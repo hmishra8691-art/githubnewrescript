@@ -2,6 +2,7 @@
 import React from "react";
 import type { Question, Option, SurveyDefinition, QuestionColumn, QuestionRow } from "@rescript/schema";
 import { resolveVariant, questionTypeRegistry } from "@rescript/schema";
+import { resolveMediaUrl, zoomModeFor, questionZooms, zoomParadataKey } from "@rescript/engine";
 import {
   effectiveQuestion,
   groupSegments,
@@ -58,6 +59,7 @@ import { announceSelection } from "./optionPopup";
 import { CellMultiDropdown } from "./cellMultiDropdown";
 import { TimeSelects } from "./TimeSelects";
 import { enhanceMediaCarousels } from "./mediaCarousel";
+import { ZoomProvider, Zoomable, ZoomButton, useZoom, enhanceZoomableImages } from "./Lightbox";
 import { CardFace, cardFrameClass } from "./CardFace";
 import { programmerCardClass, HiddenQuestionHead, ProgrammerFoot, type ProgrammerView } from "./programmerView";
 import { DefaultsNote } from "./defaultsNote";
@@ -122,6 +124,11 @@ export interface QRProps {
    * it as one keeps working. Absent outside a Runner (nothing to store into).
    */
   onExtraChange?(suffix: string, value: unknown): void;
+  /**
+   * S5a: PARADATA a renderer measures (ZOOMED_<CODE>, the before/after divider) — stored as embedded data, so it
+   * travels with every save and export like the timers' TIMER_<REF>_*. Absent outside a Runner.
+   */
+  onParadata?(name: string, value: number | string): void;
   /**
    * PROGRAMMER CHROME — preview and test only (brief 19/10/2026). The Runner
    * passes it when the page is a preview, the runtime's test mode or a test
@@ -1558,6 +1565,7 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
         const sel = idx >= 0;
         return (
           <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)} {...anchor("option", o.code)}>
+            <ZoomButton src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
@@ -2776,6 +2784,7 @@ export function CompareImages(p: QRProps) {
             role="radio" aria-checked={sel} tabIndex={0}
             onClick={() => p.onChange(sel ? null : o.code)}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onChange(sel ? null : o.code); } }}>
+            <ZoomButton src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} style={{ height: 220 }}/>
@@ -2846,12 +2855,14 @@ function QuestionMedia({ q, anchor: a, decorative, altText }: {
     <div className={`rs-qmedia rs-qmedia-${layout}`} data-testid="rs-qmedia" data-count={list.length} {...a}>
       {list.map((m, i) => (
         <div key={`${i}:${m.url}`} className="rs-qmedia-item" data-testid="rs-qmedia-item">
-          <MediaEmbed
-            url={m.url}
-            display={q.settings.mediaDisplay}
-            title={m.title ?? stripHtmlText(q.text)}
-            alt={m.alt ?? fallbackAlt}
-          />
+          <Zoomable mode={resolveMediaUrl(m.url).kind === "image" ? zoomModeFor(q, m) : "off"} src={resolveMediaUrl(m.url).url ?? m.url} alt={m.alt ?? fallbackAlt}>
+            <MediaEmbed
+              url={m.url}
+              display={q.settings.mediaDisplay}
+              title={m.title ?? stripHtmlText(q.text)}
+              alt={m.alt ?? fallbackAlt}
+            />
+          </Zoomable>
         </div>
       ))}
     </div>
@@ -2881,7 +2892,33 @@ function withPipedMedia(p: QRProps, ctx: EvalContext): QRProps {
 }
 
 /* ------------------------------------------------------------------ shell */
+/**
+ * S5a (MM2-04): the question's zoom. With `settings.zoom` (or any stimulus item's zoom) on, the card is wrapped in
+ * one ZoomProvider — its stimulus images, option images and the images inserted in its text open the lightbox, and
+ * each open adds one to ZOOMED_<CODE> (paradata, through `onParadata`). Off — every existing survey — renders
+ * exactly the markup it always did.
+ */
 export function QuestionRenderer(props: QRProps) {
+  if (!questionZooms(props.q)) return <QuestionRendererCard {...props} />;
+  const key = zoomParadataKey(props.q.code || props.q.id);
+  return (
+    <ZoomProvider mode={zoomModeFor(props.q)}
+      onZoomed={() => props.onParadata?.(key, (Number((props.state.embedded as Record<string, unknown> | undefined)?.[key]) || 0) + 1)}>
+      <QuestionRendererCard {...props} />
+    </ZoomProvider>
+  );
+}
+
+/** the images inserted in the question text become zoom targets (only inside a ZoomProvider whose mode is on) */
+function TextZoom({ deps }: { deps: unknown[] }) {
+  const z = useZoom();
+  const ref = React.useRef<HTMLSpanElement>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => enhanceZoomableImages(ref.current?.closest<HTMLElement>(".rs-card") ?? null, z && z.mode !== "off" ? z.open : null), [z, ...deps]);
+  return <span ref={ref} hidden aria-hidden />;
+}
+
+function QuestionRendererCard(props: QRProps) {
   /*
    * A MESSAGE WHEN AN OPTION IS SELECTED, FOR EVERY CHOICE RENDERER AT ONCE.
    * The change handler is wrapped here, once, so a radio list, a checkbox
@@ -3041,6 +3078,7 @@ export function QuestionRenderer(props: QRProps) {
       {...anchor("question", p.q.id)}
     >
           {pv && <HiddenQuestionHead q={p.q} pv={pv} />}
+          <TextZoom deps={[text]} />
           {/* the block's content IS its text (`normalizeQuestionContent` moved any legacy HTML Content there) */}
           <div {...anchor("text")} className="rs-qhtml" ref={cardRef} {...{ [SCOPE_ATTR]: textScope }} dangerouslySetInnerHTML={{ __html: text }} />
           {/* a content block's media was configured in the builder and never drawn (Prince 11 §4) */}
@@ -3082,6 +3120,7 @@ export function QuestionRenderer(props: QRProps) {
     >
       {p.q.customCss && <style dangerouslySetInnerHTML={{ __html: p.q.customCss }} />}
       <span ref={cardRef} hidden aria-hidden />
+      <TextZoom deps={[text, instruction]} />
       {/* preview / test only: the hidden-question banner and header — nothing on a live link (`programmerView.tsx`) */}
       {pv && <HiddenQuestionHead q={p.q} pv={pv} />}
       {/* preview / test only: a default / piped value that resolved to nothing (A63, `defaultsNote.tsx`) */}

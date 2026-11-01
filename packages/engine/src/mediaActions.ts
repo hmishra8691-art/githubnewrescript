@@ -2,6 +2,7 @@ import type { Option, Question, SurveyDefinition } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
 import { resolveMediaUrl } from "./media.js";
 import { safeHttpsUrl } from "./aiInterviewStudy.js";
+import { isZoomMode, type ZoomMode } from "./mediaZoom.js";
 
 /**
  * set_question_media — A QUESTION'S STIMULUS AND ITS OPTION IMAGES (S2b item 3, 2026-10-30; audit D16, AQ-05, MM2-16).
@@ -20,6 +21,8 @@ import { safeHttpsUrl } from "./aiInterviewStudy.js";
  *                    with the route (update_question type "media.video_rating" first)
  *   options          an option's imageUrl / imageAlt (OptionSpec image); null removes it
  *   clear            removes the stimulus (items, URL, layout, requireComplete)
+ *   zoom             S5a (MM2-04): settings.zoom off | click | hover-magnifier — the question's images (stimulus, text,
+ *                    option images) open in the lightbox; an item may carry its own `zoom`
  *
  * URLS: https (no credentials, no private host — `safeHttpsUrl`, the external-URL rule) or the survey's media library
  * (`/api/media/<id>…`), and the URL must be one the renderers can show (`resolveMediaUrl` — the same rule the editor
@@ -27,12 +30,12 @@ import { safeHttpsUrl } from "./aiInterviewStudy.js";
  * refused with the reason. A piped address (`{{ImageURL}}`) is set in the editor, not by this action.
  */
 
-export interface MediaItemSpec { url: string; alt?: string; title?: string }
+export interface MediaItemSpec { url: string; alt?: string; title?: string; zoom?: ZoomMode }
 export interface OptionImageSpec { option: string | number; imageUrl: string | null; imageAlt?: string }
 export type MediaAction = {
   op: "set_question_media"; target: string;
   items?: MediaItemSpec[]; layout?: "horizontal" | "vertical"; altText?: string; decorative?: boolean;
-  requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean;
+  requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean; zoom?: ZoomMode;
 };
 export const MEDIA_ACTION_OPS = ["set_question_media"] as const;
 
@@ -44,7 +47,7 @@ export function coerceMediaAction(o: Record<string, unknown>): MediaAction | str
   const target = s(o.target ?? o.question, 120);
   if (!target) return "set_question_media needs a target question";
   const rawItems = Array.isArray(o.items) ? o.items : Array.isArray(o.media) ? o.media : s(o.url ?? o.image ?? o.video ?? o.audio, 2000) ? [{ url: o.url ?? o.image ?? o.video ?? o.audio, alt: o.alt }] : undefined;
-  const items = rawItems?.slice(0, 10).map((x) => (typeof x === "string" ? { url: x } : x && typeof x === "object" ? x as Record<string, unknown> : {})).map((x) => ({ url: s((x as Record<string, unknown>).url ?? (x as Record<string, unknown>).src, 2000) ?? "", ...(s((x as Record<string, unknown>).alt, 300) !== undefined ? { alt: s((x as Record<string, unknown>).alt, 300)! } : {}), ...(s((x as Record<string, unknown>).title, 160) ? { title: s((x as Record<string, unknown>).title, 160)! } : {}) })).filter((x) => x.url);
+  const items = rawItems?.slice(0, 10).map((x) => (typeof x === "string" ? { url: x } : x && typeof x === "object" ? x as Record<string, unknown> : {})).map((x) => ({ url: s((x as Record<string, unknown>).url ?? (x as Record<string, unknown>).src, 2000) ?? "", ...(s((x as Record<string, unknown>).alt, 300) !== undefined ? { alt: s((x as Record<string, unknown>).alt, 300)! } : {}), ...(s((x as Record<string, unknown>).title, 160) ? { title: s((x as Record<string, unknown>).title, 160)! } : {}), ...(isZoomMode((x as Record<string, unknown>).zoom) ? { zoom: (x as Record<string, unknown>).zoom as ZoomMode } : {}) })).filter((x) => x.url);
   const options = Array.isArray(o.options) ? o.options.slice(0, 60).map((x) => x && typeof x === "object" ? x as Record<string, unknown> : {}).map((x) => {
     const option = typeof x.option === "number" || typeof x.option === "string" ? x.option : typeof x.code === "number" || typeof x.code === "string" ? x.code : undefined;
     const url = x.imageUrl === null || x.image === null ? null : s(x.imageUrl ?? x.image ?? x.url, 2000);
@@ -59,8 +62,10 @@ export function coerceMediaAction(o: Record<string, unknown>): MediaAction | str
   const rc = b(o.requireComplete ?? o.watchToContinue ?? o.forcedExposure);
   if (rc !== undefined) a.requireComplete = rc;
   if (options?.length) a.options = options;
+  const zoom = o.zoom === true ? "click" : o.zoom === false ? "off" : o.zoom;
+  if (zoom !== undefined) { if (!isZoomMode(zoom)) return `set_question_media zoom must be "off", "click" or "hover-magnifier" (got ${JSON.stringify(zoom).slice(0, 40)})`; a.zoom = zoom; }
   if (b(o.clear) === true || o.items === null || o.url === null) a.clear = true;
-  return Object.keys(a).length > 2 ? a : "set_question_media changes nothing — give items (url, alt), options (option, imageUrl), requireComplete or clear";
+  return Object.keys(a).length > 2 ? a : "set_question_media changes nothing — give items (url, alt), options (option, imageUrl), requireComplete, zoom or clear";
 }
 
 /** why a URL cannot be a question's media, or null */
@@ -100,13 +105,17 @@ export function applyMediaAction(def: SurveyDefinition, a: MediaAction, env: Med
   if (a.items?.length) {
     for (const it of a.items) { const why = mediaUrlProblem(it.url); if (why) fail(`${q.code}: ${why}`); }
     if (st.mediaItems?.length || st.mediaUrl) lossy.push(`replaces the media of ${q.code}`);
-    st.mediaItems = a.items.map((it) => ({ id: env.ids("med"), url: it.url.trim(), ...(it.alt !== undefined ? { alt: it.alt } : {}), ...(it.title ? { title: it.title } : {}) }));
+    st.mediaItems = a.items.map((it) => ({ id: env.ids("med"), url: it.url.trim(), ...(it.alt !== undefined ? { alt: it.alt } : {}), ...(it.title ? { title: it.title } : {}), ...(it.zoom ? { zoom: it.zoom } : {}) }));
     st.mediaUrl = st.mediaItems[0].url;
     const kinds = a.items.map((it) => (it.url.startsWith("/api/media/") ? "library item" : resolveMediaUrl(it.url).kind));
     done.push(`stimulus: ${a.items.length === 1 ? kinds[0] : `${a.items.length} items (${kinds.join(", ")})`}`);
     if (a.items.some((it) => it.alt === undefined) && a.altText === undefined && !a.decorative) warnings.push(`${q.code}: a media item has no alt text — screen readers will read the question text instead; give alt for a stimulus that carries meaning`);
   }
   if (a.layout) { st.mediaLayout = a.layout; done.push(`layout ${a.layout}`); }
+  if (a.zoom !== undefined) {
+    if (a.zoom === "off") delete st.zoom; else st.zoom = a.zoom;
+    done.push(a.zoom === "off" ? "image zoom off" : a.zoom === "click" ? "images open in a zoomable lightbox" : "images get a hover magnifier (click opens the lightbox)");
+  }
   if (a.altText !== undefined || a.decorative !== undefined) {
     st.accessibility = { ...(st.accessibility ?? {}), ...(a.altText !== undefined ? { altText: a.altText } : {}), ...(a.decorative !== undefined ? { decorative: a.decorative } : {}) };
     done.push(a.decorative ? "decorative (announced as nothing)" : `alt text “${(a.altText ?? "").slice(0, 40)}”`);
@@ -137,6 +146,6 @@ export function applyMediaAction(def: SurveyDefinition, a: MediaAction, env: Med
 
 export function describeMediaAction(a: MediaAction): string {
   if (a.clear && !a.items?.length) return `Remove the media of ${a.target}`;
-  const what = [a.items?.length ? `${a.items.length === 1 ? "a stimulus" : `${a.items.length} media items`}` : "", a.options?.length ? "option images" : "", a.requireComplete ? "watch-to-continue" : ""].filter(Boolean).join(", ");
+  const what = [a.items?.length ? `${a.items.length === 1 ? "a stimulus" : `${a.items.length} media items`}` : "", a.options?.length ? "option images" : "", a.requireComplete ? "watch-to-continue" : "", a.zoom && a.zoom !== "off" ? `zoom ${a.zoom}` : ""].filter(Boolean).join(", ");
   return `Set the media of ${a.target}${what ? ` (${what})` : ""}`;
 }

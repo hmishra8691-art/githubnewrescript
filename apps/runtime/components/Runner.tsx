@@ -2561,6 +2561,11 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
               telemetryRef.current?.answerChanged(q.id);
               force();
             }}
+            onParadata={(name, v) => {
+              /* S5a: renderer paradata (ZOOMED_<CODE>, BA_<CODE>_*) — embedded data, saved and exported with the response */
+              if (!/^[A-Z][A-Z0-9_]{0,80}$/.test(name)) return;
+              (state.embedded as Record<string, unknown>)[name] = v;
+            }}
           />
           </TimerLock>
           </React.Fragment>

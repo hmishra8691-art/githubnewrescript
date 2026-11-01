@@ -38,7 +38,7 @@ export function MediaListEditor({ q, patchSettings, label }: {
 
   const write = (next: Item[]) => {
     const kept = next;
-    const simple = kept.length <= 1 && !kept[0]?.alt && !kept[0]?.title;
+    const simple = kept.length <= 1 && !kept[0]?.alt && !kept[0]?.title && !kept[0]?.zoom;
     patchSettings({
       mediaUrl: kept[0]?.url?.trim() ? kept[0].url : undefined,
       mediaItems: simple ? undefined : kept,
@@ -97,6 +97,16 @@ export function MediaListEditor({ q, patchSettings, label }: {
                 {/* Choose / Upload here REPLACE this item */}
                 <MediaUrlInput testId={`media-item-url-${i}`} questionId={q.id} value={m.url}
                   onChange={(v) => set(i, { url: v ?? "" })} />
+                {kind === "image" && (
+                  <select className="select" style={{ marginTop: 4 }} data-testid={`media-item-zoom-${i}`} value={m.zoom ?? ""}
+                    title="S5a: zoom for this image (blank = the question's Image zoom setting)"
+                    onChange={(e) => set(i, { zoom: (e.target.value || undefined) as Item["zoom"] })}>
+                    <option value="">Zoom: as the question</option>
+                    <option value="off">Zoom: off</option>
+                    <option value="click">Zoom: click → lightbox</option>
+                    <option value="hover-magnifier">Zoom: hover magnifier</option>
+                  </select>
+                )}
                 {kind === "image" && (
                   <input className="input" style={{ marginTop: 4 }} data-testid={`media-item-alt-${i}`}
                     placeholder="Alt text — what a screen reader says (leave blank to use the question text)"

@@ -138,7 +138,7 @@ From `packages/engine/src/mediaActions.ts`:
 export type MediaAction = {
   op: "set_question_media"; target: string;
   items?: MediaItemSpec[]; layout?: "horizontal" | "vertical"; altText?: string; decorative?: boolean;
-  requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean;
+  requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean; zoom?: ZoomMode;
 };
 ```
 

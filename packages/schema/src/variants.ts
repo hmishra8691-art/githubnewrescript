@@ -611,7 +611,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.single, "image", "Image Select", "Pick one image from a grid.", {
     baseType: "image_select", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
-    defaults: { settings: { maxSelections: 1 } },
+    defaults: { settings: { zoom: "click", maxSelections: 1 } },
   }),
   // Retired duplicates — the rating scales live in the Slider / Rating family.
   // Kept registered so existing surveys keep rendering; hidden from the picker.
@@ -800,7 +800,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.multi, "image", "Image Multi-Select / Image Grid", "Pick several images from a grid.", {
     baseType: "image_select", responseModel: "multiple_choice",
     capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
-    defaults: { settings: { maxSelections: 99 } },
+    defaults: { settings: { zoom: "click", maxSelections: 99 } },
   }),
   /*
    * RETIRED. "Checkbox with Min = 3 and Max = 3 already forces respondents to
@@ -1437,6 +1437,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.ranking, "image", "Image Ranking", "Rank images by tapping them in order.", {
     baseType: "image_ranking", responseModel: "rank_order",
     capabilities: ["options", "images", "randomization", "carry_forward"], validations: ["required"],
+    defaults: { settings: { zoom: "click" } },
   }),
   /*
    * RETIRED FROM RANKING, not from the product: the same question now lives
@@ -1644,13 +1645,13 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.image, "choice", "Image Choice", "Pick one image.", {
     baseType: "image_select", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
-    defaults: { settings: { maxSelections: 1 } },
+    defaults: { settings: { zoom: "click", maxSelections: 1 } },
     supersededBy: "single_select.image",
   }),
   stable(F.image, "grid", "Image Grid (Multi)", "Pick several images.", {
     baseType: "image_select", responseModel: "multiple_choice",
     capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
-    defaults: { settings: { maxSelections: 99 } },
+    defaults: { settings: { zoom: "click", maxSelections: 99 } },
     supersededBy: "multi_select.image",
   }),
   stable(F.image, "ranking", "Image Ranking", "Rank images in order.", {
@@ -1667,6 +1668,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.image, "comparison", "Image Comparison (Side-by-Side)", "Two or more large images side by side — pick one.", {
     baseType: "single_select", renderer: "compare", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { zoom: "click" } },
     supersededBy: "comparison.side_by_side",
   }),
   /*
@@ -2130,6 +2132,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.comparison, "side_by_side", "Side-by-Side Comparison", "Large option cards/images side by side — pick one.", {
     baseType: "single_select", renderer: "compare", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { zoom: "click" } },
     supersededBy: "single_select.product_choice",
   }),
   /* Same duels, same `tournament` renderer, same rank_order answer as

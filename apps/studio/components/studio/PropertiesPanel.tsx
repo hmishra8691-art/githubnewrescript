@@ -1458,6 +1458,25 @@ function PropertiesPanelBody() {
       </CollapsibleSection>
       )}
 
+      {/* S5a (MM2-04): image zoom — the question's images (stimulus, text, options) open in an accessible lightbox */}
+      {showSec("Image zoom") && (
+      <CollapsibleSection id="image-zoom" title="Image zoom" active={!!q.settings.zoom && q.settings.zoom !== "off"}>
+        <div className="card" style={{ padding: 10 }} data-testid="question-zoom">
+          <label className="f"><span>Respondents can enlarge this question's images</span>
+            <select className="select" data-testid="question-zoom-mode" value={q.settings.zoom ?? "off"}
+              onChange={(e) => patchSettings({ zoom: e.target.value === "off" ? undefined : (e.target.value as "click" | "hover-magnifier") })}>
+              <option value="off">Off</option>
+              <option value="click">Click to open a zoomable lightbox</option>
+              <option value="hover-magnifier">Hover magnifier (click still opens the lightbox)</option>
+            </select></label>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+            Applies to the stimulus, images inserted in the text and option images. Each opening is counted in
+            <code> ZOOMED_{q.code}</code> (embedded data, exported). Zoom 1–5×, pan, Esc closes; keyboard and touch work too.
+          </div>
+        </div>
+      </CollapsibleSection>
+      )}
+
       {/*
         * LOCATION — the `geo` response model's one configuration block. The
         * mode picks the renderer (pin / address / radius) over one stored shape;

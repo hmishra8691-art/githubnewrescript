@@ -1210,7 +1210,18 @@ const QuestionObject = z.object({
         alt: z.string().optional(),
         /** a caption / name shown in the builder */
         title: z.string().optional(),
+        /** S5a (MM2-04): this item's zoom — overrides the question's `zoom`; see `zoom` below */
+        zoom: z.enum(["off", "click", "hover-magnifier"]).optional(),
       })).optional(),
+      /**
+       * S5a (MM2-04) IMAGE ZOOM: how a respondent enlarges the question's images (its stimulus images, the images
+       * inserted in its text, its option images). "click" — a click / Enter opens an accessible lightbox (zoom
+       * 1–5×, pan, Esc closes); "hover-magnifier" — a lens follows the pointer, and a click / Enter still opens the
+       * lightbox (keyboard and touch users get the same zoom). Absent = "off": every existing survey is unchanged;
+       * the image variants' defaults set "click", so a NEW image question zooms. Each open counts in the paradata
+       * field ZOOMED_<CODE> (embedded data, exported).
+       */
+      zoom: z.enum(["off", "click", "hover-magnifier"]).optional(),
       /** how several media items sit: side by side (wrapping on narrow screens) or stacked */
       mediaLayout: z.enum(["horizontal", "vertical"]).optional(),
       /** Respondent must reach the end of the media before answering. */
