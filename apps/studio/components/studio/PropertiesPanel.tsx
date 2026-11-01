@@ -17,6 +17,7 @@ import { QualitySettings } from "./QualitySettings";
 import { AssessmentSettingsCard } from "./AssessmentSettingsCard";
 import { ResearchDesignEditor } from "./ResearchDesignEditor";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
+import { TimerEditor } from "./TimerEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { HeaderRepeatEditor } from "./HeaderRepeatEditor";
 import { QuestionAnalysisSection } from "./QuestionAnalysisSection";
@@ -1447,6 +1448,13 @@ function PropertiesPanelBody() {
       {showSec("Skip logic") && (
       <CollapsibleSection id="skip-logic" title="Skip logic" active={(q.skipLogic?.length ?? 0) > 0}>
       <SkipLogicEditor q={q} patch={patch} />
+      </CollapsibleSection>
+      )}
+
+      {/* S4b (GA-05): a native timer on any question — one clock per page */}
+      {showSec("Timer") && (
+      <CollapsibleSection id="timer" title="Timer" active={!!q.timer}>
+      <TimerEditor value={q.timer} what="question" testId="question-timer" onChange={(t) => patch({ timer: t } as Partial<Question>)} />
       </CollapsibleSection>
       )}
 

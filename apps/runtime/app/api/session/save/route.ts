@@ -92,7 +92,8 @@ export async function POST(req: NextRequest) {
    */
   /* S1a: which values sandboxed scripts wrote — checked, and read by the replay (script_written, not a mismatch) */
   const scriptWrites = sanitizeScriptWrites(body?.scriptWrites);
-  const check = def ? await serverCheck(def, existing, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed, scriptWrites }, sessionId) : null;
+  /* S4b (LO-07): the device class this save's telemetry carries (when the survey keeps it) replays `device` conditions */
+  const check = def ? await serverCheck(def, { ...existing, device: keepTelemetry?.device?.type ?? null }, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed, scriptWrites }, sessionId) : null;
   if (check && !check.ok && validationPosture() === "enforce" && !existing.is_test) {
     const first = check.hard[0];
     return NextResponse.json({
@@ -376,7 +377,7 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
   if (posture !== "off") {
     const check = checkSubmission({
       def: survey.def,
-      prior: { seed: row.seed, sessionId: row.session_id, startedAt: row.started_at },
+      prior: { seed: row.seed, sessionId: row.session_id, startedAt: row.started_at, device: typeof body?.telemetry?.device?.type === "string" ? body.telemetry.device.type : null },
       posted: { answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: body?.flags ?? [], stepIndex: body?.stepIndex ?? 0, status: newStatus, completed: !!body?.completed, scriptWrites: sanitizeScriptWrites(body?.scriptWrites) },
       recompute: recomputePosture() !== "off",
     });
@@ -437,7 +438,7 @@ async function storedBalanceClaims(def: SurveyDefinition, surveyId: string, isTe
  */
 async function serverCheck(
   def: SurveyDefinition,
-  existing: { survey_id: string; is_test: boolean | null; seed?: number | null; started_at?: string | null },
+  existing: { survey_id: string; is_test: boolean | null; seed?: number | null; started_at?: string | null; device?: string | null },
   posted: { status: string; stepIndex: unknown; answers: unknown; calculated: unknown; embedded: unknown; flags: unknown; completed: unknown; scriptWrites?: unknown },
   sessionId: string,
 ): Promise<SubmissionCheck | null> {
@@ -449,7 +450,7 @@ async function serverCheck(
     const balanceClaims = recompute ? await storedBalanceClaims(def, existing.survey_id, !!existing.is_test, sessionId) : {};
     const check = checkSubmission({
       def,
-      prior: { seed: existing.seed == null ? null : Number(existing.seed), sessionId, startedAt: existing.started_at ?? null },
+      prior: { seed: existing.seed == null ? null : Number(existing.seed), sessionId, startedAt: existing.started_at ?? null, device: existing.device ?? null },
       posted: { answers: posted.answers ?? {}, calculated: posted.calculated ?? {}, embedded: posted.embedded ?? {}, flags: posted.flags ?? [], stepIndex: posted.stepIndex ?? 0, status: posted.status, completed: !!posted.completed, scriptWrites: posted.scriptWrites },
       quotaCounts, recompute, balanceClaims,
     });

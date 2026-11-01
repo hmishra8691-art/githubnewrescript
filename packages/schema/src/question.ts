@@ -8,6 +8,7 @@ import { MediaDisplay } from "./mediaDisplay.js";
 import { QuestionAnalysis } from "./analysisPlan.js";
 import { normalizeQuestion } from "./questionContent.js";
 import { ExactBalance } from "./balance.js";
+import { Timer } from "./timer.js";
 import { QuestionAssessment } from "./assessment.js";
 
 /**
@@ -1539,6 +1540,8 @@ const QuestionObject = z.object({
 
   displayLogic: Condition.optional(),
   skipLogic: z.array(SkipRule).default([]),
+  /** S4b (GA-05): a native timer on this question — counted on the page's one clock; see timer.ts */
+  timer: Timer.optional(),
 
   customJs: z.string().optional(),
   customCss: z.string().optional(),

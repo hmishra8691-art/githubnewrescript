@@ -66,6 +66,10 @@ Connectives: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, `NOR` (= NOT (A OR B)), `BU
 | `ranking` | `rankedFirst`, `rankedLast`, `rankedTopN`, `rankEquals`, `rankGreaterThan`, `rankLessThan`, `notRanked`, `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `displayed`, `notDisplayed` |
 | `date` | `dateBefore`, `dateAfter`, `dateEquals`, `dateBetween`, `answered`, `unanswered`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween` |
 
+## Behaviour conditions
+
+What the runtime measures about the respondent, usable in every condition (display, skip, branch, validation `when`, punch `when`, UX `when`): `time_on_page`, `elapsed`, `device`, `timed_out`. `time_on_page` and `elapsed` are seconds (on the current page; since the start) and are re-evaluated as the page clock ticks; `device` is one of `mobile`, `tablet`, `desktop`; `timed_out` is true once a timer has run out (`timed_out.Q5` / `timed_out.<page id>` names one). Examples: `time_on_page > 20`, `device = mobile`, `timed_out.Q5`. A question with the same code keeps the bare word — write `behavior.device` then. The server replay treats time as client-asserted (a soft note, never a refusal) and replays `device` from the stored device class. The quality engine's `SYSTEM_*` metrics are computed after the interview for custom quality rules only; anywhere else the logic check warns.
+
 ## Calculation functions
 
 47 functions, usable in calculations, in `{{expr: …}}` piping and inside conditions (an expression in a condition compiles to an `expr` source). Names are case-insensitive.

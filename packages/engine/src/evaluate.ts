@@ -1,4 +1,5 @@
 import { displayedCodesFor, hasDisplayedResolver } from "./displayedRegistry.js";
+import { behaviorValue } from "./timers.js";
 import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
 import { isOptionValueRef, isQuestionValueRef, isPipedValueRef, effectiveResponseModel, OPEN_ENDED_MULTI_VALUE_OPERATORS } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
@@ -235,6 +236,9 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
       if (!l) return null;
       return loopValue(l, source.ref || "code");
     }
+    /* S4b (LO-07): a respondent-behaviour value — time on page, elapsed, device, timed out (timers.ts) */
+    case "behavior":
+      return behaviorValue(source.ref, source.scope, state);
     case "quota": {
       const counts = ctx.quotaCounts?.[source.ref];
       if (!counts) return null;

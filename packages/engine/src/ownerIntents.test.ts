@@ -63,7 +63,7 @@ test("#8 “equally / evenly / balanced / rotate” → options rotate; Hindi �
   assert.equal((plain as SurveyAction[])[0] && (plain as { method?: string }[])[0].method, undefined);
 });
 
-test("#9 countdown: with a length → the timed variant; without → a choice of lengths; not single choice → the model (a script)", () => {
+test("#9 countdown: with a length → the timed variant; without → a choice of lengths; not single choice → the native timer (S4b)", () => {
   for (const s of ["Add a 30-second countdown to Q1", "Put a 30 second timer on Q1", "Add a countdown timer of 30 seconds to this question", "Q1 में 30 सेकंड का काउंटडाउन टाइमर जोड़ो"]) {
     const a = ops(s, "Q1");
     assert.ok(Array.isArray(a), `${s}: ${JSON.stringify(a).slice(0, 200)}`);
@@ -73,9 +73,10 @@ test("#9 countdown: with a length → the timed variant; without → a choice of
   const noLen = interpretRequest(def, "Add a countdown timer to this question", { selectedId: id("Q1") });
   assert.equal(noLen.kind, "model");
   assert.deepEqual(noLen.kind === "model" ? noLen.fallback?.choices.map((c) => c.label) : [], ["10 seconds", "30 seconds", "60 seconds"]);
+  /* S4b (GA-05): any other type takes the native question timer — no script */
   const numeric = interpretRequest(def, "Add a 30-second countdown to Q4");
-  assert.equal(numeric.kind, "model");
-  assert.match(numeric.kind === "model" ? numeric.reason : "", /script/);
+  assert.equal(numeric.kind, "actions");
+  assert.deepEqual(numeric.kind === "actions" ? numeric.actions : [], [{ op: "set_timer", target: "Q4", limitSeconds: 30, show: "countdown", onTimeout: "lock" }]);
   // negatives
   for (const s of ["How long is the countdown on Q1?", "Remove the timer from Q1"]) { const i = interpretRequest(def, s); assert.ok(!(i.kind === "actions" && i.actions.some((x) => x.op === "update_question")), s); }
 });

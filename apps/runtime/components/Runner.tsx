@@ -109,6 +109,8 @@ import {
   type LogicStatics,
   type PreparedLogicScript,
   type ScriptWriteResult,
+  /* S4b: native timers and behaviour conditions */
+  pageTimers, timerParadata, timedOutSkips, advanceTimedOut, setBehavior, formatClock,
 } from "@rescript/engine";
 
 /**
@@ -144,6 +146,7 @@ import { resumeSeq } from "@/lib/saveSeq";
 import { firstInvalidTarget, focusErrorTarget, prefersReducedMotion } from "@/lib/errorFocus";
 import { SectionNav, SubmitGatePanel } from "./SectionNav";
 import { createTelemetryCollector, detectDevice, type TelemetryCollector } from "@/lib/telemetry";
+import { PageClock, usesLiveBehavior, effectiveDevice } from "@/lib/timerClock";
 import { createScriptHealthCollector, sessionScriptHealth, scriptHealthPayload, browserClass, readStoredScriptHealth, writeStoredScriptHealth, type ScriptIssue } from "@/lib/scriptHealth";
 import { runScriptLifecycle, LIFECYCLE_TIMEOUT_MS, type AskFrames } from "@/lib/scriptLifecycle";
 import { runLogicEvent, runCustomScriptRules, logicAsk, onChangeScheduler, LOGIC_RUN_TIMEOUT_MS, type LogicEventOutcome, type SkippedRule } from "@/lib/logicScripts";
@@ -861,6 +864,20 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const telemetryRef = React.useRef<TelemetryCollector | null>(null);
   /** the survey shell — the UX layer's root (scoped styles, animations, behaviours) */
   const shellRef = React.useRef<HTMLDivElement | null>(null);
+  /*
+   * S4b (GA-05, LO-07) — THE PAGE CLOCK: one per page (lib/timerClock.ts), wall time. `onClockRef` is set during a
+   * render that has timers or a time behaviour condition; the interval then calls it (timeouts, announcements) and
+   * re-renders so live conditions (time_on_page > 5) and the countdown follow the clock. No timers → no re-render.
+   */
+  const clockRef = React.useRef(new PageClock());
+  const onClockRef = React.useRef<(() => void) | null>(null);
+  const [, setClockTick] = React.useState(0);
+  const [timerNote, setTimerNote] = React.useState("");
+  const detectedDeviceRef = React.useRef<string | undefined | null>(null);
+  React.useEffect(() => {
+    const id = setInterval(() => { const f = onClockRef.current; if (f) { f(); setClockTick((n) => (n + 1) % 1_000_000); } }, 500);
+    return () => clearInterval(id);
+  }, []);
   const notePage = (allSteps: RuntimeStep[], index: number, via: "start" | "next" | "back" | "reload" | "jump") => {
     const st = allSteps[index];
     if (st?.kind === "page") telemetryRef.current?.enterPage(st.pageId, index, st.questionIds, via);
@@ -1527,8 +1544,32 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * test), each in the hidden-question theme. On a live link the two are the
    * same list.
    */
+  /*
+   * S4b — THE BEHAVIOUR SNAPSHOT the conditions read (state.meta.behavior, never posted): seconds on this page and
+   * since the start, from the page clock, and the device class (detected; the preview's device switch when changed).
+   * Set before the page's questions are decided, so display logic on time_on_page / device applies on this render.
+   */
+  const clockKey = pageStep ? `${state.stepIndex}|${pageStep.pageId}` : "";
+  const clockNow = Date.now();
+  const clockFresh = pageStep ? clockRef.current.enter(clockKey, clockNow) : false;
+  if (detectedDeviceRef.current === null) detectedDeviceRef.current = typeof window !== "undefined" ? detectDevice()?.type : undefined;
+  const behaviorDevice = effectiveDevice(detectedDeviceRef.current ?? undefined, device, mode === "preview");
+  if (pageStep) {
+    const started = Date.parse(state.startedAt);
+    setBehavior(state, {
+      timeOnPage: Math.floor(clockRef.current.elapsed(clockNow)),
+      elapsed: Number.isFinite(started) ? Math.max(0, Math.floor((clockNow - started) / 1000)) : 0,
+      ...(behaviorDevice ? { device: behaviorDevice } : {}),
+    });
+  }
   const questions = pageStep ? visibleQuestions(def, pageStep, state, counts) : [];
   const pageQuestions = pageStep && reveal ? visibleQuestions(def, pageStep, state, counts, view) : questions;
+  /* S4b: the page's timers (its own + each shown question's) on the one clock; a fresh visit resets TIMED_OUT */
+  const timers = pageStep ? pageTimers(def, pageStep, questions) : [];
+  if (clockFresh) for (const t of timers) state.embedded[`${t.key}_TIMED_OUT`] = 0;
+  const clock = clockRef.current.view(timers, clockNow);
+  const timedOutPage = advanceTimedOut(timers, state.embedded);
+  const waitNext = !timedOutPage && clock.minWait > 0;
   const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts, ui, locale };
   /** S1b: the page's logic frame is keyed by the page shown (and its iteration) */
   const logicKey = pageStep ? `${state.stepIndex}|${answerKey(pageStep.pageId, pageStep.loop ?? null)}` : "end";
@@ -1688,6 +1729,25 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   });
   nextRef.current = handleNext;
 
+  /*
+   * S4b — WHAT THE CLOCK DOES ON A TICK: a timer that has just run out records TIMED_OUT = 1 at once (so
+   * `timed_out` conditions see it on this page), says "Time is up" politely, and — onTimeout "advance" — presses
+   * Next through the normal path (handleNextInner skips only the questions not yet answered). lock / message are
+   * drawn from the clock's view on the re-render. The warning and "you can continue now" are announced once each.
+   */
+  onClockRef.current = pageStep && !ended && !probe && (timers.length > 0 || usesLiveBehavior(def)) ? () => {
+    if (clockRef.current.key !== clockKey) return;
+    const r = clockRef.current.step(timers, Date.now());
+    for (const t of r.expired) state.embedded[`${t.key}_TIMED_OUT`] = 1;
+    if (r.expired.length) setTimerNote(uiText(ui, "timer_up", {}, "Time is up."));
+    else if (r.warn) setTimerNote(uiText(ui, "timer_warning", { seconds: r.warn.remaining }, `${r.warn.remaining} seconds left.`));
+    else if (r.ready) setTimerNote(uiText(ui, "timer_ready", {}, "You can continue now."));
+    if (r.expired.some((t) => t.timer.onTimeout === "advance")) {
+      const press = (n = 0) => { if (advancingRef.current && n < 60) { setTimeout(() => press(n + 1), 50); return; } void nextRef.current?.(); };
+      press();
+    }
+  } : null;
+
   const handleNextInner = async () => {
     if (!pageStep) return;
     if (mediaGate.held) return;
@@ -1739,7 +1799,16 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       noteLife(life, "validate");
       fromScripts.push(...life.errors);
     }
-    const allErrs = [...errs, ...fromScripts];
+    /*
+     * S4b — ADVANCE ON TIMEOUT: an advance timer on this page has run out (TIMED_OUT = 1). The questions NOT YET
+     * ANSWERED are skipped (recorded timed out, the same rule the server replay applies); an answered question that
+     * fails its rules still stops the page (an invalid value is never stored because time ran out), and soft
+     * warnings are not shown — time is up. A minimum wait (minSeconds) still holds Next otherwise.
+     */
+    /* read now, not from the render: the clock's tick writes TIMED_OUT and presses Next before the next render */
+    const timedOutNow = advanceTimedOut(timers, state.embedded);
+    if (!timedOutNow && clockRef.current.key === clockKey && clockRef.current.view(timers, Date.now()).minWait > 0) return;
+    const allErrs = timedOutNow ? timedOutSkips([...errs, ...fromScripts], state, pageStep, timers, state.embedded).kept : [...errs, ...fromScripts];
     const blocking = blockingErrors(allErrs);
     if (blocking.length > 0) {
       refuse(allErrs, shownQuestions.map((q) => q.id));
@@ -1752,7 +1821,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * and the second proceeds. The acknowledgement is keyed to the messages
      * themselves, so changing the answer and re-triggering warns again.
      */
-    const soft = warnings(allErrs);
+    const soft = timedOutNow ? [] : warnings(allErrs);
     const softKey = soft.map((w) => `${w.questionId}:${w.message}`).join("|");
     if (soft.length > 0 && ackWarnRef.current !== softKey) {
       ackWarnRef.current = softKey;
@@ -1945,6 +2014,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const leavePage = async () => {
     if (!pageStep) return;
     skippedProbesRef.current = new Set();
+    /* S4b: the timers' paradata — TIMER_<REF>_ELAPSED (seconds on the page) and TIMER_<REF>_TIMED_OUT (0 | 1) */
+    if (timers.length && clockRef.current.key === clockKey) Object.assign(state.embedded, timerParadata(timers, clockRef.current.elapsed(Date.now()), clockRef.current.timedOut));
     telemetryRef.current?.leavePage();
     // name the page being left: a List Fill decided just above may have added steps before it
     let nav: ReturnType<typeof advance>;
@@ -2321,6 +2392,26 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           <MediaEmbed url={pageStep.mediaUrl} title={pageStep.title} alt={pageStep.title ?? "Block media"} />
         </div>
       )}
+      {/*
+        * S4b — THE PAGE CLOCK, drawn. The visible time is role=timer with aria-live off (a screen reader is not read
+        * every second); the polite status below says the warning, "time is up" and "you can continue now" once each.
+        * The warning state changes colour; its pulse is off under prefers-reduced-motion (globals.css).
+        */}
+      {clock.countdown && (
+        <div className={`rs-timer${clock.countdown.warn ? " rs-timer-warn" : ""}`} data-testid="rs-timer" data-ref={clock.countdown.ref} data-remaining={clock.countdown.remaining}>
+          <span className="rs-timer-label">{uiText(ui, "timer_left", {}, "Time left")}{clock.countdown.scope === "question" ? ` (${def.questions.find((q) => q.id === clock.countdown!.questionId)?.code ?? ""})` : ""}:</span>{" "}
+          <span role="timer" aria-live="off" aria-atomic="true">{formatClock(clock.countdown.remaining)}</span>
+        </div>
+      )}
+      {timers.length > 0 && (
+        <div role="status" aria-live="polite" data-testid="rs-timer-announce" className="rs-sr-only"
+          style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" }}>{timerNote}</div>
+      )}
+      {timers.filter((t) => t.timer.onTimeout === "message" && clockRef.current.fired.has(t.ref)).map((t) => (
+        <div key={t.ref} className="rs-media-note rs-timer-message" role="status" data-testid="rs-timer-message" data-ref={t.ref}>
+          {t.timer.message ?? uiText(ui, "timer_message", {}, "Time is up for this question. You can still continue.")}
+        </div>
+      ))}
       {errors.length > 0 && (
         <div className="rs-error-banner" role="status" aria-live="polite" tabIndex={-1} data-testid="rs-error-banner">
           {blockingErrors(errors).length > 0 ? uiText(ui, "review_errors") : uiText(ui, "review_soft")}
@@ -2386,6 +2477,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           <React.Fragment key={key}>
           {/* language-specific audio for this question (a recording, approved AI audio or a hosted file, by the survey's priority) — the play button appears only when one exists */}
           <QuestionAudio def={sourceDef} q={q} language={lang} />
+          {/* S4b: a page with timers wraps each question in a fieldset — `disabled` once a lock timer has run out (every control inside is disabled natively) */}
+          <TimerLock on={timers.length > 0} locked={clock.pageLocked || clock.lockedQuestions.includes(q.id)} qid={q.id}>
           <QuestionRenderer
             def={def}
             q={q}
@@ -2454,6 +2547,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
               force();
             }}
           />
+          </TimerLock>
           </React.Fragment>
         );
       })}
@@ -2462,6 +2556,15 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       </SpeechServiceContext.Provider>
       {mediaGate.held && (
         <div className="rs-media-note" role="status" data-testid="rs-next-held">{mediaGate.reason}</div>
+      )}
+      {/* S4b minSeconds: why Next is disabled — the ticking number is hidden from screen readers, the sentence is not */}
+      {waitNext && (
+        <div className="rs-media-note" id="rs-min-wait" data-testid="rs-min-wait">
+          <span aria-hidden="true">{uiText(ui, "timer_wait", { seconds: clock.minWait }, `You can continue in ${clock.minWait} s.`)}</span>
+          <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" }}>
+            {uiText(ui, "timer_wait_sr", { seconds: Math.max(...timers.map((t) => t.timer.minSeconds ?? 0)) }, `Next becomes available after ${Math.max(...timers.map((t) => t.timer.minSeconds ?? 0))} seconds on this page.`)}
+          </span>
+        </div>
       )}
       {gate && (
         <SubmitGatePanel gate={gate}
@@ -2495,8 +2598,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           /* the ref above is what actually prevents the second submit; this
              is so the respondent can see why the button stopped responding —
              and a clip that must be watched first holds it too */
-          disabled={advancing || mediaGate.held}
+          disabled={advancing || mediaGate.held || waitNext}
           aria-busy={advancing || undefined}
+          aria-describedby={waitNext ? "rs-min-wait" : undefined}
           onClick={conversational ? convoNext : handleNext}
         >
           {pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= pageQuestions.length - 1) ? b.buttons.submitLabel : b.buttons.nextLabel}
@@ -2695,5 +2799,17 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         body
       )}
     </>
+  );
+}
+
+
+/** S4b: the per-question fieldset of a timed page — present for the page's lifetime (so the question never remounts), `disabled` when locked */
+function TimerLock({ on, locked, qid, children }: { on: boolean; locked: boolean; qid: string; children: React.ReactNode }) {
+  if (!on) return <>{children}</>;
+  return (
+    <fieldset disabled={locked} className="rs-timer-lock" data-testid="rs-timer-lock" data-qid-lock={qid} data-locked={locked ? "true" : "false"}
+      style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+      {children}
+    </fieldset>
   );
 }

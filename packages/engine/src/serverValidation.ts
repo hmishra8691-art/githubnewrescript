@@ -10,6 +10,16 @@ import { sectionNavMode } from "./sectionNav.js";
 import { assessmentSettings } from "./assessment.js";
 import { scriptMayWriteAnswer, scriptMayWriteVariable } from "./scriptWrites.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
+import { deviceClass, pageTimers, setBehavior, timedOutSkips } from "./timers.js";
+
+/** S4b: does this object (a question, a page node) read a behaviour value the replay cannot know? */
+function readsBehavior(o: unknown, refs: ReadonlySet<string>, depth = 0): boolean {
+  if (!o || typeof o !== "object" || depth > 40) return false;
+  if (Array.isArray(o)) return o.some((x) => readsBehavior(x, refs, depth + 1));
+  const r = o as Record<string, unknown>;
+  if (r.kind === "behavior" && typeof r.ref === "string" && refs.has(r.ref)) return true;
+  return Object.values(r).some((x) => readsBehavior(x, refs, depth + 1));
+}
 
 /**
  * THE SERVER CHECKS WHAT THE CLIENT SAYS HAPPENED.
@@ -76,7 +86,12 @@ export type SubmissionProblem = {
     | "server_mismatch"
     /* S1a: a value the replay cannot derive (or did not show) that a sandboxed script wrote through the engine-checked
        channel (`state.scriptWrites`) — informational: the server runs no author code, so it cannot recompute it */
-    | "script_written";
+    | "script_written"
+    /* S4b: a page left by an advance-on-timeout timer — its unanswered questions are skipped, not refused */
+    | "timed_out"
+    /* S4b (LO-07): a rule on time_on_page / elapsed (or on device when no device class is stored) is the browser's
+       measurement — the replay cannot know it, so a question it decides is not refused for a missing answer */
+    | "client_asserted";
   questionId?: string;
   pageId?: string;
   /** server_mismatch on a calculated variable: its name */
@@ -105,7 +120,7 @@ export interface SubmissionCheck {
 export interface SubmissionInput {
   def: SurveyDefinition;
   /** the row as it is before this save */
-  prior: { seed: number | null | undefined; sessionId: string; startedAt?: string | null };
+  prior: { seed: number | null | undefined; sessionId: string; startedAt?: string | null; /** S4b: the stored device class (mobile | tablet | desktop) — replays `device` conditions */ device?: string | null };
   /** what the client posted */
   posted: {
     answers: unknown;
@@ -178,6 +193,17 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
     embedded: isPlainObject(posted.embedded) ? (posted.embedded as ResponseState["embedded"]) : {},
   });
   if (prior.startedAt) state.startedAt = prior.startedAt;
+  /*
+   * S4b (LO-07): the replay's behaviour snapshot — `device` from the stored class; time on page / elapsed are the
+   * browser's measurement (client-asserted): unknown here, so a rule on them is false in the replay and the
+   * questions such a rule decides are never refused for a missing answer (soft `client_asserted`).
+   */
+  const device = deviceClass(prior.device);
+  setBehavior(state, { asserted: true, ...(device ? { device } : {}) });
+  const unknownBehavior = new Set(["time_on_page", "elapsed", ...(device ? [] : ["device"])]);
+  if (readsBehavior(def.questions, unknownBehavior) || readsBehavior(def.flow, unknownBehavior) || readsBehavior((def as { displayRules?: unknown }).displayRules, unknownBehavior)) {
+    soft.push({ severity: "soft", code: "client_asserted", message: `the survey has conditions on ${[...unknownBehavior].join(" / ")} — measured in the browser; the replay takes the answers they decide as posted` });
+  }
   state.answers = { ...answers };
   state.calculated = isPlainObject(posted.calculated) ? { ...(posted.calculated as Record<string, unknown>) } as ResponseState["calculated"] : {};
   state.flags = Array.isArray(posted.flags) ? [...(posted.flags as string[])] : [];
@@ -221,6 +247,18 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
         for (const e of unanswered) soft.push({ severity: "soft", code: "skipped_required", questionId: e.questionId, pageId: step.pageId, message: `${e.questionId} skipped by section navigation` });
         errs = errs.filter((e) => !unanswered.includes(e));
       }
+    }
+    /* S4b: an advance-on-timeout page (posted TIMER_<REF>_TIMED_OUT = 1) — unanswered questions were skipped by the clock */
+    if (errs.length) {
+      const t = timedOutSkips(errs, state, step, pageTimers(def, step, visible), state.embedded);
+      for (const e of t.skipped) soft.push({ severity: "soft", code: "timed_out", questionId: e.questionId, pageId: step.pageId, message: `${e.questionId} unanswered: the page's time ran out (advance on timeout)` });
+      errs = t.kept;
+    }
+    /* S4b: a question decided by a behaviour value the replay cannot know is not refused for a missing answer */
+    if (errs.length && unknownBehavior.size) {
+      const asserted = errs.filter((e) => isEmptyAnswer(lookupAnswer(state.answers, e.questionId, step.loop ?? null)) && readsBehavior(getQuestion(def, e.questionId), unknownBehavior));
+      for (const e of asserted) soft.push({ severity: "soft", code: "client_asserted", questionId: e.questionId, pageId: step.pageId, message: `${e.questionId} unanswered: its logic reads a browser measurement (time / device) the server cannot replay` });
+      errs = errs.filter((e) => !asserted.includes(e));
     }
     for (const e of errs) hard.push({ severity: "hard", code: "invalid_answer", questionId: e.questionId, pageId: step.pageId, message: e.message });
     if (errs.length) return out(pages); // the browser would not have let the respondent past this page

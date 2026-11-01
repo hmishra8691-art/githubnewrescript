@@ -47,7 +47,7 @@ export const NATIVE_ROUTES: readonly NativeRoute[] = [
   {
     id: "press_next", need: /\b(?:click|press|trigger)\w*\b[^.]{0,40}\b(?:next|back|continue|submit)\b|\bauto-?advance\b|\bmove on (?:by itself|automatically)\b|\bcannot press next\b/i,
     cannot: "press Next or Back (.click() on the page's buttons does nothing — the script runs on a mirror of the page)",
-    route: `call rs.goToPage("<page id>") or rs.goToSection("<block>"); for a question that moves on by itself when time runs out use the timed question (update_question type "gamified.timed", settings {"timeLimitSeconds": 30, "onTimeout": "advance"}); to stop the respondent use validation (set_validation)`,
+    route: `call rs.goToPage("<page id>") or rs.goToSection("<block>"); for a page or question that moves on by itself when time runs out use the native timer (set_timer {"target": "Q5", "scope": "page", "limitSeconds": 30, "onTimeout": "advance"}); to stop the respondent use validation (set_validation)`,
     actions: ["update_question", "set_validation"],
   },
   {
@@ -101,8 +101,8 @@ export const NATIVE_ROUTES: readonly NativeRoute[] = [
   {
     id: "long_timer", need: /\b(?:\d{3,}|[6-9]\d)\s*(?:s|sec|secs|seconds?)\b|\b(?:\d+)\s*(?:min|mins|minutes?)\b[^.]{0,30}\b(?:timer|countdown|limit)\b|\btime limit\b/i,
     cannot: "wait more than 60 s in one step (rs.after is capped at 60,000 ms)",
-    route: `the timed question: update_question type "gamified.timed", settings {"timeLimitSeconds": 1–3600, "onTimeout": "lock" | "advance"}`,
-    actions: ["update_question"],
+    route: `the native timer: set_timer {target, scope question | page, limitSeconds 1–3600, show countdown | hidden, onTimeout advance | lock | message, warnAtSeconds, minSeconds} — one clock per page, no script`,
+    actions: ["set_timer"],
   },
   {
     id: "layout", need: /\b(?:move|reorder|rearrange)\w*\b[^.]{0,30}\b(?:questions?|pages?|sections?)\b|\b(?:two|2|three|3) columns?\b|\bput (?:Q\w+|the questions?) (?:on|onto) (?:one|the same|a new) page\b/i,
@@ -175,8 +175,10 @@ export const NATIVE_FEATURES: readonly NativeFeature[] = [
     summary: "set_theme layout {progressBar top|bottom|none, progressStyle bar|percent|steps}: steps = \"Page n of N\" with step dots (up to 12 pages, then the text alone); bottom = after the page body and its buttons; n and N follow the logic-aware page path" },
   { id: "section_navigation", name: "Section navigation", need: /\bsection nav\w*|\bnavigat\w*|\btable of contents\b|\bjump between sections\b|\bunanswered\b|\bprogress\b/i, actions: ["set_navigation"],
     summary: "set_navigation {sectionNav off|visited|free, position top|side}: a built-in section navigator that highlights unanswered questions" },
-  { id: "timers", name: "Timers", need: /\btimers?\b|\bcountdown\b|\btime limit\b|\btimed\b|\bseconds?\b/i, actions: ["update_question"],
-    summary: "update_question type \"gamified.timed\" settings {timeLimitSeconds 1–3600, onTimeout lock|advance} (single choice); a visible countdown on another type is a behaviour script ticking with rs.after (≤ 60 s per step)" },
+  { id: "timers", name: "Timers", need: /\btimers?\b|\bcountdown\b|\btime limit\b|\btimed\b|\bseconds?\b|\bbefore next\b/i, actions: ["set_timer", "update_question"],
+    summary: "set_timer {target, scope question|page (or page: <page id>), limitSeconds 1–3600, show countdown|hidden, onTimeout advance|lock|message, warnAtSeconds, minSeconds (Next enabled after), message | clear}: a native timer on ANY question or page, one Runner clock per page; paradata TIMER_<REF>_ELAPSED / _TIMED_OUT; advance skips unanswered questions only. gamified.timed (update_question) stays the reaction-time single choice" },
+  { id: "behaviour_conditions", name: "Behaviour conditions (time on page, elapsed, device, timed out)", need: /\btime on (?:the )?page\b|\belapsed\b|\bonly (?:on|for) (?:mobile|phones?|tablets?|desktops?)\b|\b(?:mobile|phone|tablet|desktop)[- ]only\b|\bdevice (?:is|=|type|class)\b|\btimed[\s-]?out\b/i, actions: ["set_display_logic", "add_skip", "set_validation"],
+    summary: "any condition (display, skip, branch, validation when, punch when, UX when) may read time_on_page and elapsed (seconds), device (mobile | tablet | desktop) and timed_out / timed_out.<Q or page>: \"time_on_page > 5\", \"device = mobile\", \"timed_out.Q5\" — evaluated live; the server treats time as client-asserted and replays device from the stored class. SYSTEM_* quality metrics belong to custom quality rules only" },
   { id: "assessments", name: "Assessments", need: /\bquiz\w*|\bexam\w*|\btest scor\w*|\banswer key\b|\bcorrect answer\b|\bmarks?\b|\bgrad(?:e|ing)\b|\bpass mark\b/i, actions: ["set_answer_key", "set_assessment"],
     summary: "set_answer_key {target, correct, points} and set_assessment {passMark, feedback …}: scored tests computed by the engine, never written by a script; the instant-feedback quiz (type \"gamified.quiz\") reads the same key — no option meta" },
   { id: "media", name: "Question media (stimulus, option images)", need: /\b(?:image|picture|photo|logo|video|audio|clip|stimulus|media)\b/i, actions: ["set_question_media"],

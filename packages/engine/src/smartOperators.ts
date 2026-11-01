@@ -183,6 +183,8 @@ export function operandTypeOf(def: SurveyDefinition, source: ConditionSource): O
     case "rule": return "named";
     case "embedded": return embeddedOperandType(def, source.ref);
     case "quota": return "numeric";
+    /* S4b (LO-07): seconds are numbers, timed_out is yes / no, device is a word (mobile | tablet | desktop) */
+    case "behavior": return source.ref === "timed_out" ? "boolean" : source.ref === "device" ? "text" : "numeric";
     case "expr": return "any";
     case "calculation": return "any";
     case "option": return source.ref === "index" ? "numeric" : source.ref === "value" ? "any" : "text";

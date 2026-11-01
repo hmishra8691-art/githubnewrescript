@@ -2,6 +2,7 @@ import { z } from "zod";
 import { Condition } from "./conditions.js";
 import { SetExpr } from "./setExpression.js";
 import { ExactBalance } from "./balance.js";
+import { Timer } from "./timer.js";
 
 /**
  * Survey Flow — the ordered structure the runtime walks (requirement §7).
@@ -282,6 +283,8 @@ export type FlowNode =
       mediaUrl?: string;
       questionIds: string[];
       visibleIf?: Condition;
+      /** S4b: a native page timer (schema timer.ts) */
+      timer?: Timer;
     }
   | {
       type: "section";
@@ -459,6 +462,8 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       mediaUrl: z.string().optional(),
       questionIds: z.array(z.string()),
       visibleIf: Condition.optional(),
+      /** S4b (GA-05): a native page timer — one clock for the page; see timer.ts */
+      timer: Timer.optional(),
     }),
     z.object({
       type: z.literal("section"),

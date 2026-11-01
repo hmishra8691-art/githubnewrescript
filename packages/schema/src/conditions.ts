@@ -365,7 +365,12 @@ export const ConditionSource = z.object({
      * accepted — which is every feature, because they all call the same
      * evaluator.
      */
-    .enum(["question", "variable", "embedded", "calculation", "quota", "loop", "option", "expr", "rule"])
+    /*
+     * `behavior` (S4b, LO-07): a RESPONDENT-BEHAVIOUR value the runtime measures — `ref` is one of
+     * BEHAVIOR_SOURCES (timer.ts): time_on_page, elapsed (seconds), device (mobile | tablet | desktop),
+     * timed_out (`scope` = one timer's question code / page id, absent = any timer so far).
+     */
+    .enum(["question", "variable", "embedded", "calculation", "quota", "loop", "option", "expr", "rule", "behavior"])
     .default("question"),
   /**
    * Question id (e.g. "q_brand") or variable / field name.

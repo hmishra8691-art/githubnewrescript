@@ -585,8 +585,10 @@ function countdown(r: Run): Interpretation | null {
   if (!q.ok) return q.out;
   const single = effectiveResponseModel(q.v) === "single_choice";
   const advance = /\b(?:go(?:es)?\s+(?:on|to\s+the\s+next)|move(?:s)?\s+on|next\s+page|advance|auto[\s-]?advance|skip\s+ahead)\b|आगे/i.test(t);
-  if (!single) return { kind: "model", category: "survey_editing", reason: `${code(q.v)} is ${q.v.type.replace(/_/g, " ")}: the built-in visible countdown is the timed single-choice question, so a countdown here is a script (the language model writes it with rs.after)`, detected: qDetected([q.v]),
-    fallback: { understood, question: `The built-in countdown is a timed single-choice question; ${code(q.v)} is ${q.v.type.replace(/_/g, " ")}, so it needs a countdown script, which the language model writes. Without one, a timed question can be added instead.`, choices: [] } };
+  /* S4b (GA-05): any other type takes the native question timer (set_timer) — no script */
+  if (!single && seconds && seconds >= 1 && seconds <= 3600) return act(r, "survey_editing", `${code(q.v)} gets a ${seconds}-second visible countdown; when time runs out ${advance ? "the page moves on (an unanswered question is skipped)" : "its answer locks"}.`, [{ op: "set_timer", target: code(q.v), limitSeconds: seconds, show: "countdown", onTimeout: advance ? "advance" : "lock" } as SurveyAction], qDetected([q.v]));
+  if (!single && !seconds) return { kind: "model", category: "survey_editing", reason: "the countdown's length is not said — the language model asks or chooses it", detected: qDetected([q.v]),
+    fallback: { understood, question: `How long should ${code(q.v)}'s countdown run?`, choices: [10, 30, 60].map((n) => ({ label: `${n} seconds`, text: `Add a ${n}-second countdown to ${code(q.v)}` })) } };
   if (!seconds) return { kind: "model", category: "survey_editing", reason: "the countdown's length is not said — the language model asks or chooses it", detected: qDetected([q.v]),
     fallback: { understood: `A countdown on ${code(q.v)} — the timed single-choice question (a visible countdown; the answer locks when time runs out).`, question: `How long should ${code(q.v)}'s countdown run?`, choices: [10, 30, 60].map((n) => ({ label: `${n} seconds`, text: `Add a ${n}-second countdown to ${code(q.v)}` })) } };
   if (seconds < 1 || seconds > 3600) return refused("survey_editing", understood, `A countdown runs between 1 second and 1 hour — ${seconds} seconds is outside that.`, qDetected([q.v]));
@@ -606,7 +608,36 @@ function variantClarify(r: Run): Interpretation | null {
   return { kind: "model", category: "question_creation", reason: `the question's wording has to be written — the language model drafts it as ${drag ? "ranking.drag" : "media.video_rating"}, then it is applied as create_question through the same gate`, detected: [det("variant", drag ? "ranking.drag" : "media.video_rating")], fallback };
 }
 
-const ownerIntents: Recogniser = (r) => punchByOption(r) ?? countdown(r) ?? variantClarify(r);
+/*
+ * S4b (GA-05, IM-19) — PAGE TIMING without a model: "give respondents 30 seconds on this page", "a 2-minute time
+ * limit on the page of Q4", "at least 10 seconds before Next", "keep Next disabled for 5 seconds" → set_timer on
+ * the page (this page = the page holding the selected question, or the question named). Locks / hides / warns
+ * when the sentence says so.
+ */
+function pageTiming(r: Run): Interpretation | null {
+  const t = r.text;
+  const minimum = /\b(?:at\s+least|minimum(?:\s+of)?|min\.?|no\s+(?:sooner|earlier)\s+than)\s+(\d+)\s*(seconds?|secs?|s\b|minutes?|mins?)\b[^.]*\bnext\b|\bnext\b[^.]*\b(?:disabled|locked|inactive|greyed)\b[^.]*?\b(?:for|until)\s+(\d+)\s*(seconds?|secs?|s\b|minutes?|mins?)/i.exec(t);
+  const limit = /\b(?:give|allow|let)\b[^.]*?\b(\d+)\s*[-\s]?\s*(seconds?|secs?|minutes?|mins?)\b[^.]*\b(?:on|for)\s+(?:this|the|each|every)\s+page\b|\b(\d+)\s*[-\s]?\s*(seconds?|secs?|minutes?|mins?)\b\s*(?:time[\s-]?limit|timer|count[\s-]?down)\s+(?:on|for|to)\s+(?:this|the)\s+page\b/i.exec(t);
+  if (!minimum && !limit) return null;
+  const toSec = (n: string | undefined, unit: string | undefined) => (n ? Math.round(Number(n) * (/^min/i.test(unit ?? "") ? 60 : 1)) : undefined);
+  const minSeconds = minimum ? toSec(minimum[1] ?? minimum[3], minimum[2] ?? minimum[4]) : undefined;
+  const limitSeconds = limit ? toSec(limit[1] ?? limit[3], limit[2] ?? limit[4]) : undefined;
+  const qm = /\b(Q[\w.]*\d[\w.]*)\b/i.exec(t);
+  const ref = qm?.[1] ?? (r.ctx.selectedId ? r.def.questions.find((x) => x.id === r.ctx.selectedId)?.code : undefined);
+  const understood = `${limitSeconds ? `${limitSeconds} seconds on the page` : ""}${limitSeconds && minSeconds ? ", and " : ""}${minSeconds ? `at least ${minSeconds} seconds before Next` : ""}.`;
+  if (!ref) return { kind: "clarify", category: "survey_editing", understood, question: "Which page? Select a question on it, or name one (“… on the page of Q4”).", choices: [], detected: [] };
+  const q = questionOf(r, String(ref), "survey_editing", understood);
+  if (!q.ok) return q.out;
+  for (const v of [limitSeconds, minSeconds]) if (v !== undefined && (v < 1 || v > 3600)) return refused("survey_editing", understood, `A page timer runs between 1 second and 1 hour — ${v} seconds is outside that.`, qDetected([q.v]));
+  const lock = /\block(?:s|ed)?\b/i.test(t);
+  const hidden = /\b(?:hidden|no\s+(?:visible\s+)?(?:countdown|clock|timer)\s+shown|don'?t\s+show)\b/i.test(t);
+  const warn = /\bwarn(?:ing)?\b[^.]*?\b(\d+)\s*(?:seconds?|secs?)\b/i.exec(t);
+  const action = { op: "set_timer", target: code(q.v), scope: "page", ...(limitSeconds ? { limitSeconds, show: hidden ? "hidden" : "countdown", onTimeout: lock ? "lock" : "advance" } : {}), ...(minSeconds ? { minSeconds } : {}), ...(warn ? { warnAtSeconds: Number(warn[1]) } : {}) };
+  const says = [limitSeconds ? `${limitSeconds} seconds on the page of ${code(q.v)} (${hidden ? "no countdown shown" : "a visible countdown"}; then ${lock ? "the answers lock" : "the page moves on — unanswered questions are skipped, an invalid answer still stops it"})` : "", minSeconds ? `Next is enabled after ${minSeconds} seconds on that page` : ""].filter(Boolean).join("; ");
+  return act(r, "survey_editing", `${says}.`, [action as SurveyAction], qDetected([q.v]));
+}
+
+const ownerIntents: Recogniser = (r) => punchByOption(r) ?? pageTiming(r) ?? countdown(r) ?? variantClarify(r);
 
 /* ---------------------------------------------------------- look and behaviour: popups, messages, tooltips */
 

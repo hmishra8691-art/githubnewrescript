@@ -1146,3 +1146,12 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-matrix-stack tr.rs-matrix-group { display: block; }
 .rs-cascade { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
 .rs-cascade label { display: flex; flex-direction: column; gap: 4px; font-size: .92em; }
+
+/* S4b (GA-05): the page clock — a quiet chip; the warning state is a colour change plus a pulse that
+   prefers-reduced-motion turns off (the colour change stays) */
+.rs-timer { display: inline-flex; align-items: baseline; gap: 4px; margin-bottom: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--rs-border, #d0d5dd); background: var(--rs-surface, #fff); color: var(--rs-text, inherit); font-variant-numeric: tabular-nums; }
+.rs-timer-warn { border-color: var(--rs-error); color: var(--rs-error); animation: rs-timer-pulse 1s ease-in-out 3; }
+@keyframes rs-timer-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--rs-error) 20%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .rs-timer-warn { animation: none; } }
+.rs-timer-lock[disabled] { opacity: 0.6; }
