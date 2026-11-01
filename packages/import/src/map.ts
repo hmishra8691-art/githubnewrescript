@@ -4,6 +4,7 @@ import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField, InventoryItem,
 } from "./canonical.js";
 import { plainText, canonicalStats, exprHasRaw, type CanonicalStats } from "./canonical.js";
+import { analyzeQualtricsJs, type JsMigration } from "./jsMigrate.js";
 
 /**
  * THE RESCRIPT MAPPING ENGINE (§5–§9, §15, §24–§25, §27, §31).
@@ -70,6 +71,8 @@ export interface MapResult {
   /** what the mapper attempted and how each attempt ended — see InventoryItem */
   inventory: InventoryItem[];
   unresolved: UnresolvedReference[];
+  /** I3: what each imported JavaScript does and what it becomes here (jsMigrate.ts) */
+  jsMigrations: (JsMigration & { questionId: string | null; scriptName: string })[];
 }
 
 /* ------------------------------------------------------------ kind → Rescript type */
@@ -177,16 +180,38 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
    * never run, because code written for another platform's runtime (or in
    * another language entirely) cannot be assumed to mean anything here.
    */
+  const jsMigrations: MapResult["jsMigrations"] = [];
+  const migratedScripts: Record<string, unknown>[] = [];
+  const nativeTimers: { questionId: string; minSeconds: number; location: string }[] = [];
+  const jsStatus = new Map<string, { status: InventoryItem["status"]; note: string }>();
   const scriptFor = (cu: CanonicalSurvey["custom"][number], questionId: string | null) => {
     /* S0b D3: the code gate's verdict travels with it, so whoever reviews it sees it before switching it on (it cannot be switched on while it fails) */
     const gate = codeGate(cu.code, "logic");
     const verdict = gate.ok ? "Script check: passes. " : `Script check: refused — ${gateReason(gate)}. `;
+    const name = `Imported ${cu.language} · ${cu.role}${questionId ? "" : ` · ${cu.location}`}`.slice(0, 120);
+    /*
+     * I3: Qualtrics JavaScript is READ (never run) for what it does: a translated logic script when every call has
+     * an equivalent (kept switched off), a native setting when the code is a known pattern, the reasons otherwise.
+     */
+    let migration = "";
+    if (cu.language === "javascript" && c.source.platform === "qualtrics") {
+      const a = analyzeQualtricsJs(cu.code, cu.location, (qid) => qBySource.get(qid)?.variable);
+      jsMigrations.push({ ...a, questionId, scriptName: name });
+      migration = `Migration: ${a.summary} `;
+      if (a.translated?.gate.ok) migratedScripts.push({
+        id: uid("script"), name: `Migrated JS · ${cu.role}${questionId ? "" : ` · ${cu.location}`} (review)`.slice(0, 120),
+        scope: questionId ? "question" : "survey", ...(questionId ? { ref: questionId } : {}), event: a.translated.event, code: a.translated.code, enabled: false,
+        notes: `Script check: passes. Translated from the Qualtrics JavaScript in “${name}” by the importer; not executed. Review it, then switch it on.`.slice(0, 1000),
+      });
+      if (a.native && questionId) nativeTimers.push({ questionId, minSeconds: a.native.minSeconds, location: cu.location });
+      jsStatus.set(cu.location, a.verdict === "native" ? { status: "imported", note: `reproduced by a native page timer (${a.native!.minSeconds} s minimum); code kept, disabled` } : a.verdict === "compatible" ? { status: "partial", note: "translated script attached, switched off for review" } : { status: "unsupported", note: `kept, disabled — ${a.verdict}` });
+    }
     return {
-      id: uid("script"), name: `Imported ${cu.language} · ${cu.role}${questionId ? "" : ` · ${cu.location}`}`.slice(0, 120),
+      id: uid("script"), name,
       scope: questionId ? "question" : "survey", ...(questionId ? { ref: questionId } : {}),
       event: /submit/i.test(cu.role + cu.code.slice(0, 200)) ? "on_submit" : "on_load",
       code: cu.code, enabled: false,
-      notes: `${verdict}Imported from ${c.source.platform} (${cu.location}); not executed. ${cu.refs.length ? `Reads ${cu.refs.join(", ")}. ` : ""}Analyse it in Intelligent mode, then rebuild it as Rescript logic.`.slice(0, 1000),
+      notes: `${verdict}Imported from ${c.source.platform} (${cu.location}); not executed. ${migration}${cu.refs.length ? `Reads ${cu.refs.join(", ")}. ` : ""}Analyse it in Intelligent mode, then rebuild it as Rescript logic.`.slice(0, 1000),
     };
   };
   const optionCode = (qs: string, choice: string): string | number | undefined => qBySource.get(qs)?.options.find((o) => o.sourceId === choice)?.code;
@@ -580,6 +605,15 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     inventory.push({ feature: "timer", sourceId: cq.sourceId, status: "imported", note: `page timer${pt.minSeconds ? ` · Next after ${pt.minSeconds} s` : ""}${pt.limitSeconds ? ` · advances after ${pt.limitSeconds} s` : ""}` });
   }
 
+  /* I3: a JavaScript that only holds Next back for N seconds = a native minimum time on that page */
+  for (const nt of nativeTimers) {
+    const page = findPage(flow, nt.questionId) as { timer?: Record<string, unknown> } | null;
+    if (!page) continue;
+    if (page.timer?.minSeconds) { issues.push({ location: nt.location, type: "converted", severity: "low", message: `The JavaScript on ${nt.location} holds Next for ${nt.minSeconds} s, but the page already has a ${String(page.timer.minSeconds)} s minimum; that one was kept.`, autoAttempted: true, refs: [nt.location] }); continue; }
+    page.timer = { show: "hidden", onTimeout: "advance", ...(page.timer ?? {}), minSeconds: nt.minSeconds };
+    issues.push({ location: nt.location, type: "converted", severity: "low", message: `The JavaScript on ${nt.location} hid Next for ${nt.minSeconds} s; that is now the page's native minimum time (the code is kept, switched off).`, autoAttempted: true, refs: [nt.location] });
+  }
+
   /* ------------------------------------------------------------ quotas */
   const quotas: Quota[] = [];
   if (logic) {
@@ -665,6 +699,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   /* ------------------------------------------------------------ assemble */
   // survey-level custom code (a Decipher top-level exec, a Qualtrics header script): kept the same way
   for (const cu of c.custom) scripts.push(scriptFor(cu, null));
+  scripts.push(...migratedScripts);
+  function adjustJs(i: InventoryItem): InventoryItem { const j = i.feature === "custom_js" ? jsStatus.get(i.sourceId) : undefined; return j ? { ...i, ...j } : i; }
   const qidOf = (refs: string[] | undefined, location: string): string | undefined => {
     for (const r of [...(refs ?? []), location.split(/\s|·/)[0]]) { const id = idOf.get(r); if (id) return id; }
     return undefined;
@@ -736,7 +772,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   const all = [...c.issues, ...issues];
   if (!parsed.success) {
     all.push(...parsed.error.issues.slice(0, 10).map((i): Issue => ({ location: i.path.join("."), type: "validation", severity: "high", message: `The imported survey did not pass the schema: ${i.message}`, autoAttempted: false })));
-    return { def: null, mapping, issues: sortIssues(all), created: canonicalStats(c), confidence, merge, quality: null, inventory: [...(c.inventory ?? []), ...inventory], unresolved };
+    return { def: null, mapping, issues: sortIssues(all), created: canonicalStats(c), confidence, merge, quality: null, inventory: [...(c.inventory ?? []).map(adjustJs), ...inventory], unresolved, jsMigrations };
   }
   const def = parsed.data;
   /* post-migration validation (§31): the engine's own quality check — references, flow, variables, logic */
@@ -752,7 +788,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     for (const i of relevant.filter((x) => x.level === "error").slice(0, 60)) all.push({ location: where(i), type: "validation", severity: "high", message: i.message, autoAttempted: false, ...(i.questionId ? { refs: [i.questionId] } : {}) });
     for (const i of relevant.filter((x) => x.level !== "error").slice(0, 60)) all.push({ location: where(i), type: "validation", severity: "low", message: i.message, autoAttempted: false, ...(i.questionId ? { refs: [i.questionId] } : {}) });
   } catch (e) { all.push({ location: "validation", type: "validation", severity: "medium", message: `The quality check could not run: ${(e as Error).message}`, autoAttempted: false }); }
-  return { def, mapping, issues: sortIssues(all), created: createdStats(def, built, existing), confidence, merge, quality, inventory: [...(c.inventory ?? []), ...inventory], unresolved };
+  return { def, mapping, issues: sortIssues(all), created: createdStats(def, built, existing), confidence, merge, quality, inventory: [...(c.inventory ?? []).map(adjustJs), ...inventory], unresolved, jsMigrations };
 }
 
 function opName(op: string): string {

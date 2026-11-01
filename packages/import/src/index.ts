@@ -15,6 +15,7 @@ export * from "./quotaSheet.js";
 export * from "./verify.js";
 export * from "./mappingDecision.js";
 export * from "./graph.js";
+export * from "./jsMigrate.js";
 export { ZIP_LIMITS } from "./zip.js";
 export { parseXml } from "./xml.js";
 export { extractPdfText } from "./pdf.js";

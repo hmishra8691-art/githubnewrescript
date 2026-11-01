@@ -99,6 +99,8 @@ export interface MigrationReport {
   mapping: { decisions: MappingDecision[]; summary: Record<MappingClass, number> };
   /** the source's dependency graph, embedded-data map and integrity findings (graph.ts) */
   graph: ImportGraph;
+  /** I3: each imported JavaScript, what it does and what it becomes (jsMigrate.ts) */
+  scripts: MapResult["jsMigrations"];
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -140,6 +142,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     if (f.detected) summary.push(`Of ${plural(f.detected, "source element")} checked, ${f.imported} came across as they were${f.partial ? `, ${f.partial} with a change` : ""}${f.unsupported ? `, ${f.unsupported} could not be reproduced` : ""} (${fid.importedPct}% as-is).`);
     { const ms = mapping.summary; const notExact = ms.components + ms.needs_runtime + ms.needs_js + ms.unsupported; if (notExact) summary.push(`Question types: ${ms.exact} native${ms.components ? `, ${ms.components} rebuilt from Studio components` : ""}${ms.needs_js ? `, ${ms.needs_js} needing their custom script reviewed` : ""}${ms.needs_runtime ? `, ${ms.needs_runtime} needing a feature Rescript does not have` : ""}${ms.unsupported ? `, ${ms.unsupported} with no equivalent (placeholders)` : ""}.`); }
     { const gf = graph.findings.filter((f) => f.severity !== "info"); if (gf.length) summary.push(`The source's dependency check found ${plural(gf.length, "problem")} in the original survey: ${Object.entries(graph.stats.findings).filter(([k]) => k !== "unused_embedded").map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(", ")}.`); }
+    { const js = m.jsMigrations ?? []; if (js.length) { const n = (v: string) => js.filter((x) => x.verdict === v).length; summary.push(`${plural(js.length, "custom script")} read, none run: ${[n("compatible") ? `${n("compatible")} translated (attached, switched off for review)` : "", n("native") ? `${n("native")} reproduced by a native setting` : "", n("partial") ? `${n("partial")} need${n("partial") === 1 ? "s" : ""} a person` : "", n("incompatible") ? `${n("incompatible")} cannot run here (page or network access)` : ""].filter(Boolean).join(", ")}.`); } }
     if (fid.unresolved.length) summary.push(`${plural(fid.unresolved.length, "reference")} point${fid.unresolved.length === 1 ? "s" : ""} at something that is not in the imported survey.`);
     if (fid.assets.some((a) => a.risk !== "ok")) summary.push(`${plural(fid.assets.filter((a) => a.risk !== "ok").length, "image")} ${fid.assets.filter((a) => a.risk !== "ok").length === 1 ? "is" : "are"} still hosted by Qualtrics or named only by a library id — re-upload them here.`);
     if (fid.languages.length) summary.push(`Translations in ${fid.languages.map((l) => l.code).join(", ")} were imported for review.`);
@@ -157,7 +160,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     source: { platform: c.source.platform, format: c.source.format, fileName: c.source.fileName, title: c.source.title, label: detection.label, reasons: detection.reasons },
     scope, detected, created: m.def ? cr : null, converted, review, risks, confidence,
     validation: m.quality ? { errors: m.quality.errors.length, warnings: m.quality.warnings.length, deployable: m.quality.deployable } : null,
-    merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid, mapping, graph,
+    merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid, mapping, graph, scripts: m.jsMigrations ?? [],
   };
 }
 

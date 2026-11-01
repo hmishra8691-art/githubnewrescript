@@ -335,6 +335,7 @@
       "Created 11 questions, 5 blocks, 2 page breaks, 4 embedded variables, 2 display logic rules, 2 skip rules, 2 branches, 1 randomizer, 2 quotas, 4 validation rules.",
       "The survey passes the quality check.",
       "Of 45 source elements checked, 38 came across as they were, 2 with a change, 5 could not be reproduced (84.4% as-is).",
+      "The source's dependency check found 2 problems in the original survey: 2 missing reference.",
       "2 references point at something that is not in the imported survey."
     ]
   },
@@ -569,7 +570,9 @@
       "6 custom logic items need review — none were guessed.",
       "The survey passes the quality check.",
       "Of 87 source elements checked, 66 came across as they were, 9 with a change, 12 could not be reproduced (75.9% as-is).",
-      "Question types: 20 native, 8 rebuilt from Studio components, 1 with no equivalent (placeholders).",
+      "Question types: 20 native, 7 rebuilt from Studio components, 1 needing their custom script reviewed, 1 with no equivalent (placeholders).",
+      "The source's dependency check found 2 problems in the original survey: 1 broken branch, 1 unreachable.",
+      "2 custom scripts read, none run: 2 need a person.",
       "2 images are still hosted by Qualtrics or named only by a library id — re-upload them here.",
       "Translations in es, fr were imported for review."
     ]
@@ -613,11 +616,11 @@
     "fidelity": {
       "totals": {
         "detected": 182,
-        "imported": 168,
+        "imported": 169,
         "partial": 12,
-        "unsupported": 2
+        "unsupported": 1
       },
-      "importedPct": 92.3,
+      "importedPct": 92.9,
       "features": {
         "question": {
           "detected": 121,
@@ -651,9 +654,9 @@
         },
         "custom_js": {
           "detected": 1,
-          "imported": 0,
+          "imported": 1,
           "partial": 0,
-          "unsupported": 1
+          "unsupported": 0
         },
         "survey_option": {
           "detected": 2,
@@ -689,7 +692,7 @@
     "risks": {
       "high": 2,
       "medium": 0,
-      "low": 0
+      "low": 1
     },
     "verification": {
       "ok": true,
@@ -733,8 +736,9 @@
       "Created 120 questions, 13 blocks, 12 page breaks, 2 embedded variables, 12 hidden variables, 11 display logic rules, 1 branch, 38 validation rules.",
       "1 custom logic item needs review — none were guessed.",
       "The survey passes the quality check.",
-      "Of 182 source elements checked, 168 came across as they were, 12 with a change, 2 could not be reproduced (92.3% as-is).",
-      "Question types: 107 native, 13 rebuilt from Studio components, 1 needing a feature Rescript does not have."
+      "Of 182 source elements checked, 169 came across as they were, 12 with a change, 1 could not be reproduced (92.9% as-is).",
+      "Question types: 107 native, 12 rebuilt from Studio components, 1 needing their custom script reviewed, 1 needing a feature Rescript does not have.",
+      "1 custom script read, none run: 1 reproduced by a native setting."
     ]
   }
 }
