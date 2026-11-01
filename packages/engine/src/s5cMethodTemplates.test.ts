@@ -55,3 +55,19 @@ test("add_method_template is a registered action with a capability record", () =
   assert.deepEqual(f.actions, ["add_method_template"]);
   assert.ok(f.need.test("a Van Westendorp with Newton-Miller-Smith"));
 });
+
+test("add_method_template sequential_monadic: a block per concept under a Williams randomizer, the plan item names the stored order", () => {
+  const r = act(base(), [{ op: "add_method_template", template: "sequential_monadic", concepts: ["Fresh", "Bold", "Calm"] }]);
+  const rnd = r.def.flow[0] as unknown as { type: string; id: string; order?: string; children: { id: string; title?: string }[] };
+  assert.equal(rnd.type, "randomizer");
+  assert.equal(rnd.order, "williams");
+  assert.deepEqual(rnd.children.map((b) => b.title), ["Fresh", "Bold", "Calm"]);
+  const t = r.def.research!.analysisPlan!.tests[0];
+  assert.equal(t.method, "sequential_monadic");
+  assert.deepEqual(t.variables, ["C1_APPEAL", "C2_APPEAL", "C3_APPEAL"]);
+  assert.equal(t.options!.order, `ORDER_${rnd.id.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase()}`);
+  assert.deepEqual(t.options!.blocks, rnd.children.map((b) => b.id));
+  const qc = runQualityCheck(r.def);
+  assert.equal(qc.deployable, true, JSON.stringify(qc.areas.filter((a) => a.status === "fail")));
+  assert.match(JSON.stringify(coerce([{ op: "add_method_template", template: "sequential_monadic", concepts: ["One"] }]).rejected), /2–8 different names/);
+});

@@ -1,6 +1,7 @@
 import type { FlowNode, PlannedTest, SurveyDefinition } from "@rescript/schema";
 import { AnalysisPlan, Question } from "@rescript/schema";
 import type { IdMinter } from "./questionOps.js";
+import { randomizerOrderVariable } from "./displayOrder.js";
 
 /**
  * RESEARCH-METHOD TEMPLATES (S5c, 2026-11-01) — a complete, programmed block for a named method, with the
@@ -19,11 +20,16 @@ import type { IdMinter } from "./questionOps.js";
  *   price_ladder         an adaptive Gabor–Granger ladder (numeric.price_ladder, `prices`, `start`), the answer the
  *                        highest price accepted. Plan: pricing (gabor_granger, ladder: true, prices).
  *
+ *   sequential_monadic   one block per concept (the concept, then appeal and purchase intent, 5-point), all under a
+ *                        randomizer that shows every block in a Williams order (balanced for position and for which
+ *                        concept follows which); ORDER_<RANDOMIZER> stores the order each respondent saw (S4c).
+ *                        Plan: sequential_monadic on the appeal ratings (order, blocks) — paired tests + order effect.
+ *
  * Variable names are fixed per template (PSM_TOO_CHEAP, …) so the plan can name them; a survey that already has
  * one of them is refused with the clash named — pass `prefix` ("A_" → A_PSM_TOO_CHEAP) to add a second copy.
  */
 
-export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder"] as const;
+export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic"] as const;
 export type MethodTemplateKey = (typeof METHOD_TEMPLATE_KEYS)[number];
 
 export type MethodTemplateAction = {
@@ -41,6 +47,8 @@ export type MethodTemplateAction = {
   prices?: number[];
   /** price_ladder: where the ladder starts (default middle) */
   start?: "middle" | "lowest" | "highest" | "random";
+  /** sequential_monadic: the concepts (2–8 short names; default Concept A, B, C) */
+  concepts?: string[];
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */
@@ -51,7 +59,7 @@ export const METHOD_TEMPLATE_ACTION_OPS = ["add_method_template"] as const;
 export interface MethodTemplateFragment {
   title: string;
   questions: Record<string, unknown>[];
-  /** one block holding the template's pages */
+  /** the template's top-level flow node: a block of pages (a randomizer of concept blocks for sequential_monadic) */
   block: FlowNode;
   tests: Omit<PlannedTest, "id">[];
   notes: string[];
@@ -74,6 +82,11 @@ export function coerceMethodTemplateAction(o: Record<string, unknown>): MethodTe
     a.prices = [...ps].sort((x, y) => x - y);
   }
   if (o.start !== undefined) { if (!["middle", "lowest", "highest", "random"].includes(String(o.start))) return "add_method_template start must be middle, lowest, highest or random"; a.start = o.start as MethodTemplateAction["start"]; }
+  if (o.concepts !== undefined) {
+    const cs = Array.isArray(o.concepts) ? o.concepts.map((c) => str(c, 120)).filter((c): c is string => !!c) : [];
+    if (cs.length < 2 || cs.length > 8 || new Set(cs.map((c) => c.toLowerCase())).size !== cs.length) return "add_method_template concepts must be 2–8 different names";
+    a.concepts = cs;
+  }
   if (o.plan === false) a.plan = false;
   return a;
 }
@@ -126,6 +139,31 @@ export function methodTemplateFragment(a: Omit<MethodTemplateAction, "op">, ids:
         block: { type: "block", id: ids("b"), title: "Price ladder", children: [page("Price ladder", [ladder])] } as FlowNode,
         tests: [{ method: "pricing", variables: [`${P}PRICE_LADDER`], priority: 1, tier: "essential", hypotheses: [], reason: "Gabor–Granger demand and revenue curves from the adaptive ladder", options: { method: "gabor_granger", ladder: true, prices } }],
         notes: [`Ladder ${prices.map((p) => `${cur}${p}`).join(" / ")}, starting ${a.start ?? "middle"}; the answer is the highest price accepted (0 = none), the path is kept as GG_${P}PRICE_LADDER_PATH.`],
+      };
+    }
+    case "sequential_monadic": {
+      const concepts = a.concepts ?? ["Concept A", "Concept B", "Concept C"];
+      const AGREE = (lo: string, hi: string) => [{ code: 1, label: lo }, { code: 2, label: "2" }, { code: 3, label: "3" }, { code: 4, label: "4" }, { code: 5, label: hi }];
+      const qs: Record<string, unknown>[] = [];
+      const blocks: FlowNode[] = [];
+      const appeal: string[] = [];
+      concepts.forEach((c, i) => {
+        const n = i + 1;
+        const show = q(`C${n}_SHOW`, "html", `<p><strong>${c.replace(/[<>&]/g, "")}</strong></p><p>Please read this description carefully.</p>`, { required: false });
+        const ap = q(`C${n}_APPEAL`, "single_select", `Overall, how appealing is ${c.replace(/[<>&]/g, "")} to you?`, { options: AGREE("Not at all appealing", "Extremely appealing") });
+        const pi = q(`C${n}_INTENT`, "single_select", `How likely would you be to buy ${c.replace(/[<>&]/g, "")}?`, { options: AGREE("Definitely would not buy", "Definitely would buy") });
+        qs.push(show, ap, pi);
+        appeal.push(String(ap.variableName));
+        blocks.push({ type: "block", id: ids("b"), title: c, children: [page(c, [show, ap, pi])] } as FlowNode);
+      });
+      const rid = ids("r");
+      return {
+        title: `Sequential monadic test of ${concepts.length} concepts`,
+        questions: qs,
+        /* the randomizer is the top-level node itself: a block holding a randomizer is a "block with non-page elements" to the quality check */
+        block: { type: "randomizer", id: rid, title: "Concept rotation", order: "williams", children: blocks } as FlowNode,
+        tests: [{ method: "sequential_monadic", variables: appeal, priority: 1, tier: "essential", hypotheses: [], reason: "every respondent rates every concept: within-respondent comparison and the order effect", options: { order: randomizerOrderVariable(rid, null), blocks: blocks.map((b) => (b as { id: string }).id) } }],
+        notes: [`Rotation: Williams order over ${concepts.length} concept blocks; the order is stored in ${randomizerOrderVariable(rid, null)}.`],
       };
     }
   }

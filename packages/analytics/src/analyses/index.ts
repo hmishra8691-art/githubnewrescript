@@ -7,12 +7,13 @@ import { cluster, correlation, factor, quality, regression, reliability, segment
 import { brand, csat, gap, nps, pricing, text, trend, turf } from "./business.js";
 import { conjoint, maxdiff } from "./choice.js";
 import { hb, lca, sem } from "./advanced.js";
+import { sequentialMonadic } from "./experimental.js";
 
 export type AnalysisRunner = (def: AnalysisDefinition, ds: Dataset, totalCases: number) => AnalysisResult;
 
 export const RUNNERS: Record<AnalysisDefinition["kind"], AnalysisRunner> = {
   descriptive, topbox, crosstab, test: statisticalTest, correlation, regression, segmentation, cluster, factor, reliability, trend,
-  nps, csat, turf, gap, pricing, brand, ranking, allocation, text, quality, weighting, conjoint, maxdiff, hb, lca, sem,
+  nps, csat, turf, gap, pricing, brand, ranking, allocation, text, quality, weighting, conjoint, maxdiff, hb, lca, sem, sequential_monadic: sequentialMonadic,
 };
 
 /**
@@ -93,4 +94,5 @@ export * from "./business.js";
 export * from "./choice.js";
 export * from "./advanced.js";
 export * from "./pricingModels.js";
+export * from "./experimental.js";
 export { hashDefinition } from "./common.js";

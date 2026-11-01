@@ -18,8 +18,8 @@ import {
   buildBrandTrackerSurvey, buildEmployeeSurvey,
 } from "./starters.js";
 import type { SurveyDefinition } from "@rescript/schema";
-import { buildPricingPsmSurvey, buildPriceLadderSurvey } from "./methods.js";
-export { buildMethodSurvey, buildPricingPsmSurvey, buildPriceLadderSurvey } from "./methods.js";
+import { buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey } from "./methods.js";
+export { buildMethodSurvey, buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey } from "./methods.js";
 
 export interface SurveyTemplate {
   key: string;
@@ -76,6 +76,12 @@ export const SURVEY_TEMPLATES: SurveyTemplate[] = [
     name: "Adaptive Gabor–Granger price ladder",
     description: "One price at a time — up after yes, down after no — storing the highest price accepted, with the planned demand and revenue curves",
     build: buildPriceLadderSurvey,
+  },
+  {
+    key: "sequential_monadic",
+    name: "Sequential monadic concept test",
+    description: "Every respondent rates every concept in a Williams-balanced order (stored per respondent), with the planned within-respondent comparison and order-effect check",
+    build: buildSequentialMonadicSurvey,
   },
   {
     key: "master_demo_2026",

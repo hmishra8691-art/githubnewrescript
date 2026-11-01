@@ -27,9 +27,10 @@ THE ENGINE generates the design once (seeded), refuses an infeasible one with th
 {"op":"update_conjoint","target":"PHONE_CBC","dualResponse":true}
 {"op":"simulate_conjoint","target":"PLAN_MENU","scenario":{"name":"Premium bundle at $12","prices":{"Insurance":"$5"},"bundles":[{"name":"Premium","items":["Insurance","Streaming"],"price":"$12"}]}}   // remove:true drops a scenario
 "A MaxDiff of the most and least important product features", no list anywhere → {"kind":"clarify","reply":"…","questions":["Which features should the MaxDiff compare? I'll size the tasks from how many there are."]}. "A CBC with four attributes, three levels each" (or a rating-based conjoint with 4 attributes) → clarify: "What are the four attributes and their levels?"
-METHOD TEMPLATES (S5c) — a whole programmed block plus the analysis-plan items that read it, ONE action: add_method_template {template, product, currency, prefix, plan}. pricing_psm = Van Westendorp's four prices + the Newton–Miller–Smith likelihood pair at the respondent's own cheap/expensive price (nms:false drops it; vwCurves proxy|textbook). price_ladder = adaptive Gabor–Granger (numeric.price_ladder: up after yes, down after no, stops at the first boundary; prices [3–20], start middle|lowest|highest|random), the answer = highest price accepted. Variable names are fixed (PSM_*, NMS_*); a clash is refused — pass prefix. Never rebuild these from create_question.
+METHOD TEMPLATES (S5c) — a whole programmed block plus the analysis-plan items that read it, ONE action: add_method_template {template, product, currency, prefix, plan}. pricing_psm = Van Westendorp's four prices + the Newton–Miller–Smith likelihood pair at the respondent's own cheap/expensive price (nms:false drops it; vwCurves proxy|textbook). price_ladder = adaptive Gabor–Granger (numeric.price_ladder: up after yes, down after no, stops at the first boundary; prices [3–20], start middle|lowest|highest|random), the answer = highest price accepted. sequential_monadic = one block per concept (concepts [2–8]) under a Williams randomizer, the order stored, plan: within-respondent tests + order effect. Variable names are fixed (PSM_*, NMS_*); a clash is refused — pass prefix. Never rebuild these from create_question.
 {"op":"add_method_template","template":"pricing_psm","product":"the Aurora kettle","currency":"$"}
-{"op":"add_method_template","template":"price_ladder","product":"the Plus plan","currency":"$","prices":[5,8,12,15,20]}`;
+{"op":"add_method_template","template":"price_ladder","product":"the Plus plan","currency":"$","prices":[5,8,12,15,20]}
+{"op":"add_method_template","template":"sequential_monadic","concepts":["Fresh","Bold","Calm"]}`;
 
 /**
  * A request about MaxDiff or conjoint — the guide goes with it. English, Hinglish and Devanagari,
@@ -43,6 +44,6 @@ export function methodsIntent(text: string): boolean {
   // Hinglish words around the method names are covered above; Devanagari spellings of them
   if (/मैक्स\s?डिफ|मैक्सडिफ|कंजॉइंट|कन्जॉइंट|कंजोइंट|बेस्ट\s?(?:और|-)?\s?वर्स्ट/.test(t)) return true;
   /* S5c: the method templates */
-  if (/\bvan[\s-]?westendorp\b|\bprice sensitivity (?:meter|study|test)\b|\bpsm\b|\bnewton[\s–-]+miller|\bnms\b|\bgabor[\s–-]+granger\b|\bprice ladder\b/i.test(t)) return true;
+  if (/\bvan[\s-]?westendorp\b|\bprice sensitivity (?:meter|study|test)\b|\bpsm\b|\bnewton[\s–-]+miller|\bnms\b|\bgabor[\s–-]+granger\b|\bprice ladder\b|\bsequential[\s-]+monadic\b/i.test(t)) return true;
   return false;
 }

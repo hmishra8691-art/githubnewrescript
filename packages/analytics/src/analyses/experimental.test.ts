@@ -1,0 +1,70 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { SurveyDefinition } from "@rescript/schema";
+import { buildDataset, type AnalyticsRow } from "../dataset.js";
+import { runAnalysis } from "./index.js";
+import { conceptPositions, holm } from "./experimental.js";
+
+const spec = { environment: "LIVE" as const, dataset: "all" as const };
+const row = (i: number, a: Record<string, unknown>, calc: Record<string, unknown> = {}, embedded: Record<string, unknown> = {}): AnalyticsRow => ({ id: `r${i}`, session_id: `s${i}`, status: "complete", answers: a, calculated: calc, embedded, flags: [] });
+const near = (a: number | null | undefined, b: number, tol = 1e-3) => assert.ok(a != null && Math.abs(a - b) < tol, `${a} ≈ ${b}`);
+
+test("holm: step-down adjusted p-values, monotone, in the input order", () => {
+  assert.deepEqual(holm([0.01, 0.04, 0.03]).map((p) => Math.round(p! * 1e6) / 1e6), [0.03, 0.06, 0.06]);
+  assert.deepEqual(holm([0.5, null]), [0.5, null]);
+});
+
+test("conceptPositions reads the stored ORDER_<randomizer> (non-concept children skipped)", () => {
+  assert.deepEqual(conceptPositions("b2,intro,b3,b1", ["b1", "b2", "b3"]), [2, 0, 1]);
+  assert.deepEqual(conceptPositions(null, ["b1", "b2"]), [null, null]);
+});
+
+/*
+ * SEQUENTIAL MONADIC — six respondents rate concepts A, B, C (5-point), each in one of the six Williams orders.
+ *   ratings (A,B,C) / order:  (5,3,2) ABC  (4,4,3) BCA  (5,2,3) CAB  (3,3,1) ACB  (4,2,2) CBA  (5,4,2) BAC
+ * Hand-computed:
+ *   means A 4.3333, B 3.0, C 2.1667
+ *   paired differences A−B (2,0,3,0,2,1): mean 1.3333, t = 2.6968;  A−C: 2.1667, t = 7.0502;  B−C: 0.8333, t = 1.7461
+ *   Friedman rank sums 17 / 11.5 / 7.5 → Q = 7.5833 before ties; three rows with one tie pair each → Σ(t³−t) = 18,
+ *     factor 1 − 18/144 = 0.875 → Q = 8.6667, df 2, p = e^(−Q/2) = 0.013124
+ *   first-position lift (first-shown − mean of the later two): 2.5, 0.5, −0.5, 1.0, −1.0, 0.5 → mean 0.5, t = 1.0
+ *   A first (5,3) 4.0 vs later 4.5;  B first (4,4) 4.0 vs later 2.5;  C first (3,2) 2.5 vs later 2.0
+ */
+const def = SurveyDefinition.parse({
+  meta: { id: "sm", code: "SM", title: "SM", version: "1.0" },
+  questions: ["A", "B", "C"].map((c) => ({ id: `q_${c}`, code: `C_${c}`, variableName: `C_${c}`, type: "single_select", text: c, options: [1, 2, 3, 4, 5].map((k) => ({ code: k, label: String(k) })) })),
+  flow: [{ type: "randomizer", id: "rot", order: "williams", children: ["A", "B", "C"].map((c) => ({ type: "block", id: `b${c}`, children: [{ type: "page", id: `p${c}`, questionIds: [`q_${c}`] }] })) }],
+});
+const DATA: [number[], string][] = [[[5, 3, 2], "ABC"], [[4, 4, 3], "BCA"], [[5, 2, 3], "CAB"], [[3, 3, 1], "ACB"], [[4, 2, 2], "CBA"], [[5, 4, 2], "BAC"]];
+const rows = DATA.map(([r, o], i) => row(i, { q_A: r[0], q_B: r[1], q_C: r[2] }, { ORDER_ROT: [...o].map((c) => `b${c}`).join(",") }));
+
+test("sequential monadic: means, Friedman, paired t per pair (Holm), first-position effect — the hand-computed values", () => {
+  const ds = buildDataset(def, rows, { spec });
+  const res = runAnalysis({ name: "sm", kind: "sequential_monadic", dataset: spec, variables: ["C_A", "C_B", "C_C"], options: { order: "ORDER_ROT", blocks: ["bA", "bB", "bC"] } }, ds);
+  assert.equal(res.error, undefined, JSON.stringify(res.warnings));
+  assert.deepEqual(res.tables[0].rows.map((r) => r.mean), [4.33, 3, 2.17]);
+  const fr = res.tests.find((t) => t.test === "friedman")!;
+  near(fr.statistic, 8.6667);
+  near(fr.p, Math.exp(-8.6667 / 2), 1e-4);
+  const pairs = res.tables.find((t) => t.id === "pairs")!.rows;
+  assert.deepEqual(pairs.map((r) => r.t), [2.7, 7.05, 1.75]);
+  assert.deepEqual(pairs.map((r) => r.diff), [1.33, 2.17, 0.83]);
+  /* Holm on the three raw p-values, recomputed here from the table */
+  const raw = pairs.map((r) => Number(r.p)), adj = holm(raw);
+  pairs.forEach((r, k) => near(Number(r.pHolm), adj[k]!, 3e-4));
+  near(Number(pairs[1].pHolm), 3 * Number(pairs[1].p), 3e-4);   /* the smallest raw p (A−C) is multiplied by the 3 pairs */
+  const pos = res.tests.find((t) => t.test === "first_position_effect")!;
+  near(pos.statistic, 1.0);
+  const order = res.tables.find((t) => t.id === "order")!.rows;
+  assert.deepEqual(order.map((r) => [r.meanFirst, r.meanLater, r.nFirst, r.nLater]), [[4, 4.5, 2, 4], [4, 2.5, 2, 4], [2.5, 2, 2, 4]]);
+  assert.ok(res.variablesUsed.includes("ORDER_ROT"));
+});
+
+test("sequential monadic: two concepts use the paired t; no order variable is said, not guessed", () => {
+  const ds = buildDataset(def, rows, { spec });
+  const res = runAnalysis({ name: "sm", kind: "sequential_monadic", dataset: spec, variables: ["C_A", "C_B"] }, ds);
+  near(res.tests[0].statistic, 2.6968);
+  assert.ok(res.warnings.some((w) => /order effect is not checked/.test(w)));
+  const one = runAnalysis({ name: "sm", kind: "sequential_monadic", dataset: spec, variables: ["C_A"] }, ds);
+  assert.ok(one.warnings.some((w) => /at least two concepts/.test(w)));
+});

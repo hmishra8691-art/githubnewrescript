@@ -23,3 +23,13 @@ test("price_ladder starter: one ladder question, the gabor_granger ladder plan i
   assert.equal(run.endStatus, "complete");
   assert.equal(run.state.answers[def.questions[0].id], 15, "the simulated respondent answers a ladder price (the middle one)");
 });
+
+test("sequential_monadic starter: three concept blocks rotated, the plan item reads the ratings and the stored order", () => {
+  const def = findSurveyTemplate("sequential_monadic")!.build("x");
+  const t = def.research!.analysisPlan!.tests[0];
+  assert.equal(t.method, "sequential_monadic");
+  assert.match(String(t.options!.order), /^ORDER_/);
+  const run = simulateRespondent(def, { seed: 5, answers: {} });
+  assert.equal(run.endStatus, "complete");
+  assert.equal(run.pages.length, 3, "one page per concept");
+});

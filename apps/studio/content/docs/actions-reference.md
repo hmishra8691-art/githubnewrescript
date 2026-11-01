@@ -251,6 +251,8 @@ export type MethodTemplateAction = {
   prices?: number[];
   /** price_ladder: where the ladder starts (default middle) */
   start?: "middle" | "lowest" | "highest" | "random";
+  /** sequential_monadic: the concepts (2–8 short names; default Concept A, B, C) */
+  concepts?: string[];
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */

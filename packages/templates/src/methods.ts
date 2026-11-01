@@ -32,3 +32,6 @@ export const buildPricingPsmSurvey = (surveyId = "pricing-psm") =>
 
 export const buildPriceLadderSurvey = (surveyId = "price-ladder") =>
   buildMethodSurvey(surveyId, { code: "GGL", title: "Adaptive Gabor–Granger price ladder" }, { template: "price_ladder", product: "the product", prices: [5, 10, 15, 20, 25] });
+
+export const buildSequentialMonadicSurvey = (surveyId = "sequential-monadic") =>
+  buildMethodSurvey(surveyId, { code: "SMT", title: "Sequential monadic concept test" }, { template: "sequential_monadic", concepts: ["Concept A", "Concept B", "Concept C"] });
