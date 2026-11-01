@@ -1186,6 +1186,10 @@ const QuestionObject = z.object({
       designRef: z.string().optional(), // conjoint/maxdiff design file id
       /** which design VERSION a respondent answers: absent = derived from the seed; `{ exact: true }` = an atomic least-filled claim (balance.ts) */
       versionBalance: ExactBalance.optional(),
+      /** S4c (RA-08): an experiment question's ARM claimed exactly (weighted by the arms' weights) at page entry, stored in `<VAR>_ARM` */
+      armBalance: ExactBalance.optional(),
+      /** S4c (RK-04): store the displayed order of randomized options / rows / columns in `<VAR>_ORDER` / `_ROW_ORDER` / `_COL_ORDER` (opt-in) */
+      recordOrder: z.boolean().optional(),
 
       /* ---- 2026-09 variant batch. Every field optional; absent = old behaviour. */
       /** Video / audio stimulus URL (video rating, timeline, watch-time). */

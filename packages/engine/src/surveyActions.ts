@@ -120,7 +120,15 @@ export type SurveyAction =
   | { op: "page_break"; after: string; remove?: boolean }
   | { op: "create_embedded"; name: string; source?: "url" | "static" | "panel" | "expression"; value?: string }
   | { op: "create_calculation"; name: string; expression: string; label?: string; dataType?: "numeric" | "text" | "boolean" }
-  | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string }
+  | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string;
+      /** S4c: relative weight per block (title or id → weight > 0; absent = 1), the order design, exact balance */
+      weights?: Record<string, number>; order?: "random" | "rotation" | "latin_square" | "williams"; exact?: boolean }
+  /**
+   * S4c: change an existing randomizer — `randomizer` is its id, its title, or a block inside it (only one randomizer:
+   * may be omitted). `weights` by child title or id (null clears); `order` random | rotation | latin_square | williams;
+   * `exact` claims least-filled (weighted / by design row); `recordOrder` false stops ORDER_<ID> (default on).
+   */
+  | { op: "set_randomizer"; randomizer?: string; show?: number | null; weights?: Record<string, number> | null; order?: "random" | "rotation" | "latin_square" | "williams"; exact?: boolean; recordOrder?: boolean; title?: string }
   | { op: "create_branch"; blocks: string[]; when: CondInput; title?: string; arms?: { blocks: string[]; when: CondInput; label?: string }[]; otherwise?: string[] }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
   | { op: "set_research"; strict?: boolean; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];
@@ -156,7 +164,7 @@ export type SurveyAction =
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
   "set_display_logic", "add_skip", "clear_skips", "set_validation", "page_break", "create_embedded", "create_calculation",
-  "create_randomizer", "create_branch", "create_loop", "set_research", "add_punch", "remove_punches",
+  "create_randomizer", "set_randomizer", "create_branch", "create_loop", "set_research", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
@@ -395,7 +403,14 @@ function coerceOne(item: unknown): SurveyAction | string {
       return { op, name, source, ...(str(o.value) ? { value: str(o.value) } : {}) };
     }
     case "create_calculation": { const name = str(o.name), expression = str(o.expression); return name && expression ? { op, name, expression, ...(str(o.label) ? { label: str(o.label) } : {}), ...(["numeric", "text", "boolean"].includes(String(o.dataType)) ? { dataType: o.dataType as "numeric" } : {}) } : "create_calculation needs name and expression"; }
-    case "create_randomizer": { const blocks = strs(o.blocks); if (!blocks || blocks.length < 2) return "create_randomizer needs two or more blocks"; const show = Number(o.show); return { op, blocks, ...(Number.isInteger(show) && show > 0 ? { show } : {}), ...(str(o.title) ? { title: str(o.title) } : {}) }; }
+    case "create_randomizer": { const blocks = strs(o.blocks); if (!blocks || blocks.length < 2) return "create_randomizer needs two or more blocks"; const show = Number(o.show); const w = randWeightsIn(o.weights); const ord = randOrderIn(o.order); if (ord === "bad") return "create_randomizer: order is random, rotation, latin_square or williams"; return { op, blocks, ...(Number.isInteger(show) && show > 0 ? { show } : {}), ...(str(o.title) ? { title: str(o.title) } : {}), ...(w ? { weights: w } : {}), ...(ord ? { order: ord } : {}), ...(typeof o.exact === "boolean" ? { exact: o.exact } : {}) }; }
+    case "set_randomizer": {
+      const ord = randOrderIn(o.order); if (ord === "bad") return "set_randomizer: order is random, rotation, latin_square or williams";
+      const show = o.show === null ? null : Number(o.show);
+      const w = o.weights === null ? null : randWeightsIn(o.weights);
+      const out = { op, ...(str(o.randomizer ?? o.target ?? o.id) ? { randomizer: str(o.randomizer ?? o.target ?? o.id) } : {}), ...(show === null ? { show: null } : Number.isInteger(show) && show > 0 ? { show } : {}), ...(w === null ? { weights: null } : w ? { weights: w } : {}), ...(ord ? { order: ord } : {}), ...(typeof o.exact === "boolean" ? { exact: o.exact } : {}), ...(typeof o.recordOrder === "boolean" ? { recordOrder: o.recordOrder } : {}), ...(str(o.title) ? { title: str(o.title) } : {}) } as SurveyAction;
+      return Object.keys(out).length > 1 + ("randomizer" in out ? 1 : 0) ? out : "set_randomizer changes nothing";
+    }
     case "create_branch": {
       /* one arm (blocks + when), or several (arms) — first match wins — and an optional otherwise */
       const arms = Array.isArray(o.arms) ? o.arms.map((x) => { const r = (x ?? {}) as Record<string, unknown>; const blocks = strs(r.blocks), when = condIn(r.when ?? r.condition); return blocks?.length && when ? { blocks, when, ...(str(r.label) ? { label: str(r.label) } : {}) } : null; }).filter((x): x is { blocks: string[]; when: CondInput; label?: string } => !!x) : [];
@@ -660,6 +675,34 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
 
 class ActionError extends Error {}
 const fail = (m: string): never => { throw new ActionError(m); };
+
+/* S4c — randomizer weights / order from a model's or a sentence's arguments */
+function randWeightsIn(v: unknown): Record<string, number> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>).slice(0, 100)) { const n = Number(x); if (k.trim() && Number.isFinite(n) && n > 0) out[k.trim().slice(0, 200)] = Math.min(1_000_000, n); }
+  return Object.keys(out).length ? out : undefined;
+}
+function randOrderIn(v: unknown): "random" | "rotation" | "latin_square" | "williams" | undefined | "bad" {
+  if (v == null || v === "") return undefined;
+  const s = String(v).toLowerCase().replace(/[\s-]+/g, "_");
+  if (s === "random" || s === "shuffle") return "random";
+  if (s === "rotation" || s === "rotate" || s === "even" || s === "even_presentation") return "rotation";
+  if (s === "latin_square" || s === "latin") return "latin_square";
+  if (s === "williams" || s === "williams_design" || s === "carryover" || s === "carryover_balanced") return "williams";
+  return "bad";
+}
+/** weights named by child title or id → keyed by child id; an unknown child is refused */
+function randomizerWeightMap(node: Extract<FlowNode, { type: "randomizer" }>, w: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(w)) {
+    const key = k.toLowerCase();
+    const c = node.children.find((x) => x.id.toLowerCase() === key || ((x as { title?: string }).title ?? "").toLowerCase() === key);
+    if (!c) fail(`the randomizer has no child “${k}” (name a child by its title or id: ${node.children.map((x) => (x as { title?: string }).title ?? x.id).join(", ")})`);
+    out[c!.id] = v;
+  }
+  return out;
+}
 /** the create_question actions a method action makes for its design (the only way a design-task question is created) */
 const designQuestionActions = new WeakSet<object>();
 /** the actions whose dependents are worth listing before applying */
@@ -953,10 +996,30 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       const sorted = [...idx].sort((x, y) => x - y);
       if (sorted.some((v, k) => k > 0 && v !== sorted[k - 1] + 1)) fail("the blocks to randomize must sit next to each other in the flow");
       const nodes = sorted.map((i) => flow[i]);
-      const node = { type: "randomizer", id: ctx.ids("rand"), ...(a.title ? { title: a.title } : {}), ...(a.show ? { show: a.show } : {}), evenPresentation: true, ...(a.show ? { balance: { exact: true } } : {}), children: nodes } as unknown as FlowNode;
+      const design = a.order === "latin_square" || a.order === "williams";
+      const node = { type: "randomizer", id: ctx.ids("rand"), ...(a.title ? { title: a.title } : {}), ...(a.show ? { show: a.show } : {}), evenPresentation: true, ...((a.exact ?? (!!a.show || design)) ? { balance: { exact: true } } : {}), ...(a.order && a.order !== "rotation" ? { order: a.order } : {}), children: nodes } as unknown as Extract<FlowNode, { type: "randomizer" }>;
+      if (a.weights) node.weights = randomizerWeightMap(node, a.weights);
       flow.splice(sorted[0], nodes.length, node);
       const titles = nodes.map((n) => (n as { title?: string }).title ?? n.id);
       return { description: `Randomized the order of ${titles.map((t) => `“${t}”`).join(", ")}${a.show ? ` (each respondent sees ${a.show})` : ""}`, touched: ids };
+    }
+    case "set_randomizer": {
+      const all: Extract<FlowNode, { type: "randomizer" }>[] = [];
+      const walkR = (ns: readonly FlowNode[]) => { for (const n of ns) { if (n.type === "randomizer") all.push(n); const k = (n as { children?: FlowNode[] }).children; if (k) walkR(k); if (n.type === "branch") { for (const b of n.branches) walkR(b.children); if (n.otherwise) walkR(n.otherwise); } } };
+      walkR(def.flow as FlowNode[]);
+      const ref = a.randomizer?.trim().toLowerCase();
+      const holds = (n: FlowNode, r: string): boolean => n.id.toLowerCase() === r || ((n as { title?: string }).title ?? "").toLowerCase() === r || ((n as { children?: FlowNode[] }).children ?? []).some((c) => holds(c, r));
+      const node = ref ? (all.find((n) => n.id.toLowerCase() === ref || (n.title ?? "").toLowerCase() === ref) ?? all.find((n) => n.children.some((c) => holds(c, ref)))) : all.length === 1 ? all[0] : undefined;
+      if (!node) fail(ref ? `no randomizer “${a.randomizer}” (name it by its id, its title or a block inside it)` : all.length ? "there are several randomizers — name one (its id, title or a block inside it)" : "the survey has no randomizer — create_randomizer first");
+      const r = node!;
+      if (a.title) r.title = a.title;
+      if (a.show === null) delete r.show; else if (a.show) { if (a.show > r.children.length) fail(`show ${a.show} is more than the randomizer's ${r.children.length} children`); r.show = a.show; }
+      if (a.weights === null) delete r.weights; else if (a.weights) r.weights = randomizerWeightMap(r, a.weights);
+      if (a.order) { if (a.order === "random") { delete r.order; delete r.evenPresentation; } else if (a.order === "rotation") { delete r.order; r.evenPresentation = true; } else r.order = a.order; }
+      if (a.exact === true) { r.balance = { ...(r.balance ?? {}), exact: true }; if (!r.order) r.evenPresentation = true; }
+      if (a.exact === false) delete r.balance;
+      if (a.recordOrder === false) r.recordOrder = false; else if (a.recordOrder === true) delete r.recordOrder;
+      return { description: `Randomizer ${r.title ?? r.id}: ${[r.order ?? (r.evenPresentation ? "rotation" : "random"), r.show ? `show ${r.show} of ${r.children.length}` : "all shown", r.weights ? `weights ${Object.entries(r.weights).map(([k, v]) => `${k}=${v}`).join(", ")}` : "", r.balance?.exact ? "exact balance" : "", r.recordOrder === false ? "order not stored" : `order stored in ORDER_${r.id.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase()}`].filter(Boolean).join("; ")}`, touched: [] };
     }
     case "create_branch": {
       /*
@@ -1610,7 +1673,8 @@ export function describeAction(a: SurveyAction): string {
     case "page_break": return a.remove ? `Remove the page break after ${a.after}` : `Page break after ${a.after}`;
     case "create_embedded": return `Create embedded variable ${a.name}`;
     case "create_calculation": return `Create calculation ${a.name}`;
-    case "create_randomizer": return `Randomize ${a.blocks.join(", ")}`;
+    case "create_randomizer": return `Randomize ${a.blocks.join(", ")}${a.order && a.order !== "random" ? ` (${a.order.replace("_", " ")})` : ""}${a.weights ? " (weighted)" : ""}`;
+    case "set_randomizer": return `Change the randomizer${a.randomizer ? ` ${a.randomizer}` : ""}${a.order ? ` — order ${a.order.replace("_", " ")}` : ""}${a.weights ? " — weights" : a.weights === null ? " — no weights" : ""}${a.exact != null ? ` — exact balance ${a.exact ? "on" : "off"}` : ""}`;
     case "create_branch": return `Show ${a.blocks.join(", ")} only when ${condWords(a.when)}${a.arms?.length ? ` (+${a.arms.length} more arm${a.arms.length === 1 ? "" : "s"})` : ""}`;
     case "create_loop": return `Loop ${a.from}${a.to !== a.from ? `–${a.to}` : ""}`;
     case "set_research": return a.strict === true && Object.keys(a).length === 2 ? "Enforce the research design" : a.strict === false && Object.keys(a).length === 2 ? "Stop enforcing the research design" : a.brief && Object.keys(a).length === 2 ? `Record the project brief (${Object.keys(a.brief).map((k) => BRIEF_WORDS[k] ?? k).join(", ")})` : "Record the research design";

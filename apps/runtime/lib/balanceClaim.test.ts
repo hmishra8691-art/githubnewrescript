@@ -69,3 +69,35 @@ test("a failed claim (database without 0073) stores the seed-derived arm and say
   // exactly what the respondent would have seen before #15
   assert.deepEqual(after.filter((p) => !/^pn/.test(p)), before.filter((p) => !/^pn/.test(p)));
 });
+
+/* S4c (RA-05 / RA-06): the server path carries the weights to the store, and claims a design ROW */
+test("S4c: a weighted exact randomizer sends its weights; 400 respondents at 3:1 → 300 / 100", async () => {
+  const d = SurveyDefinition.parse({
+    meta: { id: "rw", code: "RW", title: "Weighted", version: "1" },
+    questions: ["q0", "a", "b"].map(qn),
+    flow: [page("p0", "q0"), { type: "randomizer", id: "rw", show: 1, weights: { pa: 3, pb: 1 }, balance: { exact: true }, children: [page("pa", "a"), page("pb", "b")] }, { type: "end", id: "end", status: "complete" }],
+  });
+  const m = new MemoryBalanceStore();
+  const seen: (readonly number[] | undefined)[] = [];
+  const store: BalanceStore = { claim: async (r) => { seen.push(r.weights); return { ok: true, arms: m.claim(r) }; } };
+  for (let i = 0; i < 400; i++) await claimBalances(d, createResponseState(d, { seed: 50 + i, sessionId: `rw-session-${i}` }), ["randomizer:rw"], "rw:LIVE", store);
+  assert.ok(seen.every((w) => Array.isArray(w) && w.length === 2 && [...w].sort().join() === "1,3"));
+  const c = m.counts("rw:LIVE", "randomizer:rw");
+  assert.equal(c.pa!.active, 300); assert.equal(c.pb!.active, 100);
+});
+
+test("S4c: an exact Williams randomizer's row is claimed through the server path (latin:<id> → RANDOMIZER_<ID>_ROW)", async () => {
+  const d = SurveyDefinition.parse({
+    meta: { id: "rl", code: "RL", title: "Latin", version: "1" },
+    questions: ["q0", "a", "b", "c", "n1"].map(qn),
+    flow: [page("p0", "q0"), { type: "randomizer", id: "wl", order: "williams", balance: { exact: true }, children: [page("pa", "a"), page("pb", "b"), page("pc", "c"), page("pd", "n1")] }, { type: "end", id: "end", status: "complete" }],
+  });
+  const m = new MemoryBalanceStore();
+  for (let i = 0; i < 8; i++) {
+    const st = createResponseState(d, { seed: 7 + i, sessionId: `rl-session-${i}` });
+    const out = await claimBalances(d, st, ["latin:wl"], "rl:LIVE", memory(m));
+    assert.equal(out.assignments[0]!.variable, "RANDOMIZER_WL_ROW");
+    assert.ok(isBalanceVariable(d, "RANDOMIZER_WL_ROW"));
+  }
+  assert.deepEqual(Object.values(m.counts("rl:LIVE", "latin:wl")).map((x) => x.active), [2, 2, 2, 2]);
+});

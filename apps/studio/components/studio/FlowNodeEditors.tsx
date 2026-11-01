@@ -458,6 +458,62 @@ export function BalanceSettings({ value, onChange, what, testId }: {
   );
 }
 
+/**
+ * S4c — the randomizer's WEIGHTS (RA-05), ORDER design (RA-06) and the stored order (RK-04). Weights: one relative
+ * number per child (blank = 1) — `show` N draws in proportion, and an exact claim aims at weight / total. Order:
+ * random, rotation (= even presentation), cyclic Latin square or Williams (carryover-balanced).
+ */
+function RandomizerDesignSettings({ node, onChange }: { node: Extract<FlowNode, { type: "randomizer" }>; onChange(n: FlowNode): void }) {
+  const order = node.order ?? (node.evenPresentation ? "rotation" : "random");
+  const design = order === "latin_square" || order === "williams";
+  const n = node.children.length;
+  const rows = order === "williams" ? (n % 2 === 0 ? n : 2 * n) : n;
+  const setWeight = (id: string, v: string) => {
+    const w = { ...(node.weights ?? {}) };
+    const x = Number(v);
+    if (v === "" || !(x > 0) || x === 1) delete w[id]; else w[id] = Math.min(1_000_000, x);
+    onChange({ ...node, weights: Object.keys(w).length ? w : undefined });
+  };
+  return (
+    <div className="card" style={{ padding: 10, marginTop: 8 }} data-testid="randomizer-design">
+      <label className="row" style={{ gap: 6, fontSize: 13 }}>order
+        <select className="select" style={{ width: 280 }} value={order} data-testid="randomizer-order"
+          onChange={(e) => {
+            const v = e.target.value as NonNullable<typeof node.order>;
+            onChange({ ...node, order: v === "random" || v === "rotation" ? undefined : v, evenPresentation: v === "rotation" ? true : v === "random" ? undefined : node.evenPresentation });
+          }}>
+          <option value="random">random (seeded shuffle)</option>
+          <option value="rotation">rotation (even presentation)</option>
+          <option value="latin_square">Latin square (each child in each position equally)</option>
+          <option value="williams">Williams (also balances which child follows which)</option>
+        </select>
+      </label>
+      {design && <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }} data-testid="randomizer-order-note">
+        {rows} design rows — each respondent gets one row{node.balance?.exact ? " (claimed least-filled first)" : " (from their seed; tick exact balance for exactly equal rows)"}{node.show ? `, and sees its first ${node.show}` : ""}. Weights do not apply to a design.
+      </p>}
+      {!design && n > 1 && (
+        <div style={{ marginTop: 6 }}>
+          <div className="flabel" style={{ margin: 0 }}>weights <span className="muted" style={{ fontWeight: 400 }}>— relative; blank = 1{node.show ? `; ${node.show} of ${n} drawn in proportion` : ""}{node.balance?.exact ? "; the exact claim aims at weight / total" : ""}</span></div>
+          <div className="row" style={{ flexWrap: "wrap", gap: 10 }}>
+            {node.children.map((c) => (
+              <label key={c.id} className="row" style={{ gap: 4, fontSize: 12.5 }}>
+                {(c as { title?: string }).title || c.id}
+                <input className="input" type="number" min={0} step="any" style={{ width: 64 }} data-testid={`randomizer-weight-${c.id}`}
+                  value={node.weights?.[c.id] ?? ""} placeholder="1" onChange={(e) => setWeight(c.id, e.target.value)} />
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      <label className="row" style={{ gap: 6, fontSize: 12.5, marginTop: 6 }}>
+        <input type="checkbox" checked={node.recordOrder !== false} data-testid="randomizer-record-order"
+          onChange={(e) => onChange({ ...node, recordOrder: e.target.checked ? undefined : false })} />
+        store the order shown in <code>ORDER_{node.id.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase()}</code>
+      </label>
+    </div>
+  );
+}
+
 /* ======================================================== branch / condition */
 
 type BranchNode = Extract<FlowNode, { type: "branch" }>;
@@ -679,7 +735,8 @@ function NodeEditorBody({ node, onChange }: { node: FlowNode; onChange(n: FlowNo
               even presentation
             </label>
           </div>
-          {node.evenPresentation && <BalanceSettings value={node.balance} onChange={(b) => onChange({ ...node, balance: b })} what="each child" testId="randomizer-balance" />}
+          <RandomizerDesignSettings node={node} onChange={onChange} />
+          {(node.evenPresentation || node.order === "latin_square" || node.order === "williams") && <BalanceSettings value={node.balance} onChange={(b) => onChange({ ...node, balance: b })} what={node.order === "latin_square" || node.order === "williams" ? "each design row" : "each child"} testId="randomizer-balance" />}
           <p className="muted" style={{ fontSize: 12.5 }}>
             Anything can go inside: blocks, groups, even another randomizer. Drag it onto
             this card, or use <em>+ Add element</em> inside it.

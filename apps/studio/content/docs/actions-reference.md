@@ -6,7 +6,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 ## The operations
 
-**Survey** (29): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
+**Survey** (30): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `set_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
 **Options and design** (20): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`, `set_option_groups`, `set_timer`
 
@@ -50,7 +50,15 @@ export type SurveyAction =
   | { op: "page_break"; after: string; remove?: boolean }
   | { op: "create_embedded"; name: string; source?: "url" | "static" | "panel" | "expression"; value?: string }
   | { op: "create_calculation"; name: string; expression: string; label?: string; dataType?: "numeric" | "text" | "boolean" }
-  | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string }
+  | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string;
+      /** S4c: relative weight per block (title or id → weight > 0; absent = 1), the order design, exact balance */
+      weights?: Record<string, number>; order?: "random" | "rotation" | "latin_square" | "williams"; exact?: boolean }
+  /**
+   * S4c: change an existing randomizer — `randomizer` is its id, its title, or a block inside it (only one randomizer:
+   * may be omitted). `weights` by child title or id (null clears); `order` random | rotation | latin_square | williams;
+   * `exact` claims least-filled (weighted / by design row); `recordOrder` false stops ORDER_<ID> (default on).
+   */
+  | { op: "set_randomizer"; randomizer?: string; show?: number | null; weights?: Record<string, number> | null; order?: "random" | "rotation" | "latin_square" | "williams"; exact?: boolean; recordOrder?: boolean; title?: string }
   | { op: "create_branch"; blocks: string[]; when: CondInput; title?: string; arms?: { blocks: string[]; when: CondInput; label?: string }[]; otherwise?: string[] }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
   | { op: "set_research"; strict?: boolean; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];

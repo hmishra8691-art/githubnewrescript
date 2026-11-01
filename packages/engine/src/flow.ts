@@ -20,7 +20,8 @@ import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
 import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
 import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
-import { designSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
+import { designSlot, designRowSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
+import { designRows, randomizerOrderKind, randomizerWeights, seededDesignRow } from "./randomizerDesign.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -208,35 +209,58 @@ export function compileFlow(
            * markedly more even than a shuffle, with no shared state.)
            */
           let children = seededShuffle(eligible, seed);
+          const nodeKey = `${node.id}${loopKeySuffix(loop)}`;
+          const orderKind = randomizerOrderKind(node);
+          const rows = designRows(orderKind, node.children.length);
           /*
            * EXACT BALANCE (#15): the children were CLAIMED for this respondent
            * (least-filled, atomically, across the sample) and stored in
            * `RANDOMIZER_<ID>`. Shown in a seeded order, so position effects are
            * not baked in. Not claimed yet: the seed-derived window below stands
            * in — the Runner claims before any page of it is shown.
+           *
+           * S4c: a Latin square / Williams randomizer claims its ROW instead
+           * (`RANDOMIZER_<ID>_ROW`); weighted children are claimed weighted.
            */
           let exactSlot: BalanceSlot | null = null;
-          if (node.balance?.exact) {
-            const nodeKey = `${node.id}${loopKeySuffix(loop)}`;
-            const show = node.show ?? eligible.length;
-            const fallbackIds = show < eligible.length ? seedWindow(eligible, show, state.seed, nodeKey, !!node.evenPresentation).map((c) => c.id) : [];
-            exactSlot = randomizerSlot(def, state, node, eligible.map((c) => c.id), loop, fallbackIds);
-            if (exactSlot) opts.onBalance?.(exactSlot);
-          }
-          if (exactSlot?.assigned) {
-            const chosen = new Set(exactSlot.assigned);
-            /* a child the respondent can no longer see (Back + a changed answer) is not shown; nothing is re-claimed */
-            children = seededShuffle(eligible.filter((c) => chosen.has(c.id)), seed);
-          } else if (node.show != null && node.show < children.length) {
-            if (node.evenPresentation) {
-              const offset = Math.abs(subSeed(state.seed, `even:${node.id}${loopKeySuffix(loop)}`)) % eligible.length;
-              const inOrder = eligible;
-              children = Array.from({ length: node.show }, (_, i) => inOrder[(offset + i) % inOrder.length]);
-              // the WINDOW is rotated for balance; the order within it is
-              // still rolled, so position effects are not baked in
-              children = seededShuffle(children, seed);
-            } else {
-              children = children.slice(0, node.show);
+          if (rows) {
+            /* S4c (RA-06): the respondent's row of the design — claimed (exact) or seeded — gives order AND window */
+            const fallbackRow = seededDesignRow(state.seed, nodeKey, rows.length);
+            if (node.balance?.exact) {
+              exactSlot = designRowSlot(def, state, node, rows.length, loop, fallbackRow);
+              if (exactSlot) opts.onBalance?.(exactSlot);
+            }
+            const rowNo = Number(exactSlot?.assigned?.[0] ?? fallbackRow);
+            const row = rows[(Number.isInteger(rowNo) && rowNo >= 1 && rowNo <= rows.length ? rowNo : fallbackRow) - 1]!;
+            const ok = new Set(eligible.map((c) => c.id));
+            const inRow = row.map((i) => node.children[i]!).filter((c) => ok.has(c.id));
+            children = node.show != null && node.show < inRow.length ? inRow.slice(0, node.show) : inRow;
+          } else {
+            const weights = randomizerWeights(node, eligible.map((c) => c.id));
+            if (node.balance?.exact) {
+              const show = node.show ?? eligible.length;
+              const fallbackIds = show < eligible.length ? seedWindow(eligible, show, state.seed, nodeKey, orderKind === "rotation", weights).map((c) => c.id) : [];
+              exactSlot = randomizerSlot(def, state, node, eligible.map((c) => c.id), loop, fallbackIds, weights);
+              if (exactSlot) opts.onBalance?.(exactSlot);
+            }
+            if (exactSlot?.assigned) {
+              const chosen = new Set(exactSlot.assigned);
+              /* a child the respondent can no longer see (Back + a changed answer) is not shown; nothing is re-claimed */
+              children = seededShuffle(eligible.filter((c) => chosen.has(c.id)), seed);
+            } else if (node.show != null && node.show < children.length) {
+              if (weights) {
+                /* S4c (RA-05): N of M in proportion to the weights, without replacement; then a seeded order */
+                children = seededShuffle(seedWindow(eligible, node.show, state.seed, nodeKey, false, weights), seed);
+              } else if (orderKind === "rotation") {
+                const offset = Math.abs(subSeed(state.seed, `even:${node.id}${loopKeySuffix(loop)}`)) % eligible.length;
+                const inOrder = eligible;
+                children = Array.from({ length: node.show }, (_, i) => inOrder[(offset + i) % inOrder.length]);
+                // the WINDOW is rotated for balance; the order within it is
+                // still rolled, so position effects are not baked in
+                children = seededShuffle(children, seed);
+              } else {
+                children = children.slice(0, node.show);
+              }
             }
           }
           if (exactSlot) balanceStack.push(exactSlot.key);

@@ -70,15 +70,19 @@ export async function POST(req: NextRequest) {
   // the SERVER's seed: the tie-break order is derived from it, not from anything the client says
   const state = stateOf(body, sessionId, Number(existing.seed ?? 0) || 0, run.def);
   let missing = false;
+  let missingWeighted = false;
   const store: BalanceStore = {
     async claim(r) {
       if (missing) return { ok: false, error: "migration 0073 is not applied" };
+      if (r.weights && missingWeighted) return { ok: false, error: "migration 0079 (weighted claim) is not applied" };
       const { data, error } = await db.rpc("rescript_claim_balance", {
         p_survey: existing.survey_id, p_test: isTest, p_session: sessionId, p_key: r.key,
         p_arms: [...r.preference], p_count: r.count, p_basis: r.basis, p_hold_seconds: Math.round(r.holdMinutes * 60),
+        /* S4c (RA-05): weights only when they differ — an unweighted claim is exactly the 0073 call (a database without 0079 still serves it) */
+        ...(r.weights ? { p_weights: [...r.weights] } : {}),
       });
       if (error) {
-        if (missingBalanceMigration(error.message)) missing = true;
+        if (missingBalanceMigration(error.message)) { if (r.weights) missingWeighted = true; else missing = true; }
         return { ok: false, error: error.message };
       }
       return { ok: true, arms: Array.isArray(data) ? (data as unknown[]).map(String) : [] };
@@ -86,7 +90,7 @@ export async function POST(req: NextRequest) {
   };
   const out = await claimBalances(run.def, state, keys, `${existing.survey_id}:${isTest ? "TEST" : "LIVE"}`, store);
   for (const a of out.assignments) {
-    if (a.source === "fallback") console.warn("[rescript:balance] claim failed — the seed-derived arm is used", JSON.stringify({ surveyId: existing.survey_id, sessionId: sessionId.slice(0, 8), key: a.key, error: a.reason, needsMigration: missing ? "0073" : undefined }));
+    if (a.source === "fallback") console.warn("[rescript:balance] claim failed — the seed-derived arm is used", JSON.stringify({ surveyId: existing.survey_id, sessionId: sessionId.slice(0, 8), key: a.key, error: a.reason, needsMigration: missing ? "0073" : missingWeighted ? "0079" : undefined }));
     else console.info("[rescript:balance] claimed", JSON.stringify({ surveyId: existing.survey_id, sessionId: sessionId.slice(0, 8), environment: isTest ? "TEST" : "LIVE", key: a.key, arms: a.arms }));
   }
   return NextResponse.json({ ok: true, environment: isTest ? "TEST" : "LIVE", ...out });

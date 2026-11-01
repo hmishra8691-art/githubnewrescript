@@ -78,6 +78,10 @@ export type EmbeddedDataType = z.infer<typeof EmbeddedDataType>;
  */
 
 /** How a reference column's values are typed, for comparison and export. */
+/** S4c (RA-06): how a flow randomizer orders its children — see `FlowNode` randomizer `order` */
+export const RandomizerOrder = z.enum(["random", "rotation", "latin_square", "williams"]);
+export type RandomizerOrder = z.infer<typeof RandomizerOrder>;
+
 export const LoopReferenceType = z.enum(["text", "number", "boolean"]);
 export type LoopReferenceType = z.infer<typeof LoopReferenceType>;
 
@@ -311,6 +315,19 @@ export type FlowNode =
       evenPresentation?: boolean;
       /** exact balance across respondents (an atomic least-filled claim) — see balance.ts; absent = seed-derived */
       balance?: ExactBalance;
+      /**
+       * S4c (RA-05): relative weight per child id (positive, default 1). `show` N of M draws without replacement
+       * in proportion to the weights; with `balance.exact` the claim targets weight / total per child.
+       */
+      weights?: Record<string, number>;
+      /**
+       * S4c (RA-06): how the children are ordered. `random` (seeded shuffle), `rotation` (= `evenPresentation`, kept
+       * for old surveys), `latin_square` (cyclic) or `williams` (carryover-balanced; 2n rows for odd n). Absent =
+       * `rotation` when `evenPresentation`, else `random`.
+       */
+      order?: RandomizerOrder;
+      /** S4c (RK-04): store the order shown in `ORDER_<ID>` — default on; `false` turns it off */
+      recordOrder?: boolean;
       children: FlowNode[];
       /** Only run this randomizer (and show any of its children) when this holds. */
       visibleIf?: Condition;
@@ -488,6 +505,9 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       show: z.number().optional(),
       evenPresentation: z.boolean().optional(),
       balance: ExactBalance.optional(),
+      weights: z.record(z.string(), z.number().positive().max(1_000_000)).optional(),
+      order: RandomizerOrder.optional(),
+      recordOrder: z.boolean().optional(),
       children: z.array(FlowNode),
       visibleIf: Condition.optional(),
     }),

@@ -1,4 +1,4 @@
--- EXACT BALANCE SQL TEST (0073, engine item #15) — run against a database with the migrations applied:
+-- EXACT BALANCE SQL TEST (0073, engine item #15; 0079 adds `p_weights` — the B13 signature is the 9-argument one) — run against a database with the migrations applied:
 --   psql -d <db> -v ON_ERROR_STOP=1 -f scripts/exact-balance-sql-test.sql
 --
 -- Proves, on the real functions:
@@ -145,8 +145,8 @@ end $$;
 do $$
 declare ok boolean;
 begin
-  ok := not has_function_privilege('anon', 'public.rescript_claim_balance(uuid, boolean, text, text, text[], integer, text, integer)', 'execute')
-    and not has_function_privilege('authenticated', 'public.rescript_claim_balance(uuid, boolean, text, text, text[], integer, text, integer)', 'execute')
+  ok := not has_function_privilege('anon', 'public.rescript_claim_balance(uuid, boolean, text, text, text[], integer, text, integer, numeric[])', 'execute')
+    and not has_function_privilege('authenticated', 'public.rescript_claim_balance(uuid, boolean, text, text, text[], integer, text, integer, numeric[])', 'execute')
     and not has_function_privilege('authenticated', 'public.rescript_release_balance(uuid, text, text)', 'execute')
     and not has_table_privilege('anon', 'public.balance_claims', 'select')
     and not has_table_privilege('authenticated', 'public.balance_claims', 'insert');
