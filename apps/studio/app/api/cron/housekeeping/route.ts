@@ -2,6 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { supabaseService } from "@/lib/authServer";
+import { importSessionStore } from "@/lib/import/sessionsServer";
 
 /**
  * WEEKLY HOUSEKEEPING (audit SCHEMA-09).
@@ -62,5 +63,14 @@ async function run(req: Request): Promise<NextResponse> {
     }
     more = pass.more === true;
   }
-  return NextResponse.json({ ok: true, passes, deleted: totals, more, elapsedMs: Date.now() - startedAt });
+  /* I4: import source files past their 90 days — the object goes, the key is cleared, the session stays as history */
+  let importSources = 0; let importError: string | undefined;
+  try {
+    const store = importSessionStore();
+    for (const s of await store.expired(200)) {
+      if (Date.now() - startedAt > BUDGET_MS + 10_000) break;
+      await store.dropSource(s); importSources++;
+    }
+  } catch (e) { importError = (e as Error).message; }
+  return NextResponse.json({ ok: true, passes, deleted: { ...totals, importSources }, more, elapsedMs: Date.now() - startedAt, ...(importError ? { importSourcesError: importError } : {}) });
 }

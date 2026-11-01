@@ -6,6 +6,8 @@ import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, estimateAi, recordUsage } from "@/lib/metering";
 import { aiReadyFor } from "@/lib/byok/connect";
 import { CUSTOM_LOGIC_SYSTEM_PROMPT } from "@/lib/import/customLogic";
+import { importSessionStore } from "@/lib/import/sessionsServer";
+import { bounded, digestReport } from "@/lib/import/sessions";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -127,7 +129,30 @@ export async function POST(req: NextRequest) {
   });
   const actual = { customerCharge: (upload?.customerCharge ?? 0) + (processing?.customerCharge ?? 0), currency };
 
+  /*
+   * I4: the run is recorded as an import session — the file (90 days), the reconstructed model, the report
+   * digest and, for a merge, the survey as it is now (what a rollback restores). Best effort: a history that
+   * cannot be written (no migration 0080 yet) never fails the import; the response says why.
+   */
+  let session: { id: string; expiresAt: string; keepsSource: boolean; keepsPrior: boolean; store: string } | null = null;
+  let sessionNote: string | undefined;
+  try {
+    const store = importSessionStore();
+    const kept = bounded(canonical);
+    const prior = into === "merge" ? bounded(existing) : null;
+    const notes = [kept === null ? "the reconstructed model was too large to keep" : "", into === "merge" && prior === null ? "the survey before the import was too large to keep, so a rollback must use the version history" : ""].filter(Boolean);
+    const row = await store.create({
+      customerId: user ? user.customerId : null, userId: user?.userId ?? null, surveyId: into === "merge" && surveyId !== "sandbox" ? surveyId : null,
+      into, scope, fileName, format: detection.format, platform: detection.platform ?? null, fingerprint: canonical.source.fingerprint, sizeBytes: bytes.length,
+      reportDigest: digestReport(report), canonical: kept, decisions: [], priorDefinition: prior, error: notes.length ? notes.join("; ") : null, status: report.ok ? "analyzed" : "failed",
+    }, bytes);
+    session = { id: row.id, expiresAt: row.sourceExpiresAt, keepsSource: !!row.storageKey, keepsPrior: prior !== null, store: store.kind };
+  } catch (e) {
+    sessionNote = `This import was not added to the import history: ${(e as Error).message}`;
+  }
+
   return NextResponse.json({
+    session, ...(sessionNote ? { sessionNote } : {}),
     ok: report.ok, phase, detection, workload: work, estimate, actual,
     title: canonical.source.title ?? null,
     definition: result.def, report, mapping: result.mapping, confidence: result.confidence, verification,
