@@ -326,6 +326,12 @@ export function stripAssessmentSecrets<T extends SurveyDefinition>(def: T): T {
      * always did; `migrateQuizKeys` moved that key here). In a paper, or with feedback off, it is stripped like any key.
      */
     if (!s && isQuiz(q) && q.settings?.showFeedback !== false) continue;
+    /*
+     * S5a (GA-06): a GAMIFIED survey that gives points per correct answer and is NOT a scored paper keeps its key —
+     * the points HUD needs it, and the HUD already tells the respondent which answers scored. A paper strips it as
+     * before (its HUD then counts answer points only; the stored POINTS of the paper are the browser's).
+     */
+    if (!s && def.gamification && def.gamification.enabled !== false && (def.gamification.points?.perCorrect ?? 0) > 0) continue;
     const a = q.assessment;
     q.assessment = {
       correct: [], withheld: true,

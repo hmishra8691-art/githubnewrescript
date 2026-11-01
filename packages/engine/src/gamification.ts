@@ -10,8 +10,9 @@ import { assessmentSelectedCodes } from "./assessment.js";
  *   gamificationVariables(def, state)   the calculated variables, recomputed with the survey's calculations
  *                                       (`runCalculations`, so the Runner and the server replay agree):
  *       POINTS_ANSWERED  answered questions (top-level answers of respondent-facing questions)
- *       POINTS_CORRECT   correct answers by the answer key (question.assessment.correct — the quiz / assessment key;
- *                        0 where the key was stripped from the respondent's copy: the server replay counts them)
+ *       POINTS_CORRECT   correct answers by the answer key (question.assessment.correct — the quiz / assessment key).
+ *                        The respondent's copy keeps the key when perCorrect > 0 and the survey is not a scored paper
+ *                        (stripAssessmentSecrets); a scored paper withholds it, and then this is 0
  *       POINTS           perAnswer × answered + perCorrect × correct + the custom variable's number
  *       LEVEL            the 1-based index of the highest level whose minPoints is reached (0 = none)
  *       LEVEL_NAME       that level's name ("" = none)

@@ -5,6 +5,7 @@ import { applySurveyActions, coerceSurveyActions, type SurveyAction } from "./su
 import { gamificationVariables, newBadges, badgeRule, lintGamification, BADGE_ICON_GLYPHS } from "./gamification.js";
 import { runCalculations } from "./flow.js";
 import { buildVariableDictionary } from "./variables.js";
+import { stripAssessmentSecrets } from "./assessment.js";
 import { flattenVariables } from "./flatten.js";
 
 /* S5a item 4 (GA-06, GA-07): points, badges, levels */
@@ -100,4 +101,13 @@ test("set_gamification: shortcuts, refusals, add/remove, clear", () => {
   assert.match(gamificationVariables(d, state({ [d.questions[0].id]: 1 })).BADGES as string, /q1/);
   d = act(d, [{ op: "set_gamification", clear: true }]);
   assert.equal(d.gamification, undefined);
+});
+
+test("the respondent copy keeps the key when correct answers score points (not a scored paper); a paper strips it", () => {
+  const d = { ...gamified(), assessment: undefined } as SurveyDefinition; // keys on the questions, not a scored paper (set_answer_key makes one)
+  assert.deepEqual(stripAssessmentSecrets(d).questions[0].assessment?.correct?.map(String), ["1"]);
+  const noCorrect = act(d, [{ op: "set_gamification", perCorrect: 0 }]);
+  assert.equal(stripAssessmentSecrets(noCorrect).questions[0].assessment?.correct?.length ?? 0, 0);
+  const paper = { ...d, assessment: { enabled: true, showResults: "after_submit" } } as SurveyDefinition;
+  assert.equal(stripAssessmentSecrets(paper).questions[0].assessment?.correct?.length ?? 0, 0);
 });

@@ -39,6 +39,11 @@ export function VideoRecording(p: QRProps) {
 
   const stopTick = () => { if (tick.current) { clearInterval(tick.current); tick.current = null; } };
   const release = () => { stream.current?.getTracks().forEach((t) => t.stop()); stream.current = null; };
+  /* the live preview: attached once the <video> exists (after the phase change commits), never before */
+  React.useEffect(() => {
+    const v = preview.current, s = stream.current;
+    if ((phase === "preview" || phase === "recording") && v && s && v.srcObject !== s) { v.srcObject = s; void v.play().catch(() => {}); }
+  }, [phase]);
   React.useEffect(() => () => { stopTick(); try { rec.current?.state === "recording" && rec.current.stop(); } catch { /* gone */ } release(); }, []);
 
   const store = async (blob: Blob, name: string) => {
@@ -67,7 +72,6 @@ export function VideoRecording(p: QRProps) {
       const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: true });
       stream.current = s;
       setPhase("preview");
-      requestAnimationFrame(() => { if (preview.current) { preview.current.srcObject = s; void preview.current.play().catch(() => {}); } });
     } catch {
       setFallback(true);
       setNote("No camera available (or permission was refused) — please upload a video file instead.");
