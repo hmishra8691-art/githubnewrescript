@@ -51,6 +51,14 @@ export interface ImportReport {
   merge?: { unchanged: string[]; changed: { source: string; rescript: string; differences: string[] }[]; added: string[] };
   summary: string[]; audit: string[]; ok: boolean;
   fidelity?: ImportFidelity;
+  /** I5: the decisions the source left open */
+  clarifications?: ImportClarification[];
+}
+export interface ImportDecision { id: string; type: string; [k: string]: unknown }
+export interface ImportClarification {
+  id: string; kind: string; question: string; evidence: string; location: string; questionId?: string;
+  recommended: { label: string; decision: ImportDecision } | null; because?: string; suggestedBy?: "rules" | "ai";
+  alternatives: { label: string; decision: ImportDecision }[];
 }
 export interface ImportJob {
   fileName: string;
@@ -77,6 +85,11 @@ export interface ImportJob {
   sessionExpiresAt?: string;
   sessionNote?: string;
   rollingBack?: boolean;
+  /** I5: the option chosen per clarification (index into [recommended, ...alternatives]) */
+  answers?: Record<string, number>;
+  deciding?: boolean;
+  /** the last round's outcome: how many answers were applied, and the ones refused with why */
+  decided?: { applied: number; rejected: { id: string; reason: string }[] };
 }
 
 const ROWS: [keyof Stats, string][] = [
@@ -90,10 +103,11 @@ const SCOPES: { id: ImportScope; label: string; about: string }[] = [
 ];
 const CONF: [string, string][] = [["confirmed", "Confirmed"], ["high", "High confidence"], ["review", "Needs review"], ["ambiguous", "Ambiguous"], ["unsupported", "Unsupported"]];
 
-export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, readOnly, sandbox }: {
+export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, onDecide, readOnly, sandbox }: {
   job: ImportJob;
   onPatch(p: Partial<ImportJob>): void;
   onRun(): void; onCreate(): void; onMerge(): void; onCancel(): void; onReviewAfter(): void; onRollback?(): void;
+  onDecide?(decisions: ImportDecision[]): void;
   readOnly: boolean; sandbox: boolean;
 }) {
   const cur = job.estimate?.currency ?? "USD";
@@ -171,6 +185,8 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
 
             {job.sessionId && <p className="iqi-dim" data-testid="iqi-session">Recorded in the import history{job.sessionExpiresAt ? ` · the file is kept until ${new Date(job.sessionExpiresAt).toLocaleDateString()}` : ""}{job.sessionNote ? ` · ${job.sessionNote}` : ""}</p>}
             {!job.sessionId && job.sessionNote && <p className="iqi-dim" data-testid="iqi-session">{job.sessionNote}</p>}
+            {job.stage === "ready" && !!r.clarifications?.length && <Clarifications job={job} items={r.clarifications} onPatch={onPatch} onDecide={onDecide} />}
+            {job.stage === "ready" && job.decided && <p className="iqi-dim" data-testid="iqi-decided">{job.decided.applied} answer{job.decided.applied === 1 ? "" : "s"} applied; the preview was re-analysed{job.decided.rejected.length ? ` · refused: ${job.decided.rejected.map((x) => x.reason).join("; ")}` : ""}.</p>}
             {job.panel === "issues" && <IssueList report={r} />}
             {job.panel === "map" && job.mapping && <MapTable mapping={job.mapping} />}
             {job.panel === "fidelity" && r.fidelity && <FidelityDetail f={r.fidelity} verification={job.verification} />}
@@ -397,6 +413,43 @@ export function ImportHistory({ surveyId }: { surveyId: string }) {
     <div className="iqi-history" data-testid="iq-import-history">
       <span className="iqi-dim">Recent imports</span>
       <ul>{rows.map((r) => <li key={r.id} data-testid="iq-import-history-row" data-status={r.status}><b>{r.fileName}</b> <span className="iqi-dim">{new Date(r.createdAt).toLocaleString()} · {r.into === "merge" ? "into this survey" : "new project"} · {word[r.status] ?? r.status}{r.reportDigest?.questions ? ` · ${r.reportDigest.questions} questions` : ""}{r.hasSource ? " · file kept" : ""}</span></li>)}</ul>
+    </div>
+  );
+}
+
+
+/**
+ * I5 — THE QUESTIONS THE SOURCE LEFT OPEN: one per decision, the recommended answer pre-selected (with why),
+ * the alternatives, and "leave it". Apply sends the chosen decisions; the preview is re-analysed with them.
+ */
+function Clarifications({ job, items, onPatch, onDecide }: { job: ImportJob; items: ImportClarification[]; onPatch(p: Partial<ImportJob>): void; onDecide?(d: ImportDecision[]): void }) {
+  const opts = (c: ImportClarification) => [...(c.recommended ? [c.recommended] : []), ...c.alternatives];
+  const pick = (c: ImportClarification) => job.answers?.[c.id] ?? (c.recommended ? 0 : -1);
+  const chosen = items.map((c) => ({ c, i: pick(c) })).filter((x) => x.i >= 0);
+  return (
+    <div className="iqi-clarify" data-testid="iqi-clarify">
+      <p className="iqi-clarify-head"><b>{items.length} question{items.length === 1 ? "" : "s"} for you</b> <span className="iqi-dim">— the file leaves these decisions open; nothing was guessed.</span></p>
+      <ol>
+        {items.map((c) => (
+          <li key={c.id} data-testid="iqi-clarify-item" data-kind={c.kind}>
+            <p className="iqi-clarify-q">{c.question}</p>
+            {c.because && c.recommended && <p className="iqi-dim">Recommended{c.suggestedBy === "ai" ? " (AI suggestion — check it)" : ""}: {c.because}</p>}
+            <div role="radiogroup" aria-label={c.question}>
+              {opts(c).map((o, i) => (
+                <label key={i} className="iqi-clarify-opt">
+                  <input type="radio" name={`clar-${c.id}`} checked={pick(c) === i} onChange={() => onPatch({ answers: { ...(job.answers ?? {}), [c.id]: i } })} data-testid="iqi-clarify-option" />
+                  {o.label}{i === 0 && c.recommended ? <span className="iqi-badge">recommended</span> : null}
+                </label>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ol>
+      <div className="iq-actions">
+        <span className="iqi-dim">{chosen.length} of {items.length} answered</span>
+        <span className="iq-spacer" />
+        <button type="button" className="iq-btn primary" disabled={!onDecide || job.deciding || !chosen.length || !job.sessionId} onClick={() => onDecide?.(chosen.map(({ c, i }) => opts(c)[i].decision))} data-testid="iqi-clarify-apply" title={job.sessionId ? "Apply these answers and re-analyse the preview" : "This import was not recorded, so its answers cannot be applied — import the file again"}>{job.deciding ? "Re-analysing…" : "Apply answers"}</button>
+      </div>
     </div>
   );
 }

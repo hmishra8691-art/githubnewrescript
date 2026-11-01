@@ -1,5 +1,5 @@
 import type {
-  CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CFlow, CExpr, CRef, COp, CanonicalKind, Issue, SourceFormat,
+  CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CFlow, CExpr, CRef, COp, CanonicalKind, Issue, SourceFormat, CanonicalEmbeddedField, PendingInstruction,
 } from "../canonical.js";
 import type { DocBlock } from "./docx.js";
 
@@ -171,7 +171,8 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
 
   /* ------------------------------------------------------------ logic, now every question exists */
   const byCode = new Map(drafts.map((d) => [d.q.sourceId.toUpperCase(), d.q]));
-  for (const [i, d] of drafts.entries()) readInstructions(d, drafts[i + 1]?.q, byCode, issues);
+  const embedded: CanonicalEmbeddedField[] = [];
+  for (const [i, d] of drafts.entries()) readInstructions(d, drafts[i + 1]?.q, byCode, issues, embedded);
 
   /* ------------------------------------------------------------ flow */
   const flow: CFlow[] = [];
@@ -188,7 +189,7 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
 
   return {
     source: { platform: "document", format: meta.format, fileName: meta.fileName, title, fingerprint: meta.fingerprint },
-    questions: drafts.map((d) => d.q), flow, embedded: [], quotas: [], custom: [], issues,
+    questions: drafts.map((d) => d.q), flow, embedded, quotas: [], custom: [], issues,
   };
 }
 
@@ -253,7 +254,20 @@ function inferType(d: Draft, issues: Issue[]) {
   if (kind === "multi" && !hasOpts) { q.confidence = worst(q.confidence, "ambiguous"); issues.push({ location: q.sourceId, type: "ambiguous", severity: "medium", message: `${q.sourceId} says “${basis.trim()}” but lists no options.`, suggestion: "Add its options in Studio.", autoAttempted: true, refs: [q.sourceId] }); }
   if (kind === "nps") q.options = [];
   q.kind = kind;
-  if (/\brandomi[sz]e|\brotate\b/i.test(said)) q.randomizeOptions = true;
+  if (/\brandomi[sz]e|\brotate\b/i.test(said)) {
+    q.randomizeOptions = true;
+    /* "RANDOMIZE … EXCEPT 99" / "… EXCEPT NONE OF THE ABOVE": those keep their place (anchored at the end) */
+    const ex = /\brandomi[sz]e[^\n]*?\bexcept\b\s+(?:for\s+)?(?:options?\s+|codes?\s+)?([^\n.]+)/i.exec(said);
+    const special = (o: CanonicalOption) => /\b(?:other|none|none of (?:the|these)|don'?t know|not sure|prefer not|refused|n\/?a)\b/i.test(o.label);
+    if (ex) {
+      const words = ex[1].replace(/[\])>]+\s*$/, "").split(/\s*(?:,|\band\b|&|\/)\s*/i).map((w) => w.trim().replace(/^[["“(]+|[\]"”)]+$/g, "")).filter(Boolean);
+      const fixed = q.options.filter((o) => words.some((w) => String(o.code) === w || o.label.toLowerCase() === w.toLowerCase().replace(/^["“]|["”]$/g, "") || (w.length > 3 && o.label.toLowerCase().startsWith(w.toLowerCase()))));
+      if (fixed.length) q.randomization = { anchorsTop: [], anchorsBottom: fixed.map((o) => o.sourceId), undisplayed: [], sourceType: `document: randomize except ${fixed.map((o) => o.code).join(", ")}` };
+      else issues.push({ location: `${q.sourceId} · randomization`, type: "ambiguous", severity: "low", message: `${q.sourceId} says to randomize except “${ex[1].trim()}”, which matches none of its options.`, autoAttempted: true, refs: [q.sourceId], instruction: { kind: "randomize", text: ex[0], questionId: q.sourceId, options: q.options.filter(special).map((o) => o.sourceId) } });
+    } else if (q.options.some(special)) {
+      issues.push({ location: `${q.sourceId} · randomization`, type: "ambiguous", severity: "low", message: `${q.sourceId} says to randomize its options but not whether ${q.options.filter(special).map((o) => `“${o.label}”`).join(", ")} keep their place.`, suggestion: "Usually Other / None / Don't know stay fixed at the end.", autoAttempted: true, refs: [q.sourceId], instruction: { kind: "randomize", text: "randomize", questionId: q.sourceId, options: q.options.filter(special).map((o) => o.sourceId) } });
+    }
+  }
   if (/\bnot required\b|\boptional\b/i.test(said)) q.required = false;
   const range = /\b(?:between|from)\s+(\d+)\s+(?:and|to|-)\s+(\d+)\b|\brange\s*[:=]?\s*(\d+)\s*[-–]\s*(\d+)|\b(?:numeric|number|integer|whole number)\b\W{0,3}(\d+)\s*[-–]\s*(\d+)\b/i.exec(said);
   if (range && (q.kind === "numeric" || q.kind === "slider")) { const lo = Number(range[1] ?? range[3] ?? range[5]), hi = Number(range[2] ?? range[4] ?? range[6]); const v: CanonicalValidation[] = [{ kind: "min_value", value: lo }, { kind: "max_value", value: hi }]; q.validation.push(...v); }
@@ -265,18 +279,35 @@ function inferType(d: Draft, issues: Issue[]) {
 /* ------------------------------------------------------------ logic */
 
 /** "ASK IF …", "SKIP TO …", per-option "(SKIP TO Q10)" / "TERMINATE" — resolved against the real questions */
-function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode: Map<string, CanonicalQuestion>, issues: Issue[]) {
+function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode: Map<string, CanonicalQuestion>, issues: Issue[], embedded: CanonicalEmbeddedField[] = []) {
   const q = d.q;
   const conds: CExpr[] = [];
+  /* I5: an ambiguous issue raised while reading one instruction carries that instruction, for the clarification engine */
+  const tag = (from: number, instruction: PendingInstruction) => { for (let i = from; i < issues.length; i++) if (issues[i].type === "ambiguous" && !issues[i].instruction) issues[i].instruction = instruction; };
   for (const ins of d.instructions) {
-    const text = ins.replace(/^[[(<]\s*|\s*[\])>]$/g, "").trim();
+    const text = ins.replace(/^[[(<]\s*|\s*[\])>]$/g, "").trim().replace(/^(?:programmer(?:'s)?\s+)?(?:note|instruction)s?\s*[:\-–]\s*/i, "");
     let m: RegExpExecArray | null;
     // display: ASK IF / SHOW IF / BASE: / ASK Qx ONLY IF / ask only for respondents who …
     if ((m = /^(?:ASK|SHOW|DISPLAY)\s+(?:(?:Q\w+)\s+)?(?:ONLY\s+)?(?:IF|WHEN|TO|FOR)\s+(.+)$/i.exec(text)) || (m = /^(?:BASE|FILTER)\s*:\s*(.+)$/i.exec(text)) || (m = /^IF\s+(.+?)\s*,?\s*(?:THEN\s+)?(?:ASK|SHOW)\b.*$/i.exec(text))) {
       const body = m[1].replace(/^(?:all\s+)?(?:respondents?|those|people|participants|anyone)\s+(?:who|that|with)\s+/i, "");
       if (/^all\b/i.test(body.trim())) continue;
+      const n0 = issues.length;
       const e = resolveCondition(body, q, byCode, `${q.sourceId} · “${text}”`, issues);
+      tag(n0, { kind: "display", text, questionId: q.sourceId, condition: body });
       if (e) conds.push(e);
+      continue;
+    }
+    /* "SKIP THIS QUESTION IF …" / "SKIP Q5 IF …": a condition with no destination — say so, do not guess one */
+    if ((m = /^SKIP\s+(?:THIS\s+QUESTION|Q\w+|IT)?\s*(?:IF|WHEN)\s+(.+)$/i.exec(text)) && !/\bTO\s+Q?\w+/i.test(text)) {
+      issues.push({ location: `${q.sourceId} · “${text}”`, type: "ambiguous", severity: "medium", message: `${q.sourceId} says “${text}” without saying where respondents go.`, suggestion: "Say which question or section comes next, or whether this question should simply not be shown.", autoAttempted: false, refs: [q.sourceId], instruction: { kind: "skip_target", text, questionId: q.sourceId, condition: m[1] } });
+      continue;
+    }
+    /* "STORE THE RESPONDENT'S REGION" / "CREATE A HIDDEN VARIABLE CALLED Region": an embedded field whose source is not said */
+    if ((m = /^(?:CREATE|STORE|SAVE|RECORD|CAPTURE|ASSIGN|SET)\b.*?\b(?:(?:hidden\s+)?variable|embedded\s+data|field)\s+(?:called|named)\s+["“]?([A-Za-z_][\w]*)/i.exec(text)) || (m = /^(?:STORE|SAVE|RECORD|CAPTURE)\s+(?:the\s+)?(?:respondent'?s?\s+|their\s+)([A-Za-z_][\w]*)/i.exec(text))) {
+      const name = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+      const from = /\bfrom\s+(?:the\s+)?(?:url|link|panel|query)\b/i.test(text) ? "url" : null;
+      if (!embedded.some((f) => f.name.toUpperCase() === name.toUpperCase())) embedded.push({ name, source: from ?? "static", sourceType: `document: “${text}”` });
+      if (!from) issues.push({ location: `${q.sourceId} · “${text}”`, type: "ambiguous", severity: "medium", message: `The document asks to store ${name} but does not say where its value comes from.`, suggestion: "Say whether it arrives in the survey link, comes from an earlier question, or is a fixed value.", autoAttempted: false, refs: [q.sourceId], instruction: { kind: "embedded", text, questionId: q.sourceId, name } });
       continue;
     }
     // skip: IF Q5 = NO, SKIP TO Q10 / If No, skip to Q10 / otherwise go to Q8
@@ -285,16 +316,20 @@ function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode:
       if (!to) { issues.push({ location: `${q.sourceId} · “${text}”`, type: "reference", severity: "medium", message: `${q.sourceId} says to skip to “${m[2]}”, which is not a question in the document.`, autoAttempted: true, refs: [q.sourceId] }); continue; }
       if (!m[1]) {
         if (to.kind === "question" && next && to.id === next.sourceId) continue; // "continue to the next question"
-        issues.push({ location: `${q.sourceId} · “${text}”`, type: "ambiguous", severity: "medium", message: `${q.sourceId} says “${text}” without saying when.`, suggestion: "Add the condition in Skip logic.", autoAttempted: false, refs: [q.sourceId] });
+        issues.push({ location: `${q.sourceId} · “${text}”`, type: "ambiguous", severity: "medium", message: `${q.sourceId} says “${text}” without saying when.`, suggestion: "Add the condition in Skip logic.", autoAttempted: false, refs: [q.sourceId], instruction: { kind: "skip", text, questionId: q.sourceId, target: to } });
         continue;
       }
       if (to.kind === "question" && next && to.id === next.sourceId) continue; // "If Yes, continue to Q6" is the default path
+      const n0 = issues.length;
       const e = resolveCondition(m[1], q, byCode, `${q.sourceId} · “${text}”`, issues);
+      tag(n0, { kind: "skip", text, questionId: q.sourceId, target: to, condition: m[1] });
       if (e) q.skips.push({ when: e, to, label: text });
       continue;
     }
     if ((m = /^IF\s+(.+?)\s*[,:]?\s*(?:THANK\s+AND\s+)?(?:TERMINATE|END|CLOSE|SCREEN\s*OUT|DISQUALIFY)\b/i.exec(text))) {
+      const n0 = issues.length;
       const e = resolveCondition(m[1], q, byCode, `${q.sourceId} · “${text}”`, issues);
+      tag(n0, { kind: "terminate", text, questionId: q.sourceId, condition: m[1] });
       if (e) q.skips.push({ when: e, to: { kind: "end", status: "screened" }, label: text });
       continue;
     }

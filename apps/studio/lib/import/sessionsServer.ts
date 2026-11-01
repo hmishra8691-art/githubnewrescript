@@ -77,6 +77,7 @@ function databaseStore(): SessionStore {
       if (patch.appliedAt !== undefined) row.applied_at = patch.appliedAt;
       if (patch.rolledBackAt !== undefined) row.rolled_back_at = patch.rolledBackAt;
       if (patch.decisions) row.decisions = patch.decisions;
+      if (patch.reportDigest) row.report_digest = patch.reportDigest;
       if (patch.error !== undefined) row.error = patch.error;
       const { data } = await db.from("import_sessions").update(row).eq("id", id).select("*").maybeSingle();
       return data ? toSession(data as Row) : null;

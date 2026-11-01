@@ -17,6 +17,8 @@ export type SessionStatus = "analyzed" | "applied" | "rolled_back" | "failed" | 
 
 export interface ReportDigest {
   title: string | null;
+  /** the detection's sentence ("Qualtrics survey (QSF)") — what a re-analysis reports the source as */
+  label?: string;
   ok: boolean;
   summary: string[];
   questions: number;
@@ -61,7 +63,7 @@ export type NewSession = Omit<ImportSession, "id" | "createdAt" | "appliedAt" | 
 export function digestReport(r: MigrationReport): ReportDigest {
   const f = r.fidelity?.totals;
   return {
-    title: r.source.title ?? null, ok: r.ok, summary: r.summary.slice(0, 20),
+    title: r.source.title ?? null, label: r.source.label, ok: r.ok, summary: r.summary.slice(0, 20),
     questions: r.created?.questions ?? r.detected.questions, review: r.review.length,
     risks: { high: r.risks.high.length, medium: r.risks.medium.length, low: r.risks.low.length },
     mapping: { ...(r.mapping?.summary ?? {}) },
@@ -122,7 +124,7 @@ export interface SessionStore {
   create(s: NewSession, source: Uint8Array | null): Promise<ImportSession>;
   get(id: string): Promise<ImportSession | null>;
   list(filter: { customerId: string | null; surveyId?: string | null; limit?: number }): Promise<ImportSession[]>;
-  update(id: string, patch: Partial<Pick<ImportSession, "status" | "surveyId" | "appliedAt" | "rolledBackAt" | "decisions" | "error">>): Promise<ImportSession | null>;
+  update(id: string, patch: Partial<Pick<ImportSession, "status" | "surveyId" | "appliedAt" | "rolledBackAt" | "decisions" | "error" | "reportDigest">>): Promise<ImportSession | null>;
   /** sessions whose source is due for removal (expired), oldest first */
   expired(limit: number): Promise<ImportSession[]>;
   /** remove the stored file and clear its key; idempotent */

@@ -654,6 +654,22 @@ export function IntelligentView() {
     patchJob(id, { stage: "cancelled" }); importFiles.delete(id);
   };
 
+  /* I5: answer the import's open questions — the session re-analyses with every decision so far */
+  const decideImport = React.useCallback(async (id: string, decisions: unknown[]) => {
+    const job = jobOf(id);
+    if (!job?.sessionId) return;
+    patchJob(id, { deciding: true, error: undefined });
+    try {
+      const r = await fetch(`/api/import/sessions/${encodeURIComponent(job.sessionId)}/decisions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions }) });
+      const d = await r.json().catch(() => null) as { report?: ImportJob["report"]; definition?: SurveyDefinition | null; mapping?: ImportJob["mapping"]; verification?: ImportJob["verification"]; applied?: string[]; rejected?: { id: string; reason: string }[]; error?: string } | null;
+      if (!r.ok || !d?.report) { patchJob(id, { deciding: false, error: d?.error ?? `The answers could not be applied (${r.status}).` }); return; }
+      patchJob(id, { deciding: false, report: d.report, definition: d.definition ?? null, mapping: d.mapping, verification: d.verification ?? null, answers: {}, decided: { applied: d.applied?.length ?? 0, rejected: d.rejected ?? [] } });
+    } catch (e) {
+      patchJob(id, { deciding: false, error: (e as Error).message });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns, patchJob]);
+
   /* I4: roll an applied import back — a merge restores the survey as it was (one edit, undoable); a new project is deleted unless it has responses */
   const rollbackImport = React.useCallback(async (id: string) => {
     const job = jobOf(id);
@@ -914,7 +930,7 @@ export function IntelligentView() {
               if (turn.kind === "import") return (
                 <ImportCard key={turn.id} job={turn.job} readOnly={s.readOnly} sandbox={sandbox}
                   onPatch={(p) => patchJob(turn.id, p)} onRun={() => void runImport(turn.id)} onCreate={() => void createFromImport(turn.id)}
-                  onMerge={() => mergeImport(turn.id)} onCancel={() => cancelImport(turn.id)} onReviewAfter={() => showReview("What needs review after the import?")} onRollback={() => void rollbackImport(turn.id)} />
+                  onMerge={() => mergeImport(turn.id)} onCancel={() => cancelImport(turn.id)} onReviewAfter={() => showReview("What needs review after the import?")} onRollback={() => void rollbackImport(turn.id)} onDecide={(ds) => void decideImport(turn.id, ds)} />
               );
               if (turn.kind === "copilot") {
                 const open = turn.proposal === "open" && copilot.state;

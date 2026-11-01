@@ -1,0 +1,28 @@
+Brand Study
+S1. Do you currently own a car?
+1. Yes
+2. No
+S2. Which region do you live in?
+[RANDOMIZE]
+1. North
+2. South
+3. Other
+Q1. Which brands have you heard of? SELECT ALL THAT APPLY
+[RANDOMIZE ALL OPTIONS EXCEPT 99]
+1. Alpha
+2. Beta
+3. Gamma
+99. None of the above
+Q2. How satisfied are you with your car?
+[ASK ONLY IF EXISTING CUSTOMER]
+1. Very satisfied
+2. Somewhat
+3. Not at all
+Q3. Would you buy again?
+1. Yes
+2. No
+Q4. Why do you say that?
+[SKIP THIS QUESTION IF NO]
+[PROGRAMMER NOTE: STORE THE RESPONDENT'S REGION]
+Q5. Any comments?
+[ASK IF Q42 = 1]
