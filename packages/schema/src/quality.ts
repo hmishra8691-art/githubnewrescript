@@ -110,10 +110,21 @@ export const TelemetryConfig = z.object({
   device: z.boolean().default(true),
   /** hash the respondent's IP (salted) — never the raw address */
   network: z.boolean().default(true),
+  /**
+   * S5b (TE-04): per-question viewport visibility (ms at least half on screen, first-seen time — an
+   * IntersectionObserver) and the deepest scroll per page visit (% of the page height). Times and percentages only.
+   */
+  visibility: z.boolean().default(true),
   /** text shown in the runtime footer, e.g. "This survey records response timing to protect data quality." */
   disclosure: z.string().optional(),
 });
 export type TelemetryConfig = z.infer<typeof TelemetryConfig>;
+/**
+ * The telemetry CATEGORIES — the on/off switches of `TelemetryConfig` (its other fields are settings). A category
+ * that is off is listed in the telemetry's `disabled`, so a zero reads as "not measured".
+ */
+export const TELEMETRY_CATEGORIES = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility"] as const;
+export type TelemetryCategory = (typeof TELEMETRY_CATEGORIES)[number];
 
 export const PrivacyConfig = z.object({
   /** days to keep raw telemetry after completion; 0 = keep (scores are kept regardless) */

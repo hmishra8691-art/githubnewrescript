@@ -1,6 +1,6 @@
 import type { FlagDraft, RuleContext, ResponseTelemetry } from "../types.js";
 import { fnv1a, pct } from "../metrics.js";
-import { isOpen, screenerQuestionIds } from "../survey.js";
+import { isOpen, isRespondentQuestion, screenerQuestionIds } from "../survey.js";
 
 /**
  * Interaction, navigation, device, network, screener and history rules — the
@@ -13,6 +13,25 @@ export function navigationFingerprint(t: ResponseTelemetry | null): string | nul
   const seq = [...t.pages].sort((a, b) => a.enteredAt - b.enteredAt)
     .map((v) => `${v.pageId}${v.via === "back" ? "<" : v.via === "reload" ? "~" : v.via === "jump" ? "^" : ">"}`);
   return fnv1a(seq.join(""));
+}
+
+/**
+ * S5b (TE-04): questions the respondent changed (their own input — a punch or a script write is not a change) whose
+ * card was never at least half inside the viewport. Only meaningful when the collector measured visibility.
+ */
+export function unseenAnswered(ctx: Pick<RuleContext, "def" | "telemetry" | "applies">): string[] {
+  const t = ctx.telemetry;
+  if (!t) return [];
+  const out: string[] = [];
+  for (const q of ctx.def.questions) {
+    if (!isRespondentQuestion(q) || q.type === "html" || q.settings?.hidden) continue;
+    const qt = t.questions[q.id];
+    if (!qt || !(qt.changes > 0)) continue;
+    if (qt.firstSeenAt !== undefined || (qt.visibleMs ?? 0) > 0) continue;
+    if (!ctx.applies("interaction.answered_unseen", q.id)) continue;
+    out.push(q.id);
+  }
+  return out;
 }
 
 export function behaviourRules(ctx: RuleContext): FlagDraft[] {
@@ -53,6 +72,21 @@ export function behaviourRules(ctx: RuleContext): FlagDraft[] {
           questionIds: hits.flatMap((v) => v.questionIds),
         });
       }
+    }
+  }
+
+  /* ------------------------------------------------- visibility (S5b TE-04) */
+  if (t && !ctx.disabledTelemetry.has("visibility") && ctx.enabled("interaction.answered_unseen")) {
+    const min = ctx.param<number>("interaction.answered_unseen", "minQuestions");
+    const unseen = unseenAnswered(ctx);
+    if (unseen.length >= Math.max(1, min)) {
+      out.push({
+        ruleId: "interaction.answered_unseen",
+        observed: `${unseen.length} question${unseen.length === 1 ? " was" : "s were"} answered without ever being on screen`,
+        expected: `fewer than ${Math.max(1, min)}`,
+        explanation: "An answer changed while its question had never been at least half visible — a person answers what they can see; a script does not need to.",
+        questionIds: unseen,
+      });
     }
   }
 

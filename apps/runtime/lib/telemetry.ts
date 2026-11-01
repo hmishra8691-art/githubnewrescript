@@ -1,6 +1,8 @@
 "use client";
 import type { TelemetryConfig } from "@rescript/schema";
+import { TELEMETRY_CATEGORIES } from "@rescript/schema";
 import type { ResponseTelemetry, PageVisit, DeviceInfo } from "@rescript/quality";
+import { isCardVisible, scrollDepthPct, visibleStart, visibleStop } from "./paradata";
 
 /**
  * The event collector — what the runtime records about HOW a respondent
@@ -19,6 +21,11 @@ import type { ResponseTelemetry, PageVisit, DeviceInfo } from "@rescript/quality
  * visit). Question timings: first/last change and the page-entry → first
  * change latency on the visit where it happened. Out-of-focus time is
  * attributed to the visit in progress and subtracted from dwell by the engine.
+ *
+ * S5b (TE-04) visibility: one IntersectionObserver watches every question card ([data-qid]) on the page; a card
+ * at least half on screen (or filling half the viewport) accumulates `visibleMs` and gets a `firstSeenAt`. New
+ * cards are picked up by a throttled MutationObserver. Scroll depth is the deepest viewport bottom reached on the
+ * visit, % of the page height, sampled once per animation frame at most. Times and percentages only.
  */
 
 export interface TelemetryCollector {
@@ -79,7 +86,13 @@ function reloadCount(sessionId: string | undefined): number {
 export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessionId: string | undefined): TelemetryCollector {
   const c = cfg ?? ({} as Partial<TelemetryConfig>);
   const on = (k: keyof TelemetryConfig) => (c as any)[k] !== false;
-  const disabled = (["timing", "focus", "clipboard", "navigation", "interaction", "device", "network"] as const).filter((k) => !on(k));
+  const disabled: string[] = TELEMETRY_CATEGORIES.filter((k) => !on(k));
+  const hasIO = typeof window !== "undefined" && typeof (window as any).IntersectionObserver === "function";
+  const visibilityOn = on("visibility") && hasIO;
+  if (on("visibility") && !hasIO && typeof window !== "undefined") disabled.push("visibility");
+  /** S5b categories this collector measures (the engine treats the others as "not measured") */
+  const measured: string[] = [];
+  if (visibilityOn) measured.push("visibility");
   const startedAt = now();
   const reloads = on("navigation") ? reloadCount(sessionId) : 0;
 
@@ -91,6 +104,7 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
     interaction: { pointerEvents: 0, keyEvents: 0, scrollEvents: 0 },
     device: on("device") ? detectDevice() : undefined,
     disabled,
+    measured,
   };
 
   let current: PageVisit | null = null;
@@ -149,8 +163,55 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
     }
   }
 
+  /* ---------------------------------------------------------------- S5b visibility + scroll depth */
+  const visibleOpen = new Map<string, number>();
+  let io: IntersectionObserver | null = null;
+  let mo: MutationObserver | null = null;
+  let watched = new WeakSet<Element>();
+  let scanTimer: ReturnType<typeof setTimeout> | null = null;
+  let scrollFrame = 0;
+  const sampleDepth = () => {
+    scrollFrame = 0;
+    if (!current || typeof document === "undefined") return;
+    const d = scrollDepthPct(window.scrollY, window.innerHeight, document.documentElement.scrollHeight);
+    current.scrollDepth = Math.max(current.scrollDepth ?? 0, d);
+  };
+  const scan = () => {
+    scanTimer = null;
+    if (!io || typeof document === "undefined") return;
+    for (const el of document.querySelectorAll<HTMLElement>("[data-qid]")) {
+      if (watched.has(el) || el.closest(".rs-review-item, [data-testid=assessment-q]")) continue;
+      watched.add(el);
+      io.observe(el);
+    }
+    sampleDepth();
+  };
+  const scheduleScan = () => { if (!scanTimer) scanTimer = setTimeout(scan, 200); };
+  const stopAllVisible = () => { const t = now(); for (const qid of [...visibleOpen.keys()]) visibleStop(visibleOpen, data.questions[qid], qid, t); };
+  if (visibilityOn) {
+    io = new IntersectionObserver((entries) => {
+      const t = now();
+      for (const e of entries) {
+        const qid = (e.target as HTMLElement).dataset.qid;
+        if (!qid) continue;
+        const vis = e.isIntersecting && isCardVisible(e.intersectionRatio, e.intersectionRect.height, e.rootBounds?.height ?? window.innerHeight);
+        if (vis && !(typeof document !== "undefined" && document.visibilityState === "hidden")) visibleStart(visibleOpen, qt(qid), qid, t);
+        else visibleStop(visibleOpen, data.questions[qid], qid, t);
+      }
+    }, { threshold: [0, 0.25, 0.5, 0.75, 1] });
+    mo = new MutationObserver(scheduleScan);
+    if (document.body) mo.observe(document.body, { childList: true, subtree: true });
+    listen(window, "scroll", () => { if (!scrollFrame) scrollFrame = requestAnimationFrame(sampleDepth); }, { passive: true });
+    // a hidden tab is not "visible" time: close the open intervals; the observer re-reports on return
+    listen(document, "visibilitychange", () => {
+      if (document.visibilityState === "hidden") stopAllVisible();
+      else if (io) { const els = [...document.querySelectorAll<HTMLElement>("[data-qid]")]; io.disconnect(); watched = new WeakSet(); for (const el of els) { watched.add(el); io.observe(el); } }
+    });
+  }
+
   const leavePage = () => {
     if (!current) return;
+    if (visibilityOn) { sampleDepth(); stopAllVisible(); }
     current.leftAt = now();
     current = null;
   };
@@ -164,6 +225,7 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
       const visit: PageVisit = { pageId, step, enteredAt: now(), via, questionIds, outOfFocusMs: 0, blurs: 0, pointerEvents: 0, keyEvents: 0, scrollEvents: 0 };
       current = visit;
       data.pages.push(visit);
+      if (visibilityOn) { visit.scrollDepth = 0; io?.disconnect(); watched = new WeakSet(); scheduleScan(); }
       if (on("navigation")) {
         if (via === "back") data.navigation.back++;
         else if (via === "next") data.navigation.forward++;
@@ -189,6 +251,9 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
       data.submittedAt = now();
     },
     dispose() {
+      io?.disconnect(); mo?.disconnect(); io = null; mo = null;
+      if (scanTimer) clearTimeout(scanTimer);
+      if (scrollFrame) cancelAnimationFrame(scrollFrame);
       for (const [type, fn, target, opts] of listeners) target.removeEventListener(type, fn, opts);
       listeners.length = 0;
     },

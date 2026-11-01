@@ -733,3 +733,54 @@ test("consistency.attention_pair FIRES: the same question asked twice, undeclare
   const c = assess({ def: relaxed, response: response({ answers: { ...GOOD_ANSWERS, n1: 3, n2: 5 } }), peers: [] });
   assert.ok(!has(c, "consistency.attention_pair"));
 });
+
+/* ------------------------------------------------ S5b item 1: visibility (TE-04) */
+
+/** the human telemetry with visibility measured: every answered question seen, except the listed ones */
+function seenTelemetry(unseen: string[] = []): ResponseTelemetry {
+  const t = telemetry(HUMAN_SECS);
+  for (const [qid, q] of Object.entries(t.questions)) {
+    if (unseen.includes(qid)) continue;
+    q.firstSeenAt = (q.firstChangeAt ?? t.startedAt) - 500;
+    q.visibleMs = 2000;
+  }
+  for (const p of t.pages) p.scrollDepth = 100;
+  t.measured = ["visibility"];
+  return t;
+}
+
+test("S5b interaction.answered_unseen: answers changed while the card was never on screen", () => {
+  const p = peers(12);
+  const clean = assess({ def: def(), response: response({ tel: seenTelemetry() }), peers: p });
+  assert.ok(!has(clean, "interaction.answered_unseen"));
+  assert.ok(!clean.notMeasured.includes("visibility"));
+
+  const two = assess({ def: def(), response: response({ tel: seenTelemetry(["s4", "s5"]) }), peers: p });
+  const f = two.flags.find((x) => x.ruleId === "interaction.answered_unseen");
+  assert.ok(f, "fires at standard with 2 unseen answers");
+  assert.deepEqual([...f!.questionIds].sort(), ["s4", "s5"]);
+  assert.match(f!.observed, /2 questions were answered without ever being on screen/);
+
+  // one unseen answer: below the standard threshold (2), above strict's (1)
+  const one = seenTelemetry(["s4"]);
+  assert.ok(!has(assess({ def: def(), response: response({ tel: one }), peers: p }), "interaction.answered_unseen"));
+  assert.ok(has(assess({ def: def({ enabled: true, strictness: "strict" }), response: response({ tel: one }), peers: p }), "interaction.answered_unseen"));
+});
+
+test("S5b visibility: not measured (old telemetry, switched off, or no IntersectionObserver) never fires", () => {
+  const p = peers(12);
+  const old = telemetry(HUMAN_SECS); // no `measured`: recorded before S5b
+  const a = assess({ def: def(), response: response({ tel: old }), peers: p });
+  assert.ok(!has(a, "interaction.answered_unseen"));
+  assert.ok(a.notMeasured.includes("visibility"));
+
+  const off = def({ enabled: true, strictness: "strict", telemetry: { visibility: false } });
+  const b = assess({ def: off, response: response({ tel: seenTelemetry(["s4", "s5", "s6"]) }), peers: p });
+  assert.ok(!has(b, "interaction.answered_unseen"));
+  assert.ok(b.notMeasured.includes("visibility"));
+});
+
+test("S5b: telemetryOff lists only categories, never a setting", () => {
+  const s = summarizeConfig(def({ enabled: true, telemetry: { visibility: false, focus: false } }));
+  assert.deepEqual([...s.telemetryOff].sort(), ["focus", "visibility"]);
+});

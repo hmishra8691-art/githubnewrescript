@@ -9,6 +9,7 @@ import { isStaleSave, parseSaveSeq } from "@/lib/saveSeq";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 import { surveyFieldworkEvents } from "@/lib/notifyEmit";
+import { sanitizeTelemetry } from "@/lib/telemetrySanitize";
 import { assessmentResultRow, scoreForSubmission } from "@/lib/assessmentPayload";
 import type { RespondentAssessmentReport } from "@rescript/engine";
 
@@ -393,6 +394,8 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
     ...(nav.trail ? { nav: nav.trail } : {}),
     ...(seq != null ? { save_seq: seq } : {}),
     script_writes: sanitizeScriptWrites(body?.scriptWrites),
+    // S5b: the telemetry as the database path keeps it (sanitised per the survey's switches)
+    ...(body?.telemetry && typeof body.telemetry === "object" && body.telemetry.v === 1 ? { telemetry: sanitizeTelemetry(body.telemetry, survey.def?.quality?.telemetry) } : {}),
     // S1c: the session's script failures, as the database path keeps them in telemetry.scriptHealth
     script_health: sanitizeScriptHealth(body?.scriptHealth, redactionSet(body?.answers, body?.embedded)),
   });
@@ -469,55 +472,3 @@ async function serverCheck(
   }
 }
 
-/**
- * Keep only the fields the collector defines, drop anything the survey has
- * switched off, and bound the size. Clipboard text never arrives (the
- * collector records lengths only) — this guards against a tampered client.
- */
-function sanitizeTelemetry(t: any, cfg: any): any {
-  const on = (k: string) => !cfg || cfg[k] !== false;
-  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
-  const pages = Array.isArray(t.pages) ? t.pages.slice(0, 2000).map((v: any) => ({
-    pageId: String(v.pageId ?? "").slice(0, 80), step: num(v.step), enteredAt: num(v.enteredAt),
-    leftAt: typeof v.leftAt === "number" ? v.leftAt : undefined,
-    via: ["start", "next", "back", "reload", "jump"].includes(v.via) ? v.via : "next",
-    questionIds: Array.isArray(v.questionIds) ? v.questionIds.slice(0, 200).map(String) : [],
-    outOfFocusMs: on("focus") ? num(v.outOfFocusMs) : 0, blurs: on("focus") ? num(v.blurs) : 0,
-    pointerEvents: on("interaction") ? num(v.pointerEvents) : 0, keyEvents: on("interaction") ? num(v.keyEvents) : 0, scrollEvents: on("interaction") ? num(v.scrollEvents) : 0,
-  })) : [];
-  const questions: Record<string, unknown> = {};
-  if (t.questions && typeof t.questions === "object") {
-    for (const [k, q] of Object.entries(t.questions as Record<string, any>).slice(0, 2000)) {
-      questions[String(k).slice(0, 80)] = {
-        firstChangeAt: typeof q?.firstChangeAt === "number" ? q.firstChangeAt : undefined,
-        lastChangeAt: typeof q?.lastChangeAt === "number" ? q.lastChangeAt : undefined,
-        changes: num(q?.changes), latencyMs: typeof q?.latencyMs === "number" ? q.latencyMs : undefined,
-        pastes: on("clipboard") ? num(q?.pastes) : 0, pasteChars: on("clipboard") ? num(q?.pasteChars) : 0,
-        typedChars: on("interaction") ? num(q?.typedChars) : 0, copies: on("clipboard") ? num(q?.copies) : 0,
-      };
-    }
-  }
-  const d = t.device && typeof t.device === "object" && on("device") ? {
-    type: ["desktop", "tablet", "mobile"].includes(t.device.type) ? t.device.type : "unknown",
-    browser: String(t.device.browser ?? "").slice(0, 40), os: String(t.device.os ?? "").slice(0, 40),
-    screen: String(t.device.screen ?? "").slice(0, 20), viewport: String(t.device.viewport ?? "").slice(0, 20),
-    dpr: num(t.device.dpr), locale: String(t.device.locale ?? "").slice(0, 20), language: String(t.device.language ?? "").slice(0, 10),
-    timezone: String(t.device.timezone ?? "").slice(0, 60), tzOffset: num(t.device.tzOffset),
-    touch: !!t.device.touch, webdriver: !!t.device.webdriver,
-    hardwareConcurrency: typeof t.device.hardwareConcurrency === "number" ? t.device.hardwareConcurrency : undefined,
-    platform: t.device.platform ? String(t.device.platform).slice(0, 40) : undefined,
-  } : undefined;
-  const disabled = new Set<string>(Array.isArray(t.disabled) ? t.disabled.map(String) : []);
-  for (const k of ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network"]) if (!on(k)) disabled.add(k);
-  return {
-    v: 1, startedAt: num(t.startedAt), submittedAt: typeof t.submittedAt === "number" ? t.submittedAt : undefined,
-    pages: on("timing") || on("navigation") ? pages : [],
-    questions: on("timing") ? questions : {},
-    focus: on("focus") ? { blurs: num(t.focus?.blurs), totalOutOfFocusMs: num(t.focus?.totalOutOfFocusMs), longestOutOfFocusMs: num(t.focus?.longestOutOfFocusMs) } : { blurs: 0, totalOutOfFocusMs: 0, longestOutOfFocusMs: 0 },
-    clipboard: on("clipboard") ? { copies: num(t.clipboard?.copies), pastes: num(t.clipboard?.pastes), pasteChars: num(t.clipboard?.pasteChars), largePastes: num(t.clipboard?.largePastes), pasteQuestions: num(t.clipboard?.pasteQuestions) } : { copies: 0, pastes: 0, pasteChars: 0, largePastes: 0, pasteQuestions: 0 },
-    navigation: on("navigation") ? { back: num(t.navigation?.back), forward: num(t.navigation?.forward), reloads: num(t.navigation?.reloads), jumps: num(t.navigation?.jumps), sequence: Array.isArray(t.navigation?.sequence) ? t.navigation.sequence.slice(0, 500).map((x: unknown) => String(x).slice(0, 90)) : [] } : { back: 0, forward: 0, reloads: 0, jumps: 0, sequence: [] },
-    interaction: on("interaction") ? { pointerEvents: num(t.interaction?.pointerEvents), keyEvents: num(t.interaction?.keyEvents), scrollEvents: num(t.interaction?.scrollEvents) } : { pointerEvents: 0, keyEvents: 0, scrollEvents: 0 },
-    device: d,
-    disabled: [...disabled],
-  };
-}

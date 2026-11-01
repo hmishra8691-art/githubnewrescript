@@ -34,6 +34,9 @@ Profiles: built-in (`Consumer Research — Standard`, `B2B — Relaxed`, `Health
 
 Recorded per session, derived metadata only (`ResponseTelemetry`): page visits (`pageId`, `enteredAt/leftAt`, `via` start/next/back/reload, out-of-focus ms, blurs, pointer/key/scroll counts), per-question timing (first/last change, latency after page entry, change count, paste count + **lengths**, typed chars), focus totals, clipboard counts, navigation sequence, interaction totals, device class (type, browser, OS, screen, viewport, dpr, locale, language, timezone, touch, `navigator.webdriver`). Explicitly **not** recorded: clipboard contents, typed text, keystrokes, mouse coordinates, raw IP, canvas/font fingerprints. Disabled categories are listed in `disabled` so a zero reads as "not measured".
 
+**S5b paradata (2026-11-01, `docs/S5-EXTENDED-FEATURES-2026-11-01.md` part B).** Each newer collector has its own switch in `quality.telemetry` and is listed in `disabled` when off; the collector lists what it actually measured in `measured`, so telemetry recorded before S5b (or in a browser without the API) reads as "not measured", never as zero.
+- `visibility` (TE-04): per question `visibleMs` (time its card was at least half in the viewport, or filled half of it) and `firstSeenAt`; per page visit `scrollDepth` (deepest viewport bottom, % of page height). An IntersectionObserver and a once-per-frame scroll sample — no coordinates, no element positions. Rule `interaction.answered_unseen` (informational).
+
 Posted with every save; the server re-sanitises it (`sanitizeTelemetry`), drops switched-off categories, computes `device_hash` (sha256 of coarse fields, salted per survey), and stores it. `ip_hash` is set at session creation from `x-forwarded-for` (salted per survey via `QUALITY_HASH_SALT`), only when `telemetry.network` is on. The disclosure text renders in the runtime footer.
 
 ## 3. The engine — `packages/quality`
