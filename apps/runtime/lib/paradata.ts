@@ -93,3 +93,55 @@ export function pushHistory(list: HistoryEntry[], entry: HistoryEntry, dropped =
   return d;
 }
 
+
+/* ------------------------------------------------------------------ inactivity (TE-06) */
+
+/** the most idle periods kept per session */
+export const IDLE_CAP = 100;
+export interface IdlePeriod { pageId: string; /** ms since the survey started, when the respondent stopped */ at: number; ms: number; prompted?: boolean }
+export interface IdleSummary { thresholdMs: number; periods: IdlePeriod[]; totalMs: number; longestMs: number; prompts: number; dropped?: number }
+
+/**
+ * The idle clock. `last` is the last input / pointer / key / scroll; a gap of at least `thresholdMs` without one is
+ * an idle period, recorded when activity resumes (or the page is left) — so a throttled background timer never
+ * loses one. `tick` only says when a period has just begun (for the optional prompt), once per period.
+ */
+export class IdleClock {
+  last: number;
+  readonly thresholdMs: number;
+  readonly summary: IdleSummary;
+  private announced = false;
+  private prompted = false;
+  constructor(thresholdMs: number, start: number, summary?: IdleSummary) {
+    this.thresholdMs = thresholdMs;
+    this.summary = summary ?? { thresholdMs, periods: [], totalMs: 0, longestMs: 0, prompts: 0 };
+    this.last = start;
+  }
+  /** a timer tick: true exactly once when the current gap first reaches the threshold */
+  tick(now: number): boolean {
+    if (this.announced || now - this.last < this.thresholdMs) return false;
+    this.announced = true;
+    return true;
+  }
+  /** the optional prompt was shown for the current period */
+  notePrompt(): void { if (!this.prompted) { this.prompted = true; this.summary.prompts++; } }
+  /** input happened: closes an idle period when the gap reached the threshold; returns it */
+  activity(now: number, pageId: string, startedAt: number): IdlePeriod | null {
+    const gap = now - this.last;
+    let out: IdlePeriod | null = null;
+    if (gap >= this.thresholdMs) {
+      out = { pageId, at: Math.max(0, this.last - startedAt), ms: gap, ...(this.prompted ? { prompted: true } : {}) };
+      const s = this.summary;
+      s.totalMs += gap;
+      s.longestMs = Math.max(s.longestMs, gap);
+      s.periods.push(out);
+      if (s.periods.length > IDLE_CAP) { s.periods.shift(); s.dropped = (s.dropped ?? 0) + 1; }
+    }
+    this.last = now;
+    this.announced = false;
+    this.prompted = false;
+    return out;
+  }
+  /** a new page starts the clock afresh (the click that left the old one was activity) */
+  reset(now: number): void { this.last = now; this.announced = false; this.prompted = false; }
+}

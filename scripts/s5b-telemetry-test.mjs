@@ -10,6 +10,9 @@
  *   B  answer history (TE-02): a single choice switched 1→2→1→2→1 keeps the five values with rising times; a grid
  *      keeps its cells; typed text keeps { len } only (the text is nowhere in the telemetry, client or stored);
  *      the stored row keeps the history; answerHistory off → none
+ *   C  inactivity (TE-06): idleSeconds 10 + idlePrompt with custom text → after 10 s the native popup (centred,
+ *      the custom words) opens; a mouse move closes it; idle.periods holds one period ≥ 10 s, prompted, on p1, and
+ *      the visit's idleMs; with the prompt off (default) the period is still recorded and no popup opens
  *
  *   RUNTIME_URL=http://localhost:3001 node scripts/s5b-telemetry-test.mjs
  *   SECTIONS=A (default all)
@@ -19,7 +22,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { sendPreview } from "./lib/preview.mjs";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
-const SECTIONS = new Set((process.env.SECTIONS ?? "A,B").split(",").map((s) => s.trim()));
+const SECTIONS = new Set((process.env.SECTIONS ?? "A,B,C").split(",").map((s) => s.trim()));
 let passed = 0;
 const ok = (m) => { passed++; console.log(`  ok   ${m}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -211,6 +214,66 @@ if (SECTIONS.has("B")) {
   assert.ok(t.disabled.includes("answerHistory") && !t.measured.includes("answerHistory"));
   ok("answerHistory off: change counts only, 'answerHistory' in disabled");
   await pv.context().close();
+}
+
+/* ============================================================== C. inactivity */
+if (SECTIONS.has("C")) {
+  console.log("\nC  inactivity + optional prompt (TE-06)");
+  const mk = (id, telemetry) => {
+    const d = survey(id, [sq("q1"), { id: "z", code: "Z", variableName: "Z", type: "single_select", text: "Last", options: scale, required: false, settings: {} }],
+      [{ type: "page", id: "p1", questionIds: ["q1"] }, { type: "page", id: "p2", questionIds: ["z"] }], { quality: { enabled: true, telemetry } });
+    return d;
+  };
+  {
+    const pv = await open(mk("s5b-c1", { idleSeconds: 10, idlePrompt: true, idlePromptText: "Still with us? No rush." }));
+    await pv.waitForSelector('[data-qid="q1"]');
+    await pv.mouse.move(200, 200);
+    await sleep(4000);
+    assert.equal(await pv.$$eval('[data-rs-ux-popup="rs-idle-prompt"]', (e) => e.length), 0, "no prompt before the threshold");
+    await pv.waitForSelector('[data-rs-ux-popup="rs-idle-prompt"]', { timeout: 15000 });
+    const pop = await pv.$eval('[data-rs-ux-popup="rs-idle-prompt"]', (el) => ({ text: el.textContent, placement: el.getAttribute("data-placement"), role: el.querySelector("[role]")?.getAttribute("role") }));
+    assert.match(pop.text, /Still with us\? No rush\./);
+    assert.equal(pop.placement, "center");
+    ok(`after 10 s idle the native popup opens, centred, with the survey's words (role ${pop.role})`);
+    await pv.mouse.move(300, 320);
+    await pv.mouse.move(310, 330);
+    await sleep(500);
+    assert.equal(await pv.$$eval('[data-rs-ux-popup="rs-idle-prompt"]', (e) => e.length), 0, "input closes it");
+    const t = await tel(pv);
+    assert.ok(t.measured.includes("idle"));
+    assert.equal(t.idle.thresholdMs, 10000);
+    assert.equal(t.idle.periods.length, 1, JSON.stringify(t.idle));
+    const p = t.idle.periods[0];
+    assert.equal(p.pageId, "p1");
+    assert.ok(p.ms >= 10000 && p.prompted === true, JSON.stringify(p));
+    assert.equal(t.idle.prompts, 1);
+    assert.ok(t.pages[0].idleMs >= 10000);
+    ok(`a mouse move closes it; idle.periods = [{ p1, ${p.ms} ms, prompted }], prompts 1, the visit's idleMs set`);
+    await pv.context().close();
+  }
+  {
+    const pv = await open(mk("s5b-c2", { idleSeconds: 10 }));
+    await pv.waitForSelector('[data-qid="q1"]');
+    await sleep(11500);
+    assert.equal(await pv.$$eval('[data-rs-ux-popup="rs-idle-prompt"]', (e) => e.length), 0, "the prompt is off by default");
+    await pv.click('[data-qid="q1"] label >> nth=0');
+    await sleep(300);
+    const t = await tel(pv);
+    assert.equal(t.idle.periods.length, 1);
+    assert.equal(t.idle.periods[0].prompted, undefined);
+    assert.equal(t.idle.prompts, 0);
+    ok("prompt off (default): no popup, the idle period is still recorded");
+    await pv.context().close();
+  }
+  {
+    const pv = await open(mk("s5b-c3", { idle: false, idleSeconds: 10, idlePrompt: true }));
+    await pv.waitForSelector('[data-qid="q1"]');
+    const t = await tel(pv);
+    assert.equal(t.idle, undefined);
+    assert.ok(t.disabled.includes("idle") && !t.measured.includes("idle"));
+    ok("idle off: no idle record (and so no prompt), 'idle' in disabled");
+    await pv.context().close();
+  }
 }
 
 await browser.close();

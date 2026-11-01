@@ -4,13 +4,13 @@
  * collector records lengths only) — this guards against a tampered client.
  *
  * (Moved out of api/session/save/route.ts in S5b so it can be unit-tested; the S5b fields — scroll depth,
- * question visibility, answer history — are kept only when their category is on, and listed in `disabled` when it is off.)
+ * question visibility, answer history, idle periods — are kept only when their category is on, and listed in `disabled` when it is off.)
  */
-import { HISTORY_CAP, HISTORY_CLOSED_TYPES, HISTORY_TEXT_TYPES, historyValue } from "./paradata.ts";
+import { HISTORY_CAP, HISTORY_CLOSED_TYPES, HISTORY_TEXT_TYPES, historyValue, IDLE_CAP } from "./paradata.ts";
 
-export const TELEMETRY_KEYS = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility", "answerHistory"] as const;
+export const TELEMETRY_KEYS = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility", "answerHistory", "idle"] as const;
 /** the S5b categories a collector reports in `measured` */
-const MEASURABLE = ["visibility", "answerHistory"];
+const MEASURABLE = ["visibility", "answerHistory", "idle"];
 
 /**
  * S5b (TE-02): a question's value history as the server keeps it — re-derived from the DEFINITION's question type,
@@ -46,7 +46,18 @@ export function sanitizeTelemetry(t: any, cfg: any, types?: Record<string, strin
     outOfFocusMs: on("focus") ? num(v.outOfFocusMs) : 0, blurs: on("focus") ? num(v.blurs) : 0,
     pointerEvents: on("interaction") ? num(v.pointerEvents) : 0, keyEvents: on("interaction") ? num(v.keyEvents) : 0, scrollEvents: on("interaction") ? num(v.scrollEvents) : 0,
     scrollDepth: on("visibility") ? optNum(v.scrollDepth, 0, 100) : undefined,
+    idleMs: on("idle") ? optNum(v.idleMs, 0) : undefined,
   })) : [];
+  /* S5b (TE-06): idle periods — page, relative start, duration, prompted; nothing else */
+  const ti = t.idle && typeof t.idle === "object" && on("idle") ? t.idle : null;
+  const idle = ti ? {
+    thresholdMs: num(ti.thresholdMs),
+    periods: (Array.isArray(ti.periods) ? ti.periods : []).slice(-IDLE_CAP).filter((p: any) => p && typeof p === "object").map((p: any) => ({
+      pageId: String(p.pageId ?? "").slice(0, 80), at: Math.max(0, num(p.at)), ms: Math.max(0, num(p.ms)), ...(p.prompted === true ? { prompted: true } : {}),
+    })),
+    totalMs: Math.max(0, num(ti.totalMs)), longestMs: Math.max(0, num(ti.longestMs)), prompts: Math.max(0, Math.round(num(ti.prompts))),
+    ...(typeof ti.dropped === "number" && ti.dropped > 0 ? { dropped: Math.round(ti.dropped) } : {}),
+  } : undefined;
   const questions: Record<string, unknown> = {};
   if (t.questions && typeof t.questions === "object") {
     for (const [k, q] of Object.entries(t.questions as Record<string, any>).slice(0, 2000)) {
@@ -87,5 +98,6 @@ export function sanitizeTelemetry(t: any, cfg: any, types?: Record<string, strin
     device: d,
     disabled: [...disabled],
     measured,
+    ...(idle ? { idle } : {}),
   };
 }

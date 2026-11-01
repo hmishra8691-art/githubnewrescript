@@ -66,3 +66,18 @@ test("S5b answer history: at most 20 entries survive", () => {
   assert.equal(s.questions.q1.history.length, 20);
   assert.equal(s.questions.q1.historyDropped, 10);
 });
+
+test("S5b idle: periods and per-visit idle time kept when on, nothing when off", () => {
+  const t: any = base();
+  t.measured = ["idle"];
+  t.pages[0].idleMs = 61000;
+  t.idle = { thresholdMs: 60000, periods: [{ pageId: "p1", at: 1000, ms: 61000, prompted: true, note: "x" }, "junk"], totalMs: 61000, longestMs: 61000, prompts: 1, extra: "SECRET" };
+  const s = sanitizeTelemetry(t, {});
+  assert.deepEqual(s.idle, { thresholdMs: 60000, periods: [{ pageId: "p1", at: 1000, ms: 61000, prompted: true }], totalMs: 61000, longestMs: 61000, prompts: 1 });
+  assert.equal(s.pages[0].idleMs, 61000);
+  assert.deepEqual(s.measured, ["idle"]);
+  const off = sanitizeTelemetry(t, { idle: false });
+  assert.equal(off.idle, undefined);
+  assert.equal(off.pages[0].idleMs, undefined);
+  assert.ok(off.disabled.includes("idle"));
+});

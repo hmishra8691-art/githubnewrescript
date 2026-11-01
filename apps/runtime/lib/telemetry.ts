@@ -2,7 +2,7 @@
 import type { TelemetryConfig } from "@rescript/schema";
 import { TELEMETRY_CATEGORIES } from "@rescript/schema";
 import type { ResponseTelemetry, PageVisit, DeviceInfo } from "@rescript/quality";
-import { historyValue, isCardVisible, pushHistory, scrollDepthPct, visibleStart, visibleStop } from "./paradata";
+import { historyValue, IdleClock, isCardVisible, pushHistory, scrollDepthPct, visibleStart, visibleStop } from "./paradata";
 
 /**
  * The event collector — what the runtime records about HOW a respondent
@@ -29,6 +29,10 @@ import { historyValue, isCardVisible, pushHistory, scrollDepthPct, visibleStart,
  *
  * S5b (TE-02) answer history: every change of a closed question appends `[ms since start, value]` (codes,
  * numbers, grid cells), the latest 20 kept; typed text appends `{ len }`; nothing else is kept (lib/paradata.ts).
+ *
+ * S5b (TE-06) inactivity: any input / pointer / key / scroll / wheel / touch resets an idle clock; a gap of
+ * `idleSeconds` (default 60) is an idle period (page, relative start, duration), closed when activity resumes or
+ * the page is left. A 1 s timer only announces the start, for the optional prompt (`idlePrompt`, off by default).
  */
 
 export interface TelemetryCollector {
@@ -46,6 +50,13 @@ export interface TelemetryCollector {
   submitted(): void;
   /** stop listening */
   dispose(): void;
+  /**
+   * S5b (TE-06): told when an idle period begins ("idle", once per period) and when input resumes ("active") — the
+   * Runner opens / closes the optional "Are you still there?" prompt. Returns whether the prompt is configured.
+   */
+  onIdle(fn: ((phase: "idle" | "active") => void) | null): boolean;
+  /** S5b: the prompt was shown for the current idle period */
+  idlePrompted(): void;
   /** the coarse device description, for the server-side device hash */
   device: DeviceInfo | undefined;
 }
@@ -101,6 +112,9 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
   if (visibilityOn) measured.push("visibility");
   const historyOn = on("answerHistory") && on("timing");
   if (historyOn) measured.push("answerHistory");
+  const idleOn = on("idle") && typeof window !== "undefined";
+  if (idleOn) measured.push("idle");
+  const idleMs = Math.max(10, Math.min(3600, Number((c as any).idleSeconds) || 60)) * 1000;
   const startedAt = now();
   const reloads = on("navigation") ? reloadCount(sessionId) : 0;
 
@@ -113,6 +127,7 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
     device: on("device") ? detectDevice() : undefined,
     disabled,
     measured,
+    ...(idleOn ? { idle: { thresholdMs: idleMs, periods: [], totalMs: 0, longestMs: 0, prompts: 0 } } : {}),
   };
 
   let current: PageVisit | null = null;
@@ -217,8 +232,32 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
     });
   }
 
+  /* ---------------------------------------------------------------- S5b inactivity */
+  const idle = idleOn && data.idle ? new IdleClock(idleMs, startedAt, data.idle) : null;
+  let idleHandler: ((phase: "idle" | "active") => void) | null = null;
+  let idleTimer: ReturnType<typeof setInterval> | null = null;
+  let idleNow = false;
+  const activity = () => {
+    if (!idle) return;
+    const t = now();
+    if (t - idle.last < 250 && !idleNow) { idle.last = t; return; } // pointermove storms: one assignment
+    const p = idle.activity(t, current?.pageId ?? "", startedAt);
+    if (p && current) current.idleMs = (current.idleMs ?? 0) + p.ms;
+    if (idleNow) { idleNow = false; idleHandler?.("active"); }
+  };
+  if (idle) {
+    for (const ev of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart", "input"]) listen(document, ev, activity, { capture: true, passive: true });
+    listen(window, "scroll", activity, { passive: true });
+    idleTimer = setInterval(() => {
+      if (!current || !idle.tick(now())) return;
+      idleNow = true;
+      idleHandler?.("idle");
+    }, 1000);
+  }
+
   const leavePage = () => {
     if (!current) return;
+    if (idle) activity();
     if (visibilityOn) { sampleDepth(); stopAllVisible(); }
     current.leftAt = now();
     current = null;
@@ -234,6 +273,7 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
       current = visit;
       data.pages.push(visit);
       if (visibilityOn) { visit.scrollDepth = 0; io?.disconnect(); watched = new WeakSet(); scheduleScan(); }
+      if (idle) { idle.reset(now()); if (idleNow) { idleNow = false; idleHandler?.("active"); } }
       if (on("navigation")) {
         if (via === "back") data.navigation.back++;
         else if (via === "next") data.navigation.forward++;
@@ -262,7 +302,11 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
       leavePage();
       data.submittedAt = now();
     },
+    onIdle(fn) { idleHandler = fn; return !!idle && (c as any).idlePrompt === true; },
+    idlePrompted() { idle?.notePrompt(); },
     dispose() {
+      if (idleTimer) clearInterval(idleTimer);
+      idleHandler = null;
       io?.disconnect(); mo?.disconnect(); io = null; mo = null;
       if (scanTimer) clearTimeout(scanTimer);
       if (scrollFrame) cancelAnimationFrame(scrollFrame);

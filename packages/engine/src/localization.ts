@@ -100,6 +100,8 @@ export const UI_STRINGS: { id: string; en: string; hint: string }[] = [
   { id: "review_soft", en: "Please check the highlighted answers — you can continue if they are right.", hint: "banner for warnings only" },
   { id: "page_of", en: "Page {n} of {total}", hint: "progress label" },
   { id: "skip_to_questions", en: "Skip to the questions", hint: "keyboard skip link" },
+  { id: "idle_prompt", en: "Are you still there? Take your time — your answers so far are kept.", hint: "S5b: the optional inactivity prompt (quality.telemetry.idlePrompt)" },
+  { id: "idle_prompt_ok", en: "I’m here", hint: "S5b: the inactivity prompt's button" },
   { id: "other_specify", en: "Please specify", hint: "placeholder of an “Other” text box" },
   { id: "other_required", en: "Please say what “Other” is before continuing.", hint: "validation" },
   { id: "search_options", en: "Search {n} options…", hint: "placeholder of the option filter on long lists" },

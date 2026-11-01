@@ -140,7 +140,7 @@ import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaG
 import { Inspector } from "./Inspector";
 import { useAssessmentResults } from "./AssessmentResults";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
-import { MediaEmbed, SafeImage, ProgressIndicator, GamificationHud, ReviewPanel, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, ProgressIndicator, GamificationHud, openUxPopup, ReviewPanel, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -686,6 +686,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   );
   const def = React.useMemo(() => localizeDefinition(sourceDef, lang), [sourceDef, lang]);
   const ui = React.useMemo(() => uiStringsFor(sourceDef, lang), [sourceDef, lang]);
+  /* S5b: the idle prompt is opened from the collector's callback, outside React's render — it reads the current words here */
+  const uiRef = React.useRef(ui);
+  uiRef.current = ui;
   const langCfg = surveyLanguages(sourceDef).find((l) => l.code === lang);
   const locale = languageLocale(lang, langCfg);
   const dir = languageDirection(lang, langCfg);
@@ -1131,6 +1134,24 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     telemetryRef.current?.dispose();
     telemetryRef.current = createTelemetryCollector(def.quality?.telemetry, session?.sessionId);
     if (mode !== "live" && typeof window !== "undefined") { (window as any).__rescriptTelemetry = telemetryRef.current.data; (window as any).__rescriptScriptHealth = scriptHealth(); }
+    /*
+     * S5b (TE-06): the optional "Are you still there?" — the survey's native popup (centred, a button to close),
+     * opened when an idle period begins and closed by any input. Never in a hidden tab. Off by default.
+     */
+    {
+      const tel = telemetryRef.current;
+      let closeIdle: (() => void) | null = null;
+      if (tel.onIdle(null)) {
+        tel.onIdle((phase) => {
+          if (phase === "active") { closeIdle?.(); closeIdle = null; return; }
+          const root = shellRef.current;
+          if (!root || closeIdle || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+          tel.idlePrompted();
+          const text = def.quality?.telemetry?.idlePromptText?.trim() || uiText(uiRef.current, "idle_prompt");
+          closeIdle = openUxPopup({ root, owner: "rs-idle-prompt", effect: { text, placement: "center", dismiss: "button" }, labels: { close: uiText(uiRef.current, "idle_prompt_ok") } });
+        });
+      }
+    }
     /*
      * The resume machinery, for the test suites — the same seam
      * `__rescriptState` and `__rescriptTelemetry` already use, and for the

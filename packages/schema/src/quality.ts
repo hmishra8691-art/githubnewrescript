@@ -120,6 +120,17 @@ export const TelemetryConfig = z.object({
    * with times relative to the start). Typed text keeps its length only, never the text. Needs `timing`.
    */
   answerHistory: z.boolean().default(true),
+  /**
+   * S5b (TE-06): idle periods in the page — no input, pointer, key or scroll for `idleSeconds` — as page, start
+   * (relative) and duration. Durations only.
+   */
+  idle: z.boolean().default(true),
+  /** the gap, in seconds, that counts as idle */
+  idleSeconds: z.number().int().min(10).max(3600).default(60),
+  /** a gentle "Are you still there?" through the survey's native popup when an idle period begins — off by default */
+  idlePrompt: z.boolean().default(false),
+  /** the prompt's own words (absent: the built-in text in the respondent's language) */
+  idlePromptText: z.string().max(300).optional(),
   /** text shown in the runtime footer, e.g. "This survey records response timing to protect data quality." */
   disclosure: z.string().optional(),
 });
@@ -128,7 +139,7 @@ export type TelemetryConfig = z.infer<typeof TelemetryConfig>;
  * The telemetry CATEGORIES — the on/off switches of `TelemetryConfig` (its other fields are settings). A category
  * that is off is listed in the telemetry's `disabled`, so a zero reads as "not measured".
  */
-export const TELEMETRY_CATEGORIES = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility", "answerHistory"] as const;
+export const TELEMETRY_CATEGORIES = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility", "answerHistory", "idle"] as const;
 export type TelemetryCategory = (typeof TELEMETRY_CATEGORIES)[number];
 
 export const PrivacyConfig = z.object({

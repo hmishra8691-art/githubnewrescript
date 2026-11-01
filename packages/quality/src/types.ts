@@ -29,6 +29,8 @@ export interface PageVisit {
   scrollEvents: number;
   /** S5b (TE-04): deepest point of the page reached on this visit, % of the page height (100 = the page fits / was scrolled to the end) */
   scrollDepth?: number;
+  /** S5b (TE-06): ms of this visit spent in idle periods (no input for the survey's idle threshold) */
+  idleMs?: number;
 }
 
 export interface QuestionTiming {
@@ -93,6 +95,8 @@ export interface ResponseTelemetry {
    * before S5b has no such list, so those categories read as "not measured" rather than as zero.
    */
   measured?: string[];
+  /** S5b (TE-06): idle periods — page, start (ms since the survey started), duration; whether the prompt was shown */
+  idle?: { thresholdMs: number; periods: { pageId: string; at: number; ms: number; prompted?: boolean }[]; totalMs: number; longestMs: number; prompts: number; dropped?: number };
 }
 
 /* ============================================================ inputs */

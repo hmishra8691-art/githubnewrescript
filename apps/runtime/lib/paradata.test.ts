@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isCardVisible, scrollDepthPct, visibleStart, visibleStop, historyValue, pushHistory, HISTORY_CAP, type HistoryEntry } from "./paradata.ts";
+import { isCardVisible, scrollDepthPct, visibleStart, visibleStop, historyValue, pushHistory, HISTORY_CAP, type HistoryEntry, IdleClock, IDLE_CAP } from "./paradata.ts";
 
 /* S5b item 1 (TE-04): visibility + scroll depth arithmetic */
 
@@ -66,4 +66,39 @@ test("pushHistory keeps the latest 20 and counts what it dropped", () => {
   assert.equal(d, 5);
   assert.deepEqual(h[0], [50, "5"]);
   assert.deepEqual(h[19], [240, "24"]);
+});
+
+/* S5b item 3 (TE-06): the idle clock */
+
+test("IdleClock: a gap of the threshold is an idle period, closed by the next activity; shorter gaps are not", () => {
+  const c = new IdleClock(60_000, 1_000);
+  assert.equal(c.activity(30_000, "p1", 1_000), null, "29 s: not idle");
+  assert.equal(c.tick(60_000), false);
+  assert.equal(c.tick(90_000), true, "the tick announces the start once");
+  assert.equal(c.tick(91_000), false);
+  c.notePrompt(); c.notePrompt();
+  const p = c.activity(125_000, "p1", 1_000);
+  assert.deepEqual(p, { pageId: "p1", at: 29_000, ms: 95_000, prompted: true });
+  assert.equal(c.summary.prompts, 1);
+  assert.equal(c.summary.totalMs, 95_000);
+  assert.equal(c.summary.longestMs, 95_000);
+  // a later period without a prompt
+  const q = c.activity(200_000, "p2", 1_000);
+  assert.deepEqual(q, { pageId: "p2", at: 124_000, ms: 75_000 });
+  assert.equal(c.summary.totalMs, 170_000);
+  assert.equal(c.summary.periods.length, 2);
+  // a throttled timer never loses a period: no tick, still recorded on activity
+  const d = new IdleClock(10_000, 0);
+  assert.ok(d.activity(50_000, "p1", 0));
+  // a new page restarts the clock
+  d.reset(60_000);
+  assert.equal(d.activity(65_000, "p2", 0), null);
+});
+
+test("IdleClock keeps at most IDLE_CAP periods and counts the dropped", () => {
+  const c = new IdleClock(10_000, 0);
+  let t = 0;
+  for (let i = 0; i < IDLE_CAP + 5; i++) { t += 11_000; c.activity(t, "p", 0); }
+  assert.equal(c.summary.periods.length, IDLE_CAP);
+  assert.equal(c.summary.dropped, 5);
 });

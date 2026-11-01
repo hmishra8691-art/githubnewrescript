@@ -48,5 +48,7 @@ export { showOptionPopup, announceSelection } from "./optionPopup";
 export { AssessmentReport, type AssessmentReportProps } from "./AssessmentReport";
 export { ProgressIndicator } from "./ProgressIndicator";
 export { GamificationHud } from "./Gamification";
+/* S5b (TE-06): the native popup, for the Runner's optional idle prompt */
+export { openUxPopup } from "./uxPopup";
 export { ReviewPanel } from "./ReviewPanel";
 export { progressModel, STEP_DOTS_MAX, type ProgressModel, type ProgressPosition, type ProgressStyle } from "./progress";
