@@ -526,7 +526,7 @@ function CustomRuleRow({ rule, onChange, onRemove }: { rule: CustomQualityRule; 
       </div>
       <div className="qs-custom-when">
         <span className="flabel">IF</span>
-        <ConditionEditor value={rule.when} onChange={(when) => onChange({ ...rule, when })}
+        <ConditionEditor systemVariables value={rule.when} onChange={(when) => onChange({ ...rule, when })}
           workspace={{ title: "Custom quality rule", description: "Flag the response when the following condition is met:" }} />
       </div>
       <div className="qs-custom-then">
