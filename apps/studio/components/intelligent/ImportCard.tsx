@@ -55,7 +55,7 @@ export interface ImportReport {
 export interface ImportJob {
   fileName: string;
   size: number;
-  stage: "estimating" | "estimated" | "running" | "ready" | "failed" | "creating" | "created" | "merged" | "cancelled";
+  stage: "estimating" | "estimated" | "running" | "ready" | "failed" | "creating" | "created" | "merged" | "cancelled" | "rolled_back";
   scope: ImportScope;
   into: "new" | "merge";
   detection?: { format: string; platform: string; label: string; confidence: string; reasons: string[] };
@@ -72,6 +72,11 @@ export interface ImportJob {
   panel?: "issues" | "map" | "fidelity" | null;
   /** the survey as it was when a merge was previewed — applied only onto that */
   basedOn?: SurveyDefinition;
+  /** I4: the import session this run was recorded as (history, the file for 90 days, rollback) */
+  sessionId?: string;
+  sessionExpiresAt?: string;
+  sessionNote?: string;
+  rollingBack?: boolean;
 }
 
 const ROWS: [keyof Stats, string][] = [
@@ -85,17 +90,18 @@ const SCOPES: { id: ImportScope; label: string; about: string }[] = [
 ];
 const CONF: [string, string][] = [["confirmed", "Confirmed"], ["high", "High confidence"], ["review", "Needs review"], ["ambiguous", "Ambiguous"], ["unsupported", "Unsupported"]];
 
-export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, readOnly, sandbox }: {
+export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, readOnly, sandbox }: {
   job: ImportJob;
   onPatch(p: Partial<ImportJob>): void;
-  onRun(): void; onCreate(): void; onMerge(): void; onCancel(): void; onReviewAfter(): void;
+  onRun(): void; onCreate(): void; onMerge(): void; onCancel(): void; onReviewAfter(): void; onRollback?(): void;
   readOnly: boolean; sandbox: boolean;
 }) {
   const cur = job.estimate?.currency ?? "USD";
   const r = job.report;
   const done = job.stage === "created" || job.stage === "merged";
+  const rolledBack = job.stage === "rolled_back";
   return (
-    <article className={`iq-turn ${done ? "applied" : job.stage === "cancelled" ? "cancelled" : "open"}`} data-testid="iq-import" data-stage={job.stage} data-format={job.detection?.format ?? ""}>
+    <article className={`iq-turn ${done ? "applied" : job.stage === "cancelled" || rolledBack ? "cancelled" : "open"}`} data-testid="iq-import" data-stage={job.stage} data-format={job.detection?.format ?? ""}>
       <div className="iq-said"><Icon name="upload" size={13} /> <span>Import <b>{job.fileName}</b> <span className="iqi-dim">({(job.size / 1024).toFixed(job.size < 10240 ? 1 : 0)} KB)</span></span></div>
       <div className={`iq-card proposal${job.stage === "failed" ? " blocked" : ""}`}>
         <div className="iq-card-head">
@@ -163,6 +169,8 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
             {r.fidelity && (r.fidelity.totals.detected > 0 || job.verification) && <FidelityBar f={r.fidelity} verification={job.verification} />}
             {job.actual && <p className="iqi-dim" data-testid="iqi-actual">Charged for this import: <b>{formatCharge(job.actual.customerCharge, job.actual.currency)}</b>{job.estimate ? ` (estimated ${formatCharge(job.estimate.import.customerCharge, cur)})` : ""}</p>}
 
+            {job.sessionId && <p className="iqi-dim" data-testid="iqi-session">Recorded in the import history{job.sessionExpiresAt ? ` · the file is kept until ${new Date(job.sessionExpiresAt).toLocaleDateString()}` : ""}{job.sessionNote ? ` · ${job.sessionNote}` : ""}</p>}
+            {!job.sessionId && job.sessionNote && <p className="iqi-dim" data-testid="iqi-session">{job.sessionNote}</p>}
             {job.panel === "issues" && <IssueList report={r} />}
             {job.panel === "map" && job.mapping && <MapTable mapping={job.mapping} />}
             {job.panel === "fidelity" && r.fidelity && <FidelityDetail f={r.fidelity} verification={job.verification} />}
@@ -181,6 +189,7 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
               )}
               {job.stage === "created" && job.createdId && <a className="iq-btn primary" href={`/studio/${job.createdId}?mode=intelligent`} data-testid="iqi-open">Open the new project</a>}
               {job.stage === "merged" && <button type="button" className="iq-btn primary" onClick={onReviewAfter} data-testid="iqi-review-after">What needs review?</button>}
+              {done && job.sessionId && onRollback && <button type="button" className="iq-btn" onClick={onRollback} disabled={job.rollingBack || (job.stage === "merged" && readOnly)} data-testid="iqi-rollback" title={job.stage === "created" ? "Delete the project this import created (refused once it has responses)" : "Restore the survey as it was before this import"}>{job.rollingBack ? "Rolling back…" : "Roll back this import"}</button>}
             </div>
           </>
         )}
@@ -194,7 +203,7 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
 
 const KICKER: Record<ImportJob["stage"], string> = {
   estimating: "READING THE FILE", estimated: "IMPORT — ESTIMATE", running: "RECONSTRUCTING", ready: "IMPORT PREVIEW",
-  failed: "IMPORT — COULD NOT READ", creating: "CREATING THE PROJECT", created: "IMPORTED — NEW PROJECT", merged: "IMPORTED INTO THIS SURVEY", cancelled: "IMPORT CANCELLED",
+  failed: "IMPORT — COULD NOT READ", creating: "CREATING THE PROJECT", created: "IMPORTED — NEW PROJECT", merged: "IMPORTED INTO THIS SURVEY", cancelled: "IMPORT CANCELLED", rolled_back: "IMPORT ROLLED BACK",
 };
 
 function IssueList({ report }: { report: ImportReport }) {
@@ -366,5 +375,28 @@ export function ReviewCard({ text, entry, onSelect, onAnalyze }: { text: string;
         )}
       </div>
     </article>
+  );
+}
+
+
+/**
+ * I4 — the last imports of this project (or the sandbox): file, when, what came of it. Read-only; a rollback
+ * is offered on the import's own card, where its preview is.
+ */
+export interface ImportHistoryRow { id: string; fileName: string; format: string; status: string; into: string; createdAt: string; hasSource: boolean; reportDigest?: { questions?: number } }
+export function ImportHistory({ surveyId }: { surveyId: string }) {
+  const [rows, setRows] = React.useState<ImportHistoryRow[] | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    fetch(`/api/import/sessions?surveyId=${encodeURIComponent(surveyId)}&limit=5`).then((r) => r.json()).then((d) => { if (live) setRows(Array.isArray(d.sessions) ? d.sessions : []); }).catch(() => { if (live) setRows([]); });
+    return () => { live = false; };
+  }, [surveyId]);
+  if (!rows?.length) return null;
+  const word: Record<string, string> = { analyzed: "previewed", applied: "applied", rolled_back: "rolled back", failed: "could not be read", discarded: "cancelled" };
+  return (
+    <div className="iqi-history" data-testid="iq-import-history">
+      <span className="iqi-dim">Recent imports</span>
+      <ul>{rows.map((r) => <li key={r.id} data-testid="iq-import-history-row" data-status={r.status}><b>{r.fileName}</b> <span className="iqi-dim">{new Date(r.createdAt).toLocaleString()} · {r.into === "merge" ? "into this survey" : "new project"} · {word[r.status] ?? r.status}{r.reportDigest?.questions ? ` · ${r.reportDigest.questions} questions` : ""}{r.hasSource ? " · file kept" : ""}</span></li>)}</ul>
+    </div>
   );
 }

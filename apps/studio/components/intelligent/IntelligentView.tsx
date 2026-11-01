@@ -23,7 +23,7 @@ import { coerceIntent } from "../../lib/intelligent/ai";
 import { languageName, type HeardTranscript } from "../../lib/intelligent/voice";
 import { useVoiceInput } from "../../lib/useVoiceInput";
 import { importRequest, importReviewAnswer, codeFromTitle } from "../../lib/import/chat";
-import { ImportCard, ReviewCard, type ImportJob, type ReviewEntry, type ReviewScript } from "./ImportCard";
+import { ImportCard, ImportHistory, ReviewCard, type ImportJob, type ReviewEntry, type ReviewScript } from "./ImportCard";
 import type { QuotaImportNote } from "./copilot/QuotasTab";
 import { useCopilot, type CopilotEntry } from "./copilot/useCopilot";
 import { applyIntent, undoIntent } from "../../lib/copilot/spoken";
@@ -604,7 +604,7 @@ export function IntelligentView() {
     try {
       const { d } = await postImport(id, { phase: "run", scope: job.scope, into: job.into, ...(job.into === "merge" ? { existing: JSON.stringify(basedOn) } : {}) });
       if (!d.report) { patchJob(id, { stage: "failed", error: String(d.error ?? "The import could not be completed.") }); return; }
-      patchJob(id, { stage: "ready", report: d.report, definition: d.definition, mapping: d.mapping, verification: d.verification ?? null, actual: d.actual, basedOn, ...(d.report.ok ? {} : { error: "The file was read, but it did not produce a valid survey — see the issues." }) });
+      patchJob(id, { stage: "ready", report: d.report, definition: d.definition, mapping: d.mapping, verification: d.verification ?? null, actual: d.actual, basedOn, sessionId: d.session?.id, sessionExpiresAt: d.session?.expiresAt, sessionNote: d.sessionNote, ...(d.report.ok ? {} : { error: "The file was read, but it did not produce a valid survey — see the issues." }) });
     } catch (e) {
       patchJob(id, { stage: "estimated", error: (e as Error).message });
     }
@@ -626,6 +626,7 @@ export function IntelligentView() {
       const d = await r.json().catch(() => null) as { id?: string; error?: string } | null;
       if (!r.ok || !d?.id) { patchJob(id, { stage: "ready", error: d?.error ?? (r.status === 401 ? "Sign in to create a project." : `The project could not be created (${r.status}).`) }); return; }
       patchJob(id, { stage: "created", createdId: d.id });
+      if (job.sessionId) void fetch(`/api/import/sessions/${encodeURIComponent(job.sessionId)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "applied", surveyId: d.id }) }).catch(() => {});
       s.toast("Project created from the import.");
     } catch (e) {
       patchJob(id, { stage: "ready", error: (e as Error).message });
@@ -642,11 +643,37 @@ export function IntelligentView() {
     s.replace(job.definition);
     patchJob(id, { stage: "merged", basedOn: undefined });
     void fetch("/api/import/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, ...importAudit(job) }) }).catch(() => {});
+    if (job.sessionId) void fetch(`/api/import/sessions/${encodeURIComponent(job.sessionId)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "applied" }) }).catch(() => {});
     s.toast("Imported into this survey. Undo with ⌘Z.");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turns, s, patchJob]);
 
-  const cancelImport = (id: string) => { patchJob(id, { stage: "cancelled" }); importFiles.delete(id); };
+  const cancelImport = (id: string) => {
+    const job = jobOf(id);
+    if (job?.sessionId && job.stage === "ready") void fetch(`/api/import/sessions/${encodeURIComponent(job.sessionId)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "discarded" }) }).catch(() => {});
+    patchJob(id, { stage: "cancelled" }); importFiles.delete(id);
+  };
+
+  /* I4: roll an applied import back — a merge restores the survey as it was (one edit, undoable); a new project is deleted unless it has responses */
+  const rollbackImport = React.useCallback(async (id: string) => {
+    const job = jobOf(id);
+    if (!job?.sessionId) return;
+    patchJob(id, { rollingBack: true, error: undefined });
+    try {
+      const r = await fetch(`/api/import/sessions/${encodeURIComponent(job.sessionId)}/rollback`, { method: "POST" });
+      const d = await r.json().catch(() => null) as { action?: string; definition?: SurveyDefinition; error?: string } | null;
+      if (!r.ok || !d?.action) { patchJob(id, { rollingBack: false, error: d?.error ?? `The import could not be rolled back (${r.status}).` }); return; }
+      if (d.action === "restore_definition" && d.definition) {
+        s.labelNextEdit(`Rolled back the import of ${job.fileName}`);
+        s.replace(d.definition);
+        s.toast("The import was rolled back: the survey is as it was before it. Undo with ⌘Z.");
+      } else s.toast("The import was rolled back: the project it created was deleted.");
+      patchJob(id, { rollingBack: false, stage: "rolled_back" });
+    } catch (e) {
+      patchJob(id, { rollingBack: false, error: (e as Error).message });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns, s, patchJob]);
 
   const onFiles = (list: FileList | null) => {
     const f = list?.[0];
@@ -871,6 +898,7 @@ export function IntelligentView() {
                 <span className="iq-example-text"><Icon name="paperclip" size={13} /> Import a questionnaire — Qualtrics QSF, Decipher XML, Word, Excel, CSV, PDF or text</span>
                 <span className="iq-example-about">reverse-engineered into Rescript · previewed before anything is created</span>
               </button>
+              <ImportHistory surveyId={s.surveyDbId} />
               <div className="iq-examples">
                 {examples.map((e) => (
                   <button key={e.text} type="button" className="iq-example" onClick={() => setText(e.text)} data-testid="iq-example">
@@ -886,7 +914,7 @@ export function IntelligentView() {
               if (turn.kind === "import") return (
                 <ImportCard key={turn.id} job={turn.job} readOnly={s.readOnly} sandbox={sandbox}
                   onPatch={(p) => patchJob(turn.id, p)} onRun={() => void runImport(turn.id)} onCreate={() => void createFromImport(turn.id)}
-                  onMerge={() => mergeImport(turn.id)} onCancel={() => cancelImport(turn.id)} onReviewAfter={() => showReview("What needs review after the import?")} />
+                  onMerge={() => mergeImport(turn.id)} onCancel={() => cancelImport(turn.id)} onReviewAfter={() => showReview("What needs review after the import?")} onRollback={() => void rollbackImport(turn.id)} />
               );
               if (turn.kind === "copilot") {
                 const open = turn.proposal === "open" && copilot.state;
