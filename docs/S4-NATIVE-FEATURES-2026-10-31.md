@@ -322,3 +322,150 @@ Browser (`flock -o /tmp/p0/heavy.lock /tmp/p0/fresh.sh <suite>`, Studio from `st
 - The new respondent strings ("Time left", "N seconds left.", "Time is up.", "You can continue now.", the minimum-wait sentence) use `uiText` with English fallbacks — they are **not yet in the translation catalogue**.
 - `gamified.timed` is unchanged (its own clock); it is not mapped onto the page clock.
 - The flow page node editor and the Survey Flow block card both edit `page.timer`; a page created implicitly inside a block by page breaks is a page node too and is covered.
+
+---
+
+# S4c — Native features, part C: randomization and lists (2026-11-01)
+
+Audit rows RA-05, RA-06, RA-07, RA-08, RK-04, PU-13, SM-10 and D21 (`SCRIPT-STUDIO-AUDIT-2026-10-30.md`). Every new
+setting is optional: a survey written before this compiles, draws and exports exactly as before, with one deliberate
+exception — every randomizer now stores the order it showed (`ORDER_<ID>`, item 3).
+
+## 1. RA-05 — weighted randomizer
+
+- **Schema** `randomizer.weights: { <child id>: weight > 0 }` (absent = 1).
+- **Seeded** (no exact balance): `show` N of M draws N children WITHOUT replacement in proportion to the weights —
+  Efraimidis–Spirakis (`weightedSample`, the N largest u^(1/w) from the respondent's seed) — then a seeded order. Equal
+  weights take the old path unchanged (`randomizerWeights` returns null). With weights, `rotation` / even presentation
+  is not used for the window (a rotation cannot honour weights).
+- **Exact balance**: the least-filled claim becomes weighted — the arm furthest below its target share
+  (weight / total) goes first, ordered by Sainte-Laguë's (count + ½) / weight, ties in the deterministic order.
+  `pickLeastFilled` (the sandbox and preview store) and the SQL use the same rule; equal weights = the old rule.
+  10,000 simulated respondents at 2:1:1 → exactly 5,000 / 2,500 / 2,500, every prefix within one claim of target.
+- **Migration `0079_weighted_balance.sql`**: `rescript_claim_balance` gains `p_weights numeric[] default null`. The old
+  8-argument signature is dropped first (two overloads would make a named 8-argument call ambiguous) — one function
+  serves old and new callers. The route sends `p_weights` only when weights differ, so an unweighted claim works on a
+  database without 0079; a weighted claim there fails over to the seed-derived window and logs `needsMigration: 0079`.
+  Re-runnable (applied twice on scratch Postgres). SQL test `scripts/weighted-balance-sql-test.sql` (8 checks);
+  `exact-balance-sql-test.sql` B13 now names the 9-argument signature (19 checks).
+
+## 2. RA-06 — Latin square and Williams designs
+
+- **Schema** `randomizer.order: "random" | "rotation" | "latin_square" | "williams"`. Absent = `rotation` when
+  `evenPresentation` (old surveys), else `random`.
+- `latin_square`: the cyclic square, row r = (r, r+1, …) mod n — every child in every position once per n rows.
+  `williams`: first row 0, 1, n−1, 2, n−2, …, row r adds r — every child in every position AND every ordered pair
+  adjacent equally often (first-order carryover balanced); odd n uses 2n rows (the rows and their mirrors). Proven in
+  `s4cRandomization.test` for n = 2…10.
+- The respondent gets one ROW: claimed exactly (least-filled over rows; slot `latin:<id>`, stored in
+  `RANDOMIZER_<ID>_ROW`) when `balance.exact` is on, else from the seed. `show` N keeps the row's first N (still
+  position-balanced). Rows index the authored children; a child hidden for this respondent is dropped from the row
+  (the design is exact only when all are eligible). Weights do not apply to a design.
+
+## 3. RK-04 / RA-07 / SM-10 — the order each respondent saw, stored
+
+- `ORDER_<RANDOMIZER ID>[_<loop codes>]` = the children's ids in the order shown — **default ON for every randomizer**
+  (`recordOrder: false` turns it off). A sequential monadic test therefore records its concept order with no embedded
+  variable; the `sequential_monadic` capability note says so.
+- `<VAR>_ORDER` / `<VAR>_ROW_ORDER` / `<VAR>_COL_ORDER` = option / row / column codes as displayed — **opt-in per
+  question** (`settings.recordOrder`; Studio Randomization → "store the order shown"; IM `set_option_randomization
+  "recordOrder": true`) so the exports of surveys already in the field do not gain columns. Recorded for the
+  randomized axes (options when nothing is randomized).
+- Written by the Runner each time a page is shown (`recordDisplayOrders`): the stored value is the order of the page
+  as last shown. The **server replay** calls the same function at every page it walks, so the posted order is derived
+  identically, and a forged one is a soft `server_mismatch` with the server's value stored (D7).
+- The variable dictionary declares `ORDER_*`, `RANDOMIZER_<ID>_ROW` (exact designs), `<VAR>_ORDER…` and `<VAR>_ARM`
+  for elements outside loops, with labels, so CSV, SPSS (variable labels), Stata, SAS and the Excel matrix carry them.
+
+## 4. RA-08 — experiment arms with exact balance
+
+- `settings.armBalance` (the shared `ExactBalance`) on an `experiment` question. The arm is a balance slot
+  (`arm:<qid>`) on the experiment's page, so the Runner claims it BEFORE the page is shown — the same
+  `/api/session/balance` claim, weighted by the arms' weights (0079), a weight of 0 parks an arm — stores it in
+  `<VAR>_ARM`, and writes it as the answer at page entry (`applyClaimedArms`). The renderer only shows the claimed arm
+  and never draws one when `armBalance.exact` is on. A client-written `_ARM` is cleared and re-claimed by the server.
+  Without `armBalance` nothing changes (the renderer's seeded draw; `seededExperimentArm` reproduces it exactly and is
+  the claim's fallback).
+- Studio: "Exact balance" in the experiment arms editor. IM: `update_question "settings":{"armBalance":{"exact":true}}`
+  (coercion admits one shallow record only for this key).
+
+## 5. D21 / PU-13 — List Fill `method: "custom"`
+
+- `selection.scriptId` names a Scripts-panel **logic script** (id or name); `selection.customList` the calculated list
+  it writes (default `LISTFILL_<NAME>_CUSTOM`). The Runner runs the script in the logic sandbox (S1, `runLogicEvent`
+  with its id) just before the List Fill decides; the script writes `setCalc("LISTFILL_BRANDS_CUSTOM", ["D", "B"])`
+  (an array, "D,B" or JSON).
+- The engine keeps the script's order, **drops and logs** codes that are not this respondent's candidates or were
+  rejected (ineligible, quota full, at maximum), applies quotas and position-sensitive limits after it, and never tops
+  the script's selection up from the fill-to-count fallback.
+- Only when the script wrote **nothing** does priority + quota decide — with `trace.note` (preview / test traces, the
+  Studio simulator) and the soft response variable `LISTFILL_<NAME>_CUSTOM_FALLBACK = 1` (0 when the script decided).
+- Studio List Fill panel: script picker, list name, a warning when the script is missing or off. IM: `create_list_fill`
+  / `update_list_fill` `"method":"custom","script":"<name>"` (refused when the script does not exist); List Fill guide
+  line; registry feature `list_fill_custom`. `source.kind: "script"` is unchanged (still reads `calculated[scriptId]`).
+
+## IM, registry and docs (S4c)
+
+New action `set_randomizer {randomizer, show, weights, order, exact, recordOrder, title}`; `create_randomizer` takes
+`weights`, `order`, `exact`. UX guide line (randomizer designs, recordOrder, armBalance); List Fill guide line
+(custom); capability registry: randomizer summary, `experimental` family setting `armBalance`, feature
+`list_fill_custom`; `sequential_monadic` capability. Public docs regenerated (actions-reference, capabilities).
+
+## Verification (S4c)
+
+| package | command | result |
+|---|---|---|
+| engine | `cd packages/engine && pnpm -s build && node --test dist/*.test.js` | 2584/2584 (new s4cRandomization 16, s4cDisplayOrder 8, s4cExperimentArm 5, s4cListFillCustom 5) |
+| schema / designs / analytics / quality | `node --test dist/*.test.js` | 18/18, 124/124, 396/396, 61/61 |
+| templates | `node --test dist/*.test.js` | 111/111 (serverCheck "honest completion of master-demo" first failed on a soft ORDER_* mismatch — fixed: an order the client did not post is filled in by the replay without a mismatch line) |
+| renderer | `node --experimental-strip-types --test packages/renderer/test/*.test.ts` | 11/11 |
+| studio lib | `node --experimental-strip-types --test 'lib/**/*.test.ts'` | 1132/1132 |
+| runtime lib | `node --experimental-strip-types --test 'lib/*.test.ts'` | 75/75 (balanceClaim +3: weighted 300/100, Williams row, experiment arm 30/10 + forged `_ARM`) |
+| exporters | `node --test dist/*.test.js` | 141/141 (new s4cDisplayOrderExport 2) |
+| studio copilot | `node --experimental-strip-types --test lib/copilot/*.test.ts` | 427/427 |
+| SQL | `0079` applied twice; `weighted-balance-sql-test.sql`; `exact-balance-sql-test.sql` | 8/8; 19/19 |
+
+Typechecks: studio, runtime, renderer `npx tsc --noEmit -p .` — 0 errors. `gen-public-docs.mjs --check` current;
+`dependency-boundaries.mjs` 0 violations (2078 files); `auth-guard-audit.mjs` 0 problems (259 handlers).
+
+Browser (`flock -o /tmp/p0/heavy.lock /tmp/p0/fresh.sh <suite>`, Studio from `studio-sup-4600.sh`):
+
+| suite | result |
+|---|---|
+| `scripts/s4c-randomization-test.mjs` (new) | 9 passed: A sandbox claim 2 (weighted 3:1 → 150/50 under 200 parallel claims; Williams row 3/3/3/3), B preview 2 (Q0_ORDER = DOM order; 6 runs → each Williams row once, pages in row order, ORDER_R1), C experiment 1 (4 runs → 2/2, arm = answer = EXP_ARM), D List Fill custom 2 (script list decides, foreign code dropped; empty → priority + fallback flag), E Studio 2. The first full run passed A–D (7) and lost E to an OOM kill of the Studio next-server; E then passed alone (`SECTIONS=E`, `--no-runtime`) |
+| `engine-15-19-test.mjs` `SECTIONS=15` | all 9 passed |
+| `listfill-test.mjs` / `listfill-least-test.mjs` | 23 / 9 passed |
+| `listfill-intelligent-test.mjs` / `variants-g6-test.mjs` / `logic-scripts-sandbox-test.mjs` / `methods-intelligent-test.mjs` | 9 passed / all G6 checks passed / 10 checks passed / 14 passed |
+| `listfill-allocation-test.mjs` | NOT RUN — needs the `pg` module (not installed in this workspace) |
+
+## Honest limits (S4c)
+
+- Weighted + `show` N > 1: weights are relative selection weights; an arm cannot be shown more than once per
+  respondent, so a very heavy child saturates at "every respondent" (the exact claim then spreads the rest evenly).
+- A design (Latin / Williams) is exact only when every child is eligible; a hidden child is dropped from the row.
+  Designs ignore weights.
+- `ORDER_*` / `<VAR>_ORDER` / `<VAR>_ARM` inside **loops** carry the iteration codes in their names and are exported
+  from the response like any calculated value, but are **not declared** in the variable dictionary (no fixed columns,
+  no labels).
+- Stored order = the order of the page as last shown (Back + a changed answer can change it, as it changes what is
+  shown). A save that posts no `ORDER_*` (an old cached client) gets the replay's value stored with no mismatch line;
+  a posted order that differs is a soft `server_mismatch`.
+- The custom List Fill script is client-run (sandbox); the server re-checks its codes against eligibility, quotas and
+  caps but cannot verify that the script produced them (as for every script write).
+- The trace `note` travels to the browser in test and preview only; in live the soft note is the response variable.
+
+---
+
+# S4 complete — summary (2026-11-01)
+
+| part | items | audit rows |
+|---|---|---|
+| A — what the respondent sees | focus the first error; progress bottom / steps; visible option groups + cascading dropdown; one answer key | D19 / VA-06, D20 / AQ-11, AQ-08, D14 / GA-03 |
+| B — timers and behaviour | native question / page timers; behaviour conditions; `SYSTEM_*` only where computed | GA-05 / IM-19, LO-07, D15 / TE-11 |
+| C — randomization and lists | weighted randomizer (+ migration 0079); Latin square / Williams; stored display order; exact experiment arms; List Fill custom script | RA-05, RA-06, RK-04 / RA-07 / SM-10, RA-08, D21 / PU-13 |
+
+Every S4 feature is optional in the schema, editable in the Studio, reachable from Intelligent Mode (actions or
+settings checked by the engine gate), described in the capability registry and the public docs, and covered by unit
+and browser tests. The one behaviour that changes for existing surveys: randomizers now store `ORDER_<ID>` (a new
+export column). The one migration: `0079_weighted_balance.sql` (re-runnable; unweighted claims keep working
+without it). Not done in S4: the jQuery-in-frame / approved-library mechanism from the audit's P1 list.

@@ -11,7 +11,7 @@ import { assessmentSettings } from "./assessment.js";
 import { scriptMayWriteAnswer, scriptMayWriteVariable } from "./scriptWrites.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
 import { deviceClass, pageTimers, setBehavior, timedOutSkips } from "./timers.js";
-import { recordDisplayOrders } from "./displayOrder.js";
+import { recordDisplayOrders, displayOrderLabel } from "./displayOrder.js";
 
 /** S4b: does this object (a question, a page node) read a behaviour value the replay cannot know? */
 function readsBehavior(o: unknown, refs: ReadonlySet<string>, depth = 0): boolean {
@@ -382,6 +382,8 @@ function compareDerived(
     if (claims && name in claims) continue; // judged against the stored claim below
     const p = pc[name], sv = (state.calculated as Record<string, unknown>)[name];
     if (same(p, sv)) continue;
+    /* S4c: a display order the client did not post (an older client bundle) is filled in from the replay without a mismatch line */
+    if (p == null && sv != null && displayOrderLabel(def, name) != null) { rec.calculated[name] = sv; continue; }
     if (written.calculated.has(name)) { soft.push({ severity: "soft", code: "script_written", variable: name, posted: summariseValue(p), server: summariseValue(sv), message: `${name}: written by a survey script — the server does not run scripts, so it cannot derive this value` }); continue; }
     rec.calculated[name] = sv ?? null;
     soft.push({ severity: "soft", code: "server_mismatch", variable: name, posted: summariseValue(p), server: summariseValue(sv), message: `${name}: the posted value differs from the one the server calculates` });

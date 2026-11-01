@@ -119,3 +119,13 @@ test("IM: set_option_randomization recordOrder:true opts the question in (and fa
   const off = applySurveyActions(on.def, coerceSurveyActions([{ op: "set_option_randomization", target: "Q0", enabled: true, recordOrder: false }]).actions, { ids: (p: string) => `${p}_2` });
   assert.equal((off.def.questions[0]!.settings as { recordOrder?: boolean }).recordOrder, undefined);
 });
+
+test("server replay: an older client that posts no ORDER_* gets the server's order stored, without a mismatch line", () => {
+  const d = def();
+  const st = createResponseState(d, { seed: 7, sessionId: "s4c-order-replay-02" });
+  st.answers.q0 = "2";
+  const r = checkSubmission({ def: d, prior: { seed: 7, sessionId: "s4c-order-replay-02" }, posted: { answers: st.answers, calculated: {}, stepIndex: 1, status: "in_progress" } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.soft.filter((x) => x.code === "server_mismatch"), []);
+  assert.ok(String(r.recomputed?.calculated.ORDER_CONCEPTS ?? "").split(",").length === 3, JSON.stringify(r.recomputed));
+});
