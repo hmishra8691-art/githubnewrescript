@@ -412,3 +412,197 @@ An earlier run of `s5b-telemetry-test` through `fresh.sh` (Studio and runtime bo
 - **Exports.** Telemetry must be kept: with `privacy.telemetryRetentionDays` expired, or timing switched off, the cells are blank. Question seconds follow the quality engine's definition (first answering visit), not total time on screen — `VISIBLE_SECONDS` in the long file is that.
 - **`rs.getTiming()`.** The page / question seconds are as of the host's last update plus wall-clock time in the frame; out-of-focus time after that update is not subtracted until the next one. The time is client-asserted, like every condition that reads `time_on_page`.
 - **Per-response webhook.** PII detection is heuristic (types, variants, semantics, validation kinds) — a closed question whose codes are themselves identifying is not caught; `allowFields` is the explicit override in the other direction. The sandbox save path does not emit response events. Delivery was tested with a local stand-in server, not end-to-end from a browser.
+
+---
+
+# S5c — Extended features, part C: research methods polish (2026-11-01)
+
+Branch `feat/persistent-execution-engine`, from `4f69108` (S5b). Audit: `SCRIPT-STUDIO-AUDIT-2026-10-30.md` rows SM-07, SM-08, SM-10, SM-13, SM-14, SM-16, SM-18.
+
+- No new npm dependencies. **No migration.** Every new setting is an optional schema field; a survey without it behaves exactly as before.
+- Every analysis added here is checked in unit tests against reference values computed by hand and re-checked with an independent script, not only "it runs".
+- One copilot action, `add_method_template`, inserts each method as a complete programmed block plus the analysis-plan items that read it. The starter templates in `packages/templates` are built from the same engine fragments (`methodTemplateFragment`), so a survey opened from "New survey" and a block that Intelligent Mode adds are identical.
+
+## 1. SM-08 — Van Westendorp: honest end-points and the Newton–Miller–Smith extension
+
+**End-points** (`pricing` option `vwCurves`):
+- `proxy` is the default and is unchanged. It sets PMC = "too cheap" ∩ "expensive" and PME = "cheap" ∩ "too expensive", which is common practice.
+- `textbook` uses the "not" curves: PMC = "too cheap" ∩ "not cheap" (100 − cheap) and PME = "too expensive" ∩ "not expensive" (100 − expensive).
+- The result's note names the definition it used and gives the other definition's values. The curves table now has "not cheap" and "not expensive" columns.
+- OPP and IPP are the same under both definitions.
+
+**NMS** (`nmsCheap` and `nmsExpensive`, plus optional `calibration`). This is purchase likelihood at the respondent's own "cheap" price and own "expensive" price:
+- Each respondent's purchase probability is piecewise linear: (too cheap, 0) → (cheap, p_cheap) → (expensive, p_expensive) → (too expensive, 0), and 0 outside that range.
+- Trial is the mean of those probabilities. Revenue is price × trial.
+- The trial optimum is always a grid price. The revenue optimum is solved exactly on each segment, where revenue is a parabola.
+- The default calibration for a 5-point scale (top box first) is 0.7 / 0.5 / 0.3 / 0.1 / 0. This is a commonly used calibration, not a value taken from the 1993 paper; set your own with `calibration`.
+
+**Template `pricing_psm`.** The four price questions and the NMS pair, with the cheap / expensive answer piped into the NMS questions. Code: `packages/analytics/src/analyses/pricingModels.ts`.
+
+## 2. SM-07 — Adaptive Gabor–Granger: `numeric.price_ladder`
+
+**A variant, not a loop.** Engine loops iterate a list that is fixed when the loop starts, one page per iteration. An adaptive ladder needs a page per step, logic for every up / down path, and n variables that are mostly empty. The variant stores **one** numeric answer instead: the highest price accepted, with 0 meaning none. The engine checks that answer (`validate.ts` accepts 0 or a ladder price only), and the analysis reads it directly.
+
+**Step rule** (`priceLadder.ts`):
+- Start at the middle price (the lower middle for an even ladder), the lowest, the highest, or a random price seeded per respondent.
+- Yes moves one price up; no moves one price down.
+- The ladder stops at the first boundary (the next price in that direction was already asked) or at either end.
+
+**Recording.** The path goes to paradata as `GG_<CODE>_START` and `GG_<CODE>_PATH` (for example `15:1,20:0`).
+
+**Analysis.** `pricing` with `method: gabor_granger, ladder: true, prices`. Demand(p) is the % of respondents whose highest accepted price is ≥ p; revenue is p × demand. This rests on the method's monotonicity assumption.
+
+**Studio.** The variant editor sets the prices, start, prompt, answer labels and currency; the maximum value follows the top price. The plan suitability check refuses a ladder item without a ladder question or without three or more prices.
+
+## 3. SM-10 — Sequential monadic analysis
+
+**Inputs.** Plan method / analytics kind `sequential_monadic`: one rating per concept. The options are `order` (S4c's stored `ORDER_<RANDOMIZER>`) and `blocks` (the randomizer child that holds each concept).
+
+**Within-respondent comparison**, on respondents who rated every concept:
+- means;
+- the omnibus test: paired t for two concepts, Friedman (tie-corrected) for three or more;
+- every pair by paired t, Holm-adjusted, with Wilcoxon as a check.
+
+**Order effect:**
+- each concept's mean when rated first vs later (Welch t);
+- the pooled first-position effect: the first-shown rating minus the mean of the later ratings, one-sample t. Under a balanced rotation, concept quality averages out, so a non-zero mean is the position effect.
+
+**Template.** One block per concept (the concept, then appeal and intent), under a Williams randomizer that shows every block.
+
+**Registry.** Methodology `sequential_monadic` moves from partial to **supported**.
+
+## 4. SM-18 — IAT D-score
+
+**Algorithm.** Greenwald, Nosek & Banaji (2003), improved D, in the D600 form. The reaction-time variant records the first response with no forced correction, so errors get the built-in penalty.
+
+**Tagging the blocks.** The four combined blocks are `experimental.reaction_time` questions tagged with `settings.iatBlock {role, key}`: B3 / B4 compatible and B6 / B7 incompatible, each as practice or test.
+
+**Steps:**
+1. Drop trials over 10,000 ms.
+2. Exclude a respondent with more than 10 % of trials under 300 ms.
+3. Compute the inclusive SD of B3+B6 and of B4+B7, on the original latencies.
+4. Replace each error with the block's correct mean + 600 ms.
+5. For each pair, compute (incompatible − compatible) / SD.
+6. D is the equal-weight mean of the pairs present.
+
+**Per-respondent variables.** The engine writes `IAT_D`, `IAT_TRIALS`, `IAT_FAST_SHARE` and `IAT_EXCLUDED` in the calculation pass, so the Runner and the server replay agree. They are declared in the variable dictionary and exported.
+
+**Analysis** (plan method `iat_dscore`, kind `iat`):
+- scored and excluded counts, mean D, SD, t against 0 and Cohen's d;
+- strength bands (|D| < .15 / .35 / .65) by direction.
+
+**Template and Studio.** Template `iat` builds the four keyed blocks from the targets, attributes and words. The Studio's reaction-time editor sets the role and the answer key per stimulus.
+
+## 5. SM-16 — Shelf test: `hotspot.shelf`
+
+**The question.** It uses the regions machinery: a shelf image with one region per product, and the task "pick the product you would buy". The answer is the product's code.
+
+**Paradata** (browser-measured):
+- `SHELF_<CODE>_TIME`: seconds to find.
+- `SHELF_<CODE>_EXAMINED`: products hovered or focused before the pick, each once, in order.
+- `SHELF_<CODE>_PICK2`: the optional second choice (`settings.shelf.secondPick`).
+
+**Analysis** (plan method `shelf_share`, kind `shelf`): share of first choice, second-choice %, examined % and median / mean time to find per product.
+
+**Studio and IM.** The Studio reuses the regions editor and adds the second-choice controls and lint. IM can use `create_question type hotspot.shelf` or the `shelf_test` template; the template needs `imageUrl`, and the guide says to ask for it.
+
+## 6. SM-13 / SM-14 — Brand funnel and ad test templates
+
+**`brand_funnel`:**
+- Unaided first mention is an open end, coded by the existing AI classification: a calculated `ai_classify(UNAIDED, "brands|Other|None")` that the runtime resolves.
+- Then aided awareness (with None) → consideration → purchase, carried forward stage to stage → preference.
+- Plan: `brand_funnel` over the four stages, plus frequencies of the coded first mention.
+
+**`ad_test`:**
+- Forced exposure: `media.video_rating` with `requireComplete`, so the ad must play to the end before the likeability rating.
+- Unaided recall (AI-coded) and aided recall.
+- A diagnostics grid of five statements, then purchase intent.
+- Plan: recall frequencies, likeability mean, top-2 box.
+
+**Both** are starters in `packages/templates` and `add_method_template` templates. The guide asks for the brands and the video when they are not given.
+
+## 7. Registries
+
+**Methodologies:**
+- `sequential_monadic` → supported.
+- `van_westendorp` and `gabor_granger` notes rewritten (proxy / textbook, NMS, ladder).
+- `brand_funnel` note now names the template.
+- New: `iat` (partial: single-category blocks and pairing-order counterbalancing are not native), `shelf_test` (supported), `ad_test` (supported). Each says what is not native.
+
+**Plan-method notes and records:**
+- `ANALYSIS_NOTES`: pricing, sequential_monadic, iat_dscore, shelf_share.
+- `analysis:paired` note: paired tests now run in the plan for a sequential monadic design.
+
+**Capability registry.** `method_templates` → `add_method_template`.
+
+**Methods guide.** Gains the template paragraph and seven worked example lines, all applied by the engine in `methodsGuide.test`. Its budget rose from 7,000 to 9,000 characters; the guide is sent only on methods requests. The methodology names were shortened so the capability brief stays under its 2,200 cap.
+
+## 8. Verification (S5c)
+
+**Unit tests** (final sweep after item 6 and the item 7 registry edits)
+
+| Package | Result |
+|---|---|
+| Engine | 2634/2634 (new: s5cMethodTemplates 5, s5cPriceLadder 4, s5cIat 4, s5cShelf 3); after the item 7 note edits: capabilities, capabilityRegistry and s5c* 34/34 |
+| Schema | 18/18 |
+| Designs | 124/124 |
+| Analytics | 786/786, every dist test directory (new: pricingModels 7, experimental 6) |
+| Templates | 121/121 (new: methods 6; every starter passes the quality check and is walked to an end) |
+| Renderer | 12/12 |
+| Runtime lib | 88/88 |
+| Studio lib | 1137/1137 (methodsGuide: example lines applied, intent words) |
+
+**Reference values used in the tests:**
+- VW proxy PMC 10.5 / PME 15; textbook 10 / 16; OPP 13; IPP 12.
+- NMS trial optimum 15 (55 %); revenue optimum 20 (10.0); segment vertex 15 (11.25).
+- Ladder demand 85.7 / 71.4 / 42.9 / 14.3 %, revenue maximum at 15.
+- Sequential monadic: Friedman Q 8.6667 (tie-corrected, p = e^(−Q/2)); paired t 2.70 / 7.05 / 1.75; Holm; first-position t 1.0.
+- IAT D practice 1.6667, test 2.5012, D 2.0839; analysis mean .36, SD .336, t 2.395.
+- Shelf shares 50 / 25 / 25, examined 75 / 75 / 50, times 5 / 3 / 10 s.
+
+**Checks.**
+- `tsc --noEmit`: studio, runtime and renderer, 0 errors each.
+- `gen-public-docs --check`: current. Regenerated: actions-reference (add_method_template block), capabilities and question-types (175 → 177 variants).
+- Dependency boundaries: 0 violations.
+- Auth guard: 259 handlers, 0 problems.
+
+**SQL.** No migration, so none was run.
+
+**Browser suites**
+
+| Suite | Result |
+|---|---|
+| `s5c-methods-test` (new) | 5 passed (61 s): A shelf ×2, B ladder ×2, C IAT ×1 — the IAT run writes `IAT_D` ≈ 1.94 to the preview store |
+| `methods-intelligent-test` | ok, 14 passed |
+| `variants-g6-test` | ok, all G6 variant checks passed (26 ✔ lines, including the IAT renderer's `__rt` map) |
+| `analysis-plan-test` | **not verified.** Run 1 got a ChunkLoadError while the Studio's next-server was OOM-killed. Run 2 passed §1–§4 (18 checks), then timed out in §5 as the Studio was OOM-killed again (dmesg) |
+
+**Browser: `scripts/s5c-methods-test.mjs`** (runtime preview, built from the same `methodTemplateFragment` the action uses):
+- **A — shelf.** Hovering records p2, p3 once each; the click picks p1 (answer `["p1"]`); `SHELF_SHELF_EXAMINED` is `p2,p3,p1`; the time is > 0; Enter on a focused product records `SHELF_SHELF_PICK2` and leaves the answer unchanged.
+- **B — ladder.** Starts at 15; yes → 20, no → stops, so the answer is 15, the path `15:1,20:0` and the start 15. Start again, then no at 15 / 10 / 5 → answer 0 and path `15:0,10:0,5:0`.
+- **C — IAT.** Four blocks, 32 trials, about 450 ms slower on the incompatible pairing → `IAT_D` > 0, `IAT_EXCLUDED` 0, `IAT_TRIALS` 32.
+
+## 9. Known limitations (S5c)
+
+- **NMS calibration** is a convention: the default 0.7 / 0.5 / 0.3 / 0.1 / 0 is common practice, not a published constant. The interpolation between a respondent's four prices is linear.
+- **Price ladder.** One ladder per question, and monotonic acceptance is assumed. The ladder's prices are not stored per respondent: the path is, and the definition holds the ladder.
+- **Sequential monadic.** The order check needs the stored `ORDER_<RANDOMIZER>`, so surveys fielded before S4c have none. Only first vs later is checked; there is no carry-over model by preceding concept.
+- **IAT.** Only the four combined blocks are scored. Single-category practice blocks (B1, B2, B5) and counterbalancing of which pairing comes first are not built by the template (add a randomizer by hand). Latencies are measured in the browser (`Date.now()` at the stimulus); there is no inter-trial control beyond the variant's fixation and gap.
+- **Shelf.** "Examined" means pointer hover or keyboard focus, which is a proxy for attention, not eye tracking. The shelf is a single image (no scrolling, 3D or price tags as data) with one purchase.
+- **Brand funnel / ad test.** The coded open ends need the AI service (`ai_classify` is resolved by the runtime). The ad test has no test / control cells and no second-by-second trace (use `media.video_timeline`).
+
+---
+
+# S4–S5 complete — summary (2026-11-01)
+
+| Step | What shipped |
+|---|---|
+| **S4a–S4c** (`docs/S4-NATIVE-FEATURES-2026-10-31.md`) | Native features: timers and behaviour conditions, the respondent experience, weighted and Latin-square / Williams randomizers, stored display order, exact experiment arms, custom List Fill |
+| **S5a** | Media and gamification: image zoom, before/after slider, respondent video, points / badges / levels, the review page |
+| **S5b** | Telemetry and integrations: visibility and scroll depth, answer history, inactivity, timing in exports, read-only script timing and IM quality settings, per-response webhooks |
+| **S5c** | Research methods: Van Westendorp proxy / textbook with the NMS extension, an adaptive Gabor–Granger ladder, sequential monadic analysis with the order effect, IAT D-scores, a shelf test, brand-funnel and ad-test templates — all reachable from one Intelligent Mode action and the "New survey" picker, and checked against hand-computed reference values |
+
+**Across S4–S5:**
+- No new npm dependencies.
+- One migration (0079, S4c).
+- **Not verified because of Studio out-of-memory kills in this sandbox:** S5b `script-health-test` section B and `analytics-test`, and S5c `analysis-plan-test` §5.
