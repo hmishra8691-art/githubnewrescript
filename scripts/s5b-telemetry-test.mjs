@@ -13,6 +13,9 @@
  *   C  inactivity (TE-06): idleSeconds 10 + idlePrompt with custom text → after 10 s the native popup (centred,
  *      the custom words) opens; a mouse move closes it; idle.periods holds one period ≥ 10 s, prompted, on p1, and
  *      the visit's idleMs; with the prompt off (default) the period is still recorded and no popup opens
+ *   D  read-only timing for scripts (TE-12): a behaviour script calls rs.getTiming() on "answer" and writes what it
+ *      read into an element of its own — elapsedSeconds / pageSeconds ≥ the wait, questionSeconds("Q1") ≥ the wait,
+ *      an unknown code null; with timing switched off rs.getTiming() is null
  *
  *   RUNTIME_URL=http://localhost:3001 node scripts/s5b-telemetry-test.mjs
  *   SECTIONS=A (default all)
@@ -22,7 +25,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { sendPreview } from "./lib/preview.mjs";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
-const SECTIONS = new Set((process.env.SECTIONS ?? "A,B,C").split(",").map((s) => s.trim()));
+const SECTIONS = new Set((process.env.SECTIONS ?? "A,B,C,D").split(",").map((s) => s.trim()));
 let passed = 0;
 const ok = (m) => { passed++; console.log(`  ok   ${m}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -272,6 +275,48 @@ if (SECTIONS.has("C")) {
     assert.equal(t.idle, undefined);
     assert.ok(t.disabled.includes("idle") && !t.measured.includes("idle"));
     ok("idle off: no idle record (and so no prompt), 'idle' in disabled");
+    await pv.context().close();
+  }
+}
+
+/* ============================================================== D. rs.getTiming */
+if (SECTIONS.has("D")) {
+  console.log("\nD  rs.getTiming() — read-only timing for scripts (TE-12)");
+  const script = `
+    var out = document.createElement("div");
+    out.setAttribute("data-timing", "none");
+    document.querySelector('[data-qid="q1"]').appendChild(out);
+    rs.listen("answer", function () {
+      var t = rs.getTiming();
+      out.setAttribute("data-timing", t === null ? "null" : JSON.stringify({ e: t.elapsedSeconds, p: t.pageSeconds, q: t.questionSeconds("Q1"), x: t.questionSeconds("NOPE"), frozen: Object.isFrozen(t) }));
+    });`;
+  const mk = (id, quality) => survey(id, [sq("q1")], [{ type: "page", id: "p1", questionIds: ["q1"] }], {
+    ...(quality ? { quality } : {}),
+    ux: { styles: [], animations: [], behaviors: [{ id: "uxb_t", label: "Timing reader", target: { kind: "question", questionId: "q1" }, effects: [], script, createdAt: new Date().toISOString() }] },
+  });
+  {
+    const pv = await open(mk("s5b-d1"));
+    await pv.waitForSelector('[data-qid="q1"] [data-timing]', { timeout: 30000, state: "attached" });
+    await sleep(2200);
+    await pv.click('[data-qid="q1"] label >> nth=1');
+    let v = "none";
+    for (let i = 0; i < 40 && (v === "none"); i++) { v = await pv.getAttribute('[data-qid="q1"] [data-timing]', "data-timing"); await sleep(150); }
+    const t = JSON.parse(v);
+    assert.ok(t.e >= 2 && t.p >= 2, v);
+    assert.ok(t.q >= 2 && t.q <= t.p + 1, v);
+    assert.equal(t.x, null);
+    assert.equal(t.frozen, true);
+    ok(`a script reads rs.getTiming(): elapsed ${t.e} s, page ${t.p} s, questionSeconds("Q1") ${t.q} s, unknown code null, result frozen`);
+    await pv.context().close();
+  }
+  {
+    const pv = await open(mk("s5b-d2", { enabled: true, telemetry: { timing: false } }));
+    await pv.waitForSelector('[data-qid="q1"] [data-timing]', { timeout: 30000, state: "attached" });
+    await pv.click('[data-qid="q1"] label >> nth=1');
+    let v = "none";
+    for (let i = 0; i < 40 && (v === "none"); i++) { v = await pv.getAttribute('[data-qid="q1"] [data-timing]', "data-timing"); await sleep(150); }
+    assert.equal(v, "null");
+    ok("timing switched off: rs.getTiming() is null");
     await pv.context().close();
   }
 }

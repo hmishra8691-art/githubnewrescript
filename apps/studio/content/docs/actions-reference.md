@@ -8,7 +8,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Survey** (30): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `set_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
-**Options and design** (22): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`, `set_option_groups`, `set_timer`, `set_gamification`, `set_review_page`
+**Options and design** (23): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`, `set_option_groups`, `set_timer`, `set_gamification`, `set_review_page`, `set_quality_settings`
 
 **Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
@@ -131,7 +131,9 @@ export type OptionAction =
   /* S5a GA-06 / GA-07: points, badges, levels and the HUD — see gamificationActions.ts */
   | GamificationAction
   /* S5a AQ-12: a review-your-answers page — see reviewActions.ts */
-  | ReviewAction;
+  | ReviewAction
+  /* S5b TE-13: response-quality settings (telemetry switches, strictness, rule thresholds) — see qualityActions.ts */
+  | QualitySettingsAction;
 ```
 
 ## Question media (set_question_media)
@@ -211,6 +213,20 @@ From `packages/engine/src/reviewActions.ts`:
 
 ```ts
 export type ReviewAction = { op: "set_review_page"; page?: string; add?: boolean; title?: string; textLimit?: number; exclude?: string[]; clear?: boolean };
+```
+
+## Response quality and paradata (set_quality_settings)
+
+From `packages/engine/src/qualityActions.ts`:
+
+```ts
+export type QualitySettingsAction = {
+  op: "set_quality_settings";
+  enabled?: boolean;
+  strictness?: "relaxed" | "standard" | "strict" | "very_strict" | "custom";
+  telemetry?: QualityTelemetryPatch;
+  rules?: Record<string, QualityRulePatch>;
+};
 ```
 
 ## UX actions

@@ -684,7 +684,9 @@ export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseSta
 /** what a sandboxed script can call — and nothing else */
 export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup", "goToPage", "goToSection",
   /* S1a: the engine-checked write channel (requests the host decides — scriptWrites.ts) and the reads beside it; rs.error inside a "validate" handler */
-  "getEmbedded", "getCalc", "setAnswer", "setEmbedded", "setCalc", "flag", "error"] as const;
+  "getEmbedded", "getCalc", "setAnswer", "setEmbedded", "setCalc", "flag", "error",
+  /* S5b (TE-12): read-only timing */
+  "getTiming"] as const;
 /** S1a: the rs calls that ask the host to write (each returns a promise of { ok, reason }) */
 export const UX_SCRIPT_WRITES = ["setAnswer", "setEmbedded", "setCalc", "flag"] as const;
 const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus"]);

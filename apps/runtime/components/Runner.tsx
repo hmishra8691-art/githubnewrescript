@@ -151,6 +151,7 @@ import { resumeSeq } from "@/lib/saveSeq";
 import { firstInvalidTarget, focusErrorTarget, prefersReducedMotion } from "@/lib/errorFocus";
 import { SectionNav, SubmitGatePanel } from "./SectionNav";
 import { createTelemetryCollector, detectDevice, type TelemetryCollector } from "@/lib/telemetry";
+import { timingSnapshot } from "@/lib/paradata";
 import { PageClock, usesLiveBehavior, effectiveDevice } from "@/lib/timerClock";
 import { createScriptHealthCollector, sessionScriptHealth, scriptHealthPayload, browserClass, readStoredScriptHealth, writeStoredScriptHealth, type ScriptIssue } from "@/lib/scriptHealth";
 import { runScriptLifecycle, LIFECYCLE_TIMEOUT_MS, type AskFrames } from "@/lib/scriptLifecycle";
@@ -2744,7 +2745,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}
           onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])}
           onNavigate={(target, as) => jumpTo(target, as, "script")}
-          onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} onScriptIssue={noteIssue} />
+          onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} onScriptIssue={noteIssue}
+          timing={() => timingSnapshot(telemetryRef.current?.data, (id) => def.questions.find((q) => q.id === id)?.code)} />
       )}
       {/* S5a (GA-06/07): points HUD + the native badge popup — reads POINTS / LEVEL_NAME / BADGES the engine computes */}
       {def.gamification && !ended && <GamificationHud def={def} state={state} rootRef={shellRef} tick={state.calculated.POINTS} />}

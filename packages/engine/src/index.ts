@@ -194,6 +194,7 @@ export * from "./beforeAfter.js";
 export * from "./videoRecording.js";
 export * from "./gamification.js";
 export * from "./gamificationActions.js";
+export * from "./qualityActions.js";
 export * from "./reviewPage.js";
 export * from "./reviewActions.js";
 export * from "./logicScriptActions.js";

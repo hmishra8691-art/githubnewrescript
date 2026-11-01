@@ -59,3 +59,14 @@ test("the frame document carries the guard and resets it with the loop counter",
   assert.ok(doc.includes('m.type === "ping"') && doc.includes('send("pong"'), "the frame answers the host's heartbeat");
   assert.ok(!doc.includes("__MICRO__") && !doc.includes("__CFG__"));
 });
+
+test("S5b (TE-12): rs.getTiming is in the frame, reads the host's snapshot and has no write path", () => {
+  const doc = uxSandboxDoc({ aliases: {} });
+  const i = doc.indexOf("getTiming: function");
+  assert.ok(i > 0, "rs.getTiming exists");
+  const body = doc.slice(i, doc.indexOf("},\n", doc.indexOf("questionSeconds", i)) + 2);
+  assert.ok(!/\bsend\(|\bask\(|postMessage/.test(body), "nothing goes back to the host");
+  assert.ok(body.includes("Object.freeze"), "the result is frozen");
+  assert.ok(doc.includes("timing = m.timing || null"), "the init message carries the snapshot");
+  assert.ok(doc.includes('if ("timing" in m) timing = m.timing || null'), "answer updates refresh it");
+});

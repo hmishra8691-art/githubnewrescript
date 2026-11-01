@@ -145,3 +145,36 @@ export class IdleClock {
   /** a new page starts the clock afresh (the click that left the old one was activity) */
   reset(now: number): void { this.last = now; this.announced = false; this.prompted = false; }
 }
+
+/* ------------------------------------------------------------------ read-only timing for scripts (TE-12) */
+
+/** what `rs.getTiming()` is computed from in the script frame (the frame adds "now" itself) */
+export interface TimingSnapshot {
+  startedAt: number;
+  /** the current page visit's entry and its out-of-focus ms so far (null when no page is shown) */
+  pageEnteredAt: number | null;
+  pageOutOfFocusMs: number;
+  /** seconds per question CODE: page entry → last change on the visit it was first answered on */
+  questions: Record<string, number>;
+}
+
+type SnapTelemetry = { startedAt: number; pages: { enteredAt: number; leftAt?: number; outOfFocusMs: number; questionIds: string[] }[]; questions: Record<string, { firstChangeAt?: number; lastChangeAt?: number }>; disabled?: string[] };
+
+/**
+ * The snapshot a script's `rs.getTiming()` reads — null when the survey switched timing off (a script then
+ * cannot time the respondent either). Read-only by construction: it is copied into the frame; nothing goes back.
+ */
+export function timingSnapshot(t: SnapTelemetry | null | undefined, codeOf: (questionId: string) => string | undefined): TimingSnapshot | null {
+  if (!t || (t.disabled ?? []).includes("timing")) return null;
+  const cur = t.pages.length ? t.pages[t.pages.length - 1] : null;
+  const open = cur && cur.leftAt === undefined ? cur : null;
+  const questions: Record<string, number> = {};
+  for (const [qid, q] of Object.entries(t.questions)) {
+    if (q.firstChangeAt === undefined || q.lastChangeAt === undefined) continue;
+    const visit = t.pages.find((v) => v.questionIds.includes(qid) && q.firstChangeAt! >= v.enteredAt - 1 && (v.leftAt === undefined || q.firstChangeAt! <= v.leftAt + 1));
+    if (!visit) continue;
+    const code = codeOf(qid);
+    if (code) questions[code] = Math.round(Math.max(0, q.lastChangeAt - visit.enteredAt) / 100) / 10;
+  }
+  return { startedAt: t.startedAt, pageEnteredAt: open ? open.enteredAt : null, pageOutOfFocusMs: open ? open.outOfFocusMs : 0, questions };
+}

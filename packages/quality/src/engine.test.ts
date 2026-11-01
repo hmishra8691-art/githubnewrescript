@@ -834,3 +834,12 @@ test("S5b interaction.flip_flop: repeated reversals on closed questions; open en
   const off = assess({ def: def({ enabled: true, telemetry: { answerHistory: false } }), response: response({ tel: flip(telemetry(HUMAN_SECS), ["s1", "s2"]) }), peers: p });
   assert.ok(!has(off, "interaction.flip_flop"));
 });
+
+/* ------------------------------------------------ S5b item 5: the rule map set_quality_settings checks against */
+
+import { QUALITY_RULE_PARAMS } from "@rescript/schema";
+
+test("S5b: schema QUALITY_RULE_PARAMS is exactly the catalogue (ids and threshold keys)", () => {
+  const fromCatalogue = Object.fromEntries(RULES.map((r) => [r.id, r.params.map((p) => p.key)]));
+  assert.deepEqual({ ...QUALITY_RULE_PARAMS }, fromCatalogue, "a rule added to the catalogue must be added to QUALITY_RULE_PARAMS (packages/schema/src/quality.ts)");
+});

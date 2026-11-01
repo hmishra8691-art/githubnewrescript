@@ -90,7 +90,16 @@ export interface UxLayerProps {
    * error and rs.log line — so a proposal's script can be judged by what it actually did.
    */
   onTrace?: (t: UxTrace) => void;
+  /**
+   * S5b (TE-12) — READ-ONLY TIMING for `rs.getTiming()`: the Runner's snapshot of its telemetry (survey start, the
+   * current visit's entry and out-of-focus time, seconds per question code), copied into the frame with the answers.
+   * Absent (the Studio canvas) or null (timing switched off): `rs.getTiming()` returns null.
+   */
+  timing?: () => UxTimingSnapshot | null;
 }
+
+/** S5b: what `rs.getTiming()` is computed from in the frame */
+export interface UxTimingSnapshot { startedAt: number; pageEnteredAt: number | null; pageOutOfFocusMs: number; questions: Record<string, number> }
 
 /** S2c: one event of a script frame, as the test session records it */
 export type UxTrace =
@@ -282,7 +291,7 @@ export function UxLayer(p: UxLayerProps) {
    * S1a: what a script reads besides the page's answers — every LOOP iteration's answer by `CODE@item` (for
    * `rs.getAnswer(code, loopKey)`), and the embedded data and calculated variables (`rs.getEmbedded`, `rs.getCalc`).
    */
-  const readsFor = (): { byKey: Record<string, unknown>; vars: { embedded: Record<string, unknown>; calculated: Record<string, unknown> } } => {
+  const readsFor = (): { byKey: Record<string, unknown>; vars: { embedded: Record<string, unknown>; calculated: Record<string, unknown> }; timing: UxTimingSnapshot | null } => {
     const st = p.state;
     const byKey: Record<string, unknown> = {};
     if (st) for (const [k, v] of Object.entries(st.answers)) {
@@ -291,7 +300,9 @@ export function UxLayer(p: UxLayerProps) {
       const c = byCode.get(k.slice(0, at));
       if (c) byKey[`${c}${k.slice(at)}`] = v;
     }
-    return { byKey, vars: { embedded: { ...(st?.embedded ?? {}) }, calculated: { ...(st?.calculated ?? {}) } } };
+    let timing: UxTimingSnapshot | null = null;
+    try { timing = p.timing?.() ?? null; } catch { timing = null; }
+    return { byKey, vars: { embedded: { ...(st?.embedded ?? {}) }, calculated: { ...(st?.calculated ?? {}) } }, timing };
   };
   const readsRef = React.useRef(readsFor);
   readsRef.current = readsFor;
