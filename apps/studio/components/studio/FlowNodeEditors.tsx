@@ -1,5 +1,6 @@
 "use client";
 import { TimerEditor } from "./TimerEditor";
+import { ReviewPageEditor } from "./ReviewPageEditor";
 import { UxItemsEditor } from "./UxItemsEditor";
 import React from "react";
 import type { FlowNode, EmbeddedDataType, ExactBalance } from "@rescript/schema";
@@ -652,6 +653,8 @@ function NodeEditorBody({ node, onChange }: { node: FlowNode; onChange(n: FlowNo
           </div>
           {/* S4b (GA-05): the page's timer — every question on it counts on this one clock */}
           <TimerEditor value={node.timer} what="page" testId="page-timer" onChange={(t) => onChange({ ...node, timer: t } as FlowNode)} />
+          {/* S5a (AQ-12): review your answers */}
+          <ReviewPageEditor node={node} testId="page-review" onChange={onChange} />
           <div className="flabel">Questions on this page</div>
           {node.questionIds.map((qid, i) => {
             const q = s.def.questions.find((x) => x.id === qid);

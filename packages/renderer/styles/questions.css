@@ -1209,3 +1209,16 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-gam-badges { display: inline-flex; gap: 2px; font-size: 16px; }
 @media (prefers-reduced-motion: no-preference) { .rs-gam-points { animation: rs-gam-pop .35s ease-out; } }
 @keyframes rs-gam-pop { from { transform: scale(1.25); } to { transform: scale(1); } }
+
+/* S5a (AQ-12): review your answers */
+.rs-review { margin: 0 0 16px; }
+.rs-review-title { font-size: 1.25em; margin: 0 0 8px; }
+.rs-review-group { border: 1px solid var(--rs-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--rs-surface); }
+.rs-review-section { font-size: 1em; margin: 0 0 6px; }
+.rs-review-list { margin: 0; }
+.rs-review-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; padding: 6px 0; border-top: 1px solid var(--rs-border); }
+.rs-review-item:first-child { border-top: 0; }
+.rs-review-q { font-weight: 600; flex: 1 1 260px; }
+.rs-review-a { margin: 0; display: flex; gap: 8px; align-items: center; flex: 1 1 260px; justify-content: space-between; overflow-wrap: anywhere; }
+.rs-review-change { min-height: 36px; }
+.rs-review-return { margin: 0 0 12px; }

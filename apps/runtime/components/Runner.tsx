@@ -93,6 +93,8 @@ import {
   punchDerivedQuestions,
   prefillQuestions,
   goToPage,
+  reviewConfig,
+  reviewSummary,
   sectionOutline,
   sectionNavMode,
   submitGate,
@@ -138,7 +140,7 @@ import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaG
 import { Inspector } from "./Inspector";
 import { useAssessmentResults } from "./AssessmentResults";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
-import { MediaEmbed, SafeImage, ProgressIndicator, GamificationHud, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, ProgressIndicator, GamificationHud, ReviewPanel, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -728,6 +730,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   }, [errorFocusTick]);
   /* SECTION NAVIGATION (2026-10-30): the navigator's last refusal, the Submit gate on screen, and "submit anyway" once agreed */
   const [navNote, setNavNote] = React.useState<string | null>(null);
+  /* S5a (AQ-12): the review page a "Change" left from — the landed page offers "Return to review" */
+  const [reviewReturn, setReviewReturn] = React.useState<string | null>(null);
   const [gate, setGate] = React.useState<SubmitGate | null>(null);
   const gateConfirmedRef = React.useRef(false);
   /** the latest Next handler — "Submit anyway" presses it once the previous Next's latch has opened */
@@ -784,7 +788,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     for (const line of o.logs) if (/^\[[^\]]*\] (refused: |.*\) refused: |.*: no answer within |not run: )/.test(line)) console.warn(`[rescript:script] ${line}`);
   };
   /** the latest jumpTo (a jump clicked while Next is still settling is replayed, not dropped) */
-  const jumpRef = React.useRef<((target: string, as: "page" | "section" | "auto", source: "nav" | "script" | "gate", attempt?: number) => { ok: boolean; reason?: string }) | null>(null);
+  const jumpRef = React.useRef<((target: string, as: "page" | "section" | "auto", source: "nav" | "script" | "gate" | "review", attempt?: number) => { ok: boolean; reason?: string }) | null>(null);
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
   const [logs, setLogs] = React.useState<string[]>([]);
   /** the warning set the respondent has already been shown on this page */
@@ -2135,7 +2139,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * leaves the respondent where they are and says why — never silently.
    */
   const navMode = sectionNavMode(def);
-  const jumpTo = (target: string, as: "page" | "section" | "auto" = "auto", source: "nav" | "script" | "gate" = "nav", attempt = 0): { ok: boolean; reason?: string } => {
+  const jumpTo = (target: string, as: "page" | "section" | "auto" = "auto", source: "nav" | "script" | "gate" | "review" = "nav", attempt = 0): { ok: boolean; reason?: string } => {
     /*
      * Next holds its latch for a minimum interval (MIN_ADVANCE_MS) after the
      * page has already changed. A section click inside that interval is a
@@ -2149,7 +2153,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!pageStep || ended) return { ok: false, reason: "There is no page to navigate from." };
     let r: ReturnType<typeof goToPage>;
     try {
-      r = goToPage(def, state, target, counts, view, { as });
+      /* S5a (AQ-12): "Return to review" comes forward through the visited-pages rule even when the navigator is off */
+      r = goToPage(def, state, target, counts, view, { as, ...(source === "review" ? { mode: "visited" as const } : {}) });
     } catch (e) {
       console.error("[rescript:runtime] could not jump", e);
       setFatal(fatalOf(e, "navigation"));
@@ -2484,6 +2489,19 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       )}
       <SpeechServiceContext.Provider value={speechService}>
       <MediaGateContext.Provider value={mediaGate.gate}>
+      {/* S5a (AQ-12): a review page lists the answers so far; Change jumps back (visited pages only), Return comes forward */}
+      {(() => {
+        const rc = reviewConfig(def, pageStep.pageId);
+        if (rc) return <ReviewPanel title={rc.title} groups={reviewSummary(def, state, pageStep.pageId, counts)} note={navNote}
+          onChange={(pageId) => { const back = pageStep.pageId; const r = jumpTo(pageId, "page", "nav"); if (r.ok) setReviewReturn(back); }} />;
+        if (reviewReturn && reviewReturn !== pageStep.pageId) return (
+          <div className="rs-review-return">
+            <button type="button" className="rs-btn secondary" data-testid="rs-review-return"
+              onClick={() => { const r = jumpTo(reviewReturn, "page", "review"); if (r.ok) setReviewReturn(null); }}>↩ Return to review</button>
+          </div>
+        );
+        return null;
+      })()}
       <div id="rs-questions" tabIndex={-1} className={conversational ? "rs-convo-current" : undefined} data-convo-index={conversational ? convoIndex : undefined}>
       {shownQuestions.map((q) => {
         // the full iteration path, so nested loops key separately (see loopKeySuffix)

@@ -14,6 +14,7 @@ import { newFlowNode, ELEMENT_LABELS, INSERTABLE } from "./blockModel";
 import { conditionToText } from "./ConditionBuilder";
 import { NodeEditor } from "./FlowNodeEditors";
 import { TimerEditor } from "./TimerEditor";
+import { ReviewPageEditor } from "./ReviewPageEditor";
 import {
   FlowDragProvider, useFlowDrag, DragHandle, DropZone, InsideDropTarget, EmptyContainerZone,
 } from "./FlowDnd";
@@ -407,6 +408,11 @@ function BlockCard({ node }: { node: FlowNode }) {
                 <summary className="muted" style={{ fontSize: 12.5, cursor: "pointer" }}>Timer{(p.node as { timer?: unknown }).timer ? " (on)" : ""}</summary>
                 <TimerEditor value={(p.node as Extract<FlowNode, { type: "page" }>).timer} what="page" testId={`page-timer-${p.node.id}`}
                   onChange={(t) => ops.patch(p.node.id, { ...p.node, timer: t } as FlowNode)} />
+              </details>
+              {/* S5a (AQ-12): this page as a review-your-answers page */}
+              <details className="fc-page-review" open={!!(p.node as { review?: unknown }).review} data-testid={`page-review-toggle-${p.node.id}`}>
+                <summary className="muted" style={{ fontSize: 12.5, cursor: "pointer" }}>Review page{(p.node as { review?: unknown }).review ? " (on)" : ""}</summary>
+                <ReviewPageEditor node={p.node as Extract<FlowNode, { type: "page" }>} testId={`page-review-${p.node.id}`} onChange={(n) => ops.patch(p.node.id, n)} />
               </details>
               {p.node.questionIds.map((qid: string) => {
                 const q = s.def.questions.find((x) => x.id === qid);

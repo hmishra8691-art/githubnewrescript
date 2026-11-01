@@ -21,6 +21,7 @@ import { applyMediaAction, coerceMediaAction, describeMediaAction, MEDIA_ACTION_
 import { applyLogicScriptAction, coerceLogicScriptAction, describeLogicScriptAction, LOGIC_SCRIPT_ACTION_OPS, type LogicScriptAction } from "./logicScriptActions.js";
 import { applyOptionGroupAction, coerceOptionGroupAction, describeOptionGroupAction, OPTION_GROUP_ACTION_OPS, type OptionGroupAction } from "./optionGroupActions.js";
 import { applyTimerAction, coerceTimerAction, describeTimerAction, TIMER_ACTION_OPS, type TimerAction } from "./timerActions.js";
+import { applyReviewAction, coerceReviewAction, describeReviewAction, REVIEW_ACTION_OPS, type ReviewAction } from "./reviewActions.js";
 import { applyGamificationAction, coerceGamificationAction, describeGamificationAction, GAMIFICATION_ACTION_OPS, type GamificationAction } from "./gamificationActions.js";
 
 /**
@@ -82,12 +83,14 @@ export type OptionAction =
   /* S4b GA-05 / IM-19: a native timer on a question or a page — see timerActions.ts */
   | TimerAction
   /* S5a GA-06 / GA-07: points, badges, levels and the HUD — see gamificationActions.ts */
-  | GamificationAction;
+  | GamificationAction
+  /* S5a AQ-12: a review-your-answers page — see reviewActions.ts */
+  | ReviewAction;
 
 export const OPTION_ACTION_OPS = [
   "update_option", "reorder_options", "set_option_randomization", "set_mask", "clear_mask", "duplicate_question",
   "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_hypothesis", "set_custom_code",
-  ...MEDIA_ACTION_OPS, ...LOGIC_SCRIPT_ACTION_OPS, ...OPTION_GROUP_ACTION_OPS, ...TIMER_ACTION_OPS, ...GAMIFICATION_ACTION_OPS,
+  ...MEDIA_ACTION_OPS, ...LOGIC_SCRIPT_ACTION_OPS, ...OPTION_GROUP_ACTION_OPS, ...TIMER_ACTION_OPS, ...GAMIFICATION_ACTION_OPS, ...REVIEW_ACTION_OPS,
 ] as const;
 const OPS = new Set<string>(OPTION_ACTION_OPS);
 export const isOptionOp = (op: string): boolean => OPS.has(op);
@@ -126,6 +129,7 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
   if ((OPTION_GROUP_ACTION_OPS as readonly string[]).includes(op)) return coerceOptionGroupAction(o);
   if ((TIMER_ACTION_OPS as readonly string[]).includes(op)) return coerceTimerAction(o);
   if ((GAMIFICATION_ACTION_OPS as readonly string[]).includes(op)) return coerceGamificationAction(o);
+  if ((REVIEW_ACTION_OPS as readonly string[]).includes(op)) return coerceReviewAction(o);
   switch (op) {
     case "update_option": {
       const target = str(o.target ?? o.question, 120), option = ref(o.option);
@@ -527,6 +531,7 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
     case "set_option_groups": return applyOptionGroupAction(def, a, { question: env.question, ids: env.ids });
     case "set_timer": return applyTimerAction(def, a, { question: env.question });
     case "set_gamification": return applyGamificationAction(def, a);
+    case "set_review_page": return applyReviewAction(def, a, { question: env.question, ids: env.ids });
     case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return applyLogicScriptAction(def, a, { question: env.question, ids: env.ids });
     case "update_option": {
       const q = questionOrFail(env, a.target);
@@ -900,6 +905,7 @@ export function describeOptionAction(a: OptionAction): string {
     case "set_option_groups": return describeOptionGroupAction(a);
     case "set_timer": return describeTimerAction(a);
     case "set_gamification": return describeGamificationAction(a);
+    case "set_review_page": return describeReviewAction(a);
     case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return describeLogicScriptAction(a);
     case "update_option": return `Change option ${a.option} of ${a.target}`;
     case "reorder_options": return `Reorder the options of ${a.target}`;

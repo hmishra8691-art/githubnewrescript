@@ -289,6 +289,8 @@ export type FlowNode =
       visibleIf?: Condition;
       /** S4b: a native page timer (schema timer.ts) */
       timer?: Timer;
+      /** S5a (AQ-12): review-your-answers page — see the zod object below */
+      review?: { enabled: boolean; title?: string; textLimit?: number; excludeQuestionIds?: string[] };
     }
   | {
       type: "section";
@@ -481,6 +483,17 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       visibleIf: Condition.optional(),
       /** S4b (GA-05): a native page timer — one clock for the page; see timer.ts */
       timer: Timer.optional(),
+      /**
+       * S5a (AQ-12) REVIEW YOUR ANSWERS: this page lists the respondent's answers so far (visited pages before it),
+       * grouped by section, with "Change" links back (section navigation's goToPage — visited pages only) and a
+       * "Return to review". Hidden questions are never listed; open-end text is cut at `textLimit` characters.
+       */
+      review: z.object({
+        enabled: z.boolean().default(true),
+        title: z.string().max(200).optional(),
+        textLimit: z.number().int().min(20).max(2000).optional(),
+        excludeQuestionIds: z.array(z.string()).max(500).optional(),
+      }).optional(),
     }),
     z.object({
       type: z.literal("section"),
