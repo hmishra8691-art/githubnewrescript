@@ -8,7 +8,7 @@ import { sandboxRow, sandboxSurvey } from "@/lib/sessionSandbox";
 import { isStaleSave, parseSaveSeq } from "@/lib/saveSeq";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
-import { surveyFieldworkEvents } from "@/lib/notifyEmit";
+import { surveyFieldworkEvents, responseEvents } from "@/lib/notifyEmit";
 import { sanitizeTelemetry } from "@/lib/telemetrySanitize";
 
 /** S5b: question id → type, for the server-side answer-history check */
@@ -313,6 +313,8 @@ export async function POST(req: NextRequest) {
     }
     /* G3 2026-10-22: survey fieldwork alerts — a quota-full end, completes milestones (never blocks the save) */
     if (newStatus === "quota_full" || newStatus === "complete") await surveyFieldworkEvents(db, { surveyId: existing.survey_id, status: newStatus, isTest: !!existing.is_test, sampleSize: def?.research?.sampleSize ?? null, title: def?.meta.title ?? null });
+    /* S5b (AP-09): the per-response webhook events — off unless the study's alerts turn them on (never blocks the save) */
+    if (newStatus !== "in_progress") await responseEvents({ def, surveyId: existing.survey_id, sessionId, status: newStatus, startedAt: existing.started_at ?? null, completedAt: new Date().toISOString(), isTest: !!existing.is_test, state: { answers: (update.answers as Record<string, unknown>) ?? answers ?? {}, calculated: (update.calculated as Record<string, unknown>) ?? calculated ?? {}, embedded: (update.embedded as Record<string, unknown>) ?? embedded ?? {} } });
     // the quality engine, on the final state of the row
     const summary = def ? summarizeConfig(def) : null;
     // §3 — what the engine is about to receive, so the saved settings and the
