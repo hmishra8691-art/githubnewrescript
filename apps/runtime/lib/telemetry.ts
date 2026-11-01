@@ -2,7 +2,7 @@
 import type { TelemetryConfig } from "@rescript/schema";
 import { TELEMETRY_CATEGORIES } from "@rescript/schema";
 import type { ResponseTelemetry, PageVisit, DeviceInfo } from "@rescript/quality";
-import { isCardVisible, scrollDepthPct, visibleStart, visibleStop } from "./paradata";
+import { historyValue, isCardVisible, pushHistory, scrollDepthPct, visibleStart, visibleStop } from "./paradata";
 
 /**
  * The event collector — what the runtime records about HOW a respondent
@@ -26,6 +26,9 @@ import { isCardVisible, scrollDepthPct, visibleStart, visibleStop } from "./para
  * at least half on screen (or filling half the viewport) accumulates `visibleMs` and gets a `firstSeenAt`. New
  * cards are picked up by a throttled MutationObserver. Scroll depth is the deepest viewport bottom reached on the
  * visit, % of the page height, sampled once per animation frame at most. Times and percentages only.
+ *
+ * S5b (TE-02) answer history: every change of a closed question appends `[ms since start, value]` (codes,
+ * numbers, grid cells), the latest 20 kept; typed text appends `{ len }`; nothing else is kept (lib/paradata.ts).
  */
 
 export interface TelemetryCollector {
@@ -34,8 +37,11 @@ export interface TelemetryCollector {
   enterPage(pageId: string, step: number, questionIds: string[], via: PageVisit["via"]): void;
   /** the current page is being left */
   leavePage(): void;
-  /** an answer changed */
-  answerChanged(questionId: string): void;
+  /**
+   * an answer changed. S5b (TE-02): with the question's type and its new value, a closed question's value is
+   * appended to its history (typed text: its length only; other types: nothing).
+   */
+  answerChanged(questionId: string, type?: string, value?: unknown): void;
   /** the survey ended */
   submitted(): void;
   /** stop listening */
@@ -93,6 +99,8 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
   /** S5b categories this collector measures (the engine treats the others as "not measured") */
   const measured: string[] = [];
   if (visibilityOn) measured.push("visibility");
+  const historyOn = on("answerHistory") && on("timing");
+  if (historyOn) measured.push("answerHistory");
   const startedAt = now();
   const reloads = on("navigation") ? reloadCount(sessionId) : 0;
 
@@ -235,10 +243,14 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
       }
     },
     leavePage,
-    answerChanged(questionId) {
+    answerChanged(questionId, type, value) {
       if (!on("timing")) return;
       const q = qt(questionId);
       const t = now();
+      if (historyOn && type) {
+        const hv = historyValue(type, value);
+        if (hv !== undefined) { q.history ??= []; const d = pushHistory(q.history as any, [t - startedAt, hv], q.historyDropped ?? 0); if (d) q.historyDropped = d; }
+      }
       if (q.firstChangeAt === undefined) {
         q.firstChangeAt = t;
         if (current && current.questionIds.includes(questionId)) q.latencyMs = t - current.enteredAt;

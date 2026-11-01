@@ -10,6 +10,9 @@ import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS 
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 import { surveyFieldworkEvents } from "@/lib/notifyEmit";
 import { sanitizeTelemetry } from "@/lib/telemetrySanitize";
+
+/** S5b: question id → type, for the server-side answer-history check */
+const questionTypes = (d: any): Record<string, string> => Object.fromEntries(((d?.questions ?? []) as { id: string; type: string }[]).map((q) => [q.id, q.type]));
 import { assessmentResultRow, scoreForSubmission } from "@/lib/assessmentPayload";
 import type { RespondentAssessmentReport } from "@rescript/engine";
 
@@ -71,7 +74,7 @@ export async function POST(req: NextRequest) {
   const run = await resolveRunDefinition(db, existing, body?.build);
   const def = run.def;
   const tcfg = def?.quality?.telemetry;
-  const keepTelemetry = telemetry && typeof telemetry === "object" && telemetry.v === 1 ? sanitizeTelemetry(telemetry, tcfg) : undefined;
+  const keepTelemetry = telemetry && typeof telemetry === "object" && telemetry.v === 1 ? sanitizeTelemetry(telemetry, tcfg, questionTypes(def)) : undefined;
   const deviceHash = tcfg?.device === false ? null : deviceHashFrom(qualitySalt(existing.survey_id), keepTelemetry?.device ?? null);
 
   /*
@@ -395,7 +398,7 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
     ...(seq != null ? { save_seq: seq } : {}),
     script_writes: sanitizeScriptWrites(body?.scriptWrites),
     // S5b: the telemetry as the database path keeps it (sanitised per the survey's switches)
-    ...(body?.telemetry && typeof body.telemetry === "object" && body.telemetry.v === 1 ? { telemetry: sanitizeTelemetry(body.telemetry, survey.def?.quality?.telemetry) } : {}),
+    ...(body?.telemetry && typeof body.telemetry === "object" && body.telemetry.v === 1 ? { telemetry: sanitizeTelemetry(body.telemetry, survey.def?.quality?.telemetry, questionTypes(survey.def)) } : {}),
     // S1c: the session's script failures, as the database path keeps them in telemetry.scriptHealth
     script_health: sanitizeScriptHealth(body?.scriptHealth, redactionSet(body?.answers, body?.embedded)),
   });

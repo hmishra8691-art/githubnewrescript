@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isCardVisible, scrollDepthPct, visibleStart, visibleStop } from "./paradata.ts";
+import { isCardVisible, scrollDepthPct, visibleStart, visibleStop, historyValue, pushHistory, HISTORY_CAP, type HistoryEntry } from "./paradata.ts";
 
 /* S5b item 1 (TE-04): visibility + scroll depth arithmetic */
 
@@ -36,4 +36,34 @@ test("visibleStart / visibleStop accumulate visible ms and keep the first-seen t
   visibleStop(open, q, "q1", 5500);
   assert.equal(q.visibleMs, 2500);
   assert.equal(q.firstSeenAt, 1000);
+});
+
+/* S5b item 2 (TE-02): answer-value history */
+
+test("historyValue: closed values kept, typed text as its length only, other types nothing", () => {
+  assert.equal(historyValue("single_select", "2"), "2");
+  assert.equal(historyValue("nps", 9), 9);
+  assert.equal(historyValue("single_select", undefined), null);
+  assert.deepEqual(historyValue("multi_select", ["a", "b"]), ["a", "b"]);
+  assert.deepEqual(historyValue("matrix_single", { r1: "1", r2: "4" }), { r1: "1", r2: "4" });
+  assert.deepEqual(historyValue("matrix_multi", { r1: ["1", "2"] }), { r1: ["1", "2"] });
+  assert.deepEqual(historyValue("open_text", "my secret answer"), { len: 16 });
+  assert.deepEqual(historyValue("long_text", "abc"), { len: 3 });
+  assert.deepEqual(historyValue("matrix_text", { r1: "abc", r2: "de" }), { len: 5 });
+  assert.equal(historyValue("geo", { lat: 1, lng: 2 }), undefined, "a place is never kept");
+  assert.equal(historyValue("date", "1990-01-01"), undefined);
+  assert.equal(historyValue("upload", { url: "x" }), undefined);
+  assert.equal(historyValue(undefined, "1"), undefined);
+  assert.equal(historyValue("matrix_single", { r1: { deep: 1 } }), undefined, "nested objects are refused");
+  assert.equal((historyValue("dropdown", "x".repeat(100)) as string).length, 40);
+});
+
+test("pushHistory keeps the latest 20 and counts what it dropped", () => {
+  const h: HistoryEntry[] = [];
+  let d = 0;
+  for (let i = 0; i < 25; i++) d = pushHistory(h, [i * 10, String(i)], d);
+  assert.equal(h.length, HISTORY_CAP);
+  assert.equal(d, 5);
+  assert.deepEqual(h[0], [50, "5"]);
+  assert.deepEqual(h[19], [240, "24"]);
 });

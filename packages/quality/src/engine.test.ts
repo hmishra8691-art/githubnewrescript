@@ -784,3 +784,53 @@ test("S5b: telemetryOff lists only categories, never a setting", () => {
   const s = summarizeConfig(def({ enabled: true, telemetry: { visibility: false, focus: false } }));
   assert.deepEqual([...s.telemetryOff].sort(), ["focus", "visibility"]);
 });
+
+/* ------------------------------------------------ S5b item 2: answer history (TE-02) */
+
+import { valueReversals } from "./rules/behaviour.js";
+
+test("S5b valueReversals: back to an earlier value counts; filling a grid or adding ticks does not", () => {
+  assert.equal(valueReversals(undefined), 0);
+  assert.equal(valueReversals([[1, "a"], [2, "b"]]), 0);
+  assert.equal(valueReversals([[1, "a"], [2, "b"], [3, "a"]]), 1);
+  assert.equal(valueReversals([[1, "a"], [2, "b"], [3, "a"], [4, "b"], [5, "a"]]), 3);
+  assert.equal(valueReversals([[1, "a"], [2, "a"], [3, "b"]]), 0);
+  assert.equal(valueReversals([[1, { r1: "1" }], [2, { r1: "1", r2: "3" }], [3, { r2: "3", r1: "1", r3: "2" }]]), 0);
+  assert.equal(valueReversals([[1, ["a"]], [2, ["a", "b"]], [3, ["a", "b", "c"]]]), 0);
+  assert.equal(valueReversals([[1, { r1: "1" }], [2, { r1: "2" }], [3, { r1: "1" }]]), 1);
+  assert.equal(valueReversals([[1, ["a", "b"]], [2, ["b", "a"]], [3, ["a", "b"]]]), 1, "a ranking's order matters");
+});
+
+test("S5b interaction.flip_flop: repeated reversals on closed questions; open ends and old telemetry never count", () => {
+  const p = peers(12);
+  const flip = (t: ResponseTelemetry, ids: string[]) => {
+    t.measured = ["answerHistory"];
+    for (const id of ids) t.questions[id].history = [[1000, "1"], [2000, "5"], [3000, "1"], [4000, "5"], [5000, "1"]];
+    return t;
+  };
+  const clean = telemetry(HUMAN_SECS); clean.measured = ["answerHistory"];
+  for (const q of Object.values(clean.questions)) q.history = [[1000, "4"]];
+  assert.ok(!has(assess({ def: def(), response: response({ tel: clean }), peers: p }), "interaction.flip_flop"));
+
+  const a = assess({ def: def(), response: response({ tel: flip(telemetry(HUMAN_SECS), ["s1", "s2"]) }), peers: p });
+  const f = a.flags.find((x) => x.ruleId === "interaction.flip_flop");
+  assert.ok(f, "two questions with 3 reversals fire at standard");
+  assert.match(f!.observed, /Q8 ×3, Q9 ×3/);
+
+  // one question: standard needs 2, strict needs 1
+  assert.ok(!has(assess({ def: def(), response: response({ tel: flip(telemetry(HUMAN_SECS), ["s1"]) }), peers: p }), "interaction.flip_flop"));
+  assert.ok(has(assess({ def: def({ enabled: true, strictness: "strict" }), response: response({ tel: flip(telemetry(HUMAN_SECS), ["s1"]) }), peers: p }), "interaction.flip_flop"));
+
+  // an open end's length history never counts
+  const open = flip(telemetry(HUMAN_SECS), []);
+  open.questions.oe.history = [[1, { len: 1 }], [2, { len: 2 }], [3, { len: 1 }], [4, { len: 2 }], [5, { len: 1 }]];
+  open.questions.oe2.history = open.questions.oe.history;
+  assert.ok(!has(assess({ def: def({ enabled: true, strictness: "very_strict" }), response: response({ tel: open }), peers: p }), "interaction.flip_flop"));
+
+  // recorded before S5b (no `measured`), or switched off: not measured
+  const old = flip(telemetry(HUMAN_SECS), ["s1", "s2"]); delete old.measured;
+  const b = assess({ def: def(), response: response({ tel: old }), peers: p });
+  assert.ok(!has(b, "interaction.flip_flop") && b.notMeasured.includes("answerHistory"));
+  const off = assess({ def: def({ enabled: true, telemetry: { answerHistory: false } }), response: response({ tel: flip(telemetry(HUMAN_SECS), ["s1", "s2"]) }), peers: p });
+  assert.ok(!has(off, "interaction.flip_flop"));
+});

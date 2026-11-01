@@ -44,6 +44,7 @@ const TELEMETRY: [keyof QualityConfig["telemetry"], string, string][] = [
   ["device", "Device class", "browser, OS, screen, timezone, language"],
   ["network", "Hashed IP address", "salted hash for duplicate detection — never the address"],
   ["visibility", "Question visibility & scroll depth", "time each question was on screen, deepest scroll per page — never positions"],
+  ["answerHistory", "Answer-change history", "successive codes / numbers of closed answers (latest 20); typed text: length only"],
 ];
 
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });

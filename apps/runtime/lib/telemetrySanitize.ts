@@ -4,13 +4,37 @@
  * collector records lengths only) — this guards against a tampered client.
  *
  * (Moved out of api/session/save/route.ts in S5b so it can be unit-tested; the S5b fields — scroll depth,
- * question visibility — are kept only when their category is on, and listed in `disabled` when it is off.)
+ * question visibility, answer history — are kept only when their category is on, and listed in `disabled` when it is off.)
  */
-export const TELEMETRY_KEYS = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility"] as const;
-/** the S5b categories a collector reports in `measured` */
-const MEASURABLE = ["visibility"];
+import { HISTORY_CAP, HISTORY_CLOSED_TYPES, HISTORY_TEXT_TYPES, historyValue } from "./paradata.ts";
 
-export function sanitizeTelemetry(t: any, cfg: any): any {
+export const TELEMETRY_KEYS = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility", "answerHistory"] as const;
+/** the S5b categories a collector reports in `measured` */
+const MEASURABLE = ["visibility", "answerHistory"];
+
+/**
+ * S5b (TE-02): a question's value history as the server keeps it — re-derived from the DEFINITION's question type,
+ * never the client's word: a closed type keeps validated codes / numbers / cells, typed text `{ len }` only, any
+ * other (or unknown) question nothing.
+ */
+function sanitizeHistory(h: unknown, type: string | undefined): [number, unknown][] | undefined {
+  if (!Array.isArray(h) || !type || !(HISTORY_CLOSED_TYPES.has(type) || HISTORY_TEXT_TYPES.has(type))) return undefined;
+  const out: [number, unknown][] = [];
+  for (const e of h.slice(-HISTORY_CAP)) {
+    if (!Array.isArray(e) || e.length !== 2 || typeof e[0] !== "number" || !Number.isFinite(e[0])) continue;
+    if (HISTORY_TEXT_TYPES.has(type)) {
+      const len = (e[1] as { len?: unknown } | null)?.len;
+      if (typeof len === "number" && Number.isFinite(len) && len >= 0) out.push([e[0], { len: Math.round(len) }]);
+      continue;
+    }
+    const v = historyValue(type, e[1]);
+    if (v !== undefined) out.push([e[0], v]);
+  }
+  return out.length ? out : undefined;
+}
+
+/** `types`: question id → type, from the survey definition (the history is kept only for questions it knows) */
+export function sanitizeTelemetry(t: any, cfg: any, types?: Record<string, string>): any {
   const on = (k: string) => !cfg || cfg[k] !== false;
   const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
   const optNum = (x: unknown, min = -Infinity, max = Infinity) => (typeof x === "number" && Number.isFinite(x) ? Math.max(min, Math.min(max, x)) : undefined);
@@ -34,6 +58,8 @@ export function sanitizeTelemetry(t: any, cfg: any): any {
         typedChars: on("interaction") ? num(q?.typedChars) : 0, copies: on("clipboard") ? num(q?.copies) : 0,
         visibleMs: on("visibility") ? optNum(q?.visibleMs, 0) : undefined,
         firstSeenAt: on("visibility") ? optNum(q?.firstSeenAt, 0) : undefined,
+        history: on("answerHistory") ? sanitizeHistory(q?.history, types?.[String(k)]) : undefined,
+        historyDropped: on("answerHistory") && Array.isArray(q?.history) ? optNum(q?.historyDropped, 0) : undefined,
       };
     }
   }

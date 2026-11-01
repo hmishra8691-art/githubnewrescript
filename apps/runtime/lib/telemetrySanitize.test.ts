@@ -36,3 +36,33 @@ test("the category list matches the schema's switches", async () => {
   const schema = await import("@rescript/schema");
   assert.deepEqual([...TELEMETRY_KEYS], [...schema.TELEMETRY_CATEGORIES]);
 });
+
+test("S5b answer history: re-derived from the definition's type — text keeps length only, unknown questions nothing", () => {
+  const t: any = base();
+  t.measured = ["visibility", "answerHistory"];
+  t.questions = {
+    q1: { changes: 3, history: [[10, "1"], [20, "2"], [30, "1"], ["bad", "3"], [40, { deep: { x: 1 } }]] },
+    oe: { changes: 2, history: [[10, "SECRET TEXT"], [20, { len: 7, text: "SECRET" }]] },
+    gx: { changes: 1, history: [[10, { lat: 51.5, lng: 0.1 }]] },
+    zz: { changes: 1, history: [[10, "1"]] },
+  };
+  const types = { q1: "single_select", oe: "open_text", gx: "geo" };
+  const s = sanitizeTelemetry(t, {}, types);
+  assert.deepEqual(s.questions.q1.history, [[10, "1"], [20, "2"], [30, "1"]]);
+  assert.deepEqual(s.questions.oe.history, [[20, { len: 7 }]]);
+  assert.equal(s.questions.gx.history, undefined);
+  assert.equal(s.questions.zz.history, undefined, "not in the definition: nothing");
+  assert.ok(!JSON.stringify(s).includes("SECRET"));
+  assert.deepEqual(s.measured, ["visibility", "answerHistory"]);
+  const off = sanitizeTelemetry(t, { answerHistory: false }, types);
+  assert.equal(off.questions.q1.history, undefined);
+  assert.ok(off.disabled.includes("answerHistory"));
+});
+
+test("S5b answer history: at most 20 entries survive", () => {
+  const t: any = base();
+  t.questions = { q1: { changes: 30, history: Array.from({ length: 30 }, (_, i) => [i, String(i % 5)]), historyDropped: 10 } };
+  const s = sanitizeTelemetry(t, {}, { q1: "single_select" });
+  assert.equal(s.questions.q1.history.length, 20);
+  assert.equal(s.questions.q1.historyDropped, 10);
+});

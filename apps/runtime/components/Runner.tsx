@@ -2454,7 +2454,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           errors={Object.fromEntries(errors.map((e) => [e.questionId, e.message]))}
           onChange={(q, v) => {
             setAnswer(def, state, q.id, v, pageStep.loop);
-            telemetryRef.current?.answerChanged(q.id);
+            telemetryRef.current?.answerChanged(q.id, q.type, v);
             recomputePunchesAfterChange(def, state, q.id, questions, ctx, pageStep.loop ?? null);
             scheduleOnChange(q.id);
             force();
@@ -2538,7 +2538,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
             programmerView={reveal ? { mode: mode as "preview" | "test", hidden: !!q.settings.hidden, autoPunch: explainAutoPunch(def, q, ctx, pageStep.loop ?? null) } : undefined}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
-              telemetryRef.current?.answerChanged(q.id);
+              telemetryRef.current?.answerChanged(q.id, q.type, v);
               /*
                * Auto punch on the SAME page: "if Q1.A is selected → select
                * Q2.B" with Q1 and Q2 side by side must react as the respondent

@@ -34,6 +34,31 @@ export function unseenAnswered(ctx: Pick<RuleContext, "def" | "telemetry" | "app
   return out;
 }
 
+/** a stable comparison key for a history value (object keys sorted; list order kept — a ranking's order matters) */
+function historyKey(v: unknown): string {
+  if (v && typeof v === "object" && !Array.isArray(v)) return JSON.stringify(Object.keys(v).sort().map((k) => [k, (v as Record<string, unknown>)[k]]));
+  return JSON.stringify(v ?? null);
+}
+
+/**
+ * S5b (TE-02): how many times an answer went BACK to a value it had held before (not merely the one just left):
+ * A→B→A is one reversal, A→B→A→B two. Filling a grid row by row or ticking more boxes never reverses.
+ */
+export function valueReversals(history: [number, unknown][] | undefined): number {
+  if (!history || history.length < 3) return 0;
+  const seen = new Set<string>();
+  let prev: string | null = null;
+  let n = 0;
+  for (const [, v] of history) {
+    const k = historyKey(v);
+    if (k === prev) continue;
+    if (prev !== null && seen.has(k)) n++;
+    if (prev !== null) seen.add(prev);
+    prev = k;
+  }
+  return n;
+}
+
 export function behaviourRules(ctx: RuleContext): FlagDraft[] {
   const out: FlagDraft[] = [];
   const t = ctx.telemetry;
@@ -86,6 +111,28 @@ export function behaviourRules(ctx: RuleContext): FlagDraft[] {
         expected: `fewer than ${Math.max(1, min)}`,
         explanation: "An answer changed while its question had never been at least half visible — a person answers what they can see; a script does not need to.",
         questionIds: unseen,
+      });
+    }
+  }
+
+  /* ---------------------------------------------- answer history (S5b TE-02) */
+  if (t && !ctx.disabledTelemetry.has("answerHistory") && ctx.enabled("interaction.flip_flop")) {
+    const minRev = ctx.param<number>("interaction.flip_flop", "reversals");
+    const minQs = ctx.param<number>("interaction.flip_flop", "questions");
+    const hits: { id: string; n: number }[] = [];
+    for (const q of def.questions) {
+      if (!isRespondentQuestion(q) || isOpen(q)) continue;
+      const n = valueReversals(t.questions[q.id]?.history);
+      if (n >= minRev && ctx.applies("interaction.flip_flop", q.id)) hits.push({ id: q.id, n });
+    }
+    if (hits.length >= Math.max(1, minQs)) {
+      const code = (id: string) => def.questions.find((q) => q.id === id)?.code ?? id;
+      out.push({
+        ruleId: "interaction.flip_flop",
+        observed: `${hits.length} question${hits.length === 1 ? "" : "s"} switched back and forth (${hits.map((h) => `${code(h.id)} ×${h.n}`).join(", ")})`,
+        expected: `fewer than ${minQs} questions with ${minRev}+ reversals`,
+        explanation: "Answers were changed back to values already given, again and again — indecision, or probing what each answer does.",
+        questionIds: hits.map((h) => h.id),
       });
     }
   }

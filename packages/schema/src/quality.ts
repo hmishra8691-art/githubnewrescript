@@ -115,6 +115,11 @@ export const TelemetryConfig = z.object({
    * IntersectionObserver) and the deepest scroll per page visit (% of the page height). Times and percentages only.
    */
   visibility: z.boolean().default(true),
+  /**
+   * S5b (TE-02): the successive VALUES of closed answers (codes, numbers, grid cells; the latest 20 per question,
+   * with times relative to the start). Typed text keeps its length only, never the text. Needs `timing`.
+   */
+  answerHistory: z.boolean().default(true),
   /** text shown in the runtime footer, e.g. "This survey records response timing to protect data quality." */
   disclosure: z.string().optional(),
 });
@@ -123,7 +128,7 @@ export type TelemetryConfig = z.infer<typeof TelemetryConfig>;
  * The telemetry CATEGORIES — the on/off switches of `TelemetryConfig` (its other fields are settings). A category
  * that is off is listed in the telemetry's `disabled`, so a zero reads as "not measured".
  */
-export const TELEMETRY_CATEGORIES = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility"] as const;
+export const TELEMETRY_CATEGORIES = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility", "answerHistory"] as const;
 export type TelemetryCategory = (typeof TELEMETRY_CATEGORIES)[number];
 
 export const PrivacyConfig = z.object({

@@ -47,6 +47,13 @@ export interface QuestionTiming {
   visibleMs?: number;
   /** S5b (TE-04): when the card first became at least half visible (epoch ms, like firstChangeAt) */
   firstSeenAt?: number;
+  /**
+   * S5b (TE-02): the answer's successive values, `[ms since the survey started, value]`, the latest 20. A closed
+   * question keeps its codes / numbers / grid cells; typed text keeps `{ len }` only; other types keep nothing.
+   */
+  history?: [number, unknown][];
+  /** entries dropped from the front of `history` by the cap */
+  historyDropped?: number;
 }
 
 export interface DeviceInfo {
