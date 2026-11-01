@@ -53,7 +53,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 ## Variants by family
 
-175 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
+176 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
 
 ### Single Select (`single_select`)
 
@@ -212,6 +212,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 | `media.video_timeline` | Video Hotspot / Annotation | `media_timeline` | options, min_max_selections | required, min_selections, max_selections | renderer videotimeline |
 | `media.watch_time` | Video Watch-Time Tracking | `numeric_list` | fields | required | renderer watchtime |
 | `media.video_prompt_voice` | Video Prompt → Voice Reply | `video_interview` | video_interview | required | preset of qualitative.video_interview; renderer videointerview |
+| `media.video_recording` | Video Recording / Video Response | `upload` | — | required | renderer videorecording |
 | `media.audio_recording` | Audio Recording / Voice Response | `upload` | — | required | renderer audiorec |
 | `media.speech_to_text` | Speech-to-Text Response | `long_text` | speech_input | required, min_length, max_length | preset of text.multi_line |
 

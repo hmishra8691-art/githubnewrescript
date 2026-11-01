@@ -97,6 +97,7 @@ import "./variantConfig/carousel";
 import "./variantConfig/card";
 import "./variantConfig/comparison";
 import "./variantConfig/beforeAfter";
+import "./variantConfig/videoRecording";
 import "./variantConfig/pairwise";
 import "./variantConfig/allocation";
 import "./variantConfig/hotspot";

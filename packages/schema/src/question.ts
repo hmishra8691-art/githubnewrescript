@@ -1157,6 +1157,10 @@ const QuestionObject = z.object({
       allowAnswerPause: z.boolean().optional(),
       /** How many times they may discard and start again. 0 = one take only. */
       maxRetakes: z.number().int().min(0).optional(),
+      /** S5a (MM2-09) respondent video: what the respondent agrees to before the camera turns on (shown with a checkbox) */
+      consentText: z.string().max(1000).optional(),
+      /** S5a: offer "Upload a video file" beside the camera (default true; always offered when there is no camera) */
+      allowFileUpload: z.boolean().optional(),
       /** Offer playback of their own answer before they move on. */
       reviewBeforeSubmit: z.boolean().optional(),
 

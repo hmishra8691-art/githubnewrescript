@@ -21,6 +21,7 @@
  * which is how the existing upload-cleanup helper is written, and for the
  * same reason.
  */
+import { answerVideoRule, sniffedVideoOk } from "./answerVideo.js";
 import {
   MEDIA_KINDS, mediaPath, safeSegment, withinLimit, acceptsType, assetWithinLimit, secondsThatFit,
   type MediaKind, type TranscriptStatus,
@@ -1026,4 +1027,24 @@ export async function copyMedia(
     width: row.width ?? null, height: row.height ?? null, fileName: row.original_filename ?? null,
     uploadedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * S5a item 3 (MM2-09): A RESPONDENT VIDEO, PROVEN. After `confirmUpload` has seen the object, the video rules are
+ * applied to what was actually stored — the type and size (`answerVideoRule`) and the first bytes (`sniffVideo`):
+ * a file that is not a WebM / MP4 / MOV container is removed from the store, its row marked failed, and the
+ * respondent told to record again. Reads the object once (≤ 50 MB by the rule's own ceiling, checked first).
+ */
+export async function verifyAnswerVideo(db: MediaDb, stored: Pick<StoredMedia, "mediaId" | "bucket" | "path" | "mimeType" | "bytes">, maxSizeMb?: number | null): Promise<void> {
+  const fail = async (message: string, status: number): Promise<never> => {
+    try { await storeFor(db, {}).remove(stored.bucket, [stored.path]); } catch { /* the row still says why */ }
+    await db.from("media_objects").update({ status: "failed", error: message.slice(0, 1000) }).eq("id", stored.mediaId);
+    throw new MediaError(message, status);
+  };
+  const rule = answerVideoRule(stored.mimeType ?? "video/webm", stored.bytes, maxSizeMb);
+  if (!rule.ok) await fail(rule.message!, /MB/.test(rule.message!) ? 413 : 415);
+  const { data: row } = await db.from("media_objects").select("storage_provider").eq("id", stored.mediaId).maybeSingle();
+  const bytes = await storeFor(db, (row ?? {}) as { storage_provider?: string | null }).read(stored.bucket, stored.path);
+  const sniffed = sniffedVideoOk(bytes.subarray(0, 16));
+  if (!sniffed.ok) await fail(sniffed.message!, 415);
 }

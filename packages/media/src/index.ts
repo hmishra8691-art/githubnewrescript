@@ -13,6 +13,7 @@
  * respondent's survey, which is how this rule was learned.
  */
 export * from "./plan.js";
+export * from "./answerVideo.js";
 export * from "./objectStore.js";
 export * from "./store.js";
 export * from "./runner.js";

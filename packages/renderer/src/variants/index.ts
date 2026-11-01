@@ -12,6 +12,7 @@ import "./ranking";
 import "./slider";
 import "./image";
 import "./media";
+import "./videoRecording";
 import "./dragdrop";
 import "./swipe";
 import "./carousel";

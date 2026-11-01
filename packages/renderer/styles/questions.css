@@ -1193,3 +1193,10 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-ba-point.selected { border-color: var(--rs-primary); background: var(--rs-primary); color: #fff; }
 .rs-ba-point:focus-within { outline: 3px solid var(--rs-primary); outline-offset: 2px; }
 .rs-ba-ends { display: flex; justify-content: space-between; font-size: .85em; margin-top: 4px; max-width: 520px; }
+
+/* S5a (MM2-09): respondent video recording */
+.rs-vrec-consent { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+.rs-vrec-consent input { width: 20px; height: 20px; flex: none; margin-top: 2px; }
+.rs-vrec-preview, .rs-vrec-play { display: block; width: 100%; max-width: 480px; aspect-ratio: 4 / 3; background: #000; border-radius: 10px; margin-bottom: 8px; }
+.rs-vrec-preview { transform: scaleX(-1); }
+@media (prefers-reduced-motion: reduce) { .rs-vrec .rs-rec-live { animation: none; } }

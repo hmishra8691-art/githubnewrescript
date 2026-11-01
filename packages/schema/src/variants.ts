@@ -1830,6 +1830,22 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Watch the clip, then tell us what you think.",
     },
   }),
+  /*
+   * S5a (MM2-09): RESPONDENT VIDEO — camera + microphone (getUserMedia), a live preview, a duration limit
+   * (maxAnswerSeconds), re-record (maxRetakes), consent text before the camera turns on, and a video file input when
+   * there is no camera. Stored through the session's resumable media pipeline as a respondent file (answer_upload,
+   * WebM / MP4 / MOV only, sniffed on the server, ≤ maxSizeMb ≤ 50 MB); the answer is the upload's [{url, name, size,
+   * type}].
+   */
+  stable(F.media, "video_recording", "Video Recording / Video Response", "Record a video answer with the camera (or upload a video).", {
+    baseType: "upload", renderer: "videorecording", responseModel: "media",
+    capabilities: [], validations: ["required"],
+    defaults: {
+      settings: { accept: "video/webm,video/mp4,video/quicktime", maxFiles: 1, maxSizeMb: 50, maxAnswerSeconds: 60, maxRetakes: 3, allowFileUpload: true,
+        consentText: "I agree to be recorded on video. The recording is used only for this research and is stored securely." },
+      instruction: "Turn on your camera and record your answer.",
+    },
+  }),
   stable(F.media, "audio_recording", "Audio Recording / Voice Response", "Record a spoken answer.", {
     baseType: "upload", renderer: "audiorec", responseModel: "media",
     capabilities: [], validations: ["required"],
