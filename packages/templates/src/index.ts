@@ -18,6 +18,8 @@ import {
   buildBrandTrackerSurvey, buildEmployeeSurvey,
 } from "./starters.js";
 import type { SurveyDefinition } from "@rescript/schema";
+import { buildPricingPsmSurvey } from "./methods.js";
+export { buildMethodSurvey, buildPricingPsmSurvey } from "./methods.js";
 
 export interface SurveyTemplate {
   key: string;
@@ -61,6 +63,13 @@ export const SURVEY_TEMPLATES: SurveyTemplate[] = [
     name: "Employee engagement",
     description: "eNPS, a randomised engagement grid, tenure and team, and two open ends — with the confidentiality note respondents ask for",
     build: buildEmployeeSurvey,
+  },
+  /* S5c: research-method starters — the same blocks add_method_template inserts, with their analysis-plan items */
+  {
+    key: "pricing_psm",
+    name: "Price sensitivity (Van Westendorp + Newton–Miller–Smith)",
+    description: "The four price questions, purchase likelihood at the respondent's own cheap and expensive price, and the planned pricing analysis (range, OPP, IPP, NMS trial and revenue optimum)",
+    build: buildPricingPsmSurvey,
   },
   {
     key: "master_demo_2026",

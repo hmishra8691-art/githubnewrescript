@@ -144,6 +144,7 @@ function actionsReference(engine) {
   block("Gamification (set_gamification)", "packages/engine/src/gamificationActions.ts", /^export type GamificationAction = \{/, /^\};\s*$/);
   block("Review your answers (set_review_page)", "packages/engine/src/reviewActions.ts", /^export type ReviewAction =/, /;\s*$/);
   block("Response quality and paradata (set_quality_settings)", "packages/engine/src/qualityActions.ts", /^export type QualitySettingsAction = \{/, /^\};\s*$/);
+  block("Research-method templates (add_method_template)", "packages/engine/src/methodTemplates.ts", /^export type MethodTemplateAction = \{/, /^\};\s*$/);
   block("UX actions", "packages/engine/src/uxActions.ts", /^export type UxAction =/, /;\s*$/);
   block("Analysis actions", "packages/engine/src/analysisActions.ts", /^export type AnalysisAction =/, /;\s*$/);
   block("Localization actions", "packages/engine/src/localizationActions.ts", /^export type LocalizationAction =/, /;\s*$/);

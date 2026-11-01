@@ -47,7 +47,7 @@ const PLAN_OPTION_KEYS: Partial<Record<AnalysisMethod, readonly string[]>> = {
   sem: ["syntax", "scaling", "hypothesisPaths"],
   regression: ["bootstrap", "seed"],
   reliability: ["omega"],
-  pricing: ["method", "prices", "acceptCodes"],
+  pricing: ["method", "prices", "acceptCodes", "vwCurves", "nmsCheap", "nmsExpensive", "calibration", "ladder"],
 };
 export function plannedOptions(t: Pick<PlannedTest, "method" | "options">): Record<string, unknown> {
   const keys = PLAN_OPTION_KEYS[t.method];

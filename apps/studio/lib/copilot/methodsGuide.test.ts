@@ -47,7 +47,7 @@ test("the brief's three requests: MaxDiff and CBC get the methods guide, LEAST L
 test("sizes and caching: the system prompt is unchanged and under its cap; the guide is small and rides in the cached prefix", () => {
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800, `${COPILOT_SYSTEM_PROMPT.length}`);
   /* F4 2026-10-22: + CVA, dual-response None, labelled / brand-specific CBC, summed price, menu sections, simulate_conjoint (was < 4,600) */
-  assert.ok(COPILOT_METHODS_GUIDE.length < 7_000, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
+  assert.ok(COPILOT_METHODS_GUIDE.length < 8_600, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
   assert.ok(COPILOT_LIST_FILL_GUIDE.length < 4_200, `List Fill guide ${COPILOT_LIST_FILL_GUIDE.length}`);
   const prompt = copilotUserPrompt({ ...base, message: BRIEF[0], methods: true, listFill: true });
   const [system, user] = copilotCall(prompt);
@@ -61,7 +61,7 @@ const exampleLines = (guide: string) => guide.split("\n").filter((l) => l.starts
 
 test("the guide's worked examples pass the engine's gate and apply as written, with the measured diagnostics", () => {
   const examples = exampleLines(COPILOT_METHODS_GUIDE);
-  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint"]);
+  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint", "add_method_template"]);
   const creates = examples.filter((a) => a.op.startsWith("create_")), updates = examples.filter((a) => a.op.startsWith("update_")).slice(0, 2);
   const c1 = coerceSurveyActions(creates);
   assert.deepEqual(c1.rejected, []);
@@ -133,4 +133,16 @@ test("the outline names each design with its settings, so a modification patches
   assert.deepEqual(replay.errors, []);
   assert.deepEqual(replay.after.designs.map((d) => [d.seed, d.config, d.file!.rows]), server.def.designs.map((d) => [d.seed, d.config, d.file!.rows]), "Apply replays the same design the card described");
   assert.ok(replay.diff.summary.some((l) => /Add design “Q1 MaxDiff design” \(MaxDiff, \d+ rows\)/.test(l)), JSON.stringify(replay.diff.summary));
+});
+
+/* S5c: the method-template lines apply as written on an empty survey, and the template words choose the guide */
+test("method templates: the guide's add_method_template lines apply, and pricing words send the guide", () => {
+  const lines = exampleLines(COPILOT_METHODS_GUIDE).filter((a) => a.op === "add_method_template");
+  assert.ok(lines.length >= 1);
+  const c = coerceSurveyActions(lines);
+  assert.deepEqual(c.rejected, []);
+  const made = applySurveyActions(empty(), c.actions);
+  assert.deepEqual(made.errors, []);
+  assert.ok(made.def.questions.some((q) => q.variableName === "PSM_TOO_CHEAP"));
+  for (const m of ["add a Van Westendorp price sensitivity block", "price sensitivity meter with Newton-Miller-Smith", "PSM for the new kettle"]) assert.ok(methodsIntent(m), m);
 });
