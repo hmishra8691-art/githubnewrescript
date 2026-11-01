@@ -2,6 +2,7 @@
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { Icon } from "../ui/Icon";
+import { ImportReview } from "./ImportReview";
 import { formatCharge, type ReviewLine } from "../../lib/import/chat";
 
 /**
@@ -89,6 +90,12 @@ export interface ImportJob {
   answers?: Record<string, number>;
   deciding?: boolean;
   suggesting?: boolean;
+  /** I7: the blocks chosen for the last re-run (absent = all), whether the review is open, the server's switches */
+  blocks?: string[];
+  /** every block the source has (from the first run) — a selection's report lists only the chosen ones */
+  allBlocks?: { id: string; title: string; questions: number }[];
+  reviewOpen?: boolean;
+  features?: { review: boolean };
   suggested?: { suggested: number; asked: number } | null;
   /** the last round's outcome: how many answers were applied, and the ones refused with why */
   decided?: { applied: number; rejected: { id: string; reason: string }[] };
@@ -105,12 +112,13 @@ const SCOPES: { id: ImportScope; label: string; about: string }[] = [
 ];
 const CONF: [string, string][] = [["confirmed", "Confirmed"], ["high", "High confidence"], ["review", "Needs review"], ["ambiguous", "Ambiguous"], ["unsupported", "Unsupported"]];
 
-export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, onDecide, onSuggest, readOnly, sandbox }: {
+export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, onDecide, onSuggest, onRerun, readOnly, sandbox }: {
   job: ImportJob;
   onPatch(p: Partial<ImportJob>): void;
   onRun(): void; onCreate(): void; onMerge(): void; onCancel(): void; onReviewAfter(): void; onRollback?(): void;
   onDecide?(decisions: ImportDecision[]): void;
   onSuggest?(): void;
+  onRerun?(blocks: string[] | undefined): void;
   readOnly: boolean; sandbox: boolean;
 }) {
   const cur = job.estimate?.currency ?? "USD";
@@ -190,12 +198,15 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
             {!job.sessionId && job.sessionNote && <p className="iqi-dim" data-testid="iqi-session">{job.sessionNote}</p>}
             {job.stage === "ready" && !!r.clarifications?.length && <Clarifications job={job} items={r.clarifications} onPatch={onPatch} onDecide={onDecide} onSuggest={onSuggest} />}
             {job.stage === "ready" && job.decided && <p className="iqi-dim" data-testid="iqi-decided">{job.decided.applied} answer{job.decided.applied === 1 ? "" : "s"} applied; the preview was re-analysed{job.decided.rejected.length ? ` · refused: ${job.decided.rejected.map((x) => x.reason).join("; ")}` : ""}.</p>}
+            {job.reviewOpen && <ImportReview job={job} onClose={() => onPatch({ reviewOpen: false })} onRerun={(b) => onRerun?.(b)} renderQuestions={() => <Clarifications job={job} items={r.clarifications ?? []} onPatch={onPatch} onDecide={onDecide} onSuggest={onSuggest} />} />}
+            {job.blocks?.length ? <p className="iqi-dim" data-testid="iqi-blocks-note">Only {job.blocks.length} selected block{job.blocks.length === 1 ? "" : "s"} are in this preview.</p> : null}
             {job.panel === "issues" && <IssueList report={r} />}
             {job.panel === "map" && job.mapping && <MapTable mapping={job.mapping} />}
             {job.panel === "fidelity" && r.fidelity && <FidelityDetail f={r.fidelity} verification={job.verification} />}
 
             <div className="iq-actions">
               <button type="button" className={`iq-btn${job.panel === "issues" ? " on" : ""}`} onClick={() => onPatch({ panel: job.panel === "issues" ? null : "issues" })} data-testid="iqi-issues-btn">Review issues ({r.review.length})</button>
+              {job.stage === "ready" && job.sessionId && job.features?.review !== false && <button type="button" className="iq-btn" onClick={() => onPatch({ reviewOpen: true })} data-testid="iqi-review-open">Open full review</button>}
               {r.fidelity && (r.fidelity.totals.detected > 0 || job.verification) && <button type="button" className={`iq-btn${job.panel === "fidelity" ? " on" : ""}`} onClick={() => onPatch({ panel: job.panel === "fidelity" ? null : "fidelity" })} data-testid="iqi-fidelity-btn">Fidelity report</button>}
               <button type="button" className={`iq-btn${job.panel === "map" ? " on" : ""}`} onClick={() => onPatch({ panel: job.panel === "map" ? null : "map" })} data-testid="iqi-map-btn">Source → Rescript map</button>
               <span className="iq-spacer" />

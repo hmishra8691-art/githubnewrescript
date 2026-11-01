@@ -16,7 +16,8 @@ export const maxDuration = 60;
  * (a later answer to the same question replaces the earlier one); the import is re-analysed from its stored
  * model with all of them and the new preview is returned: definition, report (with the questions still open),
  * map, verification, and which decisions were applied or refused (with the reason). Nothing is written to a
- * project — applying the import is still Create project / Add to this survey.
+ * project — applying the import is still Create project / Add to this survey. `blocks` (I7, optional): re-run with
+ * only those source blocks (Import selected blocks); absent = the whole survey.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const authed = await requireUser(req);
@@ -26,11 +27,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const caller = callerFrom(authed, !!s && s.customerId === null);
   if ("response" in caller) return caller.response;
   if (!s || !canSee(s, caller)) return notFound();
-  let body: { decisions?: unknown };
+  let body: { decisions?: unknown; blocks?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const decisions = Array.isArray(body.decisions) ? (body.decisions as Decision[]).filter((d) => d && typeof d === "object" && typeof d.id === "string" && typeof d.type === "string").slice(0, 500) : null;
   if (!decisions) return NextResponse.json({ error: "decisions must be a list" }, { status: 400 });
-  const r = reanalyze(s, decisions);
+  const blocks = Array.isArray(body.blocks) ? body.blocks.filter((b): b is string => typeof b === "string").slice(0, 500) : undefined;
+  const r = reanalyze(s, decisions, { blocks });
   if ("error" in r) return NextResponse.json({ error: r.error }, { status: r.status });
   await store.update(s.id, { decisions: r.decisions, reportDigest: digestReport(r.report) });
   return NextResponse.json({ ok: r.report.ok, definition: r.definition, report: r.report, mapping: r.mapping, confidence: r.confidence, verification: r.verification, applied: r.applied, rejected: r.rejected, decisions: r.decisions.length });

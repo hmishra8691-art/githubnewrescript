@@ -153,6 +153,8 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     session, ...(sessionNote ? { sessionNote } : {}),
+    /* I7: the full review screen — on unless the installation switches it off (IMPORT_REVIEW=off) */
+    features: { review: (process.env.IMPORT_REVIEW ?? "on").toLowerCase() !== "off" },
     ok: report.ok, phase, detection, workload: work, estimate, actual,
     title: canonical.source.title ?? null,
     definition: result.def, report, mapping: result.mapping, confidence: result.confidence, verification,

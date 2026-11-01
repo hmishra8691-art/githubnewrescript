@@ -1,5 +1,6 @@
 import { buildImportGraph, type ImportGraph } from "./graph.js";
 import { clarifications, type Clarification } from "./clarify.js";
+import { compatibility, outline, blockList, type Compatibility, type OutlineNode } from "./review.js";
 import { classifyMapping, mappingSummary, type MappingDecision, type MappingClass } from "./mappingDecision.js";
 import type { CanonicalSurvey, CanonicalStats, Issue, InventoryFeature, InventoryItem, CanonicalAsset } from "./canonical.js";
 import { canonicalStats } from "./canonical.js";
@@ -104,6 +105,12 @@ export interface MigrationReport {
   scripts: MapResult["jsMigrations"];
   /** I5: the decisions the source left open, each as a question with a recommended answer (clarify.ts) */
   clarifications: Clarification[];
+  /** I7: every element in one of six categories (review.ts) */
+  compatibility: Compatibility;
+  /** I7: the source flow in order, conditions in words */
+  outline: OutlineNode[];
+  /** I7: the blocks a person can choose to import */
+  blocks: { id: string; title: string; questions: number }[];
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -161,12 +168,14 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     `Validation ${m.quality ? `completed: ${m.quality.errors.length} errors, ${m.quality.warnings.length} warnings` : "not run"}`,
     `Fidelity ${fid.totals.detected ? `${fid.totals.imported}/${fid.totals.detected} elements as-is, ${fid.totals.partial} partial, ${fid.totals.unsupported} unsupported` : "no elements counted"}`,
   ];
-  return {
+  const out = {
     source: { platform: c.source.platform, format: c.source.format, fileName: c.source.fileName, title: c.source.title, label: detection.label, reasons: detection.reasons },
     scope, detected, created: m.def ? cr : null, converted, review, risks, confidence,
     validation: m.quality ? { errors: m.quality.errors.length, warnings: m.quality.warnings.length, deployable: m.quality.deployable } : null,
     merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid, mapping, graph, scripts: m.jsMigrations ?? [], clarifications: asks,
-  };
+    outline: outline(c), blocks: blockList(c),
+  } as Omit<MigrationReport, "compatibility">;
+  return { ...out, compatibility: compatibility(out as MigrationReport, m.inventory) };
 }
 
 /**

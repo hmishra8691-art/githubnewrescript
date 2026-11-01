@@ -1,4 +1,4 @@
-import { applyDecisions, buildReport, mapCanonical, verifyImport, type CanonicalSurvey, type Decision, type MigrationReport, type MapResult, type VerificationReport } from "@rescript/import";
+import { applyDecisions, selectBlocks, buildReport, mapCanonical, verifyImport, type CanonicalSurvey, type Decision, type MigrationReport, type MapResult, type VerificationReport } from "@rescript/import";
 import type { SurveyDefinition } from "@rescript/schema";
 import type { ImportSession } from "./sessions";
 
@@ -26,11 +26,14 @@ export function mergeDecisions(earlier: Decision[], next: Decision[]): Decision[
   return [...byId.values()];
 }
 
-export function reanalyze(s: ImportSession, newDecisions: Decision[]): Reanalysis | { error: string; status: number } {
+export function reanalyze(s: ImportSession, newDecisions: Decision[], opts: { blocks?: string[] } = {}): Reanalysis | { error: string; status: number } {
   if (!s.canonical) return { error: "This import's reconstructed model was not kept, so it cannot be re-analysed — import the file again.", status: 410 };
   if (s.status !== "analyzed") return { error: `This import is already ${s.status.replace("_", " ")}; answer its questions on a new import.`, status: 409 };
   const decisions = mergeDecisions((s.decisions as Decision[]) ?? [], newDecisions);
-  const { canonical, applied, rejected } = applyDecisions(s.canonical as CanonicalSurvey, decisions);
+  const decided = applyDecisions(s.canonical as CanonicalSurvey, decisions);
+  const { applied, rejected } = decided;
+  /* I7: Import selected blocks — the decisions first (they may name questions in any block), then the selection */
+  const canonical = opts.blocks?.length ? selectBlocks(decided.canonical, opts.blocks) : decided.canonical;
   const existing = s.into === "merge" ? (s.priorDefinition as SurveyDefinition | null) : null;
   if (s.into === "merge" && !existing) return { error: "The survey this import was previewed against was not kept, so it cannot be re-analysed here.", status: 410 };
   const result = mapCanonical(canonical, { surveyId: s.into === "merge" ? existing!.meta.id : "import_preview", existing, scope: s.scope });
