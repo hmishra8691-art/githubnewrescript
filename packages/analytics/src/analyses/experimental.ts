@@ -99,3 +99,43 @@ export function sequentialMonadic(def: AnalysisDefinition, ds: Dataset, totalCas
     recommendedCharts: ["bar_vertical", "dot_plot", "bar_horizontal"], variablesUsed, totalCases, validN: complete.length,
   });
 }
+
+/* ============================================================ IAT D-score (S5c, SM-18) */
+
+/** the conventional reading bands of |D| (Project Implicit's): < .15 little or none, < .35 slight, < .65 moderate, else strong */
+export function iatBand(d: number): "little or none" | "slight" | "moderate" | "strong" {
+  const a = Math.abs(d);
+  return a < 0.15 ? "little or none" : a < 0.35 ? "slight" : a < 0.65 ? "moderate" : "strong";
+}
+
+/**
+ * THE IAT D-SCORES the engine computed per respondent (IAT_D, Greenwald et al. 2003 D600 — engine iatScore.ts):
+ * the scored and excluded counts, mean D with its SD, a one-sample t against 0 (is there an association on
+ * average?), Cohen's d = mean / SD, and the distribution over the reading bands by direction. options.variable
+ * names another D variable; options.excluded its exclusion flag.
+ */
+export function iat(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
+  const dv = opt<string>(def, "variable", def.variables[0] ?? "IAT_D"), ev = opt<string>(def, "excluded", "IAT_EXCLUDED");
+  if (!ds.byName.has(dv) && !ds.cases.some((c) => c.vars[dv] != null)) return refused(def, ds, totalCases, `There is no D-score variable “${dv}” — tag the four combined reaction-time blocks (settings.iatBlock) so the engine computes IAT_D.`, ["table"]);
+  const d = numericColumn(ds, dv), ex = numericColumn(ds, ev);
+  const scored = d.filter((x): x is number => x != null && Number.isFinite(x));
+  const excluded = ex.filter((x) => x === 1).length;
+  const s = describe(scored);
+  const t = oneSampleT(scored, 0);
+  const bands = ["strong", "moderate", "slight", "little or none"] as const;
+  const rows = [...bands.map((b) => ({ band: `${b === "little or none" ? b : `${b} — compatible faster`}`, n: scored.filter((x) => iatBand(x) === b && (b === "little or none" || x > 0)).length })),
+    ...bands.slice(0, 3).map((b) => ({ band: `${b} — incompatible faster`, n: scored.filter((x) => iatBand(x) === b && x < 0).length }))];
+  const tables: ResultTable[] = [
+    { id: "iat", title: "IAT D-score", columns: [{ key: "m", label: "" }, { key: "v", label: "Value", type: "number", decimals: 3 }],
+      rows: [{ m: "Respondents scored", v: scored.length }, { m: "Excluded (> 10 % of trials under 300 ms)", v: excluded }, { m: "Mean D", v: round(s.mean, 3) }, { m: "SD", v: round(s.sd, 3) }, { m: "t (mean D vs 0)", v: round(t.statistic, 3) }, { m: "Cohen's d (mean / SD)", v: s.mean != null && s.sd ? round(s.mean / s.sd, 3) : null }],
+      base: { n: scored.length }, notes: ["D = (incompatible − compatible block latency) / inclusive SD, averaged over the practice and test pairs (Greenwald, Nosek & Banaji 2003; errors penalised +600 ms; trials > 10,000 ms dropped). Positive = faster on the compatible pairing."] },
+    { id: "bands", title: "Strength of association (|D| < .15 / .35 / .65)", columns: [{ key: "band", label: "Band" }, { key: "n", label: "Respondents", type: "count" }, { key: "pct", label: "%", type: "pct", decimals: 1 }],
+      rows: rows.map((r) => ({ ...r, pct: scored.length ? round((r.n / scored.length) * 100, 1) : null })) },
+  ];
+  const insights = scored.length ? [`Mean D = ${fmtNum(s.mean, 3)} (SD ${fmtNum(s.sd, 3)}, n = ${scored.length}${excluded ? `, ${excluded} excluded` : ""}) — ${s.mean != null ? iatBand(s.mean) : "—"} on average; t against 0 ${fmtP(t.p)}.`] : [];
+  return makeResult(def, ds, {
+    tables, tests: [{ ...t, test: "iat_mean_d", note: "one-sample t of D against 0" }], insights, warnings: excluded ? [`${excluded} respondents were excluded for answering more than 10 % of trials in under 300 ms.`] : [],
+    chart: { categories: rows.map((r) => r.band), series: [{ name: "Respondents", values: rows.map((r) => r.n) }] },
+    recommendedCharts: ["bar_horizontal", "histogram", "table"], variablesUsed: [dv, ...(ds.byName.has(ev) ? [ev] : [])], totalCases, validN: scored.length,
+  });
+}

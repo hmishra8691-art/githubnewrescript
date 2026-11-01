@@ -1100,6 +1100,13 @@ function s5aVariables(def: SurveyDefinition): VariableDef[] {
     out.push(mk("LEVEL_NAME", "Gamification — level name", "text", "calculation", "the level reached"));
     out.push(mk("BADGES", "Gamification — badges earned", "text", "calculation", `badge ids, comma-separated (${g.badges.map((b) => b.id).join(", ") || "none defined"})`));
   }
+  /* S5c (SM-18): the IAT D-score of the tagged reaction-time blocks */
+  if (def.questions.some((q) => (q.settings as { iatBlock?: { role?: string } }).iatBlock?.role)) {
+    out.push(mk("IAT_D", "IAT D-score (Greenwald et al. 2003, D600)", "numeric", "calculation", "(incompatible − compatible) / inclusive SD, averaged over the practice and test pairs; positive = faster on the compatible pairing; empty when excluded"));
+    out.push(mk("IAT_TRIALS", "IAT — trials scored", "numeric", "calculation", "trials ≤ 10,000 ms in the four blocks"));
+    out.push(mk("IAT_FAST_SHARE", "IAT — share of trials under 300 ms", "numeric", "calculation", "above 0.10 the respondent is excluded"));
+    out.push(mk("IAT_EXCLUDED", "IAT — excluded (too many fast trials)", "numeric", "calculation", "1 = excluded, 0 = scored", { "0": "scored", "1": "excluded" }));
+  }
   for (const q of def.questions) {
     if (questionZooms(q)) out.push(mk(zoomParadataKey(q.code || q.id), `${q.code} — image zoom opens`, "numeric", "embedded_data", "times the respondent opened the lightbox"));
     if (q.variant === "numeric.price_ladder") {

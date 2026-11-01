@@ -37,6 +37,7 @@ export const ANALYSIS_METHODS = [
   /* advanced models from the plan (2026-10-22): hierarchical Bayes for a CBC / MaxDiff exercise, latent class segmentation, SEM / CFA */
   "hb", "latent_class", "sem",
   /* S5c: research-method analyses */
+  "iat_dscore",
   "sequential_monadic",
 ] as const;
 export type AnalysisMethod = (typeof ANALYSIS_METHODS)[number];

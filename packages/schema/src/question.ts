@@ -1253,6 +1253,16 @@ const QuestionObject = z.object({
        * priceLadder.ts). The answer is the highest price accepted (0 = none); GG_<CODE>_START and GG_<CODE>_PATH
        * are kept as paradata.
        */
+      /**
+       * S5c (SM-18) IAT BLOCK: tags an `experimental.reaction_time` question as one of the four combined IAT blocks
+       * (B3 compatible practice, B4 compatible test, B6 incompatible practice, B7 incompatible test) with its answer
+       * key (row code → the correct category's option code). The engine scores the tagged blocks with Greenwald et
+       * al.'s (2003) improved D (D600) into IAT_D / IAT_TRIALS / IAT_FAST_SHARE / IAT_EXCLUDED (iatScore.ts).
+       */
+      iatBlock: z.object({
+        role: z.enum(["compatible_practice", "compatible_test", "incompatible_practice", "incompatible_test"]),
+        key: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+      }).optional(),
       priceLadder: z.object({
         prices: z.array(z.number().positive()).max(20).default([]),
         start: z.enum(["middle", "lowest", "highest", "random"]).optional(),

@@ -43,7 +43,7 @@ const ROLE_FOR_KIND: Record<AnalysisKind, VariableRole[]> = {
   text: ["text"], quality: [], weighting: ["categorical"], conjoint: ["complex"], maxdiff: ["complex"],
   hb: ["complex"], lca: ["categorical", "scale"], sem: ["scale", "numeric"],
   /* S5c */
-  sequential_monadic: ["scale", "numeric"],
+  sequential_monadic: ["scale", "numeric"], iat: ["numeric"],
 };
 
 const HINT: Partial<Record<AnalysisKind, string>> = {

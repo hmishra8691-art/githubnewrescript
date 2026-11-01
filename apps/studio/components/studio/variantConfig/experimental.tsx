@@ -195,3 +195,41 @@ registerVariantSettings("experiment", ({ q, patchSettings }) => {
     </>
   );
 });
+
+/*
+ * S5c (SM-18): the reaction-time block's IAT role and answer key. Tag the four combined blocks (compatible /
+ * incompatible × practice / test) and the engine scores them with Greenwald et al.'s (2003) improved D into
+ * IAT_D / IAT_TRIALS / IAT_FAST_SHARE / IAT_EXCLUDED (engine iatScore.ts). Untagged = an ordinary timed block.
+ */
+type IatBlock = NonNullable<Question["settings"]["iatBlock"]>;
+registerVariantSettings("iat", ({ q, patchSettings }) => {
+  const b = q.settings.iatBlock;
+  const set = (next: IatBlock | undefined) => patchSettings({ iatBlock: next });
+  return (
+    <div className="card" style={{ padding: 10 }} data-testid="iat-editor">
+      <label className="ax-field"><span className="flabel">IAT block</span>
+        <select className="input" data-testid="iat-role" value={b?.role ?? ""} onChange={(e) => set(e.target.value ? { role: e.target.value as IatBlock["role"], key: b?.key } : undefined)}>
+          <option value="">not part of a D-score</option>
+          <option value="compatible_practice">B3 — compatible pairing, practice</option>
+          <option value="compatible_test">B4 — compatible pairing, test</option>
+          <option value="incompatible_practice">B6 — incompatible pairing, practice</option>
+          <option value="incompatible_test">B7 — incompatible pairing, test</option>
+        </select>
+      </label>
+      {b?.role && (
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px", marginTop: 6 }} data-testid="iat-key">
+          {(q.rows ?? []).map((r) => (
+            <React.Fragment key={String(r.code)}>
+              <span className="flabel">{r.label.replace(/<[^>]*>/g, "")}</span>
+              <select className="input" value={String(b.key?.[String(r.code)] ?? "")} onChange={(e) => set({ ...b, key: { ...(b.key ?? {}), [String(r.code)]: e.target.value } })}>
+                <option value="">— correct category —</option>
+                {(q.options ?? []).map((o) => <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>)}
+              </select>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+      <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>D600: trials over 10 s dropped, errors = block mean + 600 ms, respondents with more than 10 % of trials under 300 ms excluded. A stimulus with no correct category set counts as correct.</p>
+    </div>
+  );
+});

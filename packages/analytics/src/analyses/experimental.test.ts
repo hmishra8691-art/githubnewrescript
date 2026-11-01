@@ -68,3 +68,26 @@ test("sequential monadic: two concepts use the paired t; no order variable is sa
   const one = runAnalysis({ name: "sm", kind: "sequential_monadic", dataset: spec, variables: ["C_A"] }, ds);
   assert.ok(one.warnings.some((w) => /at least two concepts/.test(w)));
 });
+
+/*
+ * IAT through runAnalysis: five respondents' IAT_D as the engine stores them (one excluded, D empty).
+ *   D = 0.8, 0.5, 0.2, −0.1, 0.4 → mean 0.36, SD = sqrt(Σ(d − 0.36)² / 4) = sqrt(0.452 / 4) = 0.33615, t = 0.36 / (0.33615/√5) = 2.3947
+ *   bands: 0.8 strong; 0.5, 0.4 moderate; 0.2 slight; −0.1 little or none
+ */
+test("iat analysis: mean D, SD, t against 0, Cohen's d and the bands — the hand-computed values", () => {
+  const idef = SurveyDefinition.parse({ meta: { id: "i", code: "I", title: "I", version: "1.0" }, questions: [{ id: "q1", code: "X", variableName: "X", type: "numeric", text: "x" }], flow: [] });
+  const ds = buildDataset(idef, [0.8, 0.5, 0.2, -0.1, 0.4, null].map((d, i) => row(i, { q1: 1 }, d == null ? { IAT_D: null, IAT_EXCLUDED: 1 } : { IAT_D: d, IAT_EXCLUDED: 0 })), { spec });
+  const res = runAnalysis({ name: "iat", kind: "iat", dataset: spec, variables: ["IAT_D"] }, ds);
+  const v = (m: RegExp) => Number(res.tables[0].rows.find((r) => m.test(String(r.m)))!.v);
+  assert.equal(v(/scored/), 5);
+  assert.equal(v(/Excluded/), 1);
+  near(v(/Mean D/), 0.36);
+  near(v(/^SD/), 0.336);
+  near(v(/^t /), 2.395);
+  near(v(/Cohen/), 1.071);
+  const bands = Object.fromEntries(res.tables[1].rows.map((r) => [r.band, r.n]));
+  assert.equal(bands["strong — compatible faster"], 1);
+  assert.equal(bands["moderate — compatible faster"], 2);
+  assert.equal(bands["slight — compatible faster"], 1);
+  assert.equal(bands["little or none"], 1);
+});

@@ -253,6 +253,11 @@ export type MethodTemplateAction = {
   start?: "middle" | "lowest" | "highest" | "random";
   /** sequential_monadic: the concepts (2–8 short names; default Concept A, B, C) */
   concepts?: string[];
+  /** iat: the two target categories and the two attribute categories (good first), each with 2–8 stimulus words */
+  targets?: [string, string];
+  attributes?: [string, string];
+  targetWords?: [string[], string[]];
+  attributeWords?: [string[], string[]];
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */

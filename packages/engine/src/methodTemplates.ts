@@ -25,11 +25,18 @@ import { randomizerOrderVariable } from "./displayOrder.js";
  *                        concept follows which); ORDER_<RANDOMIZER> stores the order each respondent saw (S4c).
  *                        Plan: sequential_monadic on the appeal ratings (order, blocks) — paired tests + order effect.
  *
+ *   iat                  the four COMBINED blocks of an IAT (B3/B4 compatible, B6/B7 incompatible pairing, practice
+ *                        and test), each an experimental.reaction_time question over the same stimuli with its
+ *                        answer key (settings.iatBlock) — the engine scores IAT_D. targets [A, B], attributes
+ *                        [good, bad] and their words; the single-category practice blocks (B1, B2, B5) and the
+ *                        counterbalancing of which pairing comes first are NOT added (add them by hand).
+ *                        Plan: iat_dscore.
+ *
  * Variable names are fixed per template (PSM_TOO_CHEAP, …) so the plan can name them; a survey that already has
  * one of them is refused with the clash named — pass `prefix` ("A_" → A_PSM_TOO_CHEAP) to add a second copy.
  */
 
-export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic"] as const;
+export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic", "iat"] as const;
 export type MethodTemplateKey = (typeof METHOD_TEMPLATE_KEYS)[number];
 
 export type MethodTemplateAction = {
@@ -49,6 +56,11 @@ export type MethodTemplateAction = {
   start?: "middle" | "lowest" | "highest" | "random";
   /** sequential_monadic: the concepts (2–8 short names; default Concept A, B, C) */
   concepts?: string[];
+  /** iat: the two target categories and the two attribute categories (good first), each with 2–8 stimulus words */
+  targets?: [string, string];
+  attributes?: [string, string];
+  targetWords?: [string[], string[]];
+  attributeWords?: [string[], string[]];
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */
@@ -86,6 +98,21 @@ export function coerceMethodTemplateAction(o: Record<string, unknown>): MethodTe
     const cs = Array.isArray(o.concepts) ? o.concepts.map((c) => str(c, 120)).filter((c): c is string => !!c) : [];
     if (cs.length < 2 || cs.length > 8 || new Set(cs.map((c) => c.toLowerCase())).size !== cs.length) return "add_method_template concepts must be 2–8 different names";
     a.concepts = cs;
+  }
+  const pair = (v: unknown, what: string): [string, string] | string | undefined => {
+    if (v === undefined) return undefined;
+    const xs = Array.isArray(v) ? v.map((x) => str(x, 60)).filter((x): x is string => !!x) : [];
+    return xs.length === 2 && xs[0].toLowerCase() !== xs[1].toLowerCase() ? [xs[0], xs[1]] : `add_method_template ${what} must be two different names`;
+  };
+  const words = (v: unknown, what: string): [string[], string[]] | string | undefined => {
+    if (v === undefined) return undefined;
+    const xs = Array.isArray(v) && v.length === 2 ? v.map((l) => (Array.isArray(l) ? l.map((x) => str(x, 60)).filter((x): x is string => !!x) : [])) : [];
+    return xs.length === 2 && xs.every((l) => l.length >= 2 && l.length <= 8) ? [xs[0], xs[1]] : `add_method_template ${what} must be two lists of 2–8 words`;
+  };
+  for (const [k, f] of [["targets", pair], ["attributes", pair], ["targetWords", words], ["attributeWords", words]] as const) {
+    const r = (f as (v: unknown, w: string) => unknown)(o[k], k);
+    if (typeof r === "string") return r;
+    if (r !== undefined) (a as Record<string, unknown>)[k] = r;
   }
   if (o.plan === false) a.plan = false;
   return a;
@@ -164,6 +191,32 @@ export function methodTemplateFragment(a: Omit<MethodTemplateAction, "op">, ids:
         block: { type: "randomizer", id: rid, title: "Concept rotation", order: "williams", children: blocks } as FlowNode,
         tests: [{ method: "sequential_monadic", variables: appeal, priority: 1, tier: "essential", hypotheses: [], reason: "every respondent rates every concept: within-respondent comparison and the order effect", options: { order: randomizerOrderVariable(rid, null), blocks: blocks.map((b) => (b as { id: string }).id) } }],
         notes: [`Rotation: Williams order over ${concepts.length} concept blocks; the order is stored in ${randomizerOrderVariable(rid, null)}.`],
+      };
+    }
+    case "iat": {
+      const [tA, tB] = a.targets ?? ["Flowers", "Insects"];
+      const [good, bad] = a.attributes ?? ["Pleasant", "Unpleasant"];
+      const [wA, wB] = a.targetWords ?? [["Rose", "Tulip", "Daisy", "Lily"], ["Wasp", "Moth", "Flea", "Gnat"]];
+      const [wG, wX] = a.attributeWords ?? [["Joy", "Love", "Peace", "Gift"], ["Pain", "Hate", "War", "Filth"]];
+      const stim: { code: string; label: string; group: "A" | "B" | "G" | "X" }[] = [
+        ...wA.map((w, i) => ({ code: `a${i + 1}`, label: w, group: "A" as const })), ...wB.map((w, i) => ({ code: `b${i + 1}`, label: w, group: "B" as const })),
+        ...wG.map((w, i) => ({ code: `g${i + 1}`, label: w, group: "G" as const })), ...wX.map((w, i) => ({ code: `x${i + 1}`, label: w, group: "X" as const })),
+      ];
+      /* compatible: left = A or good, right = B or bad;  incompatible: left = B or good, right = A or bad */
+      const keyFor = (compatible: boolean) => Object.fromEntries(stim.map((x) => [x.code, x.group === "G" ? 1 : x.group === "X" ? 2 : (x.group === "A") === compatible ? 1 : 2]));
+      const block = (code: string, role: string, compatible: boolean, stage: string) => q(code, "matrix_single", `${stage}: sort each word into the left or right category.`, {
+        variant: "experimental.reaction_time", required: true,
+        rows: stim.map((x) => ({ code: x.code, label: x.label })),
+        options: [{ code: 1, label: `${compatible ? tA : tB} or ${good}` }, { code: 2, label: `${compatible ? tB : tA} or ${bad}` }],
+        settings: { iatBlock: { role, key: keyFor(compatible) } },
+      });
+      const qs = [block("IAT_B3", "compatible_practice", true, "Practice"), block("IAT_B4", "compatible_test", true, "Test"), block("IAT_B6", "incompatible_practice", false, "Practice"), block("IAT_B7", "incompatible_test", false, "Test")];
+      return {
+        title: `IAT (${tA} / ${tB} × ${good} / ${bad})`,
+        questions: qs,
+        block: { type: "block", id: ids("b"), title: "Implicit association", children: qs.map((x, i) => page(["Combined practice", "Combined test", "Reversed practice", "Reversed test"][i], [x])) } as FlowNode,
+        tests: [{ method: "iat_dscore", variables: ["IAT_D"], priority: 1, tier: "essential", hypotheses: [], reason: "the implicit association: mean D-score against 0 and its strength", options: { variable: "IAT_D", excluded: "IAT_EXCLUDED" } }],
+        notes: ["The four combined blocks are scored (IAT_D, D600); the single-category practice blocks and pairing-order counterbalancing are not added."],
       };
     }
   }

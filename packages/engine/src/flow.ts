@@ -1,3 +1,4 @@
+import { hasIatBlocks, iatVariables } from "./iatScore.js";
 import type { Condition, FlowNode, SurveyDefinition, Question, SkipRule } from "@rescript/schema";
 import { gamificationVariables } from "./gamification.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
@@ -497,6 +498,8 @@ export function runCalculations(
    * value; here, so the Runner and the server replay compute them the same way (gamification.ts).
    */
   if (def.gamification) Object.assign(state.calculated, gamificationVariables(def, state));
+  /* S5c (SM-18): the IAT D-score of the tagged reaction-time blocks — the same pass, so Runner and replay agree (iatScore.ts) */
+  if (hasIatBlocks(def)) Object.assign(state.calculated, iatVariables(def, state));
 }
 
 export interface NavigationResult {
