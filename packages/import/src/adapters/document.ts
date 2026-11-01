@@ -1,7 +1,7 @@
 import type {
-  CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CFlow, CExpr, CRef, COp, CanonicalKind, Issue, SourceFormat, CanonicalEmbeddedField, PendingInstruction,
+  CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CFlow, CExpr, CRef, COp, CanonicalKind, Issue, SourceFormat, CanonicalEmbeddedField, PendingInstruction, CanonicalAsset,
 } from "../canonical.js";
-import type { DocBlock } from "./docx.js";
+import type { DocBlock, DocImage } from "./docx.js";
 
 /**
  * A QUESTIONNAIRE WRITTEN FOR PEOPLE → CANONICAL (§18–§23).
@@ -83,6 +83,7 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
     const id = code ?? `Q${++auto}`;
     const q: CanonicalQuestion = { sourceId: id, variable: id, code: id, text: text.trim(), kind: "unknown", sourceType: "document", options: [], rows: [], required: true, validation: [], skips: [], custom: [], confidence: "high", notes: code ? [] : ["numbered by the import — the document gave no code"] };
     cur = { q, instructions: [...pending], optionNotes: new Map(), block, page, typeSaid: false };
+    if (pendingImages.length) { attachImages(cur as Draft, pendingImages); pendingImages = []; }
     pending = [];
     drafts.push(cur);
     if (!explicitPages) page++; // one question per page unless the document says otherwise
@@ -108,8 +109,31 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
     if (unmarked) d.q.confidence = worst(d.q.confidence, "review");
   };
 
+  /*
+   * I6: PICTURES IN THE DOCUMENT. A picture goes with the question it sits under (or the next one, when it comes
+   * before any question): carried in the question's text as an inline image when it is small enough, else listed
+   * so the programmer uploads it. Never fetched, never sent anywhere.
+   */
+  const assets: CanonicalAsset[] = [];
+  let pendingImages: DocImage[] = [];
+  const IMAGE_INLINE_MAX = 300 * 1024;
+  const attachImages = (d: Draft, ims: DocImage[]) => {
+    for (const im of ims) {
+      const where = `${d.q.sourceId} · image ${im.name}`;
+      if (im.bytes.length <= IMAGE_INLINE_MAX) {
+        const src = `data:${im.contentType};base64,${toBase64(im.bytes)}`;
+        d.q.text = `${d.q.text}${d.q.text ? "\n" : ""}<p><img src="${src}" alt="${(im.alt ?? `Image from the document (${im.name})`).replace(/"/g, "&quot;")}" /></p>`;
+        assets.push({ url: `embedded:${im.name}`, location: where, role: "question_text", hosting: "embedded" });
+        d.q.notes.push(`picture ${im.name} from the document is shown with the question (${Math.round(im.bytes.length / 1024)} KB)`);
+      } else {
+        assets.push({ url: `embedded:${im.name}`, location: where, role: "other", hosting: "library_id" });
+        issues.push({ location: where, type: "dropped", severity: "medium", message: `The picture ${im.name} (${Math.round(im.bytes.length / 1024)} KB) is too large to carry inside the question; upload it in Studio.`, autoAttempted: false, refs: [d.q.sourceId] });
+      }
+    }
+  };
   let inferredTable = false;
   for (const b of blocks) {
+    if (b.kind === "para" && b.images?.length) { if (cur) attachImages(cur as Draft, b.images); else pendingImages.push(...b.images); }
     if (b.kind === "table") {
       flushFree();
       if (cur && !cur.table && b.rows.length >= 2) { cur.table = b.rows; continue; }
@@ -189,7 +213,7 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
 
   return {
     source: { platform: "document", format: meta.format, fileName: meta.fileName, title, fingerprint: meta.fingerprint },
-    questions: drafts.map((d) => d.q), flow, embedded, quotas: [], custom: [], issues,
+    questions: drafts.map((d) => d.q), flow, embedded, quotas: [], custom: [], issues, ...(assets.length ? { assets } : {}),
   };
 }
 
@@ -492,3 +516,5 @@ function splitTopLevel(t: string, op: "and" | "or"): string[] {
 }
 
 export type { CRef };
+
+const toBase64 = (b: Uint8Array) => Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("base64");

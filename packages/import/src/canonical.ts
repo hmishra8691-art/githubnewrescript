@@ -86,7 +86,7 @@ export interface CanonicalAsset {
   /** what it is attached to */
   role: "question_text" | "option_image" | "row_label" | "graphic" | "header" | "other";
   /** hosted by the source platform (breaks when that account closes) / a library id with no URL / an external host */
-  hosting: "platform" | "library_id" | "external";
+  hosting: "platform" | "library_id" | "external" | "embedded";
 }
 
 /** survey-level options the source carries that Rescript has a home for */

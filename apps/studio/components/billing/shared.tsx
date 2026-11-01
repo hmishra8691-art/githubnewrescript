@@ -54,7 +54,7 @@ export const EVENT_WORDS: Record<string, string> = {
   FILE_UPLOAD: "File upload", STORAGE_GB: "File storage", BANDWIDTH_GB: "Bandwidth", TEXT_TO_SPEECH_CHARACTER: "AI voice", GEOCODE_REQUEST: "Address lookup",
   EMAIL_MESSAGE: "Email invitation", REPORT_GENERATION: "Report generated", EXPORT_GENERATION: "Data export", SURVEY_RENDER: "Page rendered",
 };
-export const OPERATION_WORDS: Record<string, string> = { ai_classify: "AI classification", ai_sentiment: "AI sentiment", probe: "AI follow-up", rephrase_for_speech: "AI spoken version", tts_preview: "AI voice preview", geocode: "Address lookup" };
+export const OPERATION_WORDS: Record<string, string> = { ai_classify: "AI classification", ai_sentiment: "AI sentiment", import_suggest: "AI suggestions for an import", probe: "AI follow-up", rephrase_for_speech: "AI spoken version", tts_preview: "AI voice preview", geocode: "Address lookup" };
 
 /** Intelligent Mode's calls by what they did: copilot_ux → "Intelligent Mode · look & behaviour", copilot_ux_repair → "… · correction" */
 const COPILOT_WORDS: Record<string, string> = { ux: "look & behaviour", edit: "edit", question: "edit", generate: "survey generation", review: "review", plan: "plan", theme: "theme" };

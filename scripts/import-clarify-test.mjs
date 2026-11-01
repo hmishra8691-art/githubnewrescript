@@ -6,6 +6,9 @@
  *   B  answering four (recommended, an alternative, "Leave it") and applying re-analyses the preview: the
  *      answered questions are gone, the outcome is stated, the definition carries the decided logic
  *   C  Add to this survey: the decided rules are in the survey (display logic, anchored option, embedded source)
+ *   D  (I6) a Word file: "Suggest answers with AI" gives a labelled, NOT pre-selected suggestion for the question
+ *      the rules could not recommend ("ASK ONLY IF THEY OWN A CAR" → S1 = Yes); picked and applied, it becomes the
+ *      rule; the document's picture travels with its question
  *
  *   node scripts/import-clarify-test.mjs     (Studio dev server with AI_API_URL=fake:)
  */
@@ -25,6 +28,7 @@ import assert from "node:assert/strict";
 import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { readFileSync } from "node:fs";
+import { wordDocFixture, TINY_JPEG } from "../packages/import/dist/fixtures.js";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 let passed = 0;
@@ -77,7 +81,7 @@ await switchMode(page, "intelligent");
 await page.waitForSelector('[data-testid="intelligent-view"]');
 
 /* ------------------------------------------------------------ A */
-{
+if (SECTIONS.includes("A")) {
   await attach("brand-spec.txt", doc);
   await stageIs("estimated");
   const card = await lastImport();
@@ -96,7 +100,7 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
 }
 
 /* ------------------------------------------------------------ B */
-{
+if (SECTIONS.includes("B")) {
   const it = await items();
   const idx = (k, re) => it.findIndex((x) => x.kind === k && re.test(x.q));
   const radios = async (i) => (await page.$$('[data-testid="iqi-clarify-item"]'))[i].$$('input[type="radio"]');
@@ -117,7 +121,7 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
 }
 
 /* ------------------------------------------------------------ C */
-{
+if (SECTIONS.includes("C")) {
   await (await (await lastImport()).$('[data-testid="iqi-merge"]')).click();
   await stageIs("merged");
   const def = await readDef();
@@ -126,6 +130,41 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   assert.ok(q("S2").options.find((o) => o.label === "Other").flags.includes("anchor_bottom"), "Other stays at the end");
   assert.ok(JSON.stringify(def.flow).includes("REGION"), "REGION is an embedded field");
   ok("C: Add to this survey carries the decided rules — display logic, the anchored option, the embedded field");
+}
+
+/* ------------------------------------------------------------ D (I6) */
+if (SECTIONS.includes("D")) {
+  await switchMode(page, "intelligent");
+  const word = wordDocFixture([
+    { p: "Car Owner Study", style: "Title" },
+    { p: "S1. Do you currently own a car?", bold: true }, { p: "Yes", num: 1, level: 1 }, { p: "No", num: 1, level: 1 },
+    { p: "S2. Which brand is your car?", bold: true }, "[ASK ONLY IF THEY OWN A CAR]", { p: "Alpha", num: 2, level: 1 }, { p: "Beta", num: 2, level: 1 },
+    { p: "Q1. Look at this advert. How appealing is it?", bold: true }, { image: TINY_JPEG, name: "advert", alt: "The new Alpha advert" },
+    { p: "Very appealing", num: 3, level: 1 }, { p: "Not appealing", num: 3, level: 1 },
+  ]);
+  await page.setInputFiles('[data-testid="iq-file"]', { name: "cars.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: Buffer.from(word) });
+  await stageIs("estimated");
+  await (await (await lastImport()).$('[data-testid="iqi-into-merge"]')).check();
+  await (await (await lastImport()).$('[data-testid="iqi-run"]')).click();
+  await stageIs("ready");
+  await page.waitForSelector('[data-testid="iqi-clarify-ai"]');
+  await (await (await lastImport()).$('[data-testid="iqi-clarify-ai"]')).click();
+  await page.waitForSelector('[data-testid="iqi-clarify-suggested"]', { timeout: 60000 });
+  assert.match(await page.textContent('[data-testid="iqi-clarify-suggested"]'), /The AI suggested an answer for 1 of 1 question/);
+  const it = await items();
+  const own = it.findIndex((x) => /THEY OWN A CAR/.test(x.q));
+  assert.ok(own >= 0); assert.equal(it[own].opts[0].replace("recommended", ""), "S1 = Yes"); assert.equal(it[own].checked, -1, "an AI suggestion is not pre-selected");
+  assert.match(await (await page.$$('[data-testid="iqi-clarify-item"]'))[own].textContent(), /AI suggestion — check it/);
+  await (await (await page.$$('[data-testid="iqi-clarify-item"]'))[own].$$('input[type="radio"]'))[0].check();
+  await (await (await lastImport()).$('[data-testid="iqi-clarify-apply"]')).click();
+  await page.waitForSelector('[data-testid="iqi-decided"]', { timeout: 60000 });
+  await (await (await lastImport()).$('[data-testid="iqi-merge"]')).click();
+  await stageIs("merged");
+  const def = await readDef();
+  const byText = (re) => def.questions.filter((x) => re.test(x.text)).at(-1);
+  assert.ok(JSON.stringify(byText(/Which brand is your car/).displayLogic ?? {}).includes(byText(/currently own a car/).id), "S2 is shown by S1 = Yes");
+  assert.match(byText(/Look at this advert/).text, /<img src="data:image\/jpeg;base64,/, "the advert is with its question");
+  ok("D: Suggest answers with AI → a labelled, not pre-selected suggestion; picked and applied it is the rule; the picture travels with its question");
 }
 
 assert.deepEqual(pageErrors.filter((e) => !/401|Failed to load resource/.test(e)), [], "no page errors");

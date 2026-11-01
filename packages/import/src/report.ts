@@ -45,7 +45,7 @@ export const FEATURE_LABELS: Record<InventoryFeature, string> = {
 export function fidelity(c: CanonicalSurvey, m: MapResult): ImportFidelity {
   const items: InventoryItem[] = [...m.inventory];
   /* assets and validation rules are items too: an asset is carried by reference (partial when it is hosted by the platform, unsupported when it is only a library id) */
-  for (const a of c.assets ?? []) items.push({ feature: "asset", sourceId: a.location, status: a.hosting === "library_id" ? "unsupported" : a.hosting === "platform" ? "partial" : "imported", note: a.hosting === "library_id" ? "a library id with no URL in the file" : a.hosting === "platform" ? "hosted by Qualtrics — breaks when that account closes" : undefined });
+  for (const a of c.assets ?? []) items.push({ feature: "asset", sourceId: a.location, status: a.hosting === "library_id" ? "unsupported" : a.hosting === "platform" ? "partial" : "imported", note: a.hosting === "embedded" ? "embedded in the document; carried inside the question" : a.hosting === "library_id" ? "a library id with no URL in the file" : a.hosting === "platform" ? "hosted by Qualtrics — breaks when that account closes" : undefined });
   for (const q of c.questions) for (const v of q.validation) items.push({ feature: "validation", sourceId: `${q.sourceId} ${v.kind}`, status: "imported" });
   for (const i of c.issues) if (i.type === "validation" && /content validation|has no direct equivalent/.test(i.message) && i.location.endsWith("· validation")) items.push({ feature: "validation", sourceId: i.location, status: "unsupported", note: i.message });
   const by = new Map<InventoryFeature, InventoryItem[]>();

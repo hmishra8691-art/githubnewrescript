@@ -88,6 +88,8 @@ export interface ImportJob {
   /** I5: the option chosen per clarification (index into [recommended, ...alternatives]) */
   answers?: Record<string, number>;
   deciding?: boolean;
+  suggesting?: boolean;
+  suggested?: { suggested: number; asked: number } | null;
   /** the last round's outcome: how many answers were applied, and the ones refused with why */
   decided?: { applied: number; rejected: { id: string; reason: string }[] };
 }
@@ -103,11 +105,12 @@ const SCOPES: { id: ImportScope; label: string; about: string }[] = [
 ];
 const CONF: [string, string][] = [["confirmed", "Confirmed"], ["high", "High confidence"], ["review", "Needs review"], ["ambiguous", "Ambiguous"], ["unsupported", "Unsupported"]];
 
-export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, onDecide, readOnly, sandbox }: {
+export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, onDecide, onSuggest, readOnly, sandbox }: {
   job: ImportJob;
   onPatch(p: Partial<ImportJob>): void;
   onRun(): void; onCreate(): void; onMerge(): void; onCancel(): void; onReviewAfter(): void; onRollback?(): void;
   onDecide?(decisions: ImportDecision[]): void;
+  onSuggest?(): void;
   readOnly: boolean; sandbox: boolean;
 }) {
   const cur = job.estimate?.currency ?? "USD";
@@ -185,7 +188,7 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
 
             {job.sessionId && <p className="iqi-dim" data-testid="iqi-session">Recorded in the import history{job.sessionExpiresAt ? ` · the file is kept until ${new Date(job.sessionExpiresAt).toLocaleDateString()}` : ""}{job.sessionNote ? ` · ${job.sessionNote}` : ""}</p>}
             {!job.sessionId && job.sessionNote && <p className="iqi-dim" data-testid="iqi-session">{job.sessionNote}</p>}
-            {job.stage === "ready" && !!r.clarifications?.length && <Clarifications job={job} items={r.clarifications} onPatch={onPatch} onDecide={onDecide} />}
+            {job.stage === "ready" && !!r.clarifications?.length && <Clarifications job={job} items={r.clarifications} onPatch={onPatch} onDecide={onDecide} onSuggest={onSuggest} />}
             {job.stage === "ready" && job.decided && <p className="iqi-dim" data-testid="iqi-decided">{job.decided.applied} answer{job.decided.applied === 1 ? "" : "s"} applied; the preview was re-analysed{job.decided.rejected.length ? ` · refused: ${job.decided.rejected.map((x) => x.reason).join("; ")}` : ""}.</p>}
             {job.panel === "issues" && <IssueList report={r} />}
             {job.panel === "map" && job.mapping && <MapTable mapping={job.mapping} />}
@@ -422,9 +425,11 @@ export function ImportHistory({ surveyId }: { surveyId: string }) {
  * I5 — THE QUESTIONS THE SOURCE LEFT OPEN: one per decision, the recommended answer pre-selected (with why),
  * the alternatives, and "leave it". Apply sends the chosen decisions; the preview is re-analysed with them.
  */
-function Clarifications({ job, items, onPatch, onDecide }: { job: ImportJob; items: ImportClarification[]; onPatch(p: Partial<ImportJob>): void; onDecide?(d: ImportDecision[]): void }) {
+function Clarifications({ job, items, onPatch, onDecide, onSuggest }: { job: ImportJob; items: ImportClarification[]; onPatch(p: Partial<ImportJob>): void; onDecide?(d: ImportDecision[]): void; onSuggest?(): void }) {
   const opts = (c: ImportClarification) => [...(c.recommended ? [c.recommended] : []), ...c.alternatives];
-  const pick = (c: ImportClarification) => job.answers?.[c.id] ?? (c.recommended ? 0 : -1);
+  /* a rule's recommendation is pre-selected; an AI suggestion is shown but waits for a person to pick it */
+  const pick = (c: ImportClarification) => job.answers?.[c.id] ?? (c.recommended && c.suggestedBy !== "ai" ? 0 : -1);
+  const unrecommended = items.filter((c) => !c.recommended).length;
   const chosen = items.map((c) => ({ c, i: pick(c) })).filter((x) => x.i >= 0);
   return (
     <div className="iqi-clarify" data-testid="iqi-clarify">
@@ -445,8 +450,10 @@ function Clarifications({ job, items, onPatch, onDecide }: { job: ImportJob; ite
           </li>
         ))}
       </ol>
+      {job.suggested && <p className="iqi-dim" data-testid="iqi-clarify-suggested">The AI suggested an answer for {job.suggested.suggested} of {job.suggested.asked} question{job.suggested.asked === 1 ? "" : "s"} without a recommendation — marked “AI suggestion”, not selected until you pick them.</p>}
       <div className="iq-actions">
         <span className="iqi-dim">{chosen.length} of {items.length} answered</span>
+        {onSuggest && unrecommended > 0 && <button type="button" className="iq-btn" disabled={job.suggesting || !job.sessionId} onClick={onSuggest} data-testid="iqi-clarify-ai">{job.suggesting ? "Asking the AI…" : `Suggest answers with AI (${unrecommended})`}</button>}
         <span className="iq-spacer" />
         <button type="button" className="iq-btn primary" disabled={!onDecide || job.deciding || !chosen.length || !job.sessionId} onClick={() => onDecide?.(chosen.map(({ c, i }) => opts(c)[i].decision))} data-testid="iqi-clarify-apply" title={job.sessionId ? "Apply these answers and re-analyse the preview" : "This import was not recorded, so its answers cannot be applied — import the file again"}>{job.deciding ? "Re-analysing…" : "Apply answers"}</button>
       </div>

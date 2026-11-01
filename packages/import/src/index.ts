@@ -17,6 +17,7 @@ export * from "./mappingDecision.js";
 export * from "./graph.js";
 export * from "./jsMigrate.js";
 export * from "./clarify.js";
+export * from "./suggest.js";
 export { ZIP_LIMITS } from "./zip.js";
 export { parseXml } from "./xml.js";
 export { extractPdfText } from "./pdf.js";
