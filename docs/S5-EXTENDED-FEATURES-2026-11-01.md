@@ -562,7 +562,7 @@ Branch `feat/persistent-execution-engine`, from `4f69108` (S5b). Audit: `SCRIPT-
 
 **Checks.**
 - `tsc --noEmit`: studio, runtime and renderer, 0 errors each.
-- `gen-public-docs --check`: current. Regenerated: actions-reference (add_method_template block), capabilities and question-types (175 → 177 variants).
+- `gen-public-docs --check`: current. Regenerated: actions-reference (add_method_template block), capabilities and question-types (176 → 178 variants).
 - Dependency boundaries: 0 violations.
 - Auth guard: 259 handlers, 0 problems.
 
