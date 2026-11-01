@@ -138,7 +138,7 @@ import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaG
 import { Inspector } from "./Inspector";
 import { useAssessmentResults } from "./AssessmentResults";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
-import { MediaEmbed, SafeImage, ProgressIndicator, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, ProgressIndicator, GamificationHud, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -2707,6 +2707,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           onNavigate={(target, as) => jumpTo(target, as, "script")}
           onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} onScriptIssue={noteIssue} />
       )}
+      {/* S5a (GA-06/07): points HUD + the native badge popup — reads POINTS / LEVEL_NAME / BADGES the engine computes */}
+      {def.gamification && !ended && <GamificationHud def={def} state={state} rootRef={shellRef} tick={state.calculated.POINTS} />}
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">
           <label>

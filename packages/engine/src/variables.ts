@@ -1,4 +1,6 @@
 import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescript/schema";
+import { questionZooms, zoomParadataKey } from "./mediaZoom.js";
+import { beforeAfterKeys } from "./beforeAfter.js";
 import {
   directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariableNames, maxLoopIterations,
   possibleLoopItems, type LoopFlowNode,
@@ -841,6 +843,8 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
   }
   /* S4c (RK-04 / RA-06 / RA-08): the stored display orders, design rows and experiment arms — columns in every export */
   out.push(...displayOrderVariables(def));
+  /* S5a: gamification (POINTS, LEVEL, BADGES …) and the media paradata (ZOOMED_<CODE>, BA_<CODE>_*) — export columns */
+  out.push(...s5aVariables(def));
   /*
    * SURVEY_LANGUAGE — which language version the respondent answered in.
    * Declared whenever the survey has more than its source language, stored in
@@ -1081,6 +1085,32 @@ export function nextQuestionNaming(def: SurveyDefinition, prefix = "Q"): { code:
  * with exact arm balance. Declared for elements outside loops (inside a loop the names carry the iteration's codes and
  * are exported from the response like any other calculated value, unlabelled).
  */
+function s5aVariables(def: SurveyDefinition): VariableDef[] {
+  const out: VariableDef[] = [];
+  const mk = (name: string, label: string, dataType: "numeric" | "text", responseType: "calculation" | "embedded_data", notes: string, valueLabels: Record<string, string> = {}): VariableDef =>
+    ({ name, label, dataType, responseType, derived: true, hidden: true, valueCodes: Object.keys(valueLabels), valueLabels, notes } as VariableDef);
+  const g = def.gamification;
+  if (g && g.enabled !== false) {
+    const levels = [...g.levels].sort((a, b) => a.minPoints - b.minPoints);
+    out.push(mk("POINTS", "Gamification — points", "numeric", "calculation", `${g.points.perAnswer} per answer + ${g.points.perCorrect} per correct answer${g.points.customVariable ? ` + ${g.points.customVariable}` : ""}`));
+    out.push(mk("POINTS_ANSWERED", "Gamification — questions answered", "numeric", "calculation", "answered respondent-facing questions"));
+    out.push(mk("POINTS_CORRECT", "Gamification — correct answers", "numeric", "calculation", "correct by the answer key"));
+    out.push(mk("LEVEL", "Gamification — level", "numeric", "calculation", "1-based index of the level reached (0 = none)", Object.fromEntries([["0", "none"], ...levels.map((l, i) => [String(i + 1), l.name])])));
+    out.push(mk("LEVEL_NAME", "Gamification — level name", "text", "calculation", "the level reached"));
+    out.push(mk("BADGES", "Gamification — badges earned", "text", "calculation", `badge ids, comma-separated (${g.badges.map((b) => b.id).join(", ") || "none defined"})`));
+  }
+  for (const q of def.questions) {
+    if (questionZooms(q)) out.push(mk(zoomParadataKey(q.code || q.id), `${q.code} — image zoom opens`, "numeric", "embedded_data", "times the respondent opened the lightbox"));
+    if (q.variant === "comparison.before_after" && q.settings.recordPosition) {
+      const k = beforeAfterKeys(q.code || q.id);
+      out.push(mk(k.position, `${q.code} — before/after divider (last, %)`, "numeric", "embedded_data", "0 = all after, 100 = all before"));
+      out.push(mk(k.dwellBefore, `${q.code} — seconds with the divider on the before side`, "numeric", "embedded_data", "divider at ≥ 50 %"));
+      out.push(mk(k.dwellAfter, `${q.code} — seconds with the divider on the after side`, "numeric", "embedded_data", "divider below 50 %"));
+    }
+  }
+  return out;
+}
+
 function displayOrderVariables(def: SurveyDefinition): VariableDef[] {
   const out: VariableDef[] = [];
   const mk = (name: string, label: string, notes: string): VariableDef => ({ name, label, dataType: "text", responseType: "calculation", derived: true, hidden: true, valueCodes: [], valueLabels: {}, notes } as VariableDef);

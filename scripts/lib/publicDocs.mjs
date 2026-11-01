@@ -141,6 +141,7 @@ function actionsReference(engine) {
   block("Option groups (set_option_groups)", "packages/engine/src/optionGroupActions.ts", /^export type OptionGroupAction =/, /;\s*$/);
   out.push("Supporting types:", "", "```ts", sourceBlock("packages/engine/src/optionGroupActions.ts", /^export interface GroupSpec/, /\}\s*$/), "```", "");
   block("Timers (set_timer)", "packages/engine/src/timerActions.ts", /^export type TimerAction = \{/, /^\};\s*$/);
+  block("Gamification (set_gamification)", "packages/engine/src/gamificationActions.ts", /^export type GamificationAction = \{/, /^\};\s*$/);
   block("UX actions", "packages/engine/src/uxActions.ts", /^export type UxAction =/, /;\s*$/);
   block("Analysis actions", "packages/engine/src/analysisActions.ts", /^export type AnalysisAction =/, /;\s*$/);
   block("Localization actions", "packages/engine/src/localizationActions.ts", /^export type LocalizationAction =/, /;\s*$/);

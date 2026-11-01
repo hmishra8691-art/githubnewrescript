@@ -15,6 +15,7 @@ import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { AssessmentSettingsCard } from "./AssessmentSettingsCard";
+import { GamificationSettingsCard } from "./GamificationSettingsCard";
 import { ResearchDesignEditor } from "./ResearchDesignEditor";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { TimerEditor } from "./TimerEditor";
@@ -1250,6 +1251,8 @@ export function SurveySettings() {
 
       {/* ASSESSMENT (K4 2026-10-25, ported 2026-10-29): one "this survey is a test or quiz" checkbox; marking, pass mark, results policy and report sections only once ticked */}
       <AssessmentSettingsCard />
+      {/* S5a (GA-06/07): points, badges, levels */}
+      <GamificationSettingsCard />
 
       {/* the research design, editable by hand (Research Engine audit, Phase 1) — the Analysis tab reads it */}
       <h3 className="sec" id="research-design">Research design</h3>

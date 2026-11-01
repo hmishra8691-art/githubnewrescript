@@ -1,4 +1,5 @@
 import type { Condition, FlowNode, SurveyDefinition, Question, SkipRule } from "@rescript/schema";
+import { gamificationVariables } from "./gamification.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
@@ -491,6 +492,11 @@ export function runCalculations(
       }
     }
   }
+  /*
+   * S5a (GA-06, GA-07): POINTS / LEVEL / BADGES — after the calculations, so a custom points variable is this pass's
+   * value; here, so the Runner and the server replay compute them the same way (gamification.ts).
+   */
+  if (def.gamification) Object.assign(state.calculated, gamificationVariables(def, state));
 }
 
 export interface NavigationResult {

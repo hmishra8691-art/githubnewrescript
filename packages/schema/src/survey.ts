@@ -756,6 +756,42 @@ export const SurveyNavigation = z.object({
 });
 export type SurveyNavigation = z.infer<typeof SurveyNavigation>;
 
+/**
+ * S5a (GA-06, GA-07) GAMIFICATION: points, badges and levels, survey-wide (engine gamification.ts). Everything it
+ * produces is a calculated variable — POINTS, LEVEL, BADGES (+ POINTS_ANSWERED, POINTS_CORRECT) — recomputed with the
+ * survey's calculations (client and server replay alike) and exported with them. Absent = no gamification.
+ */
+export const BADGE_ICONS = ["star", "trophy", "medal", "rocket", "fire", "heart", "lightbulb", "target", "crown", "check"] as const;
+export const GamificationBadge = z.object({
+  id: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,39}$/),
+  title: z.string().min(1).max(80),
+  description: z.string().max(200).optional(),
+  icon: z.enum(BADGE_ICONS).default("star"),
+  /** the rule: earned (once, for good) the first time this is true — e.g. calculation POINTS ≥ 30 */
+  when: Condition,
+});
+export type GamificationBadge = z.infer<typeof GamificationBadge>;
+export const GamificationLevel = z.object({ name: z.string().min(1).max(60), minPoints: z.number().min(0) });
+export const Gamification = z.object({
+  enabled: z.boolean().default(true),
+  points: z.object({
+    /** per answered question (questions a respondent sees and answers; not hidden / calculated / content) */
+    perAnswer: z.number().min(0).max(1000).default(10),
+    /** per correct answer by the answer key (set_answer_key / the quiz key) */
+    perCorrect: z.number().min(0).max(1000).default(0),
+    /** a calculated variable whose value is ADDED to the points (a custom score) */
+    customVariable: z.string().max(80).optional(),
+  }).default({}),
+  badges: z.array(GamificationBadge).max(30).default([]),
+  /** ascending thresholds; LEVEL = the 1-based index of the highest reached (0 = none) */
+  levels: z.array(GamificationLevel).max(20).default([]),
+  hud: z.object({
+    show: z.boolean().default(true),
+    position: z.enum(["top-right", "top-left", "bottom-right", "bottom-left"]).default("top-right"),
+  }).default({}),
+});
+export type Gamification = z.infer<typeof Gamification>;
+
 export const SurveyDefinition = z.object({
   meta: z.object({
     id: z.string(),
@@ -892,6 +928,8 @@ export const SurveyDefinition = z.object({
    * exactly the survey as before — Next / Back only. See `SurveyNavigation`.
    */
   navigation: SurveyNavigation.optional(),
+  /** S5a GAMIFICATION (GA-06, GA-07): points, badges, levels and the HUD — see `Gamification`. Absent = none. */
+  gamification: Gamification.optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;
 

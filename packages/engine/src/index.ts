@@ -192,6 +192,8 @@ export * from "./mediaActions.js";
 export * from "./mediaZoom.js";
 export * from "./beforeAfter.js";
 export * from "./videoRecording.js";
+export * from "./gamification.js";
+export * from "./gamificationActions.js";
 export * from "./logicScriptActions.js";
 export * from "./scriptRefs.js";
 export * from "./researchActions.js";
