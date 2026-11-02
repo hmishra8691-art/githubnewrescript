@@ -12,9 +12,9 @@ const uid = (p: string) => `${p}_${++n}`;
 const load = (dir: string, f: string) => analyzeImport(new Uint8Array(readFileSync(join(CORPUS, dir, f))), f, { surveyId: "s", uid });
 const codes = (a: Awaited<ReturnType<typeof load>>) => a.result!.def!.questions.map((q) => `${q.code}:${q.type}`);
 
-test("word corpus: seven files, each read as Word and imported", async () => {
+test("word corpus: ten files, each read as Word and imported", async () => {
   const files = readdirSync(join(CORPUS, "word")).filter((f) => f.endsWith(".docx"));
-  assert.equal(files.length, 7);
+  assert.equal(files.length, 10);
   for (const f of files) {
     const a = await load("word", f);
     assert.equal(a.detection.format, "docx", f);

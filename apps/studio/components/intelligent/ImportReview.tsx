@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import type { ImportJob, ImportClarification } from "./ImportCard";
+import type { ImportJob, ImportClarification, ImportReconstruction, ImportVerification } from "./ImportCard";
 
 /**
  * I7 — THE IMPORT REVIEW: everything the import would create, before it is created.
@@ -10,6 +10,11 @@ import type { ImportJob, ImportClarification } from "./ImportCard";
  *   Compatibility   every element in one of six categories, with the reason
  *   Flow & logic    the source flow in order: blocks, questions with their conditions and skips in words,
  *                   branches, randomizers, embedded data, ends and redirects, and what each question depends on
+ *   Reconstruction  the dynamic relationships (carried and masked lists, loops, piping) in three groups:
+ *                   A mapped natively as the source states it (counts by feature, and the synthetic respondents),
+ *                   B rebuilt another native way by the importer's self-correction (original, reading,
+ *                   implementation, why), C requiring attention (to confirm, partial, not possible) — each C item
+ *                   opens the decision that edits it when the source left one, or says what to do
  *   Questions       the decisions the source leaves open (the same panel as the card)
  *   Blocks          choose which blocks to import; re-run the analysis
  *
@@ -37,13 +42,15 @@ export function ImportReview({ job, onClose, onRerun, renderQuestions }: {
   renderQuestions(): React.ReactNode;
 }) {
   const r = job.report as (NonNullable<ImportJob["report"]> & ReviewExtras) | undefined;
-  const [tab, setTab] = React.useState<"summary" | "compat" | "flow" | "questions" | "blocks">("summary");
+  const [tab, setTab] = React.useState<"summary" | "compat" | "recon" | "flow" | "questions" | "blocks">("summary");
   const [inspect, setInspect] = React.useState<{ source: string; data?: { kind: string; source: unknown; issues: { message: string }[] } | { error: string } } | null>(null);
   const [chosen, setChosen] = React.useState<Set<string> | null>(job.blocks ? new Set(job.blocks) : null);
   const dialog = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => { dialog.current?.focus(); const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", esc); return () => window.removeEventListener("keydown", esc); }, [onClose]);
   if (!r) return null;
   const clar: ImportClarification[] = r.clarifications ?? [];
+  const recon = (r as { reconstruction?: ImportReconstruction }).reconstruction;
+  const dyn = job.verification && !("error" in job.verification) ? (job.verification as ImportVerification).dynamics : undefined;
 
   const open = async (source: string) => {
     setInspect({ source });
@@ -77,7 +84,7 @@ export function ImportReview({ job, onClose, onRerun, renderQuestions }: {
           <button type="button" className="iq-btn" onClick={onClose} data-testid="iqr-close">Close</button>
         </header>
         <nav className="iqr-tabs" role="tablist">
-          {([["summary", "Summary"], ["compat", "Compatibility"], ["flow", "Flow & logic"], ["questions", `Questions (${clar.length})`], ["blocks", `Blocks (${blocks.length})`]] as const).map(([k, l]) => (
+          {([["summary", "Summary"], ["compat", "Compatibility"], ["recon", `Reconstruction${recon ? ` (${recon.items.length})` : ""}`], ["flow", "Flow & logic"], ["questions", `Questions (${clar.length})`], ["blocks", `Blocks (${blocks.length})`]] as const).map(([k, l]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} className={`iq-btn${tab === k ? " on" : ""}`} onClick={() => setTab(k)} data-testid={`iqr-tab-${k}`}>{l}</button>
           ))}
         </nav>
@@ -103,6 +110,58 @@ export function ImportReview({ job, onClose, onRerun, renderQuestions }: {
                     </details>
                   );
                 })}
+              </div>
+            )}
+            {tab === "recon" && (
+              <div data-testid="iqr-recon">
+                {!recon || recon.items.length === 0 ? <p className="iqi-dim">The source has no carried or masked list, loop or piping to reconstruct.</p> : (() => {
+                  const A = recon.items.filter((i) => i.category === "reconstructed");
+                  const B = recon.items.filter((i) => i.category === "alternative");
+                  const C = recon.items.filter((i) => i.category === "confirm" || i.category === "partial" || i.category === "unsupported");
+                  const decisionFor = (loc: string, qid?: string) => clar.find((x) => x.location === loc || (qid && x.questionId === qid) || x.location.split(/[\s—-]/)[0] === loc);
+                  const tested = (loc: string) => (dyn?.scenarios ?? []).filter((x) => x.target.split(", ").includes(loc));
+                  const testLine = (loc: string) => { const t = tested(loc); return t.length ? <span className={t.some((x) => x.result === "fail") ? "iq-error" : "iqi-dim"} data-testid="iqr-recon-tested"> · respondents: {t.filter((x) => x.result === "pass").length}/{t.length} behave</span> : null; };
+                  const row = (i: ImportReconstruction["items"][number], n: number) => (
+                    <li key={n} data-category={i.category} data-feature={i.feature} data-testid="iqr-recon-item">
+                      <b>{i.location}</b> <span className={`iqi-badge c-${i.category}`}>{i.category === "confirm" ? "to confirm" : i.category}</span> <span className="iqi-dim">{i.feature.replace(/_/g, " ")}</span>{testLine(i.location)}
+                      <dl className="iqr-recon-dl">
+                        <dt>Source</dt><dd>“{i.original}”</dd>
+                        <dt>Read as</dt><dd>{i.interpretation}</dd>
+                        <dt>Rescript</dt><dd className="mono">{i.implementation}</dd>
+                        <dt>Why</dt><dd>{i.why}</dd>
+                        {i.action && <><dt>To do</dt><dd>{i.action}</dd></>}
+                      </dl>
+                      {i.category !== "reconstructed" && (decisionFor(i.location, i.questionId)
+                        ? <button type="button" className="iq-btn" onClick={() => setTab("questions")} data-testid="iqr-recon-edit">Change this reading…</button>
+                        : <span className="iqi-dim"> No choice was left open here — edit {i.location} in the survey after it is created.</span>)}
+                    </li>
+                  );
+                  return (
+                    <>
+                      <p className="iqr-cats">
+                        <span className="iqi-badge c-full" data-testid="iqr-recon-count-a">A · mapped <b>{A.length}</b></span>
+                        <span className="iqi-badge c-converted" data-testid="iqr-recon-count-b">B · rebuilt another way <b>{B.length}</b></span>
+                        <span className="iqi-badge c-clarify" data-testid="iqr-recon-count-c">C · requires attention <b>{C.length}</b></span>
+                        <span className="iqi-dim"> · checked in {recon.passes} pass{recon.passes === 1 ? "" : "es"}{dyn ? ` · ${dyn.passed} of ${dyn.scenarios.length} respondent scenarios behave as expected${dyn.failed ? `, ${dyn.failed} do not` : ""}` : ""}</span>
+                      </p>
+                      <details open={C.length > 0} data-testid="iqr-recon-c">
+                        <summary>C · Requires attention ({C.length})</summary>
+                        {C.length ? <ul>{C.map(row)}</ul> : <p className="iqi-dim">Nothing.</p>}
+                      </details>
+                      <details open={B.length > 0} data-testid="iqr-recon-b">
+                        <summary>B · Rebuilt with another native feature ({B.length})</summary>
+                        {B.length ? <ul>{B.map(row)}</ul> : <p className="iqi-dim">Nothing.</p>}
+                      </details>
+                      <details data-testid="iqr-recon-a">
+                        <summary>A · Mapped natively as the source states it ({A.length})</summary>
+                        <table className="iqr-table"><tbody>
+                          {Object.entries(recon.byFeature).map(([f, k]) => <tr key={f}><th scope="row">{f.replace(/_/g, " ")}</th><td>{k.reconstructed ?? 0} mapped</td><td className="iqi-dim">{(k.alternative ?? 0) + (k.confirm ?? 0) + (k.partial ?? 0) + (k.unsupported ?? 0)} other</td></tr>)}
+                        </tbody></table>
+                        <ul>{A.map(row)}</ul>
+                      </details>
+                    </>
+                  );
+                })()}
               </div>
             )}
             {tab === "flow" && (

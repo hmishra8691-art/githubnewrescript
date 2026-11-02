@@ -1,4 +1,4 @@
-import type { CanonicalSurvey, CanonicalQuestion, CExpr, CSkipTarget, PendingInstruction } from "./canonical.js";
+import type { CanonicalSurvey, CanonicalQuestion, CExpr, CFlow, CSkipTarget, PendingInstruction } from "./canonical.js";
 import { buildImportGraph } from "./graph.js";
 
 /**
@@ -22,13 +22,18 @@ export type Decision =
   | { id: string; type: "embedded"; name: string; source: "url" | "static" | "question"; value?: string; questionId?: string }
   | { id: string; type: "or_instead_of_and"; questionId: string }
   | { id: string; type: "replace_reference"; questionId: string; from: string; to: string }
+  /* 2026-11-02 (dynamics.ts): a list taken from an earlier answer, a question repeated for each answer, or neither */
+  | { id: string; type: "carry_forward"; questionId: string; source: string; filter: "selected" | "notSelected" | "displayed" | "all" }
+  | { id: string; type: "loop"; questionId: string; source: string }
+  | { id: string; type: "drop_dynamic"; questionId: string; feature: "carry_forward" | "loop" }
+  | { id: string; type: "keep" }
   | { id: string; type: "dismiss" };
 
 export interface ClarificationOption { label: string; decision: Decision }
 export interface Clarification {
   /** stable across re-runs of the same file: kind + question + instruction words */
   id: string;
-  kind: "missing_condition" | "missing_target" | "randomize_scope" | "embedded_source" | "conflict" | "undefined_reference";
+  kind: "missing_condition" | "missing_target" | "randomize_scope" | "embedded_source" | "conflict" | "undefined_reference" | "dynamic_list" | "confirm_dynamic";
   /** the question asked of the person, specific to this survey */
   question: string;
   /** the source's own words */
@@ -123,6 +128,19 @@ export function clarifications(c: CanonicalSurvey): Clarification[] {
         });
         break;
       }
+      case "dynamic": {
+        /* a list or a repetition from an earlier answer, but which one is not said: the survey's own alternatives, no guess */
+        const cands = recentClosed(q.sourceId, 3);
+        const t = (x: CanonicalQuestion) => `${label(x)} (“${x.text.replace(/<[^>]+>/g, "").slice(0, 50)}”)`;
+        const alternatives: ClarificationOption[] = [
+          ...cands.map((x) => ({ label: `Show the answers selected at ${t(x)}`, decision: { id, type: "carry_forward", questionId: q.sourceId, source: x.sourceId, filter: "selected" } as Decision })),
+          ...cands.map((x) => ({ label: `Show the answers NOT selected at ${t(x)}`, decision: { id, type: "carry_forward", questionId: q.sourceId, source: x.sourceId, filter: "notSelected" } as Decision })),
+          ...cands.filter((x) => x.kind === "multi" || x.kind === "multi_dropdown").map((x) => ({ label: `Ask ${label(q)} once for each answer selected at ${t(x)}`, decision: { id, type: "loop", questionId: q.sourceId, source: x.sourceId } as Decision })),
+          { label: "Leave it — set the list up in Studio", decision: { id, type: "dismiss" } },
+        ];
+        push({ id, kind: "dynamic_list", location: issue.location, questionId: q.sourceId, evidence: ins.text, question: `${label(q)} says “${ins.text}”. Which earlier answers does it mean?`, recommended: null, alternatives });
+        break;
+      }
       case "embedded": {
         const name = ins.name ?? "the field";
         const word = name.toLowerCase();
@@ -138,6 +156,26 @@ export function clarifications(c: CanonicalSurvey): Clarification[] {
         break;
       }
     }
+  }
+
+  /* INFERRED DYNAMIC LISTS AND LOOPS (dynamics.ts): built and working, but read from "the previous question" or implied — confirmed by a person */
+  for (const d of c.dynamics ?? []) {
+    if (d.confidence !== "inferred" || !d.sourceId) continue;
+    const q = byId.get(d.questionId), src = byId.get(d.sourceId);
+    if (!q || !src) continue;
+    const isLoop = d.feature === "loop";
+    const id = `confirm:${d.feature}:${q.sourceId}`;
+    const others = recentClosed(q.sourceId, 3).filter((x) => x.sourceId !== src.sourceId);
+    const filter = d.feature === "mask" ? "notSelected" : d.feature === "same_list" ? "all" : "selected";
+    push({
+      id, kind: "confirm_dynamic", location: `${label(q)} · “${d.original}”`, questionId: q.sourceId, evidence: d.original,
+      question: isLoop ? `${label(q)} is repeated for each answer selected at ${label(src)} (from “${d.original}”). Is ${label(src)} the right question?` : `${label(q)}'s list was taken from ${label(src)} (from “${d.original}”). Is ${label(src)} the right question?`,
+      recommended: { label: `Yes — ${label(src)}`, decision: { id, type: "keep" } }, because: isLoop ? `${label(src)} is the nearest earlier question where several answers are chosen.` : `${label(src)} is the question just before ${label(q)}.`, suggestedBy: "rules",
+      alternatives: [
+        ...others.map((x) => (isLoop ? { label: `No — repeat it for each answer selected at ${label(x)}`, decision: { id, type: "loop", questionId: q.sourceId, source: x.sourceId } as Decision } : { label: `No — take it from ${label(x)}`, decision: { id, type: "carry_forward", questionId: q.sourceId, source: x.sourceId, filter } as Decision })),
+        { label: isLoop ? "No — do not repeat it" : "No — no list from an earlier answer", decision: { id, type: "drop_dynamic", questionId: q.sourceId, feature: isLoop ? "loop" : "carry_forward" } },
+      ],
+    });
   }
 
   /* CONFLICTS: one rule that asks for two different answers of the same single-choice question at once */
@@ -195,6 +233,37 @@ function similar(missing: string, q: CanonicalQuestion): boolean {
 }
 
 export interface ApplyResult { canonical: CanonicalSurvey; applied: string[]; rejected: { id: string; reason: string }[] }
+
+/** the block holding a question, and where */
+function blockOf(fs: CFlow[], qid: string): { list: CFlow[]; index: number; block: Extract<CFlow, { t: "block" }> } | null {
+  for (let i = 0; i < fs.length; i++) {
+    const f = fs[i];
+    if (f.t === "block" && f.pages.some((p) => p.includes(qid))) return { list: fs, index: i, block: f };
+    if ("children" in f) { const r = blockOf(f.children, qid); if (r) return r; }
+  }
+  return null;
+}
+/** a question taken out of its block into a block of its own, looped over another question's selected answers */
+function loopQuestion(c: CanonicalSurvey, qid: string, src: string): boolean {
+  const at = blockOf(c.flow, qid);
+  if (!at) return false;
+  const { list, index, block } = at;
+  const pages = block.pages.map((p) => p.filter((x) => x !== qid));
+  const pi = block.pages.findIndex((p) => p.includes(qid));
+  const before = pages.slice(0, pi).filter((p) => p.length).concat(pages[pi].length && block.pages[pi].indexOf(qid) > 0 ? [block.pages[pi].slice(0, block.pages[pi].indexOf(qid))] : []);
+  const after = (pages[pi].length && block.pages[pi].indexOf(qid) < block.pages[pi].length - 1 ? [block.pages[pi].slice(block.pages[pi].indexOf(qid) + 1)] : []).concat(pages.slice(pi + 1).filter((p) => p.length));
+  const parts: CFlow[] = [];
+  if (before.length) parts.push({ ...block, pages: before, loop: undefined });
+  parts.push({ t: "block", sourceId: `${block.sourceId}_loop_${qid}`, title: `${block.title ? `${block.title} — ` : ""}for each answer at ${src}`, pages: [[qid]], loop: { kind: "question", questionId: src, filter: "selected", loopVar: "ITEM" } });
+  if (after.length) parts.push({ ...block, sourceId: `${block.sourceId}_after_${qid}`, pages: after, loop: undefined });
+  list.splice(index, 1, ...parts);
+  return true;
+}
+/** take the loop off the block that holds a question (every question in that loop leaves it) */
+function dropLoop(c: CanonicalSurvey, qid: string): void {
+  const at = blockOf(c.flow, qid);
+  if (at?.block.loop) delete at.block.loop;
+}
 
 /**
  * Apply the accepted decisions to a COPY of the canonical survey. Each is checked first: the questions and
@@ -268,6 +337,41 @@ export function applyDecisions(source: CanonicalSurvey, decisions: Decision[]): 
         q!.displayLogic = { ...e, op: "or" };
         applied.push(d.id); break;
       }
+      case "keep": { applied.push(d.id); break; }
+      case "carry_forward": {
+        if (!q) { rejected.push({ id: d.id, reason: "no question was named" }); break; }
+        const src = byId.get(d.source);
+        if (!src) { rejected.push({ id: d.id, reason: `question ${d.source} is not in the survey` }); break; }
+        if (src === q) { rejected.push({ id: d.id, reason: `${src.variable} cannot take its list from itself` }); break; }
+        if (!["selected", "notSelected", "displayed", "all"].includes(d.filter)) { rejected.push({ id: d.id, reason: `“${String(d.filter).slice(0, 40)}” is not a carry-forward filter` }); break; }
+        if (!src.options.length && !src.carryForward) { rejected.push({ id: d.id, reason: `${src.variable} has no answers to take a list from` }); break; }
+        if (c.questions.indexOf(src) > c.questions.indexOf(q!)) { rejected.push({ id: d.id, reason: `${src.variable} is asked after ${q!.variable}` }); break; }
+        dropLoop(c, q!.sourceId);
+        q!.carryForward = { questionId: src.sourceId, filter: d.filter, into: /^matrix/.test(q!.kind) ? "rows" : "options" };
+        if (!q!.options.length && !/^matrix|single|multi|dropdown/.test(q!.kind)) q!.kind = /select\s+all|all\s+that\s+apply|multi/i.test(q!.text) ? "multi" : "single";
+        if (q!.confidence === "ambiguous" || q!.confidence === "review") q!.confidence = "high";
+        applied.push(d.id); resolved(d); break;
+      }
+      case "loop": {
+        if (!q) { rejected.push({ id: d.id, reason: "no question was named" }); break; }
+        const src = byId.get(d.source);
+        if (!src) { rejected.push({ id: d.id, reason: `question ${d.source} is not in the survey` }); break; }
+        if (src === q) { rejected.push({ id: d.id, reason: `${src.variable} cannot loop over its own answers` }); break; }
+        if (c.questions.indexOf(src) > c.questions.indexOf(q!)) { rejected.push({ id: d.id, reason: `${src.variable} is asked after ${q!.variable}` }); break; }
+        dropLoop(c, q!.sourceId);
+        if (!loopQuestion(c, q!.sourceId, src.sourceId)) { rejected.push({ id: d.id, reason: `${q!.variable} is not placed in a block` }); break; }
+        /* the item's placeholder ([STORE], <STORE>, {STORE}) becomes the loop's item */
+        const swap = (t: string) => t.replace(/\[(?:INSERT\s+|THIS\s+|CURRENT\s+)?([A-Z][A-Z'-]{2,})\]|<([A-Z][A-Z'-]{2,})>|\{([A-Z][A-Z'-]{2,})\}/g, (m, a?: string, b?: string, e?: string) => (byId.has(a ?? b ?? e ?? "") ? m : "{{loop.label}}"));
+        q!.text = swap(q!.text);
+        if (q!.confidence === "ambiguous" || q!.confidence === "review") q!.confidence = "high";
+        applied.push(d.id); resolved(d); break;
+      }
+      case "drop_dynamic": {
+        if (!q) { rejected.push({ id: d.id, reason: "no question was named" }); break; }
+        if (d.feature === "carry_forward") delete q!.carryForward;
+        else dropLoop(c, q!.sourceId);
+        applied.push(d.id); break;
+      }
       case "replace_reference": {
         if (!byId.has(d.to)) { rejected.push({ id: d.id, reason: `question ${d.to} is not in the survey` }); break; }
         const fix = (e: CExpr | undefined): CExpr | undefined => !e ? e : e.t === "group" ? { ...e, children: e.children.map((x) => fix(x)!) } : e.t === "cmp" && e.ref.kind === "question" && e.ref.id === d.from ? { ...e, ref: { ...e.ref, id: d.to, choice: e.ref.choice && byId.get(d.to)!.options.some((o) => o.sourceId === e.ref.choice) ? e.ref.choice : undefined } } : e;
@@ -275,6 +379,20 @@ export function applyDecisions(source: CanonicalSurvey, decisions: Decision[]): 
         q!.skips = q!.skips.map((s) => ({ ...s, when: fix(s.when)!, to: s.to.kind === "question" && s.to.id === d.from ? { kind: "question", id: d.to } : s.to }));
         applied.push(d.id); break;
       }
+    }
+  }
+  /* a dynamic list or loop a person decided is no longer "inferred": the reconstruction report counts it as built */
+  for (const d of decisions) {
+    if (!applied.includes(d.id)) continue;
+    const qid = "questionId" in d ? d.questionId : /^confirm:[a-z_]+:(.+)$/.exec(d.id)?.[1] ?? /^dynamic:([^:]+):/.exec(d.id)?.[1];
+    if (!qid) continue;
+    const dyn = (c.dynamics ??= []);
+    const mine = dyn.filter((x) => x.questionId === qid && ["carry_forward", "mask", "same_list", "loop"].includes(x.feature));
+    if (d.type === "keep") for (const x of mine) x.confidence = "high";
+    else if (d.type === "drop_dynamic") c.dynamics = dyn.filter((x) => !mine.includes(x) || (d.feature === "loop" ? x.feature !== "loop" : x.feature === "loop"));
+    else if (d.type === "carry_forward" || d.type === "loop") {
+      const words = (c.issues.find((i) => i.instruction?.questionId === qid)?.instruction?.text) ?? mine[0]?.original ?? "decided during the import";
+      c.dynamics = [...dyn.filter((x) => !mine.includes(x)), { feature: d.type === "loop" ? "loop" : d.filter === "notSelected" ? "mask" : d.filter === "all" ? "same_list" : "carry_forward", questionId: qid, sourceId: d.source, original: words, interpretation: `decided during the import: ${d.type === "loop" ? `asked once for each answer selected at ${d.source}` : `the list from ${d.source} (${d.filter})`}`, confidence: "high" }];
     }
   }
   c.decidedIds = [...new Set([...(c.decidedIds ?? []), ...applied])];

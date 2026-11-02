@@ -84,6 +84,38 @@ export const CASES = [
       return out;
     })(),
   },
+  {
+    file: "08-carry-forward-masking.docx", covers: "carry forward of selected options, masking (not selected), a list carried from a carried list, the same list as an earlier question, codes kept",
+    items: [{ p: "Brand Funnel", style: "Title" },
+      ...q("Q1", "Which of these brands are you aware of? SELECT ALL THAT APPLY", [[1, "Brand A"], [2, "Brand B"], [3, "Brand C"], [4, "Brand D"], [99, "None of these"]]),
+      ...q("Q2", "Which of these brands have you purchased? SELECT ALL THAT APPLY", [], ["CARRY FORWARD BRANDS SELECTED AT Q1"]),
+      ...q("Q3", "Which brands have you NOT purchased? SELECT ALL THAT APPLY", [], ["SHOW ONLY BRANDS NOT SELECTED AT Q2"]),
+      ...q("Q4", "Which brand do you use most often?", [], ["SHOW ONLY BRANDS SELECTED AT Q2"]),
+      ...q("Q5", "Which of these brands would you consider in the future? SELECT ALL THAT APPLY", [], ["SAME LIST AS Q1"]),
+      ...q("Q6", "Which of these brands do you trust? SELECT ALL THAT APPLY", [[1, "Brand A"], [2, "Brand B"], [3, "Brand C"], [4, "Brand D"]], ["CARRY FORWARD SELECTED FROM Q1"])],
+  },
+  {
+    file: "09-loops-piping.docx", covers: "a loop over the brands selected (two questions), the current brand piped, an answer piped into later text, a numeric answer piped, a carried list piped",
+    items: [{ p: "Brand Usage", style: "Title" },
+      ...q("Q1", "Which brands have you used in the last year? SELECT ALL THAT APPLY", [[1, "Alpha"], [2, "Beta"], [3, "Gamma"], [4, "Delta"]]),
+      ...q("Q2", "How satisfied are you with [BRAND]?", ["Very satisfied", "Satisfied", "Neutral", "Dissatisfied", "Very dissatisfied"], ["ASK FOR EACH BRAND SELECTED AT Q1"]),
+      "Q3. Why do you say that about [BRAND]?", "[ASK FOR EACH BRAND SELECTED AT Q1]",
+      ...q("Q4", "You said you use [INSERT ANSWER FROM Q1]. Which one is your favourite?", [], ["SHOW ONLY BRANDS SELECTED AT Q1"]),
+      "Q5. How old are you?", "[NUMERIC, 18 TO 99]",
+      ...q("Q6", "At [Q5 ANSWER] years old, how often do you buy [INSERT Q4]?", ["Weekly", "Monthly", "Less often"]),
+      "Q7. Any other comments about {Q4}?"],
+  },
+  {
+    file: "10-informal-instructions.docx", covers: "the same behaviours written informally: previous question, mask out, use the same list, repeat for every brand, pipe in — and one instruction no rule reads",
+    items: [{ p: "Informal programming notes", style: "Title" },
+      ...q("Q1", "Which supermarkets do you shop at? Select all", [[1, "Tesco"], [2, "Sainsbury's"], [3, "Asda"], [4, "Aldi"], [5, "Lidl"]]),
+      ...q("Q2", "And which of these is your main supermarket?", [], ["Programmer: only show the supermarkets they picked in the previous question"]),
+      ...q("Q3", "Which of these supermarkets would you never use? Select all", [], ["Mask out whatever they chose in Q1"]),
+      ...q("Q4", "How would you rate [SUPERMARKET] overall?", ["Excellent", "Good", "Fair", "Poor"], ["Repeat this question for every supermarket selected in Q1"]),
+      ...q("Q5", "Which supermarket would you recommend? Select all", [], ["Use the same answer list as Q1"]),
+      ...q("Q6", "What do you like most about [INSERT Q2 RESPONSE]?", []),
+      ...q("Q7", "Which of these would you like to see near you?", [], ["Only show the supermarkets they like"])],
+  },
 ];
 
 for (const c of CASES) writeFileSync(join(WORD, c.file), wordDocFixture(c.items));

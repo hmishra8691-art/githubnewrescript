@@ -244,3 +244,42 @@ const entry = (id, name, lang = "EN") => ({ SurveyID: id, SurveyName: name, Surv
 }
 
 console.log(`wrote the QSF corpus to ${OUT}`);
+
+/* ------------------------------------------------------------ 05 dynamic lists (2026-11-02)
+ * Carry forward with recode values onto a question with NO choices of its own (what Qualtrics exports for a pure
+ * carry-forward), masking (unselected), a carried list carried again, conditions on carried choices (x-prefixed
+ * locators), nested AND / OR display logic, a loop over a carried list with the loop field piped, choice-label and
+ * embedded-data piping, a branch to a screen-out with a redirect.
+ */
+{
+  const S = "SV_dynamic05";
+  const xsel = (qid, choice, op = "Selected", conj) => ({ LogicType: "Question", QuestionID: qid, QuestionIsInLoop: "no", ChoiceLocator: `q://${qid}/SelectableChoice/${choice}`, Operator: op, QuestionIDFromLocator: qid, LeftOperand: `q://${qid}/SelectableChoice/${choice}`, Type: "Expression", Description: `${qid} ${choice} ${op}`, ...(conj ? { Conjuction: conj } : {}) });
+  const qsf = {
+    SurveyEntry: entry(S, "Dynamic lists"),
+    SurveyElements: [
+      { SurveyID: S, Element: "BL", PrimaryAttribute: "Survey Blocks", SecondaryAttribute: null, TertiaryAttribute: null, Payload: [
+        block("BL_funnel", "Funnel", ["QID1", "|", "QID2", "|", "QID3", "|", "QID4", "|", "QID5"], {}, "Default"),
+        block("BL_loop", "Per brand bought", ["QID6", "QID7"], { Looping: "Question", LoopingOptions: { QID: "QID2", ChoiceLocator: "q://QID2/ChoiceGroup/SelectedChoices", Randomization: "None" } }),
+        block("BL_close", "Close", ["QID8"]),
+      ] },
+      { SurveyID: S, Element: "FL", PrimaryAttribute: "Survey Flow", SecondaryAttribute: null, TertiaryAttribute: null, Payload: { Type: "Root", FlowID: "FL_1", Flow: [
+        { Type: "EmbeddedData", FlowID: "FL_2", EmbeddedData: [{ Description: "panel", Type: "Recipient", Field: "panel", VariableType: "String", Value: "" }] },
+        { Type: "Block", ID: "BL_funnel", FlowID: "FL_3" },
+        { Type: "Branch", FlowID: "FL_4", Description: "Aware of none", BranchLogic: { 0: { 0: xsel("QID1", "5"), Type: "If" }, Type: "BooleanExpression" }, Flow: [{ Type: "EndSurvey", FlowID: "FL_5", Options: { Advanced: "true", SurveyTermination: "Redirect", EOSRedirectURL: "https://panel.example.com/screenout?pid=${e://Field/panel}", ScreenOutResponse: "true" } }] },
+        { Type: "Block", ID: "BL_loop", FlowID: "FL_6" },
+        { Type: "Block", ID: "BL_close", FlowID: "FL_7" },
+        { Type: "EndSurvey", FlowID: "FL_8" },
+      ], Properties: { Count: 8 } } },
+      sq(S, "QID1", { QuestionText: "Which of these brands are you aware of?", DataExportTag: "aware", QuestionType: "MC", Selector: "MAVR", SubSelector: "TX", Choices: choices(["Alpha", "Beta", "Gamma", "Delta", "None of these"], { 5: { ExclusiveAnswer: true } }), ChoiceOrder: order(5), RecodeValues: { 1: "10", 2: "20", 3: "30", 4: "40", 5: "99" }, Validation: req("MinChoices", { MinChoices: "1" }) }),
+      sq(S, "QID2", { QuestionText: "Which of the brands you know have you bought?", DataExportTag: "bought", QuestionType: "MC", Selector: "MAVR", SubSelector: "TX", Choices: {}, ChoiceOrder: [], DynamicChoices: { Locator: "q://QID1/SelectedChoices", Type: "SelectedChoices" }, DisplayLogic: { 0: { 0: xsel("QID1", "5", "NotSelected"), Type: "If" }, Type: "BooleanExpression", inPage: false }, Validation: req("MinChoices", { MinChoices: "1" }) }),
+      sq(S, "QID3", { QuestionText: "Which of the brands you know have you NOT bought?", DataExportTag: "notbought", QuestionType: "MC", Selector: "MAVR", SubSelector: "TX", Choices: {}, ChoiceOrder: [], DynamicChoices: { Locator: "q://QID2/UnselectedChoices", Type: "UnselectedChoices" }, Validation: opt() }),
+      sq(S, "QID4", { QuestionText: "Which one is your main brand?", DataExportTag: "main", QuestionType: "MC", Selector: "SAVR", SubSelector: "TX", Choices: {}, ChoiceOrder: [], DynamicChoices: { Locator: "q://QID2/SelectedChoices", Type: "SelectedChoices" }, DisplayLogic: { 0: { 0: xsel("QID2", "x1"), 1: xsel("QID1", "2", "Selected", "Or"), 2: xsel("QID1", "3", "Selected", "And"), Type: "If" }, Type: "BooleanExpression", inPage: false }, Validation: req() }),
+      sq(S, "QID5", { QuestionText: "Why is ${q://QID4/ChoiceGroup/SelectedChoices} your main brand? (panel ${e://Field/panel})", DataExportTag: "why", QuestionType: "TE", Selector: "ML", Validation: opt() }),
+      sq(S, "QID6", { QuestionText: "How satisfied are you with ${lm://Field/1}?", DataExportTag: "sat", QuestionType: "MC", Selector: "SAHR", SubSelector: "TX", Choices: choices(["Very dissatisfied", "Dissatisfied", "Satisfied", "Very satisfied"]), ChoiceOrder: order(4), Validation: req() }),
+      sq(S, "QID7", { QuestionText: "What would make ${lm://Field/1} better?", DataExportTag: "better", QuestionType: "TE", Selector: "SL", Validation: opt() }),
+      sq(S, "QID8", { QuestionText: "Which would you recommend?", DataExportTag: "rec", QuestionType: "MC", Selector: "SAVR", SubSelector: "TX", Choices: { 1: { Display: "${q://QID4/ChoiceGroup/SelectedChoices} (your main brand)" }, 2: { Display: "Another brand" } }, ChoiceOrder: [1, 2], Validation: req() }),
+      ...extras(S),
+    ],
+  };
+  writeFileSync(join(OUT, "05-dynamic-lists.qsf"), JSON.stringify(qsf, null, 1));
+}

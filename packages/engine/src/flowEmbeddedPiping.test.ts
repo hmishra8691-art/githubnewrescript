@@ -417,3 +417,17 @@ test("Intelligent Mode may create Embedded Data fields with the new auto / list 
   }
   assert.equal(coerceSurveyActions([{ op: "update_embedded", name: "ZIP", dataType: "zipcode" }]).rejected.length, 1, "an unknown type is still refused");
 });
+
+test("an end node's redirect pipes embedded data when the interview ends there (imported panel returns)", () => {
+  const def = survey([[{ name: "panel", source: "url" }]]);
+  def.flow = [...def.flow.filter((n) => n.type !== "end"), { type: "end", id: "done", status: "complete", redirectUrl: "https://panel.example.com/c?pid={{ed.panel}}&q={{Q2}}" }] as never;
+  const s = createResponseState(def, { embedded: { panel: "p 7&x" } });
+  let nav = start(def, s);
+  for (let i = 0; i < 6 && !nav.done; i++) {
+    const step = nav.steps[nav.stepIndex];
+    for (const id of step?.kind === "page" ? step.questionIds : []) s.answers[id] = id === "q2" ? 2 : "Ann";
+    nav = advance(def, s);
+  }
+  assert.equal(nav.done, true);
+  assert.equal(nav.redirectUrl, "https://panel.example.com/c?pid=p%207%26x&q=Ben%20%26%20Jerry");
+});

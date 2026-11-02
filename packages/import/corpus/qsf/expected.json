@@ -336,6 +336,8 @@
       "The survey passes the quality check.",
       "Of 45 source elements checked, 38 came across as they were, 2 with a change, 5 could not be reproduced (84.4% as-is).",
       "The source's dependency check found 2 problems in the original survey: 2 missing reference.",
+      "Dynamic behaviour: 3 relationships rebuilt natively (carried lists, masks, loops, piping), 1 to confirm.",
+      "2 decisions the source left open need your answer before the logic is complete — each has a recommended answer.",
       "2 references point at something that is not in the imported survey."
     ]
   },
@@ -573,6 +575,7 @@
       "Question types: 20 native, 7 rebuilt from Studio components, 1 needing their custom script reviewed, 1 with no equivalent (placeholders).",
       "The source's dependency check found 2 problems in the original survey: 1 broken branch, 1 unreachable.",
       "2 custom scripts read, none run: 2 need a person.",
+      "Dynamic behaviour: 3 relationships rebuilt natively (carried lists, masks, loops, piping), 1 to confirm.",
       "2 images are still hosted by Qualtrics or named only by a library id — re-upload them here.",
       "Translations in es, fr were imported for review."
     ]
@@ -739,6 +742,166 @@
       "Of 182 source elements checked, 169 came across as they were, 12 with a change, 1 could not be reproduced (92.9% as-is).",
       "Question types: 107 native, 12 rebuilt from Studio components, 1 needing their custom script reviewed, 1 needing a feature Rescript does not have.",
       "1 custom script read, none run: 1 reproduced by a native setting."
+    ]
+  },
+  "05-dynamic-lists.qsf": {
+    "file": "05-dynamic-lists.qsf",
+    "ok": true,
+    "title": "Dynamic lists",
+    "detected": {
+      "questions": 8,
+      "blocks": 3,
+      "pages": 7,
+      "pageBreaks": 4,
+      "embeddedFields": 1,
+      "hiddenVariables": 0,
+      "displayLogic": 2,
+      "skipLogic": 0,
+      "branches": 1,
+      "randomizers": 0,
+      "loops": 1,
+      "quotas": 0,
+      "customLogic": 0,
+      "validations": 2
+    },
+    "created": {
+      "questions": 8,
+      "blocks": 3,
+      "pages": 7,
+      "pageBreaks": 4,
+      "embeddedFields": 1,
+      "hiddenVariables": 0,
+      "displayLogic": 2,
+      "skipLogic": 0,
+      "branches": 1,
+      "randomizers": 0,
+      "loops": 1,
+      "quotas": 0,
+      "customLogic": 0,
+      "validations": 2
+    },
+    "fidelity": {
+      "totals": {
+        "detected": 20,
+        "imported": 20,
+        "partial": 0,
+        "unsupported": 0
+      },
+      "importedPct": 100,
+      "features": {
+        "question": {
+          "detected": 8,
+          "imported": 8,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "validation": {
+          "detected": 2,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "display_logic": {
+          "detected": 2,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "branch": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "loop": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "embedded": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "carry_forward": {
+          "detected": 3,
+          "imported": 3,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "piping": {
+          "detected": 2,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 0
+        }
+      },
+      "unresolved": [],
+      "assets": [],
+      "languages": [],
+      "elements": [
+        "BL:1:read",
+        "FL:1:read",
+        "SQ:8:read",
+        "PROJ:1:ignored",
+        "STAT:1:ignored",
+        "RS:1:ignored",
+        "QC:1:ignored"
+      ]
+    },
+    "quality": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "risks": {
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "verification": {
+      "ok": true,
+      "structure": {
+        "checked": 11,
+        "ok": 11,
+        "errors": [],
+        "warnings": 0
+      },
+      "runtime": {
+        "placed": 8,
+        "reached": 8,
+        "unreachable": [],
+        "unanswerable": [],
+        "errors": [],
+        "endStatuses": [
+          "complete"
+        ],
+        "walks": [
+          "deepest:10p/14q→complete",
+          "first:7p/8q→complete",
+          "last:6p/7q→complete",
+          "random:6p/7q→complete",
+          "random:7p/8q→complete",
+          "random:6p/7q→complete",
+          "random:7p/8q→complete",
+          "random:6p/7q→complete"
+        ]
+      },
+      "analysis": {
+        "variablesKept": 8,
+        "variablesRenamed": [],
+        "codesKept": 11,
+        "codesChanged": [],
+        "rowsKept": 0
+      }
+    },
+    "summary": [
+      "I imported your Qualtrics survey (QSF) into Rescript — “Dynamic lists”.",
+      "Created 8 questions, 3 blocks, 4 page breaks, 1 embedded variable, 2 display logic rules, 1 branch, 1 loop, 2 validation rules.",
+      "The survey passes the quality check.",
+      "Of 20 source elements checked, 20 came across as they were (100% as-is).",
+      "Dynamic behaviour: 6 relationships rebuilt natively (carried lists, masks, loops, piping)."
     ]
   }
 }
