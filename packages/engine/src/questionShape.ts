@@ -73,6 +73,8 @@ const AXIS_FEATURE: Record<QuestionAxis, string> = { options: "Option", rows: "R
 const SETTING_GROUPS = {
   selection_count: ["minSelections", "maxSelections"],
   other_specify: ["otherSpecifyOptional"],
+  /* "I don't know" beside the answer (dontKnow.ts) — kept across text ↔ number conversions, dropped elsewhere */
+  dont_know: ["dontKnow", "dontKnowLabel"],
   numeric_bounds: ["minValue", "maxValue", "step"],
   scale_labels: ["npsLeftLabel", "npsRightLabel", "sliderLeftLabel", "sliderRightLabel"],
   sum: ["sumTarget", "sumUnit", "chipValue"],
@@ -128,6 +130,7 @@ const UNIVERSAL_SETTINGS: readonly string[] = [
 const SETTING_LABEL: Record<string, string> = {
   minSelections: "Minimum selections", maxSelections: "Maximum selections",
   otherSpecifyOptional: "Other-specify optional",
+  dontKnow: "“I don't know” choice", dontKnowLabel: "“I don't know” label",
   minValue: "Minimum value", maxValue: "Maximum value", step: "Step",
   npsLeftLabel: "Left-end label", npsRightLabel: "Right-end label",
   sliderLeftLabel: "Left-end label", sliderRightLabel: "Right-end label",
@@ -194,12 +197,12 @@ export const SHAPES: Record<ResponseModel, ShapeSpec> = {
   text: {
     label: "text",
     axes: [],
-    groups: ["speech", "date_window", "placeholder"],
+    groups: ["speech", "date_window", "placeholder", "dont_know"],
   },
   numeric: {
     label: "a number",
     axes: [],
-    groups: ["numeric_bounds", "scale_labels", "range_pair", "slider_layout", "placeholder", "number_input"],
+    groups: ["numeric_bounds", "scale_labels", "range_pair", "slider_layout", "placeholder", "number_input", "dont_know"],
   },
   fields: {
     label: "a list of fields",

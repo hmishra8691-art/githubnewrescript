@@ -1,3 +1,4 @@
+import { dontKnowEnabled, responseStatus } from "./dontKnow.js";
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { isCascading, cascadeParentOf, CASCADE_PARENT_SUFFIX } from "./cascade.js";
 import { isQuiz, quizCorrectValue } from "./quizKey.js";
@@ -145,6 +146,15 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
       const parent = cascadeParentOf(q, state.answers[q.id]);
       if (parent !== null) out[`${q.variableName}_PARENT`] = parent;
       placed.add(`${q.id}${CASCADE_PARENT_SUFFIX}`);
+    }
+
+    /*
+     * "I don't know" (dontKnow.ts): VAR_DK = 1 when chosen, 0 when the question was answered, blank when neither —
+     * the answer column itself never holds the choice. Only on a question that offers it, so no other export grows.
+     */
+    if (dontKnowEnabled(q)) {
+      const status = responseStatus(state, q, null);
+      if (status !== "unanswered") out[`${q.variableName}_DK`] = status === "dont_know" ? 1 : 0;
     }
 
     // a rating's optional comment: `<id>__comment` → VAR_COMMENT (Video Rating, "Allow Additional Comment")

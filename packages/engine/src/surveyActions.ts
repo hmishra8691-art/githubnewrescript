@@ -2,6 +2,8 @@ import type { AnalysisPlan, Condition, FlowNode, OptionMask, Question, SurveyDef
 import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema, effectiveResponseModel, questionSettingField } from "@rescript/schema";
 import { forEachRule, isConditionNode } from "./conditionWalk.js";
 import { canonicalizeCondition } from "./optionCodes.js";
+import { looksLikeOtherSpecify } from "./otherSpecify.js";
+import { linkHypothesisConstructs, describeLinks, resolveConstructReview } from "./researchLinks.js";
 import { createQuestionFromVariant } from "./questionCreate.js";
 import { defaultIds, removeQuestion, type IdMinter } from "./questionOps.js";
 import { listBlocks, listPages } from "./blocks.js";
@@ -134,6 +136,12 @@ export type SurveyAction =
   | { op: "set_research"; strict?: boolean; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];
       /** Phase 3: the questions the research answers, the KPIs it reports, who it is written for */
       researchQuestions?: string[]; kpis?: { name: string; variable?: string; measure?: string; target?: string; direction?: "higher" | "lower" }[]; audience?: { description: string; characteristics?: string[]; literacy?: "plain" | "general" | "expert"; tone?: string; language?: string } ; /** Phase 8: the project brief — merged into the one recorded, field by field */ brief?: { client?: string; businessQuestion?: string; decision?: string; background?: string; stakeholders?: string[]; deadline?: string; deliverables?: string[] } }
+  /**
+   * 2026-11-02 (researchLinks.ts): the hypotheses' constructs and the questions that measure them — for one
+   * hypothesis (`hypothesis`: H2, 2, or its text) or every one; `review` answers one possible link a person was
+   * asked about (link it, or dismiss it for good).
+   */
+  | { op: "link_constructs"; hypothesis?: string; review?: { construct: string; question: string; decision: "link" | "dismiss" } }
   /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
   | { op: "add_punch"; target: string; when?: CondInput; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
   | { op: "remove_punches"; target: string; id?: string }
@@ -164,7 +172,7 @@ export type SurveyAction =
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
   "set_display_logic", "add_skip", "clear_skips", "set_validation", "page_break", "create_embedded", "create_calculation",
-  "create_randomizer", "set_randomizer", "create_branch", "create_loop", "set_research", "add_punch", "remove_punches",
+  "create_randomizer", "set_randomizer", "create_branch", "create_loop", "set_research", "link_constructs", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
@@ -439,6 +447,16 @@ function coerceOne(item: unknown): SurveyAction | string {
       const brief = briefFields && Object.keys(briefFields).length ? briefFields : undefined;
       return { op, ...(typeof o.strict === "boolean" ? { strict: o.strict } : {}), ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(Number.isInteger(Number(o.sampleSize)) && Number(o.sampleSize) > 0 ? { sampleSize: Number(o.sampleSize) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}), ...(strs(o.researchQuestions) ? { researchQuestions: strs(o.researchQuestions) } : {}), ...(kpis ? { kpis } : {}), ...(audience ? { audience } : {}), ...(brief ? { brief } : {}) };
     }
+    case "link_constructs": {
+      const hyp = o.hypothesis ?? o.label ?? o.index;
+      const rv = o.review && typeof o.review === "object" ? (o.review as Record<string, unknown>) : null;
+      if (rv) {
+        const construct = str(rv.construct), question = str(rv.question ?? rv.target), decision = rv.decision === "link" || rv.decision === "dismiss" ? rv.decision : undefined;
+        if (!construct || !question || !decision) return "link_constructs review needs construct, question and decision (link or dismiss)";
+        return { op, review: { construct, question, decision } };
+      }
+      return { op, ...(typeof hyp === "string" || typeof hyp === "number" ? { hypothesis: String(hyp).slice(0, 1000) } : {}) };
+    }
     default: {
       const ux = op ? coerceUxAction(op, o) : null;
       if (ux !== null) return ux;
@@ -562,7 +580,7 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   // …and translations name the question texts as they will be: last of all
   // …and a hypothesis's own actions read the list set_research writes (research intelligence, 2026-10-17: "set_hypothesis per
   // hypothesis" beside set_research in one generation ran first and was refused — "the research design has no hypotheses")
-  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : HYPOTHESIS_OPS.has(a.op) ? 2.5 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) || isListFillOp(a.op) || isAssessmentOp(a.op) ? 0.5 : 0);
+  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : HYPOTHESIS_OPS.has(a.op) ? 2.5 : a.op === "link_constructs" ? 2.6 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) || isListFillOp(a.op) || isAssessmentOp(a.op) ? 0.5 : 0);
   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
@@ -1085,7 +1103,8 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         // the planned sample bounds the analysis plan (analysisFramework.expectedSample)
         ...((a.sampleSize ?? prev?.sampleSize) ? { sampleSize: a.sampleSize ?? prev?.sampleSize } : {}),
         methodology: a.methodology ?? prev?.methodology,
-        constructs: a.constructs ? a.constructs.map((c) => ({ name: c.name, role: (ROLES.has(String(c.role)) ? c.role : "descriptive") as never, ...(c.definition ? { definition: c.definition } : {}), questionIds: map(c.questions) })) : prev?.constructs ?? [],
+        /* a construct given again by name keeps what a person dismissed from its review list (researchLinks.ts) */
+        constructs: a.constructs ? a.constructs.map((c) => { const was = prev?.constructs?.find((x) => x.name.trim().toLowerCase() === c.name.trim().toLowerCase()); return { name: c.name, role: (ROLES.has(String(c.role)) ? c.role : "descriptive") as never, ...(c.definition ? { definition: c.definition } : {}), questionIds: map(c.questions), ...(was?.dismissed?.length ? { dismissed: was.dismissed } : {}), ...(was?.origin ? { origin: was.origin } : {}) }; }) : prev?.constructs ?? [],
         analysis: a.analysis ?? prev?.analysis ?? [],
         assumptions: a.assumptions ?? prev?.assumptions ?? [],
         sources: a.sources ?? prev?.sources ?? [],
@@ -1106,7 +1125,34 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         ...((a.strict ?? prev?.strict) !== undefined ? { strict: a.strict ?? prev?.strict } : {}),
         updatedAt: ctx.now,
       } as never;
-      return { description: `Research design: ${[a.strict === true ? "enforced (research gaps are blockers)" : a.strict === false ? "no longer enforced" : "", a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : "", a.researchQuestions?.length ? `${a.researchQuestions.length} research question${a.researchQuestions.length === 1 ? "" : "s"}` : "", a.kpis?.length ? `${a.kpis.length} KPI${a.kpis.length === 1 ? "" : "s"}` : "", a.audience ? "audience" : "", a.population ? "population" : "", a.brief ? `brief (${Object.keys(a.brief).map((k) => BRIEF_WORDS[k] ?? k).join(", ")})` : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
+      /*
+       * The hypotheses' constructs and the questions that measure them, in this same change (researchLinks.ts) —
+       * what the design named is kept, the sides it did not name are created, and the questions are matched.
+       */
+      const links = a.hypotheses || a.constructs ? linkHypothesisConstructs(def, { now: ctx.now }) : null;
+      const linkWords = links ? describeLinks(links) : "";
+      if (links) for (const x of links.review) ctx.uxWarnings.push(`${x.question} may measure “${x.construct}” (${x.why}) — not linked; confirm it in the research design.`);
+      return { description: `Research design: ${[a.strict === true ? "enforced (research gaps are blockers)" : a.strict === false ? "no longer enforced" : "", a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : "", a.researchQuestions?.length ? `${a.researchQuestions.length} research question${a.researchQuestions.length === 1 ? "" : "s"}` : "", a.kpis?.length ? `${a.kpis.length} KPI${a.kpis.length === 1 ? "" : "s"}` : "", a.audience ? "audience" : "", a.population ? "population" : "", a.brief ? `brief (${Object.keys(a.brief).map((k) => BRIEF_WORDS[k] ?? k).join(", ")})` : ""].filter(Boolean).join(", ") || "updated"}${linkWords ? ` — ${linkWords}` : ""}`, touched: links?.linked.map((l) => l.questionId) ?? [] };
+    }
+    case "link_constructs": {
+      /* "link the constructs" / the research design's Link button: the same pass, on demand, for one hypothesis or all */
+      const r = def.research;
+      if (!r?.hypotheses.length) fail("the research design has no hypotheses to link — add one first");
+      let only: number[] | undefined;
+      if (a.hypothesis !== undefined) {
+        const m = /^H?(\d+)$/i.exec(String(a.hypothesis).trim());
+        const k = m ? Number(m[1]) - 1 : r!.hypotheses.findIndex((h) => h.trim().toLowerCase() === String(a.hypothesis).trim().toLowerCase());
+        if (k < 0 || k >= r!.hypotheses.length) fail(`there is no hypothesis “${a.hypothesis}” — the hypotheses are ${r!.hypotheses.map((_, j) => `H${j + 1}`).join(", ")}`);
+        only = [k];
+      }
+      if (a.review) {
+        const ok = resolveConstructReview(def, a.review.construct, tryQuestion(ctx, a.review.question)?.id ?? a.review.question, a.review.decision);
+        if (!ok) fail(`“${a.review.construct}” has no possible link to ${a.review.question} to ${a.review.decision}`);
+        return { description: `${a.review.decision === "link" ? "Linked" : "Dismissed"} ${a.review.question} ${a.review.decision === "link" ? "to" : "for"} the construct “${a.review.construct}”`, touched: [] };
+      }
+      const links = linkHypothesisConstructs(def, { ...(only ? { hypotheses: only } : {}), now: ctx.now });
+      for (const x of links.review) ctx.uxWarnings.push(`${x.question} may measure “${x.construct}” (${x.why}) — not linked; confirm it in the research design.`);
+      return { description: `Linked ${only ? `H${only[0] + 1}` : "every hypothesis"} to its constructs and their questions: ${describeLinks(links) || "nothing new"}`, touched: links.linked.map((l) => l.questionId) };
     }
     case "add_punch": {
       /*
@@ -1524,12 +1570,12 @@ function mirrorBounds(q: Question): void {
 function applyVariantSettings(q: Question, patch: Record<string, unknown>): string[] {
   const v = q.variant ? variantRegistry.get(q.variant) : undefined;
   /* S2b: the registry decides (capabilityRegistry.settingProblem) — declared, capability, family and universal keys, each value against the schema field and the bounds */
-  const bad = Object.keys(patch).filter((k) => !settableSettings(q.variant).includes(k));
-  if (bad.length) fail(`${q.code} (${v?.name ?? q.type}) has no setting ${bad.join(", ")} an action can set — its settings are ${settableSettings(q.variant).join(", ")}`);
+  const bad = Object.keys(patch).filter((k) => !settableSettings(q.variant, q.type).includes(k));
+  if (bad.length) fail(`${q.code} (${v?.name ?? q.type}) has no setting ${bad.join(", ")} an action can set — its settings are ${settableSettings(q.variant, q.type).join(", ")}`);
   const done: string[] = [];
   const settings = (q.settings ??= {} as typeof q.settings) as Record<string, unknown>;
   for (const [k, val] of Object.entries(patch)) {
-    const why = settingProblem(q.variant, k, val);
+    const why = settingProblem(q.variant, k, val, q.type);
     if (why) fail(`${q.code}: ${why}`);
     settings[k] = val;
     done.push(`${k} ${typeof val === "object" ? JSON.stringify(val) : val}`);
@@ -1591,7 +1637,8 @@ function buildOptions(specs: OptionSpec[], existing: { code: string | number; la
     used.add(String(code));
     const flags: string[] = [];
     const exclusive = o.exclusive ?? /^(?:none|none of (?:the above|these)|don'?t know|prefer not to (?:say|answer)|not applicable|n\/a)\b/i.test(o.label);
-    const other = o.other ?? /^other\b.*\b(?:specify|please)|^other\s*\(/i.test(o.label);
+    /* the same reading as every other place an option is made from words (otherSpecify.ts) */
+    const other = o.other ?? looksLikeOtherSpecify(o.label);
     if (exclusive) flags.push("exclusive");
     if (other) flags.push("other_specify");
     if (o.anchor || exclusive || other) flags.push("anchor_bottom");
@@ -1680,6 +1727,7 @@ export function describeAction(a: SurveyAction): string {
     case "create_branch": return `Show ${a.blocks.join(", ")} only when ${condWords(a.when)}${a.arms?.length ? ` (+${a.arms.length} more arm${a.arms.length === 1 ? "" : "s"})` : ""}`;
     case "create_loop": return `Loop ${a.from}${a.to !== a.from ? `–${a.to}` : ""}`;
     case "set_research": return a.strict === true && Object.keys(a).length === 2 ? "Enforce the research design" : a.strict === false && Object.keys(a).length === 2 ? "Stop enforcing the research design" : a.brief && Object.keys(a).length === 2 ? `Record the project brief (${Object.keys(a.brief).map((k) => BRIEF_WORDS[k] ?? k).join(", ")})` : "Record the research design";
+    case "link_constructs": return a.review ? `${a.review.decision === "link" ? "Link" : "Dismiss"} ${a.review.question} ${a.review.decision === "link" ? "to" : "for"} “${a.review.construct}”` : `Link ${a.hypothesis ? `hypothesis ${a.hypothesis}` : "the hypotheses"} to their constructs and questions`;
     case "add_punch": return a.expression ? `Punch rule ${a.expression}` : `Punch ${a.target} when ${a.when ? condWords(a.when) : "otherwise"}`;
     case "remove_punches": return `Remove the punch rules of ${a.target}`;
     case "create_style": return `Style “${a.label}”`;

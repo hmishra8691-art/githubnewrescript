@@ -21,8 +21,8 @@ export const COPILOT_RESEARCH_GUIDE = `RESEARCH GUIDE — planning a study end t
 2 OBJECTIVES: ONE primary "objective"; the supporting objectives as "researchQuestions".
 3 HYPOTHESES: testable — a direction, an independent and a dependent construct (set_hypothesis records the reading). A descriptive aim needs none; qualitative work states propositions as researchQuestions, not hypotheses.
 4 METHODOLOGY: "methodology" names the design AND why it fits ("online survey, n=400, monadic concept test: a clean read per concept"); what you assumed goes in "assumptions".
-5 CONSTRUCTS: "constructs" with role independent / dependent / mediator / moderator / control (a confounder) — set_question_analysis links each question to its construct and hypotheses.
-6 INSTRUMENT: balanced, complete scales; None / Other / Don't know where an answer can fall outside the list; validation (ranges; analysis variables required); routing; quotas; randomisation (option order; monadic arms recorded by create_embedded in each block).
+5 CONSTRUCTS: "constructs" with role independent / dependent / mediator / moderator / control (a confounder) — set_question_analysis links each question to its construct and hypotheses. Recording a hypothesis already makes each side's missing construct and links the questions that certainly measure it.
+6 INSTRUMENT: balanced, complete scales; None / Other / Don't know where an answer can fall outside the list ("Other (please specify)" carries "other":true; on text / numbers Don't know is settings {"dontKnow":true}); validation (ranges; analysis variables required); routing; quotas; randomisation (option order; monadic arms recorded by create_embedded in each block).
 7 SAMPLING: "sampleSize" (or quotas) and its limits.
 8 ANALYSIS: one planned item per hypothesis carrying "hypotheses", chosen by the rules below; the engine picks each method's chart.
 9 The Studio then VALIDATES the study (blocking / warnings / recommendations) and builds its TRACEABILITY matrix (objective → hypothesis → construct → questions → variables → analysis → chart → interpretation → limitations). Never claim either passes.

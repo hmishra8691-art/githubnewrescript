@@ -18,6 +18,7 @@ import { conjointMethodOf, dualKey, DUAL_SUFFIX, isDualKey } from "./conjointSui
 import { shapeHasAxis } from "./questionShape.js";
 import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnswer } from "./interview.js";
 import { isEmptyAnswer } from "./answers.js";
+import { dontKnowEnabled, dontKnowKey } from "./dontKnow.js";
 import { escapeHtml, sanitizeHtml } from "./html.js";
 import { validationBounds } from "./scale.js";
 import { checkPhone, checkPostal, checkUrl, isValidEmail, phoneCountryFor } from "./formats.js";
@@ -492,6 +493,18 @@ export function validateQuestion(
       ...extra,
     });
   };
+
+  /*
+   * "I DON'T KNOW" (dontKnow.ts). Chosen with no answer, it IS the answer: required is met, and the value checks
+   * (minimum, maximum, integer, decimals, length, format) have nothing to check. Chosen WITH an answer — which no
+   * engine writer produces, so only a crafted submission or an old client — is refused: the two are exclusive.
+   * Off (or not offered on this type), the stored key is ignored and the question validates as it always did.
+   */
+  if (dontKnowEnabled(q) && ctx.state) {
+    const dk = (ctx.state.answers as Record<string, unknown>)[dontKnowKey(q.id, ctx.loop ?? null)] === true;
+    if (dk && isEmpty(value)) return errors;
+    if (dk) push(uiText(ctx.ui, "dont_know_conflict"));
+  }
 
   /*
    * Implicit required — but never on a question the respondent cannot answer.

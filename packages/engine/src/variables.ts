@@ -1,3 +1,4 @@
+import { dontKnowEnabled } from "./dontKnow.js";
 import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescript/schema";
 import { questionZooms, zoomParadataKey } from "./mediaZoom.js";
 import { beforeAfterKeys } from "./beforeAfter.js";
@@ -659,6 +660,12 @@ export function questionVariables(
     const parents = ((q.settings as { cascadeParents?: { code: string | number; label: string }[] }).cascadeParents ?? []);
     push({ name: `${q.variableName}_PARENT`, label: `${q.code} — ${(q.settings as { cascadeParentLabel?: string }).cascadeParentLabel ?? "parent"}`, dataType: typeof parents[0]?.code === "number" ? "numeric" : "text", derived: true,
       notes: `The first list's choice the answer belongs to: ${parents.slice(0, 8).map((p) => `${p.code} = ${p.label}`).join(", ")}${parents.length > 8 ? ", …" : ""}` });
+  }
+  /* "I don't know" beside an open-text or numeric answer (dontKnow.ts): its own 0/1 column, the answer column untouched */
+  if (dontKnowEnabled(q)) {
+    push({ name: `${q.variableName}_DK`, label: `${q.code} — don't know`, dataType: "numeric", valueCodes: [0, 1],
+      valueLabels: { "0": "Answered", "1": "Don't know" }, derived: true,
+      notes: `1 = the respondent chose “${q.settings.dontKnowLabel ?? "I don't know"}” (${q.variableName} is then empty); 0 = they answered; blank = not asked or left unanswered` });
   }
   /* a rating's optional comment ("Allow Additional Comment" — Video Rating, October 2026 review) */
   if (q.settings?.allowComment) {

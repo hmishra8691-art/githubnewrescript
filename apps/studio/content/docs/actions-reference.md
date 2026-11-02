@@ -6,7 +6,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 ## The operations
 
-**Survey** (30): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `set_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
+**Survey** (31): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `set_randomizer`, `create_branch`, `create_loop`, `set_research`, `link_constructs`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
 **Options and design** (24): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`, `set_option_groups`, `set_timer`, `set_gamification`, `set_review_page`, `set_quality_settings`, `add_method_template`
 
@@ -64,6 +64,12 @@ export type SurveyAction =
   | { op: "set_research"; strict?: boolean; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];
       /** Phase 3: the questions the research answers, the KPIs it reports, who it is written for */
       researchQuestions?: string[]; kpis?: { name: string; variable?: string; measure?: string; target?: string; direction?: "higher" | "lower" }[]; audience?: { description: string; characteristics?: string[]; literacy?: "plain" | "general" | "expert"; tone?: string; language?: string } ; /** Phase 8: the project brief — merged into the one recorded, field by field */ brief?: { client?: string; businessQuestion?: string; decision?: string; background?: string; stakeholders?: string[]; deadline?: string; deliverables?: string[] } }
+  /**
+   * 2026-11-02 (researchLinks.ts): the hypotheses' constructs and the questions that measure them — for one
+   * hypothesis (`hypothesis`: H2, 2, or its text) or every one; `review` answers one possible link a person was
+   * asked about (link it, or dismiss it for good).
+   */
+  | { op: "link_constructs"; hypothesis?: string; review?: { construct: string; question: string; decision: "link" | "dismiss" } }
   /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
   | { op: "add_punch"; target: string; when?: CondInput; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
   | { op: "remove_punches"; target: string; id?: string }

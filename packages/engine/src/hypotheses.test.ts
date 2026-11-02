@@ -97,9 +97,13 @@ test("set_hypothesis records a reading; add and remove keep the readings aligned
   // the same again changes nothing
   const same = applySurveyActions(a.def, [{ op: "set_hypothesis", hypothesis: "H1", detail: { direction: "positive" } }] as never);
   assert.ok(!same.results[0].ok && /already reads that way/.test(same.results[0].error ?? ""));
-  // a capitalised single word that is no construct is refused with the list
-  const bad = applySurveyActions(def, [{ op: "set_hypothesis", hypothesis: 2, detail: { dependent: "Happiness" } }] as never);
-  assert.ok(!bad.results[0].ok && /no construct “Happiness”/.test(bad.results[0].error ?? ""), bad.results[0].error);
+  // 2026-11-02 (researchLinks.ts): a side naming a construct the design does not have yet CREATES it, in the same change…
+  const made = apply(def, [{ op: "set_hypothesis", hypothesis: 2, detail: { dependent: "Happiness" } }]);
+  assert.ok(made.def.research!.constructs.some((c) => c.name === "Happiness" && c.role === "dependent" && c.origin === "hypothesis"), "the construct is made from the side");
+  assert.match(made.results[0].description, /constructs? created: .*Happiness/);
+  // …while a near-miss of an existing construct's name is refused, naming the one it probably meant
+  const bad = applySurveyActions(def, [{ op: "set_hypothesis", hypothesis: 2, detail: { dependent: "Prise perception" } }] as never);
+  assert.ok(!bad.results[0].ok && /did you mean “Price perception”/.test(bad.results[0].error ?? ""), bad.results[0].error);
   // a phrase in words is kept as words
   const words = apply(def, [{ op: "set_hypothesis", hypothesis: 2, detail: { dependent: "overall happiness with the brand" } }]);
   assert.equal(words.def.research!.hypothesisDetails[1].dependent, "overall happiness with the brand");

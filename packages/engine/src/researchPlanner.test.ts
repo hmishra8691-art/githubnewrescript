@@ -91,12 +91,27 @@ test("the workflow from one objective: every step done, ready, asked or the mode
   assert.match(researchWorkflow(def).summary, /next: Structured hypotheses \(the model is asked \(large call\)\)/);
   assert.deepEqual(modelSteps(researchWorkflow(def)).map((m) => [m.id, m.tier]), [["hypotheses", "large"]]);
   def = apply(def, [{ op: "add_hypothesis", text: "Price perception drives switching" }, { op: "add_hypothesis", text: "Women are more satisfied than men" }] as SurveyAction[]);
-  // the readings parsed from the words are recorded by the engine
+  /*
+   * 2026-11-02 (researchLinks.ts): recording a hypothesis makes the constructs its sides name and links the
+   * questions that measure them IN THE SAME CHANGE — the framework the planner used to propose as a later step is
+   * already there: Price perception (Q6), Switching (Q4), Satisfaction (Q7), and Gender (Q2) from the groups of H2,
+   * whose answer options are recorded on the reading.
+   */
+  assert.deepEqual(def.research!.constructs.map((c) => [c.name, c.role, c.questionIds, c.origin]), [
+    ["Price perception", "independent", ["q6"], "hypothesis"],
+    ["Switching", "dependent", ["q4"], "hypothesis"],
+    ["Satisfaction", "dependent", ["q7"], "hypothesis"],
+    ["Gender", "independent", ["q2"], "hypothesis"],
+  ]);
+  assert.deepEqual(def.research!.hypothesisDetails[1].groupOptions, { questionId: "q2", higher: [2], lower: [1] });
+  assert.deepEqual(def.questions.find((q) => q.id === "q6")!.analysis?.hypotheses, ["H1"]);
+  assert.equal(def.questions.find((q) => q.id === "q2")!.analysis?.construct, "Gender");
+  // the type and direction read from the words are still the hypotheses step's to record
   s = stepOf(def, "hypotheses");
   assert.equal(s.status, "ready");
   assert.deepEqual(s.actions, [
     { op: "set_hypothesis", hypothesis: "H1", detail: { type: "causal", direction: "positive", independent: "Price perception", dependent: "switching" } },
-    { op: "set_hypothesis", hypothesis: "H2", detail: { type: "difference", direction: "positive", dependent: "satisfied", group: "women", lower: "men" } },
+    { op: "set_hypothesis", hypothesis: "H2", detail: { type: "difference", direction: "positive", independent: "Gender", dependent: "satisfied", group: "women", lower: "men" } },
   ]);
   assert.match(s.why, /^H1 and H2 read from the words \(H1: causal, positive; H2: difference, positive\)/);
   def = apply(def, s.actions);
@@ -104,20 +119,11 @@ test("the workflow from one objective: every step done, ready, asked or the mode
   assert.equal(s.status, "done");
   assert.match(s.why, /2 hypotheses recorded with their readings \(H1: causal, H2: difference\)/);
 
-  // 4. framework: a construct per hypothesis side, named as a noun, each with the questions that already measure it
+  // 4. framework: every side already has its construct, each with the questions that measure it
   s = stepOf(def, "framework");
-  assert.equal(s.status, "ready");
-  assert.deepEqual(s.actions, [{ op: "set_research", constructs: [
-    { name: "Price perception", role: "independent", questions: ["Q6"] },
-    { name: "Switching", role: "dependent", questions: ["Q4"] },
-    { name: "Gender", role: "independent", questions: ["Q2"] },
-    { name: "Satisfaction", role: "dependent", questions: ["Q7"] },
-  ] }]);
-  assert.match(s.why, /4 constructs named by the hypotheses and not yet in the framework: Price perception \(independent, measured by Q6\), Switching \(dependent, measured by Q4\), Gender \(independent, measured by Q2\), Satisfaction \(dependent, measured by Q7\)/);
-  assert.equal(s.sentence, 'Add the constructs "Price perception", "Switching", "Gender" and "Satisfaction" to the research framework');
-  def = apply(def, s.actions);
-  assert.equal(stepOf(def, "framework").status, "done");
-  assert.equal(def.research!.constructs[3].questionIds[0], "q7");
+  assert.equal(s.status, "done");
+  assert.match(s.why, /4 constructs cover every hypothesis side \(Price perception · independent, Switching · dependent, Satisfaction · dependent, Gender · independent\)/);
+  assert.equal(def.research!.constructs.length, 4, "no construct is made twice");
 
   // 5–6. questionnaire: every construct measured; variables: nothing multi-item
   assert.equal(stepOf(def, "questionnaire").status, "done");

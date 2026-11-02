@@ -265,9 +265,12 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
         ...(cs.defaultValue !== undefined ? { defaultValue: cs.defaultValue } : {}),
         ...(cs.headerRepeat === "auto" || cs.headerRepeat === "off" || typeof cs.headerRepeat === "number" ? { headerRepeat: cs.headerRepeat } : {}),
         ...(cs.fieldLabelPosition === "left" || cs.fieldLabelPosition === "above" || cs.fieldLabelPosition === "right" ? { fieldLabelPosition: cs.fieldLabelPosition } : {}),
+        /* "I don't know" (engine dontKnow.ts): only where the source asked for it, and only on a type that can carry it */
+        ...(cs.dontKnow === true && (k.type === "open_text" || k.type === "long_text" || k.type === "numeric") ? { dontKnow: true, ...(typeof cs.dontKnowLabel === "string" && cs.dontKnowLabel ? { dontKnowLabel: cs.dontKnowLabel } : {}) } : {}),
       },
     };
     if (cq.instruction) q.instruction = cq.instruction;
+    if (cs.dontKnow === true && !(k.type === "open_text" || k.type === "long_text" || k.type === "numeric")) issues.push({ location: cq.sourceId, type: "converted", severity: "low", message: `${cq.variable} asks for a “don't know” choice, which Rescript offers natively on open-text and numeric questions only; on this ${k.type.replace(/_/g, " ")} question add a “Don't know” answer instead.`, autoAttempted: false, refs: [cq.sourceId] });
     if (cq.kind === "unknown") q.text = `<p><strong>Not migrated:</strong> ${cq.sourceType} question ${cq.sourceId} (“${plainText(cq.text).slice(0, 120)}”). Rebuild it here.</p>`;
     // options, with exclusive / other-specify / anchor flags; duplicate codes made unique
     const seenCodes = new Set<string>();

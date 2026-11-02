@@ -28,6 +28,12 @@ Hypotheses are labelled `H1`, `H2`… by position. Each has a structured reading
 
 In Intelligent mode: "set the research objective to …", "add hypothesis: …", "set the reading of H2: type difference, group women, lower men, dependent satisfaction", "set the target audience to first-time smartphone buyers", "which questions measure purchase intent?", "which questions are not connected to any hypothesis?", "what are the key hypotheses we can test?".
 
+### Constructs and questions are linked when a hypothesis is recorded
+
+Recording a hypothesis — "+ hypothesis" in Survey Settings, "add hypothesis: …" or a proposed design in Intelligent mode (`add_hypothesis`, `set_hypothesis`, `set_research`) — makes, in the same change, the construct each side of its reading names when the design has none (named as a noun: "satisfied" → Satisfaction; a difference between women and men → Gender), and links the questions that certainly measure each construct: the construct's `questionIds`, the question's `analysis.construct` (when it has none) and the hypothesis label in its `analysis.hypotheses`. "Certainly" means every meaningful word of the construct's name is in the question's text, variable name or rows (as the word or its family), or the question is already tagged with the construct. A difference between groups also records the question whose answer options define the groups and the codes on each side (`hypothesisDetails[i].groupOptions`).
+
+What is only possibly a match — some of the words, or a one-word construct that more than six questions mention — is listed under the construct ("Possibly measured by — not linked until you confirm") with **link** and **dismiss**; it is never counted as measuring the construct. A dismissed question is not suggested again. A question may measure several constructs, and a construct may serve several hypotheses. **link constructs** beside a hypothesis, **Link all constructs**, or "link the constructs" / "link H2 to its constructs" (`link_constructs`) runs the same pass again; it creates no duplicate construct and no duplicate link. A side that names something close to an existing construct ("Prise perception") is refused with the name it probably meant, rather than creating a second one.
+
 ## The analysis plan
 
 ```json

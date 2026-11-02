@@ -147,7 +147,8 @@ export interface SubmissionInput {
 }
 
 const FINAL = new Set(["complete", "screened", "quota_full", "terminated"]);
-const COMPANION = /__(other|voice|probe|comment|err|transcript)(__.*)?$/;
+/* `__dk`: the "I don't know" choice beside an open-text or numeric answer (dontKnow.ts) */
+const COMPANION = /__(other|voice|probe|comment|err|transcript|dk)(__.*)?$/;
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
