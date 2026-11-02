@@ -160,11 +160,11 @@ export const DOC_LINES = [
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
 function crc32(b: Uint8Array): number { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
 /** a STORE zip, enough for a test document */
-export function makeZip(files: Record<string, string>): Uint8Array {
+export function makeZip(files: Record<string, string | Uint8Array>): Uint8Array {
   const enc = new TextEncoder();
   const parts: Uint8Array[] = []; const central: Uint8Array[] = []; let off = 0;
   for (const [name, text] of Object.entries(files)) {
-    const data = enc.encode(text); const nm = enc.encode(name); const crc = crc32(data);
+    const data = typeof text === "string" ? enc.encode(text) : text; const nm = enc.encode(name); const crc = crc32(data);
     const h = new DataView(new ArrayBuffer(30)); h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, nm.length, true);
     parts.push(new Uint8Array(h.buffer), nm, data);
     const c = new DataView(new ArrayBuffer(46)); c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, nm.length, true); c.setUint32(42, off, true);
@@ -263,4 +263,40 @@ export function pdfFixture(lines: string[][], opts: { images?: Record<number, Ui
   chunks.push(enc.encode(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${xref.map((x) => `${String(x).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${off}\n%%EOF`));
   const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0)); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; }
   return out;
+}
+
+
+/**
+ * I6/I8 — A WORD QUESTIONNAIRE BUILT FROM PARTS: paragraphs (styles, bold, real list numbering), tables whose
+ * cells may hold a nested table, and embedded pictures (word/media + relationships, as Word writes them).
+ */
+export type WordItem =
+  | string
+  | { p: string; style?: string; bold?: boolean; num?: number; level?: number }
+  | { table: (string | { table: string[][] })[][] }
+  | { image: Uint8Array; name: string; alt?: string; ext?: "jpeg" | "png" };
+export function wordDocFixture(items: WordItem[]): Uint8Array {
+  const media: Record<string, Uint8Array> = {};
+  const rels: string[] = [];
+  const para = (t: string, o: { style?: string; bold?: boolean; num?: number; level?: number } = {}) =>
+    `<w:p><w:pPr>${o.style ? `<w:pStyle w:val="${o.style}"/>` : ""}${o.num ? `<w:numPr><w:ilvl w:val="${o.level ?? 0}"/><w:numId w:val="${o.num}"/></w:numPr>` : ""}</w:pPr><w:r>${o.bold ? "<w:rPr><w:b/></w:rPr>" : ""}<w:t xml:space="preserve">${esc(t)}</w:t></w:r></w:p>`;
+  const cell = (c: string | { table: string[][] }) => typeof c === "string" ? `<w:tc><w:p><w:r><w:t>${esc(c)}</w:t></w:r></w:p></w:tc>` : `<w:tc>${tbl(c.table)}<w:p/></w:tc>`;
+  const tbl = (rows: (string | { table: string[][] })[][]): string => `<w:tbl>${rows.map((r) => `<w:tr>${r.map(cell).join("")}</w:tr>`).join("")}</w:tbl>`;
+  const body = items.map((it) => {
+    if (typeof it === "string") return para(it);
+    if ("p" in it) return para(it.p, it);
+    if ("table" in it) return tbl(it.table);
+    const id = `rIdImg${rels.length + 1}`;
+    const file = `${it.name}.${it.ext ?? "jpeg"}`;
+    media[`word/media/${file}`] = it.image;
+    rels.push(`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${file}"/>`);
+    return `<w:p><w:r><w:drawing><wp:inline><wp:docPr id="${rels.length}" name="${esc(it.name)}" descr="${esc(it.alt ?? "")}"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${id}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+  }).join("");
+  return makeZip({
+    "[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+    "word/document.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>${body}</w:body></w:document>`,
+    "word/_rels/document.xml.rels": `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join("")}</Relationships>`,
+    "word/styles.xml": `<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/></w:style></w:styles>`,
+    ...media,
+  });
 }

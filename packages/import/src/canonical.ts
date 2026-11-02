@@ -86,7 +86,7 @@ export interface CanonicalAsset {
   /** what it is attached to */
   role: "question_text" | "option_image" | "row_label" | "graphic" | "header" | "other";
   /** hosted by the source platform (breaks when that account closes) / a library id with no URL / an external host */
-  hosting: "platform" | "library_id" | "external";
+  hosting: "platform" | "library_id" | "external" | "embedded";
 }
 
 /** survey-level options the source carries that Rescript has a home for */
@@ -254,7 +254,7 @@ export interface CanonicalQuota {
 export type InventoryFeature =
   | "question" | "option" | "row" | "validation" | "display_logic" | "option_logic" | "skip_logic" | "branch" | "randomizer"
   | "block_randomizer" | "loop" | "embedded" | "quota" | "quota_logic" | "carry_forward" | "randomization" | "piping" | "translation"
-  | "asset" | "custom_js" | "flow_element" | "survey_option" | "default_value";
+  | "asset" | "custom_js" | "flow_element" | "survey_option" | "default_value" | "timer";
 export type InventoryStatus = "imported" | "partial" | "unsupported";
 export interface InventoryItem {
   feature: InventoryFeature;
@@ -277,6 +277,26 @@ export interface Issue {
   autoAttempted: boolean;
   /** the source ids it concerns, for filtering and for the custom-logic selector */
   refs?: string[];
+  /** I5: the programming instruction behind an ambiguous issue, so the clarification engine can ask about it */
+  instruction?: PendingInstruction;
+}
+
+/**
+ * I5 — an instruction a reader could not turn into logic on its own: what kind of rule it is, its words, the
+ * question it is attached to, and what part of it IS known (a skip's target, a condition's words, a variable name).
+ */
+export interface PendingInstruction {
+  kind: "display" | "skip" | "skip_target" | "terminate" | "randomize" | "embedded";
+  text: string;
+  questionId: string;
+  /** a skip whose target is known but whose condition is not */
+  target?: CSkipTarget;
+  /** a rule whose condition words are known but whose target is not */
+  condition?: string;
+  /** an embedded field's name */
+  name?: string;
+  /** option source ids the instruction is about (the special options of a randomization) */
+  options?: string[];
 }
 
 export interface CanonicalSurvey {
@@ -303,6 +323,8 @@ export interface CanonicalSurvey {
   /** the languages the source carries translations for, beside `source.language` */
   languages?: string[];
   options?: CanonicalSurveyOptions;
+  /** I5: clarifications already answered (or left for Studio) during this import — never asked again */
+  decidedIds?: string[];
   /** what the adapter decided on its own — see InventoryItem; the mapper adds the rest */
   inventory?: InventoryItem[];
   /** the source's own element kinds and how many of each were seen, read or not — the file's table of contents */

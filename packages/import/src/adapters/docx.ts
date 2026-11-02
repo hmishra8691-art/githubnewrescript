@@ -11,7 +11,7 @@ import { parseXml, kids, type XmlNode } from "../xml.js";
  * of cell text — grids are usually written as tables.
  */
 export type DocBlock =
-  | { kind: "para"; text: string; style?: string; list?: { numId: string; level: number; index: number }; bold?: boolean; pageBreakBefore?: boolean }
+  | { kind: "para"; text: string; style?: string; list?: { numId: string; level: number; index: number }; bold?: boolean; pageBreakBefore?: boolean; images?: DocImage[] }
   | { kind: "table"; rows: string[][] };
 
 /**
@@ -29,6 +29,10 @@ function runHidden(rpr: XmlNode | undefined): boolean {
   return Number.isFinite(sz) && sz > 0 && sz <= 2;
 }
 
+/** I6: a picture embedded in the document (word/media/…), with its bytes — never fetched from anywhere */
+export interface DocImage { name: string; contentType: string; bytes: Uint8Array; alt?: string }
+const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp" };
+
 export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: string[]; hidden: string[] } {
   const zip = readZip(bytes);
   const xml = zipText(zip, "word/document.xml");
@@ -40,12 +44,27 @@ export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: strin
   const stylesXml = zipText(zip, "word/styles.xml");
   if (stylesXml) for (const s of parseXml(stylesXml).root?.children ?? []) if (s.name === "w:style") { const nm = kids(s, "w:name")[0]?.attrs["w:val"]; if (s.attrs["w:styleId"] && nm) styles.set(s.attrs["w:styleId"], nm.toLowerCase()); }
   const body = doc.root ? kids(doc.root, "w:body")[0] : undefined;
+  /* I6: relationship id → media part, for the pictures the document embeds */
+  const rels = new Map<string, string>();
+  const relXml = zipText(zip, "word/_rels/document.xml.rels");
+  if (relXml) for (const r of parseXml(relXml).root?.children ?? []) if (r.name === "Relationship" && /\/image$/.test(r.attrs.Type ?? "")) rels.set(r.attrs.Id, `word/${String(r.attrs.Target).replace(/^\.?\//, "").replace(/^\/word\//, "")}`);
+  const imageOf = (n: XmlNode): DocImage | null => {
+    let blip: XmlNode | undefined; let alt: string | undefined;
+    const find = (x: XmlNode) => { for (const c of x.children) { if (c.name === "a:blip") blip = c; if (c.name === "wp:docPr") alt = c.attrs.descr || c.attrs.title || undefined; if (!blip) find(c); } };
+    find(n);
+    const id = blip?.attrs["r:embed"]; const part = id ? rels.get(id) : undefined;
+    const entry = part ? zip.get(part) : undefined;
+    const ext = part?.split(".").pop()?.toLowerCase() ?? "";
+    if (!entry || !IMAGE_TYPES[ext]) return null;
+    try { return { name: part!.split("/").pop()!, contentType: IMAGE_TYPES[ext], bytes: entry.data(), ...(alt ? { alt } : {}) }; } catch { return null; }
+  };
   const blocks: DocBlock[] = [];
   const counters = new Map<string, number>();
   let pendingBreak = false;
   const hidden: string[] = [];
-  const runText = (p: XmlNode): { text: string; bold: boolean; pageBreak: boolean } => {
+  const runText = (p: XmlNode): { text: string; bold: boolean; pageBreak: boolean; images: DocImage[] } => {
     let text = ""; let boldChars = 0; let chars = 0; let pageBreak = false;
+    const images: DocImage[] = [];
     const walk = (n: XmlNode, bold: boolean) => {
       for (const c of n.children) {
         if (c.name === "w:r") {
@@ -57,13 +76,14 @@ export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: strin
             else if (r.name === "w:tab") text += "\t";
             else if (r.name === "w:br") { if (r.attrs["w:type"] === "page") pageBreak = true; else text += "\n"; }
             else if (r.name === "w:sym") text += "□";
+            else if ((r.name === "w:drawing" || r.name === "w:pict") && images.length < 20) { const im = imageOf(r); if (im) images.push(im); }
           }
         } else if (c.name === "w:hyperlink" || c.name === "w:smartTag" || c.name === "w:ins" || c.name === "w:sdt" || c.name === "w:sdtContent" || c.name === "w:fldSimple") walk(c, bold);
         else if (c.name === "w:del") { /* tracked deletion: not the document */ }
       }
     };
     walk(p, false);
-    return { text, bold: chars > 0 && boldChars / chars > 0.6, pageBreak };
+    return { text, bold: chars > 0 && boldChars / chars > 0.6, pageBreak, images };
   };
   const para = (p: XmlNode) => {
     const ppr = kids(p, "w:pPr")[0];
@@ -71,13 +91,15 @@ export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: strin
     const numPr = ppr ? kids(ppr, "w:numPr")[0] : undefined;
     const numId = numPr ? kids(numPr, "w:numId")[0]?.attrs["w:val"] : undefined;
     const level = numPr ? Number(kids(numPr, "w:ilvl")[0]?.attrs["w:val"] ?? 0) : 0;
-    const { text, bold, pageBreak } = runText(p);
+    const { text, bold, pageBreak, images } = runText(p);
     const breakBefore = pendingBreak || !!(ppr && kids(ppr, "w:pageBreakBefore").length);
     pendingBreak = false;
+    if (images.length && !text.trim()) { blocks.push({ kind: "para", text: "", images }); if (pageBreak) pendingBreak = true; return; }
     if (pageBreak && !text.trim()) { pendingBreak = true; return; }
     for (const [k, line] of text.split("\n").entries()) {
       if (!line.trim()) continue;
       const block: DocBlock = { kind: "para", text: line.replace(/\s+/g, " ").trim(), ...(styleId ? { style: styles.get(styleId) ?? styleId.toLowerCase() } : {}), ...(bold ? { bold } : {}), ...(breakBefore && k === 0 ? { pageBreakBefore: true } : {}) };
+      if (k === 0 && images.length) block.images = images;
       if (numId && numId !== "0" && k === 0) { const key = `${numId}:${level}`; const idx = (counters.get(key) ?? 0) + 1; counters.set(key, idx); block.list = { numId, level, index: idx }; for (const [kk] of counters) if (kk.startsWith(`${numId}:`) && Number(kk.split(":")[1]) > level) counters.delete(kk); }
       blocks.push(block);
     }
@@ -85,7 +107,9 @@ export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: strin
   };
   const table = (t: XmlNode) => {
     const rows: string[][] = [];
-    for (const tr of kids(t, "w:tr")) rows.push(kids(tr, "w:tc").map((tc) => kids(tc, "w:p").map((p) => runText(p).text.trim()).filter(Boolean).join("\n")));
+    /* a cell's text, with any table nested inside it flattened to "a | b" lines (I6: nested tables are not dropped) */
+    const cellText = (tc: XmlNode): string => tc.children.flatMap((x) => x.name === "w:p" ? [runText(x).text.trim()] : x.name === "w:tbl" ? kids(x, "w:tr").map((tr) => kids(tr, "w:tc").map(cellText).filter(Boolean).join(" | ")) : []).filter(Boolean).join("\n");
+    for (const tr of kids(t, "w:tr")) rows.push(kids(tr, "w:tc").map(cellText));
     if (rows.length) blocks.push({ kind: "table", rows });
   };
   for (const c of body?.children ?? []) {

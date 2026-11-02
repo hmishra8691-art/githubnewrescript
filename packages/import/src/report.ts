@@ -1,3 +1,7 @@
+import { buildImportGraph, type ImportGraph } from "./graph.js";
+import { clarifications, type Clarification } from "./clarify.js";
+import { compatibility, outline, blockList, type Compatibility, type OutlineNode } from "./review.js";
+import { classifyMapping, mappingSummary, type MappingDecision, type MappingClass } from "./mappingDecision.js";
 import type { CanonicalSurvey, CanonicalStats, Issue, InventoryFeature, InventoryItem, CanonicalAsset } from "./canonical.js";
 import { canonicalStats } from "./canonical.js";
 import type { MapResult, ImportScope, UnresolvedReference } from "./map.js";
@@ -36,13 +40,13 @@ export const FEATURE_LABELS: Record<InventoryFeature, string> = {
   question: "Questions", option: "Choices", row: "Rows", validation: "Validation rules", display_logic: "Display logic", option_logic: "Choice / row display logic",
   skip_logic: "Skip logic", branch: "Flow branches", randomizer: "Randomizers", block_randomizer: "Block randomizers", loop: "Loops (Loop & Merge)", embedded: "Embedded data fields",
   quota: "Quotas", quota_logic: "Quota conditions", carry_forward: "Carry-forward choices", randomization: "Choice randomization", piping: "Piped text", translation: "Translations",
-  asset: "Images and files", custom_js: "Custom JavaScript", flow_element: "Other flow elements", survey_option: "Survey options", default_value: "Default answers",
+  asset: "Images and files", custom_js: "Custom JavaScript", flow_element: "Other flow elements", survey_option: "Survey options", default_value: "Default answers", timer: "Page timers",
 };
 
 export function fidelity(c: CanonicalSurvey, m: MapResult): ImportFidelity {
   const items: InventoryItem[] = [...m.inventory];
   /* assets and validation rules are items too: an asset is carried by reference (partial when it is hosted by the platform, unsupported when it is only a library id) */
-  for (const a of c.assets ?? []) items.push({ feature: "asset", sourceId: a.location, status: a.hosting === "library_id" ? "unsupported" : a.hosting === "platform" ? "partial" : "imported", note: a.hosting === "library_id" ? "a library id with no URL in the file" : a.hosting === "platform" ? "hosted by Qualtrics — breaks when that account closes" : undefined });
+  for (const a of c.assets ?? []) items.push({ feature: "asset", sourceId: a.location, status: a.hosting === "library_id" ? "unsupported" : a.hosting === "platform" ? "partial" : "imported", note: a.hosting === "embedded" ? "embedded in the document; carried inside the question" : a.hosting === "library_id" ? "a library id with no URL in the file" : a.hosting === "platform" ? "hosted by Qualtrics — breaks when that account closes" : undefined });
   for (const q of c.questions) for (const v of q.validation) items.push({ feature: "validation", sourceId: `${q.sourceId} ${v.kind}`, status: "imported" });
   for (const i of c.issues) if (i.type === "validation" && /content validation|has no direct equivalent/.test(i.message) && i.location.endsWith("· validation")) items.push({ feature: "validation", sourceId: i.location, status: "unsupported", note: i.message });
   const by = new Map<InventoryFeature, InventoryItem[]>();
@@ -93,6 +97,20 @@ export interface MigrationReport {
   ok: boolean;
   /** measured per-feature fidelity — see ImportFidelity */
   fidelity: ImportFidelity;
+  /** how close each imported question is to its source (mappingDecision.ts) — one entry per source question */
+  mapping: { decisions: MappingDecision[]; summary: Record<MappingClass, number> };
+  /** the source's dependency graph, embedded-data map and integrity findings (graph.ts) */
+  graph: ImportGraph;
+  /** I3: each imported JavaScript, what it does and what it becomes (jsMigrate.ts) */
+  scripts: MapResult["jsMigrations"];
+  /** I5: the decisions the source left open, each as a question with a recommended answer (clarify.ts) */
+  clarifications: Clarification[];
+  /** I7: every element in one of six categories (review.ts) */
+  compatibility: Compatibility;
+  /** I7: the source flow in order, conditions in words */
+  outline: OutlineNode[];
+  /** I7: the blocks a person can choose to import */
+  blocks: { id: string; title: string; questions: number }[];
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -107,6 +125,10 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
   for (const q of m.confidence) confidence[q.level] = (confidence[q.level] ?? 0) + 1;
   const cr = m.created;
   const fid = fidelity(c, m);
+  const decisions = c.questions.map(classifyMapping);
+  const mapping = { decisions, summary: mappingSummary(decisions) };
+  const graph = buildImportGraph(c);
+  const asks = clarifications(c);
   const lines = (s: CanonicalStats | null): string[] => !s ? [] : [
     plural(s.questions, "question"), plural(s.blocks, "block"), s.pageBreaks ? plural(s.pageBreaks, "page break") : "",
     s.embeddedFields ? plural(s.embeddedFields, "embedded variable") : "", s.hiddenVariables ? plural(s.hiddenVariables, "hidden variable") : "",
@@ -129,6 +151,10 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     /* the measured line: items, not a feeling */
     const f = fid.totals;
     if (f.detected) summary.push(`Of ${plural(f.detected, "source element")} checked, ${f.imported} came across as they were${f.partial ? `, ${f.partial} with a change` : ""}${f.unsupported ? `, ${f.unsupported} could not be reproduced` : ""} (${fid.importedPct}% as-is).`);
+    { const ms = mapping.summary; const notExact = ms.components + ms.needs_runtime + ms.needs_js + ms.unsupported; if (notExact) summary.push(`Question types: ${ms.exact} native${ms.components ? `, ${ms.components} rebuilt from Studio components` : ""}${ms.needs_js ? `, ${ms.needs_js} needing their custom script reviewed` : ""}${ms.needs_runtime ? `, ${ms.needs_runtime} needing a feature Rescript does not have` : ""}${ms.unsupported ? `, ${ms.unsupported} with no equivalent (placeholders)` : ""}.`); }
+    { const gf = graph.findings.filter((f) => f.severity !== "info"); if (gf.length) summary.push(`The source's dependency check found ${plural(gf.length, "problem")} in the original survey: ${Object.entries(graph.stats.findings).filter(([k]) => k !== "unused_embedded").map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(", ")}.`); }
+    { const js = m.jsMigrations ?? []; if (js.length) { const n = (v: string) => js.filter((x) => x.verdict === v).length; summary.push(`${plural(js.length, "custom script")} read, none run: ${[n("compatible") ? `${n("compatible")} translated (attached, switched off for review)` : "", n("native") ? `${n("native")} reproduced by a native setting` : "", n("partial") ? `${n("partial")} need${n("partial") === 1 ? "s" : ""} a person` : "", n("incompatible") ? `${n("incompatible")} cannot run here (page or network access)` : ""].filter(Boolean).join(", ")}.`); } }
+    if (asks.length) summary.push(`${plural(asks.length, "decision")} the source left open ${asks.length === 1 ? "needs" : "need"} your answer before the logic is complete — each has a recommended answer.`);
     if (fid.unresolved.length) summary.push(`${plural(fid.unresolved.length, "reference")} point${fid.unresolved.length === 1 ? "s" : ""} at something that is not in the imported survey.`);
     if (fid.assets.some((a) => a.risk !== "ok")) summary.push(`${plural(fid.assets.filter((a) => a.risk !== "ok").length, "image")} ${fid.assets.filter((a) => a.risk !== "ok").length === 1 ? "is" : "are"} still hosted by Qualtrics or named only by a library id — re-upload them here.`);
     if (fid.languages.length) summary.push(`Translations in ${fid.languages.map((l) => l.code).join(", ")} were imported for review.`);
@@ -142,12 +168,14 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     `Validation ${m.quality ? `completed: ${m.quality.errors.length} errors, ${m.quality.warnings.length} warnings` : "not run"}`,
     `Fidelity ${fid.totals.detected ? `${fid.totals.imported}/${fid.totals.detected} elements as-is, ${fid.totals.partial} partial, ${fid.totals.unsupported} unsupported` : "no elements counted"}`,
   ];
-  return {
+  const out = {
     source: { platform: c.source.platform, format: c.source.format, fileName: c.source.fileName, title: c.source.title, label: detection.label, reasons: detection.reasons },
     scope, detected, created: m.def ? cr : null, converted, review, risks, confidence,
     validation: m.quality ? { errors: m.quality.errors.length, warnings: m.quality.warnings.length, deployable: m.quality.deployable } : null,
-    merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid,
-  };
+    merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid, mapping, graph, scripts: m.jsMigrations ?? [], clarifications: asks,
+    outline: outline(c), blocks: blockList(c),
+  } as Omit<MigrationReport, "compatibility">;
+  return { ...out, compatibility: compatibility(out as MigrationReport, m.inventory) };
 }
 
 /**

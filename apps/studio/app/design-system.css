@@ -1562,6 +1562,35 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 
 /* ---- Intelligent · Super Intelligent import (ImportCard) ---- */
 .iqi-dim { color: var(--c-text-3); font-size: 12px; font-weight: 400; }
+/* I4: the last imports, under the welcome card's import button */
+.iqi-history { margin: 6px 0 10px; padding: 6px 10px; border: 1px solid var(--c-border); border-radius: 8px; font-size: 12px; }
+.iqi-history ul { margin: 4px 0 0; padding: 0 0 0 16px; }
+.iqi-history li { margin: 2px 0; overflow-wrap: anywhere; }
+/* I5: the questions an import leaves open */
+.iqi-clarify { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface-2, transparent); }
+.iqi-clarify ol { margin: 6px 0 0; padding-left: 20px; }
+.iqi-clarify li { margin: 0 0 10px; }
+.iqi-clarify-q { margin: 0 0 4px; font-weight: 500; }
+/* I7: the import review */
+.iqr-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.iqr { background: var(--c-surface, #fff); color: var(--c-text-1, inherit); width: min(1180px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,.25); outline: none; }
+.iqr-head, .iqr-tabs { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--c-border); flex-wrap: wrap; }
+.iqr-body { display: flex; gap: 12px; padding: 12px 14px; overflow: auto; min-height: 0; }
+.iqr-main { flex: 1 1 60%; min-width: 0; overflow: auto; }
+.iqr-inspect { flex: 1 1 40%; min-width: 0; border-left: 1px solid var(--c-border); padding-left: 12px; overflow: auto; }
+.iqr-inspect header { display: flex; align-items: center; }
+.iqr-inspect pre { font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--c-surface-2, rgba(0,0,0,.04)); padding: 8px; border-radius: 6px; max-height: 40vh; overflow: auto; }
+.iqr-table th { text-align: left; padding-right: 16px; font-weight: 500; }
+.iqr-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.iqr-outline { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.iqr-outline li { margin: 3px 0; overflow-wrap: anywhere; }
+.iqr-link { background: none; border: 0; padding: 0; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.iqr-link:hover, .iqr-link:focus-visible { text-decoration: underline; }
+.iqr-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-3); margin-right: 4px; }
+.iqr-chip { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 10px; font-size: 11px; background: var(--c-surface-2, rgba(0,0,0,.06)); }
+.iqr-blocklist { list-style: none; padding: 0; }
+@media (max-width: 760px) { .iqr-body { flex-direction: column; } .iqr-inspect { border-left: 0; padding-left: 0; border-top: 1px solid var(--c-border); } }
+.iqi-clarify-opt { display: flex; align-items: center; gap: 6px; margin: 2px 0; font-size: 13px; cursor: pointer; overflow-wrap: anywhere; }
 .iqi-line { margin: 0; color: var(--c-text-2); font-size: 12.5px; }
 .iqi-work { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--c-text-2); }
 .iqi-choice { border: 1px solid var(--c-border); border-radius: 8px; margin: 0; padding: 6px 10px 8px; display: flex; flex-direction: column; gap: 4px; }

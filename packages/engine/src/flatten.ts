@@ -97,11 +97,22 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
     out[`${q.variableName}_VERSION`] = designVersionFor(q, design.rows, seedNum, state.calculated);
   }
 
+  /*
+   * Every answer entry grouped by its question (plain + loop-suffixed), once. The per-question filter over every
+   * answer this replaces was O(questions × answers) on each call — and the runtime calls this on every page, so a
+   * 150-question survey spent most of a walk here. Same entries, same order.
+   */
+  const entriesByQuestion = new Map<string, [string, unknown][]>();
+  for (const [k, v] of Object.entries(state.answers)) {
+    const at = k.indexOf("@");
+    const base = at < 0 ? k : k.slice(0, at);
+    let list = entriesByQuestion.get(base);
+    if (!list) entriesByQuestion.set(base, (list = []));
+    list.push([k, v]);
+  }
   for (const q of def.questions) {
     // every answer entry for this question (plain + loop-suffixed)
-    const entries = Object.entries(state.answers).filter(
-      ([k]) => k === q.id || k.startsWith(`${q.id}@`),
-    );
+    const entries = entriesByQuestion.get(q.id) ?? [];
     for (const [key, value] of entries) {
       if (placed.has(key)) continue;
       // legacy fallback for loop answers whose loop variables are absent

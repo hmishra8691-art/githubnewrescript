@@ -196,4 +196,51 @@ const entry = (id, name, lang = "EN") => ({ SurveyID: id, SurveyName: name, Surv
   writeFileSync(join(OUT, "03-brand-tracker-complex.qsf"), JSON.stringify(qsf, null, 1));
 }
 
+/* ------------------------------------------------------------ 04 large (I1): 12 blocks × 10 questions + page timers, chained display logic, piped redirects, JS, drill-down */
+{
+  const S = "SV_large04";
+  const blocks = [], qs = [], flow = [];
+  let k = 0;
+  const qid = () => `QID${++k}`;
+  flow.push({ Type: "EmbeddedData", FlowID: "FL_ed1", EmbeddedData: [
+    { Description: "PID", Type: "Recipient", Field: "PID", VariableType: "String", DataVisibility: [], AnalyzeText: false },
+    { Description: "src", Type: "Custom", Field: "src", VariableType: "String", Value: "panel" },
+  ] });
+  for (let b = 1; b <= 12; b++) {
+    const ids = [];
+    for (let i = 1; i <= 10; i++) {
+      const id = qid(); ids.push(id); if (i === 5) ids.push("|");
+      const tag = `B${b}_${i}`;
+      if (i === 10) { qs.push(sq(S, id, { QuestionText: "Timing", DataExportTag: `${tag}_t`, QuestionType: "Timing", Selector: "PageTimer", Configuration: { MinSeconds: b % 3 === 0 ? "5" : "0", MaxSeconds: b % 4 === 0 ? "60" : "0" }, Choices: choices(["First Click", "Last Click", "Page Submit", "Click Count"]), ChoiceOrder: order(4) })); continue; }
+      const kind = i === 1 ? 0 : (b + i) % 5;
+      const dl = i === 1 && b > 1 ? { DisplayLogic: logic(sel(`QID${(b - 2) * 10 + 1}`, "1")) } : {};
+      if (kind === 0) qs.push(sq(S, id, { QuestionText: `Block ${b} — how satisfied are you with item ${i}?`, DataExportTag: tag, QuestionType: "MC", Selector: "SAVR", SubSelector: "TX", Choices: choices(["Very", "Somewhat", "Not at all"]), ChoiceOrder: order(3), Validation: req(), ...dl }));
+      else if (kind === 1) qs.push(sq(S, id, { QuestionText: `Block ${b} — which apply (item ${i})?`, DataExportTag: tag, QuestionType: "MC", Selector: "MAVR", SubSelector: "TX", Choices: choices(["A", "B", "C", "None"], { 4: { ExclusiveAnswer: true } }), ChoiceOrder: order(4), Validation: opt(), ...dl }));
+      else if (kind === 2) qs.push(sq(S, id, { QuestionText: `Block ${b} — rate each (item ${i})`, DataExportTag: tag, QuestionType: "Matrix", Selector: "Likert", SubSelector: "SingleAnswer", Choices: choices(["Row 1", "Row 2"]), ChoiceOrder: order(2), Answers: choices(["Low", "Mid", "High"]), AnswerOrder: order(3), Validation: opt(), ...dl }));
+      else if (kind === 3) qs.push(sq(S, id, { QuestionText: `Block ${b} — how many (item ${i})?`, DataExportTag: tag, QuestionType: "TE", Selector: "SL", Validation: { Settings: { ForceResponse: "OFF", Type: "ContentType", ContentType: "ValidNumber", ValidNumber: { Min: "0", Max: "99", NumDecimals: "" } } }, ...dl }));
+      else qs.push(sq(S, id, { QuestionText: `Block ${b} — tell us more (item ${i}) for \${e://Field/src}`, DataExportTag: tag, QuestionType: "TE", Selector: "ML", Validation: opt(), ...dl,
+        ...(b === 7 && i === 2 ? { QuestionJS: "Qualtrics.SurveyEngine.addOnload(function(){ Qualtrics.SurveyEngine.setEmbeddedData('seen6', '1'); this.hideNextButton(); var that = this; setTimeout(function(){ that.showNextButton(); }, 3000); });" } : {}) }));
+    }
+    blocks.push(block(`BL_${b}`, `Block ${b}`, ids));
+    flow.push({ Type: "Block", ID: `BL_${b}`, FlowID: `FL_b${b}` });
+    if (b === 1) flow.push({ Type: "Branch", FlowID: "FL_br1", Description: "Screen out", BranchLogic: logic(sel("QID1", "3")), Flow: [{ Type: "EndSurvey", FlowID: "FL_so", Options: { Advanced: "true", ScreenOutResponse: "true", EndingType: "Advanced", EOSRedirectURL: "https://panel.example.com/so?pid=\${e://Field/PID}&status=2" } }] });
+  }
+  const dd = qid();
+  qs.push(sq(S, dd, { QuestionText: "Choose your car", DataExportTag: "car", QuestionType: "DD", Selector: "DL", Validation: opt() }));
+  blocks.push(block("BL_extra", "Extra", [dd]));
+  flow.push({ Type: "Block", ID: "BL_extra", FlowID: "FL_extra" });
+  flow.push({ Type: "EndSurvey", FlowID: "FL_end", Options: { Advanced: "true", EndingType: "Advanced", EOSRedirectURL: "https://panel.example.com/complete?pid=\${e://Field/PID}&status=1" } });
+  const qsf = {
+    SurveyEntry: entry(S, "Large Tracker 121 questions (I1)"),
+    SurveyElements: [
+      { SurveyID: S, Element: "BL", PrimaryAttribute: "Survey Blocks", SecondaryAttribute: null, TertiaryAttribute: null, Payload: blocks },
+      { SurveyID: S, Element: "FL", PrimaryAttribute: "Survey Flow", SecondaryAttribute: null, TertiaryAttribute: null, Payload: { Type: "Root", FlowID: "FL_1", Flow: flow, Properties: { Count: flow.length } } },
+      ...qs,
+      { SurveyID: S, Element: "SO", PrimaryAttribute: "Survey Options", SecondaryAttribute: null, TertiaryAttribute: null, Payload: { BackButton: "false", ProgressBarDisplay: "None" } },
+      ...extras(S),
+    ],
+  };
+  writeFileSync(join(OUT, "04-large-121-questions.qsf"), JSON.stringify(qsf, null, 1));
+}
+
 console.log(`wrote the QSF corpus to ${OUT}`);

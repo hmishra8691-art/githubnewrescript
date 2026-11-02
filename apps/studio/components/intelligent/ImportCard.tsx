@@ -2,6 +2,7 @@
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { Icon } from "../ui/Icon";
+import { ImportReview } from "./ImportReview";
 import { formatCharge, type ReviewLine } from "../../lib/import/chat";
 
 /**
@@ -41,7 +42,13 @@ export interface ImportVerification {
   structure: { checked: number; ok: number; findings: { level: "error" | "warning"; sourceId: string; message: string }[] };
   runtime: { walks: { strategy: string; seed: number; pages: number; questions: number; end: string | null; loops: number; error: string | null }[]; placed: number; reached: number; unreachable: { id: string; code: string; reason: "by_source" | "no_walk" }[]; unanswerable: { id: string; code: string; message: string }[]; errors: string[]; endStatuses: string[] };
   analysis: { variablesKept: number; variablesRenamed: { source: string; rescript: string }[]; codesKept: number; codesChanged: { question: string; source: string; rescript: string }[]; rowsKept: number };
+  /** I8: behavioural equivalence — the source's rules run on the engine, met and not met (apart from structure) */
+  behaviour?: ImportBehaviour;
   ok: boolean;
+}
+export interface ImportBehaviour {
+  scenarios: { id: string; rule: string; kind: string; met: boolean; given: string[]; result: "pass" | "fail" | "not_testable" | "not_run"; observed: string }[];
+  passed: number; failed: number; notTestable: number; notRun: number; error?: string;
 }
 export interface ImportReport {
   source: { platform: string; format: string; fileName: string; title?: string; label: string; reasons: string[] };
@@ -51,11 +58,19 @@ export interface ImportReport {
   merge?: { unchanged: string[]; changed: { source: string; rescript: string; differences: string[] }[]; added: string[] };
   summary: string[]; audit: string[]; ok: boolean;
   fidelity?: ImportFidelity;
+  /** I5: the decisions the source left open */
+  clarifications?: ImportClarification[];
+}
+export interface ImportDecision { id: string; type: string; [k: string]: unknown }
+export interface ImportClarification {
+  id: string; kind: string; question: string; evidence: string; location: string; questionId?: string;
+  recommended: { label: string; decision: ImportDecision } | null; because?: string; suggestedBy?: "rules" | "ai";
+  alternatives: { label: string; decision: ImportDecision }[];
 }
 export interface ImportJob {
   fileName: string;
   size: number;
-  stage: "estimating" | "estimated" | "running" | "ready" | "failed" | "creating" | "created" | "merged" | "cancelled";
+  stage: "estimating" | "estimated" | "running" | "ready" | "failed" | "creating" | "created" | "merged" | "cancelled" | "rolled_back";
   scope: ImportScope;
   into: "new" | "merge";
   detection?: { format: string; platform: string; label: string; confidence: string; reasons: string[] };
@@ -72,6 +87,24 @@ export interface ImportJob {
   panel?: "issues" | "map" | "fidelity" | null;
   /** the survey as it was when a merge was previewed — applied only onto that */
   basedOn?: SurveyDefinition;
+  /** I4: the import session this run was recorded as (history, the file for 90 days, rollback) */
+  sessionId?: string;
+  sessionExpiresAt?: string;
+  sessionNote?: string;
+  rollingBack?: boolean;
+  /** I5: the option chosen per clarification (index into [recommended, ...alternatives]) */
+  answers?: Record<string, number>;
+  deciding?: boolean;
+  suggesting?: boolean;
+  /** I7: the blocks chosen for the last re-run (absent = all), whether the review is open, the server's switches */
+  blocks?: string[];
+  /** every block the source has (from the first run) — a selection's report lists only the chosen ones */
+  allBlocks?: { id: string; title: string; questions: number }[];
+  reviewOpen?: boolean;
+  features?: { review: boolean };
+  suggested?: { suggested: number; asked: number } | null;
+  /** the last round's outcome: how many answers were applied, and the ones refused with why */
+  decided?: { applied: number; rejected: { id: string; reason: string }[] };
 }
 
 const ROWS: [keyof Stats, string][] = [
@@ -85,17 +118,21 @@ const SCOPES: { id: ImportScope; label: string; about: string }[] = [
 ];
 const CONF: [string, string][] = [["confirmed", "Confirmed"], ["high", "High confidence"], ["review", "Needs review"], ["ambiguous", "Ambiguous"], ["unsupported", "Unsupported"]];
 
-export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, readOnly, sandbox }: {
+export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, onDecide, onSuggest, onRerun, readOnly, sandbox }: {
   job: ImportJob;
   onPatch(p: Partial<ImportJob>): void;
-  onRun(): void; onCreate(): void; onMerge(): void; onCancel(): void; onReviewAfter(): void;
+  onRun(): void; onCreate(): void; onMerge(): void; onCancel(): void; onReviewAfter(): void; onRollback?(): void;
+  onDecide?(decisions: ImportDecision[]): void;
+  onSuggest?(): void;
+  onRerun?(blocks: string[] | undefined): void;
   readOnly: boolean; sandbox: boolean;
 }) {
   const cur = job.estimate?.currency ?? "USD";
   const r = job.report;
   const done = job.stage === "created" || job.stage === "merged";
+  const rolledBack = job.stage === "rolled_back";
   return (
-    <article className={`iq-turn ${done ? "applied" : job.stage === "cancelled" ? "cancelled" : "open"}`} data-testid="iq-import" data-stage={job.stage} data-format={job.detection?.format ?? ""}>
+    <article className={`iq-turn ${done ? "applied" : job.stage === "cancelled" || rolledBack ? "cancelled" : "open"}`} data-testid="iq-import" data-stage={job.stage} data-format={job.detection?.format ?? ""}>
       <div className="iq-said"><Icon name="upload" size={13} /> <span>Import <b>{job.fileName}</b> <span className="iqi-dim">({(job.size / 1024).toFixed(job.size < 10240 ? 1 : 0)} KB)</span></span></div>
       <div className={`iq-card proposal${job.stage === "failed" ? " blocked" : ""}`}>
         <div className="iq-card-head">
@@ -163,12 +200,19 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
             {r.fidelity && (r.fidelity.totals.detected > 0 || job.verification) && <FidelityBar f={r.fidelity} verification={job.verification} />}
             {job.actual && <p className="iqi-dim" data-testid="iqi-actual">Charged for this import: <b>{formatCharge(job.actual.customerCharge, job.actual.currency)}</b>{job.estimate ? ` (estimated ${formatCharge(job.estimate.import.customerCharge, cur)})` : ""}</p>}
 
+            {job.sessionId && <p className="iqi-dim" data-testid="iqi-session">Recorded in the import history{job.sessionExpiresAt ? ` · the file is kept until ${new Date(job.sessionExpiresAt).toLocaleDateString()}` : ""}{job.sessionNote ? ` · ${job.sessionNote}` : ""}</p>}
+            {!job.sessionId && job.sessionNote && <p className="iqi-dim" data-testid="iqi-session">{job.sessionNote}</p>}
+            {job.stage === "ready" && !!r.clarifications?.length && <Clarifications job={job} items={r.clarifications} onPatch={onPatch} onDecide={onDecide} onSuggest={onSuggest} />}
+            {job.stage === "ready" && job.decided && <p className="iqi-dim" data-testid="iqi-decided">{job.decided.applied} answer{job.decided.applied === 1 ? "" : "s"} applied; the preview was re-analysed{job.decided.rejected.length ? ` · refused: ${job.decided.rejected.map((x) => x.reason).join("; ")}` : ""}.</p>}
+            {job.reviewOpen && <ImportReview job={job} onClose={() => onPatch({ reviewOpen: false })} onRerun={(b) => onRerun?.(b)} renderQuestions={() => <Clarifications job={job} items={r.clarifications ?? []} onPatch={onPatch} onDecide={onDecide} onSuggest={onSuggest} />} />}
+            {job.blocks?.length ? <p className="iqi-dim" data-testid="iqi-blocks-note">Only {job.blocks.length} selected block{job.blocks.length === 1 ? "" : "s"} are in this preview.</p> : null}
             {job.panel === "issues" && <IssueList report={r} />}
             {job.panel === "map" && job.mapping && <MapTable mapping={job.mapping} />}
             {job.panel === "fidelity" && r.fidelity && <FidelityDetail f={r.fidelity} verification={job.verification} />}
 
             <div className="iq-actions">
               <button type="button" className={`iq-btn${job.panel === "issues" ? " on" : ""}`} onClick={() => onPatch({ panel: job.panel === "issues" ? null : "issues" })} data-testid="iqi-issues-btn">Review issues ({r.review.length})</button>
+              {job.stage === "ready" && job.sessionId && job.features?.review !== false && <button type="button" className="iq-btn" onClick={() => onPatch({ reviewOpen: true })} data-testid="iqi-review-open">Open full review</button>}
               {r.fidelity && (r.fidelity.totals.detected > 0 || job.verification) && <button type="button" className={`iq-btn${job.panel === "fidelity" ? " on" : ""}`} onClick={() => onPatch({ panel: job.panel === "fidelity" ? null : "fidelity" })} data-testid="iqi-fidelity-btn">Fidelity report</button>}
               <button type="button" className={`iq-btn${job.panel === "map" ? " on" : ""}`} onClick={() => onPatch({ panel: job.panel === "map" ? null : "map" })} data-testid="iqi-map-btn">Source → Rescript map</button>
               <span className="iq-spacer" />
@@ -181,6 +225,7 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
               )}
               {job.stage === "created" && job.createdId && <a className="iq-btn primary" href={`/studio/${job.createdId}?mode=intelligent`} data-testid="iqi-open">Open the new project</a>}
               {job.stage === "merged" && <button type="button" className="iq-btn primary" onClick={onReviewAfter} data-testid="iqi-review-after">What needs review?</button>}
+              {done && job.sessionId && onRollback && <button type="button" className="iq-btn" onClick={onRollback} disabled={job.rollingBack || (job.stage === "merged" && readOnly)} data-testid="iqi-rollback" title={job.stage === "created" ? "Delete the project this import created (refused once it has responses)" : "Restore the survey as it was before this import"}>{job.rollingBack ? "Rolling back…" : "Roll back this import"}</button>}
             </div>
           </>
         )}
@@ -194,7 +239,7 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
 
 const KICKER: Record<ImportJob["stage"], string> = {
   estimating: "READING THE FILE", estimated: "IMPORT — ESTIMATE", running: "RECONSTRUCTING", ready: "IMPORT PREVIEW",
-  failed: "IMPORT — COULD NOT READ", creating: "CREATING THE PROJECT", created: "IMPORTED — NEW PROJECT", merged: "IMPORTED INTO THIS SURVEY", cancelled: "IMPORT CANCELLED",
+  failed: "IMPORT — COULD NOT READ", creating: "CREATING THE PROJECT", created: "IMPORTED — NEW PROJECT", merged: "IMPORTED INTO THIS SURVEY", cancelled: "IMPORT CANCELLED", rolled_back: "IMPORT ROLLED BACK",
 };
 
 function IssueList({ report }: { report: ImportReport }) {
@@ -246,6 +291,11 @@ function FidelityBar({ f, verification }: { f: ImportFidelity; verification: Imp
         {f.unresolved.length > 0 && <span className="iqi-fid-warn" data-testid="iqi-unresolved-count">· {f.unresolved.length} unresolved reference{f.unresolved.length === 1 ? "" : "s"}</span>}
         {v && <span className={`iqi-fid-verify${v.ok ? "" : " warn"}`} data-testid="iqi-verify">· engine check: {v.runtime.reached}/{v.runtime.placed} questions reached, {v.runtime.endStatuses.join(" / ") || "no end"}{v.structure.findings.some((x) => x.level === "error") ? `, ${v.structure.findings.filter((x) => x.level === "error").length} structural error${v.structure.findings.filter((x) => x.level === "error").length === 1 ? "" : "s"}` : ""}{v.runtime.errors.length ? `, ${v.runtime.errors.length} runtime error${v.runtime.errors.length === 1 ? "" : "s"}` : ""}</span>}
         {verification && "error" in verification && <span className="iqi-fid-warn" data-testid="iqi-verify">· {verification.error}</span>}
+        {v?.behaviour && v.behaviour.scenarios.length > 0 && (
+          <span className={`iqi-fid-verify${v.behaviour.failed ? " warn" : ""}`} data-testid="iqi-behaviour" data-passed={v.behaviour.passed} data-failed={v.behaviour.failed}>
+            · behaviour: {v.behaviour.passed} of {v.behaviour.scenarios.length} logic scenarios behave as the source says{v.behaviour.failed ? `, ${v.behaviour.failed} do not` : ""}{v.behaviour.notTestable ? `, ${v.behaviour.notTestable} not testable` : ""}{v.behaviour.notRun ? `, ${v.behaviour.notRun} not run` : ""}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -292,6 +342,28 @@ function FidelityDetail({ f, verification }: { f: ImportFidelity; verification: 
           {v.runtime.unreachable.length > 0 && <p className="iqi-dim" data-testid="iqi-unreachable">Not reached: {v.runtime.unreachable.map((u) => `${u.code} (${u.reason === "by_source" ? "not in the source flow" : "no walk got there"})`).join(", ")}.</p>}
           {v.runtime.unanswerable.length > 0 && <p className="iqi-dim" data-testid="iqi-unanswerable">The walker could not satisfy: {v.runtime.unanswerable.map((u) => `${u.code} — ${u.message}`).join("; ")}.</p>}
           {v.runtime.errors.length > 0 && <p className="iq-error" data-testid="iqi-runtime-error">{v.runtime.errors.join("; ")}</p>}
+        </section>
+      )}
+      {v?.behaviour && (
+        <section data-testid="iqi-behaviour-detail">
+          <div className="iq-label">Behaviour — each rule of the source, met and not met, run on the engine</div>
+          {v.behaviour.error ? <p className="iq-error">{v.behaviour.error}</p> : v.behaviour.scenarios.length === 0 ? <p className="iqi-dim">The source has no display, skip or branch rule to test.</p> : (
+            <div className="iqi-map-scroll">
+              <table className="iqi-table">
+                <thead><tr><th>Result</th><th>Rule</th><th>Scenario</th><th>Observed / why</th></tr></thead>
+                <tbody>
+                  {[...v.behaviour.scenarios].sort((a, b) => ["fail", "not_testable", "not_run", "pass"].indexOf(a.result) - ["fail", "not_testable", "not_run", "pass"].indexOf(b.result)).map((x) => (
+                    <tr key={x.id} data-result={x.result} data-testid="iqi-behaviour-row">
+                      <td className={x.result === "fail" ? "iq-error" : x.result === "pass" ? "" : "iqi-dim"}>{x.result === "pass" ? "behaves" : x.result === "fail" ? "differs" : x.result === "not_testable" ? "not testable" : "not run"}</td>
+                      <td>{x.rule}</td>
+                      <td className="iqi-dim">{x.met ? "met" : "not met"}{x.given.length ? ` — ${x.given.join(", ")}` : ""}</td>
+                      <td className="iqi-dim">{x.observed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
     </div>
@@ -366,5 +438,69 @@ export function ReviewCard({ text, entry, onSelect, onAnalyze }: { text: string;
         )}
       </div>
     </article>
+  );
+}
+
+
+/**
+ * I4 — the last imports of this project (or the sandbox): file, when, what came of it. Read-only; a rollback
+ * is offered on the import's own card, where its preview is.
+ */
+export interface ImportHistoryRow { id: string; fileName: string; format: string; status: string; into: string; createdAt: string; hasSource: boolean; reportDigest?: { questions?: number } }
+export function ImportHistory({ surveyId }: { surveyId: string }) {
+  const [rows, setRows] = React.useState<ImportHistoryRow[] | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    fetch(`/api/import/sessions?surveyId=${encodeURIComponent(surveyId)}&limit=5`).then((r) => r.json()).then((d) => { if (live) setRows(Array.isArray(d.sessions) ? d.sessions : []); }).catch(() => { if (live) setRows([]); });
+    return () => { live = false; };
+  }, [surveyId]);
+  if (!rows?.length) return null;
+  const word: Record<string, string> = { analyzed: "previewed", applied: "applied", rolled_back: "rolled back", failed: "could not be read", discarded: "cancelled" };
+  return (
+    <div className="iqi-history" data-testid="iq-import-history">
+      <span className="iqi-dim">Recent imports</span>
+      <ul>{rows.map((r) => <li key={r.id} data-testid="iq-import-history-row" data-status={r.status}><b>{r.fileName}</b> <span className="iqi-dim">{new Date(r.createdAt).toLocaleString()} · {r.into === "merge" ? "into this survey" : "new project"} · {word[r.status] ?? r.status}{r.reportDigest?.questions ? ` · ${r.reportDigest.questions} questions` : ""}{r.hasSource ? " · file kept" : ""}</span></li>)}</ul>
+    </div>
+  );
+}
+
+
+/**
+ * I5 — THE QUESTIONS THE SOURCE LEFT OPEN: one per decision, the recommended answer pre-selected (with why),
+ * the alternatives, and "leave it". Apply sends the chosen decisions; the preview is re-analysed with them.
+ */
+function Clarifications({ job, items, onPatch, onDecide, onSuggest }: { job: ImportJob; items: ImportClarification[]; onPatch(p: Partial<ImportJob>): void; onDecide?(d: ImportDecision[]): void; onSuggest?(): void }) {
+  const opts = (c: ImportClarification) => [...(c.recommended ? [c.recommended] : []), ...c.alternatives];
+  /* a rule's recommendation is pre-selected; an AI suggestion is shown but waits for a person to pick it */
+  const pick = (c: ImportClarification) => job.answers?.[c.id] ?? (c.recommended && c.suggestedBy !== "ai" ? 0 : -1);
+  const unrecommended = items.filter((c) => !c.recommended).length;
+  const chosen = items.map((c) => ({ c, i: pick(c) })).filter((x) => x.i >= 0);
+  return (
+    <div className="iqi-clarify" data-testid="iqi-clarify">
+      <p className="iqi-clarify-head"><b>{items.length} question{items.length === 1 ? "" : "s"} for you</b> <span className="iqi-dim">— the file leaves these decisions open; nothing was guessed.</span></p>
+      <ol>
+        {items.map((c) => (
+          <li key={c.id} data-testid="iqi-clarify-item" data-kind={c.kind}>
+            <p className="iqi-clarify-q">{c.question}</p>
+            {c.because && c.recommended && <p className="iqi-dim">Recommended{c.suggestedBy === "ai" ? " (AI suggestion — check it)" : ""}: {c.because}</p>}
+            <div role="radiogroup" aria-label={c.question}>
+              {opts(c).map((o, i) => (
+                <label key={i} className="iqi-clarify-opt">
+                  <input type="radio" name={`clar-${c.id}`} checked={pick(c) === i} onChange={() => onPatch({ answers: { ...(job.answers ?? {}), [c.id]: i } })} data-testid="iqi-clarify-option" />
+                  {o.label}{i === 0 && c.recommended ? <span className="iqi-badge">recommended</span> : null}
+                </label>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ol>
+      {job.suggested && <p className="iqi-dim" data-testid="iqi-clarify-suggested">The AI suggested an answer for {job.suggested.suggested} of {job.suggested.asked} question{job.suggested.asked === 1 ? "" : "s"} without a recommendation — marked “AI suggestion”, not selected until you pick them.</p>}
+      <div className="iq-actions">
+        <span className="iqi-dim">{chosen.length} of {items.length} answered</span>
+        {onSuggest && unrecommended > 0 && <button type="button" className="iq-btn" disabled={job.suggesting || !job.sessionId} onClick={onSuggest} data-testid="iqi-clarify-ai">{job.suggesting ? "Asking the AI…" : `Suggest answers with AI (${unrecommended})`}</button>}
+        <span className="iq-spacer" />
+        <button type="button" className="iq-btn primary" disabled={!onDecide || job.deciding || !chosen.length || !job.sessionId} onClick={() => onDecide?.(chosen.map(({ c, i }) => opts(c)[i].decision))} data-testid="iqi-clarify-apply" title={job.sessionId ? "Apply these answers and re-analyse the preview" : "This import was not recorded, so its answers cannot be applied — import the file again"}>{job.deciding ? "Re-analysing…" : "Apply answers"}</button>
+      </div>
+    </div>
   );
 }
