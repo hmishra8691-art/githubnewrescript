@@ -1,9 +1,21 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
-import { createResponseState, start, advance, setAnswer, visibleQuestions, validatePage, runQualityCheck, constantCondition, type ResponseState, type RuntimeStep } from "@rescript/engine";
+import { createResponseState, start, advance, setAnswer, visibleQuestions, effectiveQuestion, validatePage, runQualityCheck, constantCondition, type ResponseState, type RuntimeStep } from "@rescript/engine";
 import type { CanonicalSurvey } from "./canonical.js";
 import type { MapResult } from "./map.js";
 import { runScenarios, type BehaviourReport } from "./equivalence.js";
+import { simulateDynamics, type DynamicIntent, type DynamicSimulation } from "./dynamicSim.js";
 import { plainText } from "./canonical.js";
+
+/**
+ * The question as the respondent is shown it, for the walker to answer from — only where the list is DYNAMIC (a
+ * carried or masked list: a pure carry-forward has no options of its own, so answering from `q.options` left it
+ * unanswered, a required one refused, and a loop over it ran zero times). Every other question is answered exactly
+ * as before, so a survey without dynamic lists walks the same path.
+ */
+const shownAs = (def: SurveyDefinition, q: Question, state: ResponseState, loop: unknown): Question => {
+  if (!q.carryForward && !q.mask) return q;
+  try { const v = effectiveQuestion(q, { def, state, loop: (loop ?? null) as never }); return { ...q, options: v.options, rows: v.rows.length ? v.rows : q.rows }; } catch { return q; }
+};
 
 /**
  * POST-IMPORT VERIFICATION (QSF brief, Phase 4): is the survey that came out
@@ -49,6 +61,8 @@ export interface VerificationReport {
   /** analysis compatibility: variable names and codes the data will carry, compared with the source's */
   /** I8: behavioural equivalence — scenarios built from the source's own logic, run on the engine (equivalence.ts) */
   behaviour?: BehaviourReport;
+  /** 2026-11-02: synthetic respondents for carried lists, masks, loops and pipes, run on the engine (dynamicSim.ts) */
+  dynamics?: DynamicSimulation & { error?: string };
   analysis: { variablesKept: number; variablesRenamed: { source: string; rescript: string }[]; codesKept: number; codesChanged: { question: string; source: string; rescript: string }[]; rowsKept: number };
   ok: boolean;
 }
@@ -234,7 +248,7 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
           answered.add(q.id);
           walk.questions++;
           /* I8: a behavioural scenario fixes some answers; every other question is answered by the strategy */
-          const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(q, strategy, rnd);
+          const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(shownAs(def, q, state, step.loop), strategy, rnd);
           if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null);
         }
         qs = visibleQuestions(def, step, state, {});
@@ -251,7 +265,7 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
           if (!["single_select", "dropdown", "multi_select", "multi_dropdown"].includes(q.type)) continue;
           if (opts.force && q.id in opts.force) continue;
           if (readBy && !readBy.has(q.id)) continue;
-          const cands = (q.options ?? []).filter((o) => !o.flags?.includes("other_specify") && o.logic?.visibility !== "always_hide").slice(0, 12);
+          const cands = (shownAs(def, q, state, step.loop).options ?? []).filter((o) => !o.flags?.includes("other_specify") && o.logic?.visibility !== "always_hide").slice(0, 12);
           if (cands.length < 2) continue;
           let best: { value: unknown; ahead: number } | null = null;
           const isMulti = q.type === "multi_select" || q.type === "multi_dropdown";
@@ -278,7 +292,7 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
       if (strategy === "deepest") {
         /* the chosen answers may have shown a same-page question: answer it too (the page must still validate) */
         qs = visibleQuestions(def, step, state, {});
-        for (const q of qs.filter((x) => !answered.has(x.id))) { answered.add(q.id); walk.questions++; const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(q, strategy, rnd); if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null); }
+        for (const q of qs.filter((x) => !answered.has(x.id))) { answered.add(q.id); walk.questions++; const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(shownAs(def, q, state, step.loop), strategy, rnd); if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null); }
       }
       for (const q of qs) walk.seen.add(q.id);
       const errors = validatePage(def, qs, { def, state, loop: step.loop ?? null });
@@ -341,5 +355,15 @@ export function verifyImport(c: CanonicalSurvey, m: MapResult, opts: { embedded?
   let behaviour: BehaviourReport | undefined;
   /* bounded: the analysis waits for this — what does not fit in the budget is reported as not run */
   try { behaviour = m.def ? runScenarios(c, m, { budgetMs: opts.behaviourBudgetMs ?? 8000 }) : undefined; } catch (e) { behaviour = { scenarios: [], passed: 0, failed: 0, notTestable: 0, notRun: 0, error: (e as Error).message }; }
-  return { structure, runtime, analysis, ok, ...(behaviour ? { behaviour } : {}) };
+  let dynamics: (DynamicSimulation & { error?: string }) | undefined;
+  /* the expectation is what the SOURCE says each carried list is, so a mapping that changed it fails */
+  const rid = new Map(m.mapping.filter((e) => e.kind === "question").map((e) => [e.source, e.rescript]));
+  const intent: DynamicIntent = new Map();
+  for (const cq of c.questions) {
+    const t = rid.get(cq.sourceId), from = cq.carryForward ? rid.get(cq.carryForward.questionId) : undefined;
+    if (t && cq.carryForward) intent.set(t, { sourceQuestionId: from ?? `${cq.carryForward.questionId} (not imported)`, filter: cq.carryForward.filter === "notSelected" ? "not_selected" : cq.carryForward.filter });
+  }
+  try { dynamics = m.def ? simulateDynamics(m.def, { intent }) : undefined; } catch (e) { dynamics = { scenarios: [], passed: 0, failed: 0, error: (e as Error).message }; }
+  if (dynamics && !dynamics.scenarios.length && !dynamics.error) dynamics = undefined;
+  return { structure, runtime, analysis, ok, ...(behaviour ? { behaviour } : {}), ...(dynamics ? { dynamics } : {}) };
 }

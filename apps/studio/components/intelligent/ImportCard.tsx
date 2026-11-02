@@ -44,7 +44,21 @@ export interface ImportVerification {
   analysis: { variablesKept: number; variablesRenamed: { source: string; rescript: string }[]; codesKept: number; codesChanged: { question: string; source: string; rescript: string }[]; rowsKept: number };
   /** I8: behavioural equivalence — the source's rules run on the engine, met and not met (apart from structure) */
   behaviour?: ImportBehaviour;
+  /** synthetic respondents for carried lists, masks, loops and pipes (packages/import dynamicSim.ts) */
+  dynamics?: ImportDynamicSimulation;
   ok: boolean;
+}
+export interface ImportDynamicSimulation {
+  scenarios: { id: string; feature: string; target: string; scenario: string; result: "pass" | "fail"; expected: string; observed: string }[];
+  passed: number; failed: number; error?: string;
+}
+/** the dynamic relationships, checked and self-corrected (packages/import reconstruct.ts) */
+export type ImportReconCategory = "reconstructed" | "alternative" | "confirm" | "partial" | "unsupported";
+export interface ImportReconstruction {
+  items: { category: ImportReconCategory; feature: string; location: string; questionId?: string; original: string; interpretation: string; implementation: string; why: string; action?: string }[];
+  counts: Record<ImportReconCategory, number>;
+  byFeature: Record<string, Record<ImportReconCategory, number>>;
+  passes: number;
 }
 export interface ImportBehaviour {
   scenarios: { id: string; rule: string; kind: string; met: boolean; given: string[]; result: "pass" | "fail" | "not_testable" | "not_run"; observed: string }[];
@@ -60,6 +74,7 @@ export interface ImportReport {
   fidelity?: ImportFidelity;
   /** I5: the decisions the source left open */
   clarifications?: ImportClarification[];
+  reconstruction?: ImportReconstruction;
 }
 export interface ImportDecision { id: string; type: string; [k: string]: unknown }
 export interface ImportClarification {
@@ -296,6 +311,11 @@ function FidelityBar({ f, verification }: { f: ImportFidelity; verification: Imp
             · behaviour: {v.behaviour.passed} of {v.behaviour.scenarios.length} logic scenarios behave as the source says{v.behaviour.failed ? `, ${v.behaviour.failed} do not` : ""}{v.behaviour.notTestable ? `, ${v.behaviour.notTestable} not testable` : ""}{v.behaviour.notRun ? `, ${v.behaviour.notRun} not run` : ""}
           </span>
         )}
+        {v?.dynamics && (v.dynamics.scenarios.length > 0 || v.dynamics.error) && (
+          <span className={`iqi-fid-verify${v.dynamics.failed || v.dynamics.error ? " warn" : ""}`} data-testid="iqi-dynamics" data-passed={v.dynamics.passed} data-failed={v.dynamics.failed}>
+            · dynamic lists, loops and piping: {v.dynamics.error ? `not checked — ${v.dynamics.error}` : `${v.dynamics.passed} of ${v.dynamics.scenarios.length} respondent scenarios behave as expected${v.dynamics.failed ? `, ${v.dynamics.failed} do not` : ""}`}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -342,6 +362,27 @@ function FidelityDetail({ f, verification }: { f: ImportFidelity; verification: 
           {v.runtime.unreachable.length > 0 && <p className="iqi-dim" data-testid="iqi-unreachable">Not reached: {v.runtime.unreachable.map((u) => `${u.code} (${u.reason === "by_source" ? "not in the source flow" : "no walk got there"})`).join(", ")}.</p>}
           {v.runtime.unanswerable.length > 0 && <p className="iqi-dim" data-testid="iqi-unanswerable">The walker could not satisfy: {v.runtime.unanswerable.map((u) => `${u.code} — ${u.message}`).join("; ")}.</p>}
           {v.runtime.errors.length > 0 && <p className="iq-error" data-testid="iqi-runtime-error">{v.runtime.errors.join("; ")}</p>}
+        </section>
+      )}
+      {v?.dynamics && v.dynamics.scenarios.length > 0 && (
+        <section data-testid="iqi-dynamics-detail">
+          <div className="iq-label">Dynamic behaviour — synthetic respondents (one answer, several, none, a changed answer; loops; pipes)</div>
+          <div className="iqi-map-scroll">
+            <table className="iqi-table">
+              <thead><tr><th>Result</th><th>Question</th><th>Scenario</th><th>Expected</th><th>Engine</th></tr></thead>
+              <tbody>
+                {[...v.dynamics.scenarios].sort((a, b) => (a.result === "fail" ? 0 : 1) - (b.result === "fail" ? 0 : 1)).map((x) => (
+                  <tr key={x.id} data-result={x.result} data-testid="iqi-dynamics-row">
+                    <td className={x.result === "fail" ? "iq-error" : ""}>{x.result === "pass" ? "behaves" : "differs"}</td>
+                    <td>{x.target} <span className="iqi-dim">{x.feature.replace(/_/g, " ")}</span></td>
+                    <td className="iqi-dim">{x.scenario}</td>
+                    <td className="iqi-dim mono">{x.expected}</td>
+                    <td className="iqi-dim mono">{x.observed}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
       {v?.behaviour && (

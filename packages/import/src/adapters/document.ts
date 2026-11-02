@@ -2,6 +2,7 @@ import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CFlow, CExpr, CRef, COp, CanonicalKind, Issue, SourceFormat, CanonicalEmbeddedField, PendingInstruction, CanonicalAsset,
 } from "../canonical.js";
 import { looksLikeOtherSpecify } from "@rescript/engine";
+import { readDynamicInstructions, rewritePlaceholders, type DynDraft, type DynLoop } from "./dynamics.js";
 import type { DocBlock, DocImage } from "./docx.js";
 
 /**
@@ -50,7 +51,7 @@ const OPT_NUM = /^\s*(\d{1,3})\s*[.)=:\-–]\s*(.+)$/;
 const OPT_LETTER = /^\s*([a-hA-H])[.)]\s+(.+)$/;
 const OPT_BULLET = /^\s*(?:[•\-\*○●□■☐◻▢◯◦▪]|\(\s*\)|\[\s*\])\s*(.+)$/;
 const OPT_TRAILING = /^(.+?)(?:\s*\.{3,}\s*|\s+\(|\s+\[|\t+\s*)(\d{1,3})\s*[)\]]?\s*$/;
-const INSTRUCTION = /^\s*(?:\[[^\]]+\]|\([^)]+\)|<[^>]+>)\s*$|^\s*(?:PROGRAMMER(?:'S)?\s+NOTE|PROG(?:RAMMER)?\s*[:.]|PN\s*:|INTERVIEWER|INSTRUCTION|NOTE\s*:|ASK\s+(?:ALL|IF|ONLY|THOSE|Q\w+)|SHOW\s+(?:IF|ONLY)|DISPLAY\s+(?:IF|ONLY)|BASE\s*:|FILTER\s*:|IF\s+.+(?:SKIP|GO|CONTINUE|TERMINATE|ASK)|SKIP\s+TO|GO\s+TO|TERMINATE|RANDOMI[SZ]E|ROTATE|SINGLE\s+(?:CODE|ANSWER|RESPONSE|SELECT)|MULTI(?:PLE)?\s+(?:CODE|ANSWER|RESPONSE|SELECT)|SELECT\s+(?:ONE|ALL)|HIDDEN)\b/i;
+const INSTRUCTION = /^\s*(?:\[[^\]]+\]|\([^)]+\)|<[^>]+>)\s*$|^\s*(?:PROGRAMMER(?:'S)?\s+NOTE|PROG(?:RAMMER)?\s*[:.]|PN\s*:|INTERVIEWER|INSTRUCTION|NOTE\s*:|ASK\s+(?:ALL|IF|ONLY|THOSE|Q\w+)|SHOW\s+(?:IF|ONLY)|DISPLAY\s+(?:IF|ONLY)|BASE\s*:|FILTER\s*:|IF\s+.+(?:SKIP|GO|CONTINUE|TERMINATE|ASK)|SKIP\s+TO|GO\s+TO|TERMINATE|RANDOMI[SZ]E|ROTATE|SINGLE\s+(?:CODE|ANSWER|RESPONSE|SELECT)|MULTI(?:PLE)?\s+(?:CODE|ANSWER|RESPONSE|SELECT)|SELECT\s+(?:ONE|ALL)|HIDDEN|CARRY\s*(?:FORWARD|OVER|FWD)|MASK|PIPE\s+IN|LOOP|REPEAT\s+(?:THIS|FOR|THE)|SAME\s+LIST)\b/i;
 const HEADING = /^\s*(?:section|part|block|module|chapter)\s+[\w.-]+\s*(?:[:.–—-]\s*(.*))?$/i;
 const PAGE_BREAK = /^\s*(?:[-=_*~]{3,}|\[?\s*(?:page\s*break|new\s*page|next\s*(?:page|screen)|screen\s*break)\s*\]?)\s*$/i;
 
@@ -196,10 +197,15 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
   /* ------------------------------------------------------------ type inference */
   for (const d of drafts) inferType(d, issues);
 
-  /* ------------------------------------------------------------ logic, now every question exists */
+  /* ------------------------------------------------------------ dynamic lists and loops (dynamics.ts), before the logic reader */
   const byCode = new Map(drafts.map((d) => [d.q.sourceId.toUpperCase(), d.q]));
+  const dyn = readDynamicInstructions(drafts as DynDraft[], byCode, issues);
+
+  /* ------------------------------------------------------------ logic, now every question exists */
   const embedded: CanonicalEmbeddedField[] = [];
   for (const [i, d] of drafts.entries()) readInstructions(d, drafts[i + 1]?.q, byCode, issues, embedded);
+  /* the placeholders in the words: the loop's item, earlier answers, stored values — now the fields are known */
+  const dynamics = [...dyn.dynamics, ...rewritePlaceholders(drafts as DynDraft[], byCode, issues, embedded)];
 
   /* ------------------------------------------------------------ flow */
   const flow: CFlow[] = [];
@@ -208,15 +214,27 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
   for (const [bi, ds] of [...byBlock.entries()].sort((a, c) => a[0] - c[0])) {
     const pages: string[][] = [];
     let lastPage = -1;
-    for (const d of ds) { if (d.page !== lastPage) { pages.push([]); lastPage = d.page; } pages[pages.length - 1].push(d.q.sourceId); }
-    flow.push({ t: "block", sourceId: `block_${bi}`, title: blockTitles[bi], pages });
+    /*
+     * A loop is a block of its own (dynamics.ts): the questions before it, the looped questions, and the questions
+     * after it become consecutive blocks, in the document's order, under the same heading.
+     */
+    let part = 0;
+    let curLoop: DynLoop | undefined;
+    const close = () => { if (pages.length) { flow.push({ t: "block", sourceId: part ? `block_${bi}_${part}` : `block_${bi}`, title: curLoop ? `${blockTitles[bi] ? `${blockTitles[bi]} — ` : ""}for each ${curLoop.noun}` : blockTitles[bi], pages: pages.splice(0), ...(curLoop ? { loop: curLoop.loop } : {}) }); part++; } lastPage = -1; };
+    for (const d of ds) {
+      const lp = (d as DynDraft).loop;
+      if (lp !== curLoop) { close(); curLoop = lp; }
+      if (d.page !== lastPage) { pages.push([]); lastPage = d.page; }
+      pages[pages.length - 1].push(d.q.sourceId);
+    }
+    close();
   }
   if (!explicitPages && drafts.length > 1) issues.push({ location: "pages", type: "inferred", severity: "info", message: "The document marks no page breaks, so each question was given its own page.", suggestion: "Join pages in Architect where questions belong together.", autoAttempted: true });
   if (!drafts.length) issues.push({ location: meta.fileName, type: "parse", severity: "high", message: "No questions were recognised in the document.", suggestion: "Questions are recognised by a code at the start of the line (Q1., S2), Question 3:) followed by the options on their own lines.", autoAttempted: true });
 
   return {
     source: { platform: "document", format: meta.format, fileName: meta.fileName, title, fingerprint: meta.fingerprint },
-    questions: drafts.map((d) => d.q), flow, embedded, quotas: [], custom: [], issues, ...(assets.length ? { assets } : {}),
+    questions: drafts.map((d) => d.q), flow, embedded, quotas: [], custom: [], issues, ...(assets.length ? { assets } : {}), ...(dynamics.length ? { dynamics } : {}),
   };
 }
 

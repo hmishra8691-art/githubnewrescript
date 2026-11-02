@@ -1711,7 +1711,7 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
             const firstInside = questionIdsInLoop(n).map((id) => questionIndex.get(id) ?? Infinity).reduce((a, b) => Math.min(a, b), Infinity);
             const srcAt = questionIndex.get(q.id);
             if (srcAt != null && srcAt > firstInside) push("error", "source", `Loop "${n.loopVar}" iterates over ${q.code}, which is asked after the loop — it will have no answer yet.`);
-            if (["selected", "notSelected"].includes(n.source.filter ?? "selected") && !q.options.length) push("warning", "source", `Loop "${n.loopVar}" filters ${q.code} by selection, but ${q.code} has no options.`);
+            if (["selected", "notSelected"].includes(n.source.filter ?? "selected") && !q.options.length && !q.carryForward) push("warning", "source", `Loop "${n.loopVar}" filters ${q.code} by selection, but ${q.code} has no options.`); /* a carried-forward list IS its options at runtime (loops.ts reads effectiveQuestion) */
           }
         }
         if (n.source.kind === "listFill" && !def.listFills.some((l) => l.id === (n.source as { listFillId: string }).listFillId)) push("error", "source", `Loop "${n.loopVar}" iterates over a List Fill that does not exist.`);

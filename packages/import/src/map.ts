@@ -1,4 +1,5 @@
 import { SurveyDefinition, Localization, LanguageConfig, resolveVariant, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
+import { reconstruct, type Reconstruction } from "./reconstruct.js";
 import { runQualityCheck, listBlocks, constantCondition, recordTranslation, codeGate, gateReason } from "@rescript/engine";
 import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField, InventoryItem,
@@ -73,6 +74,8 @@ export interface MapResult {
   unresolved: UnresolvedReference[];
   /** I3: what each imported JavaScript does and what it becomes here (jsMigrate.ts) */
   jsMigrations: (JsMigration & { questionId: string | null; scriptName: string })[];
+  /** 2026-11-02: the dynamic relationships, checked, self-corrected and explained (reconstruct.ts) */
+  reconstruction?: Reconstruction;
 }
 
 /* ------------------------------------------------------------ kind → Rescript type */
@@ -214,7 +217,19 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       notes: `${verdict}Imported from ${c.source.platform} (${cu.location}); not executed. ${migration}${cu.refs.length ? `Reads ${cu.refs.join(", ")}. ` : ""}Analyse it in Intelligent mode, then rebuild it as Rescript logic.`.slice(0, 1000),
     };
   };
-  const optionCode = (qs: string, choice: string): string | number | undefined => qBySource.get(qs)?.options.find((o) => o.sourceId === choice)?.code;
+  /*
+   * A choice of a CARRIED-FORWARD question is the source's choice (2026-11-02): Qualtrics names it "x" + the
+   * source's choice id ("q://QID4/SelectableChoice/x2" on a question carrying QID2's choices), and the carried
+   * question usually has no choices of its own. It resolves through the carry-forward chain to the source's code —
+   * the code the carried option keeps at runtime — instead of being dropped as "no such choice".
+   */
+  const optionCode = (qs: string, choice: string, depth = 0): string | number | undefined => {
+    const q = qBySource.get(qs);
+    const own = q?.options.find((o) => o.sourceId === choice)?.code;
+    if (own !== undefined || !q?.carryForward || depth > 5) return own;
+    const m = /^x(.+)$/.exec(choice);
+    return optionCode(q.carryForward.questionId, m ? m[1] : choice, depth + 1);
+  };
   const rowCode = (qs: string, row: string): string | undefined => qBySource.get(qs)?.rows.find((r) => r.sourceId === row)?.code;
   const confidence: QuestionConfidence[] = [];
   /* quota ids and limits by SOURCE id — decided before any condition is built, because branches and display logic may read a quota */
@@ -692,7 +707,14 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     q.text = pipe(q.text, q.code) ?? "";
     for (const o of q.options ?? []) o.label = pipe(o.label, `${q.code} options`) ?? "";
     for (const r of q.rows ?? []) r.label = pipe(r.label, `${q.code} rows`) ?? "";
+    /* 2026-11-02: piping in the instruction, the description and a validation message too — the same tokens, the same resolution */
+    if (q.instruction) q.instruction = pipe(q.instruction, `${q.code} instruction`);
+    if (q.description) q.description = pipe(q.description, `${q.code} description`);
+    for (const v of q.validation ?? []) if (typeof (v as { message?: unknown }).message === "string") (v as { message?: string }).message = pipe((v as { message?: string }).message, `${q.code} validation message`);
   }
+  /* …and an end's redirect address (a panel id passed back): piped at the end, percent-encoded (engine redirect.ts) */
+  const pipeEnds = (ns: FlowNode[]) => { for (const n of ns as (FlowNode & { redirectUrl?: string; children?: FlowNode[]; branches?: { children: FlowNode[] }[]; otherwise?: FlowNode[] })[]) { if (n.type === "end" && n.redirectUrl) n.redirectUrl = pipe(n.redirectUrl, "End redirect"); if (n.children) pipeEnds(n.children); for (const b of n.branches ?? []) pipeEnds(b.children); if (n.otherwise) pipeEnds(n.otherwise); } };
+  pipeEnds(flow);
 
   /* ------------------------------------------------------------ an end, always */
   if (!flow.some((n) => n.type === "end") || flow[flow.length - 1]?.type !== "end") {
@@ -778,6 +800,10 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     return { def: null, mapping, issues: sortIssues(all), created: canonicalStats(c), confidence, merge, quality: null, inventory: [...(c.inventory ?? []).map(adjustJs), ...inventory], unresolved, jsMigrations };
   }
   const def = parsed.data;
+  /* 2026-11-02: every dynamic relationship checked against the runtime, corrected with native features where the first mapping cannot behave as the source intended, re-checked, explained (reconstruct.ts) */
+  let reconstruction: Reconstruction | undefined;
+  try { reconstruction = reconstruct(c, def, idOf); }
+  catch (e) { all.push({ location: "reconstruction", type: "validation", severity: "medium", message: `The reconstruction check could not run: ${(e as Error).message}`, autoAttempted: false }); }
   /* post-migration validation (§31): the engine's own quality check — references, flow, variables, logic */
   let quality: MapResult["quality"] = null;
   try {
@@ -791,7 +817,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     for (const i of relevant.filter((x) => x.level === "error").slice(0, 60)) all.push({ location: where(i), type: "validation", severity: "high", message: i.message, autoAttempted: false, ...(i.questionId ? { refs: [i.questionId] } : {}) });
     for (const i of relevant.filter((x) => x.level !== "error").slice(0, 60)) all.push({ location: where(i), type: "validation", severity: "low", message: i.message, autoAttempted: false, ...(i.questionId ? { refs: [i.questionId] } : {}) });
   } catch (e) { all.push({ location: "validation", type: "validation", severity: "medium", message: `The quality check could not run: ${(e as Error).message}`, autoAttempted: false }); }
-  return { def, mapping, issues: sortIssues(all), created: createdStats(def, built, existing), confidence, merge, quality, inventory: [...(c.inventory ?? []).map(adjustJs), ...inventory], unresolved, jsMigrations };
+  return { def, mapping, issues: sortIssues(all), created: createdStats(def, built, existing), confidence, merge, quality, inventory: [...(c.inventory ?? []).map(adjustJs), ...inventory], unresolved, jsMigrations, ...(reconstruction ? { reconstruction } : {}) };
 }
 
 function opName(op: string): string {

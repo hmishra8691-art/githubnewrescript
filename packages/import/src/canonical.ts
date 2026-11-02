@@ -286,7 +286,7 @@ export interface Issue {
  * question it is attached to, and what part of it IS known (a skip's target, a condition's words, a variable name).
  */
 export interface PendingInstruction {
-  kind: "display" | "skip" | "skip_target" | "terminate" | "randomize" | "embedded";
+  kind: "display" | "skip" | "skip_target" | "terminate" | "randomize" | "embedded" | "dynamic";
   text: string;
   questionId: string;
   /** a skip whose target is known but whose condition is not */
@@ -329,6 +329,27 @@ export interface CanonicalSurvey {
   inventory?: InventoryItem[];
   /** the source's own element kinds and how many of each were seen, read or not — the file's table of contents */
   elements?: { type: string; count: number; handled: "read" | "ignored" | "unsupported"; note?: string }[];
+  /**
+   * DYNAMIC BEHAVIOUR READ FROM WORDS (2026-11-02, adapters/dynamics.ts): every carry-forward, mask, repeated list,
+   * loop and pipe an instruction or a placeholder asked for — the words, what the reader understood, and how sure it
+   * is. The reconstruction report (reconstruct.ts) explains each from here; a QSF states these structurally and
+   * has none.
+   */
+  dynamics?: CanonicalDynamic[];
+}
+
+export interface CanonicalDynamic {
+  feature: "carry_forward" | "mask" | "same_list" | "loop" | "pipe" | "loop_pipe" | "embedded_pipe";
+  /** the question it applies to (source id) */
+  questionId: string;
+  /** the question it reads (source id), when it reads one */
+  sourceId?: string;
+  /** the words as the document wrote them */
+  original: string;
+  /** what the reader understood, in a sentence */
+  interpretation: string;
+  /** "high": the words name the source and the behaviour; "inferred": the source was "the previous question" or implied */
+  confidence: "high" | "inferred";
 }
 
 /** FNV-1a over the bytes, base36 — a fingerprint, not a security hash */

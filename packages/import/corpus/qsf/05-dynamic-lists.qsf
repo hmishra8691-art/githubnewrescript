@@ -1,0 +1,622 @@
+{
+ "SurveyEntry": {
+  "SurveyID": "SV_dynamic05",
+  "SurveyName": "Dynamic lists",
+  "SurveyDescription": null,
+  "SurveyOwnerID": "UR_sanitized",
+  "SurveyBrandID": "sanitized",
+  "DivisionID": null,
+  "SurveyLanguage": "EN",
+  "SurveyActiveResponseSet": "RS_demo",
+  "SurveyStatus": "Inactive",
+  "SurveyStartDate": "0000-00-00 00:00:00",
+  "SurveyExpirationDate": "0000-00-00 00:00:00",
+  "SurveyCreationDate": "2026-01-10 09:00:00",
+  "CreatorID": "UR_sanitized",
+  "LastModified": "2026-02-01 12:00:00",
+  "LastAccessed": "0000-00-00 00:00:00",
+  "LastActivated": "0000-00-00 00:00:00",
+  "Deleted": null
+ },
+ "SurveyElements": [
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "BL",
+   "PrimaryAttribute": "Survey Blocks",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": [
+    {
+     "Type": "Default",
+     "Description": "Funnel",
+     "ID": "BL_funnel",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID1"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID2"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID3"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID4"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID5"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Per brand bought",
+     "ID": "BL_loop",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID6"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID7"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false",
+      "Looping": "Question",
+      "LoopingOptions": {
+       "QID": "QID2",
+       "ChoiceLocator": "q://QID2/ChoiceGroup/SelectedChoices",
+       "Randomization": "None"
+      }
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Close",
+     "ID": "BL_close",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID8"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    }
+   ]
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "FL",
+   "PrimaryAttribute": "Survey Flow",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "Type": "Root",
+    "FlowID": "FL_1",
+    "Flow": [
+     {
+      "Type": "EmbeddedData",
+      "FlowID": "FL_2",
+      "EmbeddedData": [
+       {
+        "Description": "panel",
+        "Type": "Recipient",
+        "Field": "panel",
+        "VariableType": "String",
+        "Value": ""
+       }
+      ]
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_funnel",
+      "FlowID": "FL_3"
+     },
+     {
+      "Type": "Branch",
+      "FlowID": "FL_4",
+      "Description": "Aware of none",
+      "BranchLogic": {
+       "0": {
+        "0": {
+         "LogicType": "Question",
+         "QuestionID": "QID1",
+         "QuestionIsInLoop": "no",
+         "ChoiceLocator": "q://QID1/SelectableChoice/5",
+         "Operator": "Selected",
+         "QuestionIDFromLocator": "QID1",
+         "LeftOperand": "q://QID1/SelectableChoice/5",
+         "Type": "Expression",
+         "Description": "QID1 5 Selected"
+        },
+        "Type": "If"
+       },
+       "Type": "BooleanExpression"
+      },
+      "Flow": [
+       {
+        "Type": "EndSurvey",
+        "FlowID": "FL_5",
+        "Options": {
+         "Advanced": "true",
+         "SurveyTermination": "Redirect",
+         "EOSRedirectURL": "https://panel.example.com/screenout?pid=${e://Field/panel}",
+         "ScreenOutResponse": "true"
+        }
+       }
+      ]
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_loop",
+      "FlowID": "FL_6"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_close",
+      "FlowID": "FL_7"
+     },
+     {
+      "Type": "EndSurvey",
+      "FlowID": "FL_8"
+     }
+    ],
+    "Properties": {
+     "Count": 8
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID1",
+   "SecondaryAttribute": "Which of these brands are you aware of?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID1",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which of these brands are you aware of?",
+    "QuestionText": "Which of these brands are you aware of?",
+    "DataExportTag": "aware",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Alpha"
+     },
+     "2": {
+      "Display": "Beta"
+     },
+     "3": {
+      "Display": "Gamma"
+     },
+     "4": {
+      "Display": "Delta"
+     },
+     "5": {
+      "Display": "None of these",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4,
+     5
+    ],
+    "RecodeValues": {
+     "1": "10",
+     "2": "20",
+     "3": "30",
+     "4": "40",
+     "5": "99"
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "MinChoices",
+      "MinChoices": "1"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID2",
+   "SecondaryAttribute": "Which of the brands you know have you bo",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID2",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which of the brands you know have you bought?",
+    "QuestionText": "Which of the brands you know have you bought?",
+    "DataExportTag": "bought",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {},
+    "ChoiceOrder": [],
+    "DynamicChoices": {
+     "Locator": "q://QID1/SelectedChoices",
+     "Type": "SelectedChoices"
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID1",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID1/SelectableChoice/5",
+       "Operator": "NotSelected",
+       "QuestionIDFromLocator": "QID1",
+       "LeftOperand": "q://QID1/SelectableChoice/5",
+       "Type": "Expression",
+       "Description": "QID1 5 NotSelected"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "MinChoices",
+      "MinChoices": "1"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID3",
+   "SecondaryAttribute": "Which of the brands you know have you NO",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID3",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which of the brands you know have you NOT bought?",
+    "QuestionText": "Which of the brands you know have you NOT bought?",
+    "DataExportTag": "notbought",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {},
+    "ChoiceOrder": [],
+    "DynamicChoices": {
+     "Locator": "q://QID2/UnselectedChoices",
+     "Type": "UnselectedChoices"
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID4",
+   "SecondaryAttribute": "Which one is your main brand?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID4",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which one is your main brand?",
+    "QuestionText": "Which one is your main brand?",
+    "DataExportTag": "main",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {},
+    "ChoiceOrder": [],
+    "DynamicChoices": {
+     "Locator": "q://QID2/SelectedChoices",
+     "Type": "SelectedChoices"
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID2",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID2/SelectableChoice/x1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID2",
+       "LeftOperand": "q://QID2/SelectableChoice/x1",
+       "Type": "Expression",
+       "Description": "QID2 x1 Selected"
+      },
+      "1": {
+       "LogicType": "Question",
+       "QuestionID": "QID1",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID1/SelectableChoice/2",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID1",
+       "LeftOperand": "q://QID1/SelectableChoice/2",
+       "Type": "Expression",
+       "Description": "QID1 2 Selected",
+       "Conjuction": "Or"
+      },
+      "2": {
+       "LogicType": "Question",
+       "QuestionID": "QID1",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID1/SelectableChoice/3",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID1",
+       "LeftOperand": "q://QID1/SelectableChoice/3",
+       "Type": "Expression",
+       "Description": "QID1 3 Selected",
+       "Conjuction": "And"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID5",
+   "SecondaryAttribute": "Why is ${q://QID4/ChoiceGroup/SelectedCh",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID5",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Why is ${q://QID4/ChoiceGroup/SelectedChoices} your main bra",
+    "QuestionText": "Why is ${q://QID4/ChoiceGroup/SelectedChoices} your main brand? (panel ${e://Field/panel})",
+    "DataExportTag": "why",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID6",
+   "SecondaryAttribute": "How satisfied are you with ${lm://Field/",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID6",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "How satisfied are you with ${lm://Field/1}?",
+    "QuestionText": "How satisfied are you with ${lm://Field/1}?",
+    "DataExportTag": "sat",
+    "QuestionType": "MC",
+    "Selector": "SAHR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very dissatisfied"
+     },
+     "2": {
+      "Display": "Dissatisfied"
+     },
+     "3": {
+      "Display": "Satisfied"
+     },
+     "4": {
+      "Display": "Very satisfied"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID7",
+   "SecondaryAttribute": "What would make ${lm://Field/1} better?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID7",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "What would make ${lm://Field/1} better?",
+    "QuestionText": "What would make ${lm://Field/1} better?",
+    "DataExportTag": "better",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID8",
+   "SecondaryAttribute": "Which would you recommend?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID8",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which would you recommend?",
+    "QuestionText": "Which would you recommend?",
+    "DataExportTag": "rec",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "${q://QID4/ChoiceGroup/SelectedChoices} (your main brand)"
+     },
+     "2": {
+      "Display": "Another brand"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "PROJ",
+   "PrimaryAttribute": "CORE",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": "1.1.0",
+   "Payload": {
+    "ProjectCategory": "CORE",
+    "SchemaVersion": "1.1.0"
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "STAT",
+   "PrimaryAttribute": "Survey Statistics",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "MobileCompatible": true,
+    "ID": "Survey Statistics"
+   }
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "RS",
+   "PrimaryAttribute": "RS_demo",
+   "SecondaryAttribute": "Default Response Set",
+   "TertiaryAttribute": null,
+   "Payload": null
+  },
+  {
+   "SurveyID": "SV_dynamic05",
+   "Element": "QC",
+   "PrimaryAttribute": "Survey Question Count",
+   "SecondaryAttribute": "6",
+   "TertiaryAttribute": null,
+   "Payload": null
+  }
+ ]
+}

@@ -9,6 +9,7 @@ import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefi
 import { designFor, designVersionFor, shuffleAlternatives } from "./designVersion.js";
 import { isGeoAnswer, hasCoordinates, geoText, round6 } from "./geo.js";
 import { isAcbcAnswer } from "./acbc.js";
+import { withOptionUniverse } from "./optionUniverse.js";
 import { DUAL_SUFFIX, isDualKey } from "./conjointSuite.js";
 
 export type FlatVars = Record<string, unknown>;
@@ -111,7 +112,9 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
     if (!list) entriesByQuestion.set(base, (list = []));
     list.push([k, v]);
   }
-  for (const q of def.questions) {
+  for (const q0 of def.questions) {
+    /* a carried list writes its source's codes as columns, as variables.ts declares them (optionUniverse.ts) */
+    const q = withOptionUniverse(q0, def.questions);
     // every answer entry for this question (plain + loop-suffixed)
     const entries = entriesByQuestion.get(q.id) ?? [];
     for (const [key, value] of entries) {
@@ -555,7 +558,7 @@ function placeLoopAnswers(def: SurveyDefinition, state: ResponseState, out: Flat
         if (!q) continue;
         const key = `${qid}${suffix}`;
         if (state.answers[key] === undefined) continue;
-        flattenQuestion(q, state.answers[key], `${q.variableName}${position}`, out, opts);
+        flattenQuestion(withOptionUniverse(q, def.questions), state.answers[key], `${q.variableName}${position}`, out, opts);
         placed.add(key);
         /* the same per-box columns, inside the iteration's own prefix */
         for (const code of otherBoxCodes(q)) {

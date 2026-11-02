@@ -14,6 +14,7 @@ import { fieldDataType } from "./fields.js";
 import { questionAi, voiceOn } from "./aiConversation.js";
 import { embeddedCatalog } from "./embedded.js";
 import { stripHtmlText } from "./html.js";
+import { withOptionUniverse } from "./optionUniverse.js";
 import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns } from "./derivedNames.js";
 import { randomizerOrderVariable, questionOrderVariable, recordedAxes } from "./displayOrder.js";
 import { randomizerVariable, armVariableBase } from "./exactBalance.js";
@@ -101,6 +102,8 @@ export function questionVariables(
    */
   naming?: SuffixPatterns,
 ): VariableDef[] {
+  /* a carried list's columns are its source's codes (optionUniverse.ts): declared here, written by flatten.ts */
+  q = withOptionUniverse(q, all);
   const rows = dictionaryRows(q, all);
   const base = {
     questionId: q.id,

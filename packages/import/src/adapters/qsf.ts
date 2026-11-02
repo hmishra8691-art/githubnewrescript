@@ -200,7 +200,8 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
           const o: Json = f.Options ?? {};
           const status = truthy(o.ScreenOutResponse) ? "screened" : "complete";
           /* a library message (EOSM_…) is not in the file — say so instead of writing its id where a sentence should be */
-          out.push({ t: "end", sourceId: fid, status, redirectUrl: o.EOSRedirectURL || undefined });
+          /* the redirect's own piping (a panel id) in the canonical form, so it is piped at the end like any other text */
+          out.push({ t: "end", sourceId: fid, status, redirectUrl: o.EOSRedirectURL ? qsfPiping(str(o.EOSRedirectURL)) : undefined });
           if (o.EOSMessage) issues.push({ location: `Flow · EndSurvey ${fid}`, type: "dropped", severity: "low", message: `The end-of-survey message ${o.EOSMessage} lives in the Qualtrics message library, which the file does not include; the end uses Rescript's default message.`, suggestion: "Paste the message into the end element in Architect.", autoAttempted: false });
           break;
         }

@@ -1,6 +1,7 @@
 import type { CanonicalSurvey } from "./canonical.js";
 import type { Clarification } from "./clarify.js";
 import { plainText } from "./canonical.js";
+import { nativeCapabilityListing } from "./nativeRegistry.js";
 
 /**
  * AI-ASSISTED INSTRUCTION INTERPRETATION (import brief §11, I6).
@@ -97,4 +98,7 @@ export function fakeSuggest(c: CanonicalSurvey, asks: Clarification[]): { sugges
 }
 
 export const SUGGEST_SYSTEM_PROMPT = `You help a survey programmer import a questionnaire. Some programming instructions in it could not be turned into survey logic automatically. For each open question you are given the instruction's words and a NUMBERED list of choices the import engine already built (each one is valid in the survey). Pick the choice that best matches what the instruction means, using the questionnaire for context — or null when none clearly does. Never invent a choice. Reply with ONE JSON object and nothing else:
-{"suggestions":[{"id":"<the open question's id>","choice":<number or null>,"because":"<one short sentence>"}]}`;
+{"suggestions":[{"id":"<the open question's id>","choice":<number or null>,"because":"<one short sentence>"}]}
+
+What Rescript builds natively — every choice is made of these. Use this list to understand what a choice would do; it does not let you propose anything that is not one of the numbered choices:
+${nativeCapabilityListing()}`;

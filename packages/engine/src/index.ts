@@ -68,6 +68,7 @@ export * from "./retireVariants.js";
 export * from "./rendererReads.js";
 export * from "./validate.js";
 export * from "./variables.js";
+export * from "./optionUniverse.js";
 export * from "./scripts.js";
 export * from "./questionTypes.js";
 export * from "./inspector.js";
