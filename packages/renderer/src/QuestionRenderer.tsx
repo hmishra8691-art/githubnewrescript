@@ -49,6 +49,8 @@ import {
   initialDateValue,
   initialTimeValue,
   type ValidationError,
+  dontKnowEnabled,
+  dontKnowKey,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { DualResponseFollowUp } from "./variants/conjointSuite";
@@ -361,6 +363,33 @@ export function OtherSpecifyFallback(p: QRProps) {
         return o ? <OtherInput key={c} {...p} option={o} below /> : null;
       })}
     </>
+  );
+}
+
+/**
+ * "I DON'T KNOW" BESIDE AN OPEN-TEXT OR NUMERIC ANSWER (2026-11-02, engine dontKnow.ts).
+ *
+ * Drawn here, once, under every open-text and numeric question that offers it — whatever its variant — the way
+ * the "Other" box is drawn centrally. Ticking it empties the answer first and then stores the choice beside it
+ * (`<key>__dk`), so the two are never held together; typing an answer goes through the engine's `setAnswer`, which
+ * clears the choice, and the box unticks on the next render. The input is left usable on purpose: typing is how
+ * a respondent changes their mind. Outside a Runner (`onExtraChange` absent: the Studio's design canvas) it is
+ * drawn, but cannot be ticked.
+ */
+export function DontKnowChoice(p: QRProps) {
+  if (!dontKnowEnabled(p.q)) return null;
+  const on = (p.state?.answers as Record<string, unknown> | undefined)?.[dontKnowKey(p.q.id, p.loop ?? null)] === true;
+  const label = p.q.settings.dontKnowLabel?.trim() || uiOf(p, "dont_know", undefined, "I don't know");
+  const usable = !!p.onExtraChange && !p.q.settings.readOnly;
+  return (
+    <label className={`rs-dk${on ? " on" : ""}`} data-testid="rs-dont-know">
+      <input type="checkbox" data-testid="rs-dont-know-input" checked={on} disabled={!usable}
+        onChange={(e) => {
+          if (e.target.checked) { p.onChange(undefined); p.onExtraChange?.("dk", true); }
+          else p.onExtraChange?.("dk", undefined);
+        }} />
+      <span className="rs-dk-label">{label}</span>
+    </label>
   );
 }
 
@@ -3105,6 +3134,8 @@ function QuestionRendererCard(props: QRProps) {
 
   // one place, after every dispatch path — see `rendersOwnOtherBox`
   if (otherFallback) body = <>{body}{otherFallback}</>;
+  // …and the "I don't know" choice, the same way (`DontKnowChoice`)
+  if (dontKnowEnabled(p.q)) body = <>{body}<DontKnowChoice {...p} /></>;
 
   return (
     <div

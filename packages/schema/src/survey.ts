@@ -86,6 +86,18 @@ export const ResearchConstruct = z.object({
   definition: z.string().optional(),
   /** question ids that measure it */
   questionIds: z.array(z.string()).default([]),
+  /**
+   * HOW IT CAME TO BE (2026-11-02): "hypothesis" when the engine created it from a hypothesis's reading
+   * (researchLinks.ts) rather than a person or a design proposal. Absent on every construct made before.
+   */
+  origin: z.enum(["hypothesis"]).optional(),
+  /**
+   * Questions that MAY measure it but were not linked because the match was not certain — a person decides
+   * (link, or dismiss). Never counted as measuring the construct. Rebuilt on every linking pass.
+   */
+  review: z.array(z.object({ questionId: z.string(), reason: z.string() })).optional(),
+  /** question ids a person dismissed from `review`: never suggested again for this construct */
+  dismissed: z.array(z.string()).optional(),
 });
 export type ResearchConstruct = z.infer<typeof ResearchConstruct>;
 
@@ -111,6 +123,12 @@ export const HypothesisDetail = z.object({
   group: z.string().optional(),
   lower: z.string().optional(),
   expectedEffect: z.enum(["small", "medium", "large"]).optional(),
+  /**
+   * A DIFFERENCE BETWEEN GROUPS, at the level of answer options (2026-11-02): the question that defines the groups
+   * and the option codes on each side — "women are more satisfied than men" → Q2 codes [2] higher, [1] lower.
+   * Written by the linking pass when the groups' words name a question's options; absent otherwise.
+   */
+  groupOptions: z.object({ questionId: z.string(), higher: z.array(z.union([z.string(), z.number()])).default([]), lower: z.array(z.union([z.string(), z.number()])).default([]) }).optional(),
   /** the researcher's own standing of it — the fieldwork verdicts live on the analysis run */
   status: z.enum(["proposed", "supported", "not_supported", "mixed", "inconclusive"]).optional(),
   note: z.string().optional(),

@@ -1,4 +1,5 @@
 import type { Question, SurveyDefinition } from "@rescript/schema";
+import { looksLikeOtherSpecify } from "./otherSpecify.js";
 import { runQualityCheck } from "./qualityCheck.js";
 import { diagnoseQuestion } from "./diagnose.js";
 import { buildLogicFlow, unreachableLogicNodes } from "./logicGraph.js";
@@ -175,6 +176,17 @@ export function reviewSurvey(def: SurveyDefinition): SurveyReview {
     if (/matrix/.test(q.type)) continue;
     const m = DOUBLE.exec(plain(q.text));
     if (m && !/\b(?:between|both)\b/i.test(q.text)) add({ severity: "suggestion", category: "wording", message: `${q.code} may be double-barreled: it asks about “${m[1]}” and “${m[2]}” in one answer.`, questionIds: [q.id], suggestion: `Split it, or make it a grid with ${m[1]} and ${m[2]} as rows.` });
+    /*
+     * "Other (please specify)" written as a label but not flagged: the respondent picks it and is given nowhere to
+     * say what it is (2026-11-02). Saved surveys are never re-flagged on their own — a live study's validation
+     * would change under its respondents — so the review says so and the fix is one click.
+     */
+    if (["single_select", "multi_select", "dropdown", "multi_dropdown"].includes(q.type)) {
+      for (const o of q.options ?? []) {
+        if (o.flags?.includes("other_specify") || !looksLikeOtherSpecify(o.label)) continue;
+        add({ severity: "warning", category: "options", message: `${q.code} option ${o.code} “${o.label.replace(/<[^>]*>/g, "").slice(0, 60)}” asks the respondent to specify, but has no text box — choosing it records nothing about what they meant.`, questionIds: [q.id], suggestion: "Give it its “Other — specify” box.", fix: [{ op: "update_option", target: q.code, option: o.code, other: true } as SurveyAction] });
+      }
+    }
     if (q.type === "multi_select" && (q.options?.length ?? 0) >= 4 && !q.options.some((o) => NONE_OR_OTHER.test(o.label) || o.flags?.includes("exclusive") || o.flags?.includes("other_specify"))) {
       add({ severity: "suggestion", category: "options", message: `${q.code} has no “None of these” or “Other” — a respondent whose answer is not listed must pick something untrue.`, questionIds: [q.id], fix: [{ op: "update_question", target: q.code, addOptions: [{ label: "Other (please specify)", other: true }, { label: "None of these", exclusive: true }] }] });
     }

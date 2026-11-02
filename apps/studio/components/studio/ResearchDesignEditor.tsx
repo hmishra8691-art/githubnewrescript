@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { HypothesisDetail, ResearchConstruct, ResearchDesign } from "@rescript/schema";
-import { applySurveyActions, describeHypothesis, hypothesisCoverage, structuredHypotheses } from "@rescript/engine";
+import { applySurveyActions, describeHypothesis, hypothesisCoverage, structuredHypotheses, linkHypothesisConstructs, describeLinks, resolveConstructReview } from "@rescript/engine";
 import { hypothesisLabel } from "@rescript/schema";
 import { useStudio } from "./store";
 import { InlineRichText } from "./RichTextEditor";
@@ -55,12 +55,48 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
   });
   const [openReading, setOpenReading] = React.useState<number | null>(null);
   const [draftHyp, setDraftHyp] = React.useState("");
+  /*
+   * A NEW HYPOTHESIS ARRIVES WITH ITS CONSTRUCTS AND THEIR QUESTIONS (2026-11-02, engine researchLinks.ts): the
+   * statement, its reading, the constructs its sides name (made when the design has none), and every question that
+   * certainly measures them — one edit, saved together. What is only possibly a match is listed under the
+   * construct to link or dismiss; nothing uncertain is linked.
+   */
+  const link = (label: string, only?: number) => {
+    let said = "";
+    s.labelNextEdit(label);
+    s.update((d) => {
+      const rep = linkHypothesisConstructs(d, { ...(only !== undefined ? { hypotheses: [only] } : {}), now: new Date().toISOString() });
+      said = describeLinks(rep);
+    });
+    return said;
+  };
   const addHypothesis = () => {
     const text = draftHyp.trim();
     if (!text) return;
     if (r.hypotheses.some((h) => h.trim().toLowerCase() === text.toLowerCase())) { s.toast("That hypothesis is already recorded", "err"); return; }
-    patch("add hypothesis", (d) => { d.hypotheses.push(text); });
+    let said = "";
+    s.labelNextEdit("add hypothesis");
+    s.update((d) => {
+      const cur: ResearchDesign = d.research ?? { ...EMPTY, hypotheses: [], hypothesisDetails: [], researchQuestions: [], kpis: [], constructs: [], analysis: [], assumptions: [], sources: [] };
+      cur.hypotheses = [...cur.hypotheses, text];
+      const details = [...(cur.hypothesisDetails ?? [])];
+      while (details.length < cur.hypotheses.length) details.push({});
+      cur.hypothesisDetails = details;
+      cur.updatedAt = new Date().toISOString();
+      d.research = cur;
+      said = describeLinks(linkHypothesisConstructs(d, { hypotheses: [cur.hypotheses.length - 1], now: cur.updatedAt }));
+    });
     setDraftHyp("");
+    if (said) s.toast(`${hypothesisLabel(r.hypotheses.length)}: ${said}`, "ok");
+  };
+  const relink = (i?: number) => {
+    const said = link(i === undefined ? "link every hypothesis to its constructs" : `link ${hypothesisLabel(i)} to its constructs`, i);
+    s.toast(said || "Constructs and links already in place", "ok");
+  };
+  /* a possible link a person decides: link it (with the question's tags), or dismiss it for good */
+  const decide = (construct: string, questionId: string, decision: "link" | "dismiss") => {
+    s.labelNextEdit(decision === "link" ? "link question to construct" : "dismiss a possible construct link");
+    s.update((d) => { resolveConstructReview(d, construct, questionId, decision); });
   };
   const removeHypothesis = (i: number) => {
     const label = hypothesisLabel(i);
@@ -111,6 +147,7 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
                 onChange={(text) => patch(`edit ${hypothesisLabel(i)}`, (d) => { d.hypotheses[i] = text; })} />
               {c && <span className={`chip${c.status === "testable" ? " on" : c.status === "partly" ? " warn" : ""}`} title={c.status === "testable" ? "measured, and a table or test is planned" : c.status === "partly" ? "measured, nothing planned yet" : c.status === "unmeasured" ? "a construct it names has no question" : "no construct or question is linked to it"}>{c.status === "testable" ? "testable" : c.status === "partly" ? "unplanned" : c.status === "unmeasured" ? "unmeasured" : "unlinked"}</span>}
               <button type="button" className={`btn small${openReading === i ? " on" : ""}`} data-testid="rd-hypothesis-reading" title="The reading of this hypothesis: type, direction, the construct on each side, the effect expected" onClick={() => setOpenReading(openReading === i ? null : i)}>{readings[i] ? describeHypothesis(readings[i]) || "reading" : "reading"}</button>
+              <button type="button" className="btn small" data-testid="rd-hypothesis-link" title="Make the constructs this hypothesis names (when the design has none) and link the questions that measure them; possible matches are listed under the construct for you to confirm" onClick={() => relink(i)}>link constructs</button>
               <button type="button" className="btn small danger" data-testid="rd-hypothesis-remove" title="Remove this hypothesis (later ones are renumbered)" onClick={() => removeHypothesis(i)}>×</button>
               {openReading === i && readings[i] && (
                 <div className="rd-reading" data-testid="rd-reading">
@@ -136,6 +173,7 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
         <input className="input grow" data-testid="rd-hypothesis-new" placeholder="New hypothesis, e.g. Price perception drives switching" value={draftHyp}
           onChange={(e) => setDraftHyp(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addHypothesis(); } }} />
         <button type="button" className="btn small" data-testid="rd-hypothesis-add" onClick={addHypothesis} disabled={!draftHyp.trim()}>+ hypothesis</button>
+        {r.hypotheses.length > 0 && <button type="button" className="btn small" data-testid="rd-link-all" title="Every hypothesis: its constructs and the questions that measure them" onClick={() => relink()}>Link all constructs</button>}
       </div>
 
       <h4 className="rd-h">Research questions <span className="muted">· what the study sets out to answer, in words</span></h4>
@@ -192,12 +230,27 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
               {c.questionIds.map((id) => (
                 <span key={id} className="chip" data-testid="rd-construct-question">{questionLabel(id)} <button type="button" className="rd-x" aria-label={`Remove ${questionLabel(id)}`} onClick={() => patch("unlink question from construct", (d) => { d.constructs[i].questionIds = d.constructs[i].questionIds.filter((x) => x !== id); })}>×</button></span>
               ))}
+              {c.origin === "hypothesis" && <span className="chip" title="Created from a hypothesis's reading" data-testid="rd-construct-origin">from a hypothesis</span>}
+              {/* a hand-picked link goes through the same writer as an automatic one: the question's construct and hypothesis tags come with it */}
               <select className="select" style={{ width: 220 }} data-testid="rd-construct-add-question" value=""
-                onChange={(e) => { const id = e.target.value; if (!id) return; patch("link question to construct", (d) => { if (!d.constructs[i].questionIds.includes(id)) d.constructs[i].questionIds.push(id); }); }}>
+                onChange={(e) => { const id = e.target.value; if (!id) return; const name = c.name; s.labelNextEdit("link question to construct"); s.update((d) => { const cc = d.research?.constructs.find((x) => x.name === name); if (cc && !cc.questionIds.includes(id)) { cc.review = [...(cc.review ?? []), { questionId: id, reason: "chosen by hand" }]; resolveConstructReview(d, name, id, "link"); } }); }}>
                 <option value="">+ add a question…</option>
                 {s.def.questions.filter((q) => !c.questionIds.includes(q.id) && !["html", "custom_component"].includes(q.type)).map((q) => <option key={q.id} value={q.id}>{q.code} — {(q.text || q.variableName).replace(/<[^>]*>/g, "").slice(0, 60)}</option>)}
               </select>
             </div>
+            {(c.review?.length ?? 0) > 0 && (
+              <div className="rd-review" data-testid="rd-construct-review" style={{ marginTop: 6 }}>
+                <span className="muted" style={{ fontSize: 12.5 }}>Possibly measured by — not linked until you confirm</span>
+                {c.review!.map((x) => (
+                  <div key={x.questionId} className="row" style={{ gap: 6, alignItems: "center", marginTop: 4 }} data-testid="rd-construct-review-item" data-question={x.questionId}>
+                    <span className="chip warn">{questionLabel(x.questionId)}</span>
+                    <span className="muted grow" style={{ fontSize: 12.5 }}>{x.reason}</span>
+                    <button type="button" className="btn small" data-testid="rd-review-link" onClick={() => decide(c.name, x.questionId, "link")}>link</button>
+                    <button type="button" className="btn small" data-testid="rd-review-dismiss" onClick={() => decide(c.name, x.questionId, "dismiss")}>dismiss</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
         <button type="button" className="btn small" data-testid="rd-construct-add" onClick={() => patch("add construct", (d) => { d.constructs.push({ name: `Construct ${d.constructs.length + 1}`, role: "descriptive", questionIds: [] }); })}>+ construct</button>

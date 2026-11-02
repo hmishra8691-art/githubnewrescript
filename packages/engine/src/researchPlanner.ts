@@ -1,4 +1,5 @@
 import type { SurveyDefinition, Question, ResearchConstruct } from "@rescript/schema";
+import { constructName, groupingName } from "./researchLinks.js";
 import { buildAnalysisFramework, hypothesisCoverage, inferRole, measurementOf, methodologyAdvice, prioritizeCrosstabs } from "./analysisFramework.js";
 import { structuredHypotheses, type StructuredHypothesis } from "./hypotheses.js";
 import { listBlocks } from "./blocks.js";
@@ -180,7 +181,12 @@ const hypothesesStep: Build = (def, o, prior) => {
   }
   const hs = structuredHypotheses(def);
   const unread = hs.filter((h) => !readable(h));
-  const parsedOnly = hs.filter((h) => readable(h) && Object.values(h.source).includes("parsed") && !Object.values(h.source).includes("recorded"));
+  /*
+   * A reading whose TYPE and DIRECTION were only read from the words. (It was "nothing recorded at all"; since
+   * 2026-11-02 the linking pass records a side's construct when the words would not find it — the type and the
+   * direction are still this step's to record.)
+   */
+  const parsedOnly = hs.filter((h) => readable(h) && h.source.type !== "recorded" && h.source.direction !== "recorded");
   if (unread.length) {
     const model = { estimateText: unread.map((h) => `${h.label}: ${h.text}`).join("\n"), maxTokens: 300, operation: "workflow_structure" };
     const why = `${list(unread.map((h) => h.label))} cannot be read into a type, a direction and two sides from the words.`;
@@ -196,14 +202,8 @@ const hypothesesStep: Build = (def, o, prior) => {
   return step("hypotheses", { status: "done", executor: "engine", why: `${plural(hs.length, "hypothesis", "hypotheses")} recorded with their readings (${hs.map((h) => `${h.label}: ${h.type}`).join(", ")}).` });
 };
 
-/** "satisfied" → Satisfaction, "switched" → Switching: the noun a construct is named by */
-const NOUNS: [RegExp, string][] = [[/^satisf/i, "Satisfaction"], [/^switch/i, "Switching"], [/^aware/i, "Awareness"], [/^loyal/i, "Loyalty"], [/^trust/i, "Trust"], [/^recommend/i, "Likelihood to recommend"], [/^(?:purchase|buying)\s+intent|^intent(?:ion)?\s+to\s+(?:buy|purchase)|^likel\w*\s+to\s+(?:buy|purchase)/i, "Purchase intent"], [/^(?:price|value)\s+percept|^value\s+for\s+money/i, "Price perception"], [/^important|^importance/i, "Importance"]];
-export function constructName(side: string): string {
-  const t = side.trim().replace(/^(?:the|their|our|a|an)\s+/i, "");
-  for (const [re, name] of NOUNS) if (re.test(t)) return name;
-  return cap(t);
-}
-
+/* the noun a construct is named by, and the grouping a difference compares: one implementation, in researchLinks.ts, shared with the linking pass */
+export { constructName } from "./researchLinks.js";
 /**
  * The questions that already measure a construct named in words: every
  * content word of the name (as its family of synonyms) found in the
@@ -235,16 +235,6 @@ function sidesOf(h: StructuredHypothesis): { name: string; role: ResearchConstru
   if (h.mediator && !h.constructs.mediator) out.push({ name: h.mediator, role: "mediator" });
   return out;
 }
-/** "Women are more satisfied than men" → the grouping the comparison needs: gender; else the group's words */
-function groupingName(h: StructuredHypothesis): string {
-  const g = `${h.group ?? ""} ${h.lower ?? ""}`.toLowerCase();
-  if (/\b(?:women|men|female|male)\b/.test(g)) return "Gender";
-  if (/\b(?:younger|older|under|over|aged?|\d+s|millennial|gen z|boomer)\b/.test(g)) return "Age group";
-  if (/\b(?:north|south|east|west|urban|rural|region|city|london)\b/.test(g)) return "Region";
-  if (/\b(?:customers?|users?|buyers?|owners?|non-)\b/.test(g)) return "Customer status";
-  return h.independent ?? h.group ?? "Group";
-}
-
 const frameworkStep: Build = (def, _o, prior) => {
   if (!isDone(prior, "hypotheses")) return blocked("framework", "hypotheses", "The framework names the constructs the hypotheses relate.");
   const r = def.research!;

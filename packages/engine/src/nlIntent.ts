@@ -1,4 +1,5 @@
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
+import { dontKnowEligible } from "./dontKnow.js";
 import { scriptQuestion, explainScripts, findScripts, SCRIPT_QUESTION_REASON, type ScriptHealthLite } from "./scriptExplain.js";
 import { hypothesisLabel, LANGUAGE_LIBRARY, variantRegistry, effectiveResponseModel } from "@rescript/schema";
 import { applySurveyActions, BRIEF_WORDS, describeAction, diffSurveys, variantForActionType, type OptionSpec, type SurveyAction, type ValidationSpec } from "./surveyActions.js";
@@ -1593,6 +1594,28 @@ const options: Recogniser = (r) => {
     if (!q.ok) return q.out;
     const label = /specify/i.test(m[1]) ? cap(m[1].trim()) : "Other (please specify)";
     return act(r, "option_modification", `Add “${label}” to ${code(q.v)}, with a text box to specify, kept at the bottom.`, [{ op: "update_question", target: code(q.v), addOptions: [{ label, other: true }] }], [...qDetected([q.v]), det("new option", label)]);
+  }
+  /*
+   * "I DON'T KNOW" ON A TEXT OR NUMBER QUESTION (2026-11-02): the native choice beside the box (dontKnow.ts), not an
+   * option — a text or numeric question has no options to add one to. "allow don't know on Q5", "add an I don't
+   * know option to Q5", "remove the don't know from Q5".
+   */
+  if ((m = /^(add|allow|enable|offer|include|turn\s+on|remove|disable|turn\s+off|drop)\s+(?:an?\s+|the\s+)?["“]?(?:i\s+)?don['’]?t\s+know["”]?(?:\s+(?:option|answer|choice|box|checkbox|button))?\s+(?:to|in|for|on|at|from)\s+(.+)$/i.exec(t))) {
+    const off = /^(?:remove|disable|turn\s+off|drop)/i.test(m[1]);
+    const q = questionOf(r, m[2], "option_modification", `${off ? "Remove" : "Add"} “I don't know” on ${m[2]}.`);
+    if (!q.ok) return q.out;
+    if (dontKnowEligible(q.v)) {
+      if (!off && q.v.settings.dontKnow === true) return { kind: "answer", category: "option_modification", understood: `${code(q.v)} already offers “I don't know”.`, answer: `${code(q.v)} already offers “I don't know”${q.v.settings.dontKnowLabel ? ` (labelled “${q.v.settings.dontKnowLabel}”)` : ""}.`, sections: [], detected: qDetected([q.v]) } as never;
+      return act(r, "option_modification", off ? `Remove the “I don't know” choice from ${code(q.v)}.` : `Offer “I don't know” beside ${code(q.v)}'s ${q.v.type === "numeric" ? "number" : "text"} box — stored apart from the answer (${q.v.variableName}_DK), never as a value.`, [{ op: "update_question", target: code(q.v), settings: { dontKnow: !off } } as never], qDetected([q.v]));
+    }
+    /* a choice question: the ordinary exclusive answer, below */
+  }
+  /* "link the constructs" / "link H2 to its constructs": the linking pass (researchLinks.ts) */
+  if ((m = /^(?:link|map|connect)\s+(?:the\s+)?(?:(h\d+|hypothesis\s+\d+)(?:'s)?\s+)?(?:(?:hypothes[ie]s|constructs?)\s*)+(?:to\s+(?:their|its|the)\s+(?:constructs?|questions?)(?:\s+and\s+(?:their\s+)?questions?)?)?$/i.exec(t)) || (m = /^(?:link|map|connect)\s+(h\d+|hypothesis\s+\d+)\s+to\s+(?:its\s+)?(?:constructs?|questions?)(?:\s+and\s+(?:its\s+)?questions?)?$/i.exec(t))) {
+    const hyps = r.def.research?.hypotheses ?? [];
+    if (!hyps.length) return { kind: "answer", category: "research_design", understood: "Link the hypotheses to their constructs.", answer: "There are no hypotheses to link yet — add one first (“add hypothesis: …”).", sections: [], detected: [] } as never;
+    const h = m[1] ? `H${/\d+/.exec(m[1])![0]}` : undefined;
+    return act(r, "research_design", `Make the constructs ${h ?? "every hypothesis"} names (where the design has none) and link the questions that certainly measure them; possible matches are listed for you to confirm.`, [{ op: "link_constructs", ...(h ? { hypothesis: h } : {}) } as never], h ? [det("hypothesis", h)] : []);
   }
   if ((m = new RegExp(String.raw`^add\s+(?:an?\s+|the\s+)?["“]?(${EXCLUSIVE_LABEL})["”]?(?:\s+(?:option|answer|choice))?\s+(?:to|in|for|on|at)\s+(.+)$`, "i").exec(t))) {
     const q = questionOf(r, m[2], "option_modification", `Add a ${m[1]} option to ${m[2]}.`);

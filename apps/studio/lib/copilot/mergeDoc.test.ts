@@ -19,7 +19,11 @@ test("the merge adds the objective (none recorded), the new hypothesis and the n
   const r = out.def.research!;
   assert.equal(r.objective, "Explain brand switching among young adults");
   assert.deepEqual(r.hypotheses, ["Price perception drives switching", "Service quality reduces switching"]);
-  assert.deepEqual(r.constructs.map((c) => `${c.name}:${c.role}:${c.questionIds.length}`), ["Price perception:independent:1", "Service quality:descriptive:0"], "the existing construct keeps its question");
+  /*
+   * 2026-11-02 (engine researchLinks.ts): recording the hypotheses also makes the construct their dependent side
+   * names (Switching — nothing measures it yet) and gives Service quality the role H2 gives it.
+   */
+  assert.deepEqual(r.constructs.map((c) => `${c.name}:${c.role}:${c.questionIds.length}`), ["Price perception:independent:1", "Service quality:independent:0", "Switching:dependent:0"], "the existing construct keeps its question");
   assert.equal(r.constructs[1].definition, "perceived responsiveness");
   assert.deepEqual(r.sources, ["old.pdf", "switching.pdf"]);
   // a second time: nothing new

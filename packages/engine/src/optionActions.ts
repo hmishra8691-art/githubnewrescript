@@ -1,4 +1,6 @@
 import type { HypothesisDetail, Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition, UxBehavior, UxTarget } from "@rescript/schema";
+import { linkHypothesisConstructs, describeLinks } from "./researchLinks.js";
+import { looksLikeOtherSpecify } from "./otherSpecify.js";
 import { resolveUxTarget, validateUxItem, scopeCss } from "./ux.js";
 import { SCRIPT_CHECKED } from "./uxScriptGuard.js";
 import { codeGate, gateReason } from "./codeGate.js";
@@ -60,6 +62,9 @@ export type OptionRef = string | number;
 export type OptionPosition = number | { before: OptionRef } | { after: OptionRef };
 export type MaskDimension = "options" | "rows" | "columns";
 export type EmbeddedSource = "url" | "static" | "panel" | "expression";
+
+/** the types whose options draw an "Other — specify" box (the Studio offers the flag on these) */
+const OTHER_BOX_TYPES = new Set(["single_select", "multi_select", "dropdown", "multi_dropdown", "image_select"]);
 
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
@@ -522,9 +527,23 @@ function checkedDetail(def: SurveyDefinition, d: HypothesisDetail): HypothesisDe
     if (!v) continue;
     const c = constructFor(def, v);
     if (c) out[k] = c.name;
-    else if (cs.length && /^[A-Z]/.test(v) && !/\s/.test(v)) fail(`${k}: there is no construct “${v}” — the constructs are ${cs.map((c) => `“${c.name}”`).join(", ")}; name one of them, or describe the side in words`);
+    /*
+     * A side that names no construct is no longer refused: the linking pass creates it (researchLinks.ts). Only a
+     * near-miss of an existing name — "Trsut" beside "Trust" — is still refused, because creating a second,
+     * misspelt construct is worse than asking.
+     */
+    else { const near = cs.find((c) => editDistance(c.name.toLowerCase(), v.toLowerCase()) <= Math.min(2, Math.floor(c.name.length / 4))); if (near) fail(`${k}: “${v}” is not a construct — did you mean “${near.name}”? The constructs are ${cs.map((c) => `“${c.name}”`).join(", ")}`); }
   }
   return out;
+}
+function editDistance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0]; prev[0] = i;
+    for (let j = 1; j <= b.length; j++) { const tmp = prev[j]; prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1)); diag = tmp; }
+  }
+  return prev[b.length];
 }
 const detailWords = (d: HypothesisDetail): string => [d.type, d.direction, d.independent ? `IV ${d.independent}` : "", d.dependent ? `DV ${d.dependent}` : "", d.moderator ? `moderator ${d.moderator}` : "", d.mediator ? `mediator ${d.mediator}` : "", d.group ? `${d.group} higher${d.lower ? ` than ${d.lower}` : ""}` : "", d.expectedEffect ? `${d.expectedEffect} effect` : "", d.status, d.note ? "note" : ""].filter(Boolean).join(", ");
 
@@ -550,7 +569,12 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       const o = optionOrFail(q, a.option);
       const head = `${q.code} option ${o.code} “${plain(o.label)}”`;
       const changed: string[] = [], lossy: string[] = [];
-      if (a.label !== undefined && a.label !== o.label) { changed.push(`label → “${a.label}”`); o.label = a.label; }
+      if (a.label !== undefined && a.label !== o.label) {
+        changed.push(`label → “${a.label}”`);
+        /* relabelled INTO "Other (please specify)" / "Something else": the box comes with the words, unless the action says otherwise (otherSpecify.ts) */
+        if (a.other === undefined && !hasFlag(o, "other_specify") && looksLikeOtherSpecify(a.label) && !looksLikeOtherSpecify(o.label) && OTHER_BOX_TYPES.has(q.type)) { setFlag(o, "other_specify", true); changed.push("with a specify box"); }
+        o.label = a.label;
+      }
       if (a.code !== undefined && String(a.code) !== String(o.code)) {
         const clash = options.find((x) => x !== o && String(x.code) === String(a.code));
         if (clash) fail(`${q.code} already has an option with code ${a.code} (“${plain(clash.label)}”)`);
@@ -761,7 +785,11 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       details.push(a.detail ? checkedDetail(def, a.detail) : {});
       r.hypothesisDetails = details;
       r.updatedAt = env.now;
-      return { description: `Hypothesis ${hypothesisLabel(r.hypotheses.length - 1)}: ${a.text}${a.detail && Object.keys(a.detail).length ? ` (${detailWords(a.detail)})` : ""}`, warnings, touched: [] };
+      /* the constructs it names, and the questions that measure them, in the same change (researchLinks.ts) */
+      const links = linkHypothesisConstructs(def, { hypotheses: [r.hypotheses.length - 1], now: env.now });
+      const said = describeLinks(links);
+      for (const x of links.review) warnings.push(`${x.question} may measure “${x.construct}” (${x.why}) — not linked; confirm it in the research design`);
+      return { description: `Hypothesis ${hypothesisLabel(r.hypotheses.length - 1)}: ${a.text}${a.detail && Object.keys(a.detail).length ? ` (${detailWords(a.detail)})` : ""}${said ? ` — ${said}` : ""}`, warnings, touched: links.linked.map((l) => l.questionId) };
     }
     case "remove_hypothesis": {
       /*
@@ -821,7 +849,10 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       details[i] = { ...before, ...next };
       r.hypothesisDetails = details;
       r.updatedAt = env.now;
-      return { description: `${hypothesisLabel(i)}: ${a.text && a.text.trim() !== r.hypotheses[i] ? "restated; " : ""}${detailWords(next)}`, warnings, touched: [] };
+      const links = linkHypothesisConstructs(def, { hypotheses: [i], now: env.now });
+      const said = describeLinks(links);
+      for (const x of links.review) warnings.push(`${x.question} may measure “${x.construct}” (${x.why}) — not linked; confirm it in the research design`);
+      return { description: `${hypothesisLabel(i)}: ${a.text && a.text.trim() !== r.hypotheses[i] ? "restated; " : ""}${detailWords(next)}${said ? ` — ${said}` : ""}`, warnings, touched: links.linked.map((l) => l.questionId) };
     }
     case "set_custom_code": {
       /* the SURVEY's code ("__survey__", "survey", "theme"): a survey-wide script / stylesheet, not a question's (production, 2026-10-13: "there is no question “__survey__”") */

@@ -7,6 +7,7 @@ import { evaluateCondition } from "./evaluate.js";
 import type { LoopContext, ResponseState } from "./state.js";
 import { getQuestion, answerKey, loopKeySuffix } from "./state.js";
 import { syncOtherText } from "./otherSpecify.js";
+import { syncDontKnow } from "./dontKnow.js";
 import { pruneHiddenSelections } from "./visibility.js";
 import { everyLoopContext, innermostLoopOf, loopContexts, loopVariables, registerIterationQuestionsResolver } from "./loops.js";
 import { seededShuffle, subSeed } from "./random.js";
@@ -1050,6 +1051,8 @@ export function setAnswer(
    */
   const q = getQuestion(def, questionId);
   if (q) syncOtherText(state, q, loop ?? null);
+  /* "I don't know" and an answer are never stored together: a value clears the choice beside it (dontKnow.ts) */
+  if (q) syncDontKnow(state, q, loop ?? null);
   runCalculations(def, state, "on_change");
 }
 

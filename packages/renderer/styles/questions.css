@@ -1233,3 +1233,9 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-shelf-item { border-color: transparent; background: transparent; }
 .rs-shelf-item:hover, .rs-shelf-item:focus-visible { border-color: var(--rs-accent, #2563eb); background: rgba(37, 99, 235, 0.08); }
 .rs-shelf-item.second { border-color: var(--rs-muted, #64748b); border-style: dashed; }
+
+/* "I don't know" beside an open-text or numeric answer (QuestionRenderer DontKnowChoice) */
+.rs-dk { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 0.95em; cursor: pointer; min-height: 32px; }
+.rs-dk input { width: 18px; height: 18px; margin: 0; cursor: pointer; }
+.rs-dk input:disabled { cursor: default; }
+.rs-dk.on .rs-dk-label { font-weight: 600; }

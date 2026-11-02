@@ -1,6 +1,7 @@
 import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CFlow, CExpr, CRef, COp, CanonicalKind, Issue, SourceFormat, CanonicalEmbeddedField, PendingInstruction, CanonicalAsset,
 } from "../canonical.js";
+import { looksLikeOtherSpecify } from "@rescript/engine";
 import type { DocBlock, DocImage } from "./docx.js";
 
 /**
@@ -101,7 +102,7 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
     const t = /^(.+?)\s*(?:\.{3,}|\t+)\s*(\d{1,3})$/.exec(label) ?? /^(.+?)\s+\((\d{1,3})\)$/.exec(label);
     if (t) { label = t[1].trim(); code = t[2]; }
     const o: CanonicalOption = { sourceId: code, code: /^\d+$/.test(code) ? Number(code) : code, label };
-    if (/\b(?:please\s+specify|specify|other\s*[:(]|other\s*$|write\s+in)\b/i.test(label) || notes.some((n) => /specify|open/i.test(n))) o.otherSpecify = true;
+    if (/\b(?:please\s+specify|specify|other\s*[:(]|other\s*$|write\s+in)\b/i.test(label) || looksLikeOtherSpecify(label) || notes.some((n) => /specify|open/i.test(n))) o.otherSpecify = true;
     if (/^(?:none(?: of (?:these|the above))?|don'?t know|not sure|prefer not to (?:say|answer)|refused|no answer)\b/i.test(label) || notes.some((n) => /exclusive|single|only/i.test(n))) o.exclusive = true;
     if (notes.some((n) => /anchor|fix(?:ed)?\b/i.test(n))) o.anchor = true;
     d.optionNotes.set(d.q.options.length, notes);
@@ -330,6 +331,12 @@ function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode:
       const e = resolveCondition(body, q, byCode, `${q.sourceId} · “${text}”`, issues);
       tag(n0, { kind: "display", text, questionId: q.sourceId, condition: body });
       if (e) conds.push(e);
+      continue;
+    }
+    /* "ALLOW DON'T KNOW" / "INCLUDE A DON'T KNOW OPTION" / "DK ALLOWED" on an open or numeric question: the native choice, not an option */
+    if (/^(?:ALLOW|INCLUDE|ADD|SHOW|OFFER)\b.*\b(?:DON'?T\s+KNOW|DK)\b|^(?:DON'?T\s+KNOW|DK)\s+(?:ALLOWED|OPTION|BOX|ACCEPTED|PERMITTED)\b/i.test(text)) {
+      (q.settings ??= {}).dontKnow = true;
+      q.notes.push(`“I don't know” allowed (“${text}”)`);
       continue;
     }
     /* "SKIP THIS QUESTION IF …" / "SKIP Q5 IF …": a condition with no destination — say so, do not guess one */

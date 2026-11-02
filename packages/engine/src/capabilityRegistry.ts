@@ -1,4 +1,5 @@
 import { variantRegistry, questionSettingField, UNIVERSAL_VALIDATIONS, type QuestionVariantDef } from "@rescript/schema";
+import { DONT_KNOW_TYPES } from "./dontKnow.js";
 import type { UX_SCRIPT_API, UX_SCRIPT_EVENTS } from "./ux.js";
 import type { LOGIC_HELPERS } from "./codeGate.js";
 
@@ -386,9 +387,12 @@ function describeField(key: string): SettingSpec | null {
 }
 
 /** the settings an action may set on a question of this variant (none for an unknown variant: universal only) */
-export function settableSettings(variantId: string | null | undefined): string[] {
+export function settableSettings(variantId: string | null | undefined, baseType?: string): string[] {
   const v = variantId ? variantRegistry.get(variantId) : undefined;
   const keys = new Set<string>();
+  /* "I don't know" (dontKnow.ts) belongs to the BASE type — open text, long text, a number — whatever the variant, or none */
+  const base = baseType ?? (v as { baseType?: string } | undefined)?.baseType;
+  if (base && DONT_KNOW_TYPES.has(base)) { keys.add("dontKnow"); keys.add("dontKnowLabel"); }
   if (v) {
     for (const k of Object.keys((v.defaults as { settings?: Record<string, unknown> } | undefined)?.settings ?? {})) keys.add(k);
     for (const c of v.capabilities) for (const k of CAPABILITY_SETTINGS[c] ?? []) keys.add(k);
@@ -402,8 +406,8 @@ export function settableSettings(variantId: string | null | undefined): string[]
  * ONE SETTING, CHECKED (the gate's rule for update_question / create_question settings): the key must be settable on
  * this variant, the value must fit the schema's own field and the registry's bounds. Returns the reason, or null.
  */
-export function settingProblem(variantId: string | null | undefined, key: string, value: unknown): string | null {
-  const allowed = settableSettings(variantId);
+export function settingProblem(variantId: string | null | undefined, key: string, value: unknown, baseType?: string): string | null {
+  const allowed = settableSettings(variantId, baseType);
   if (!allowed.includes(key)) return `has no setting ${key} an action can set — its settings are ${allowed.join(", ")}`;
   const v = variantId ? variantRegistry.get(variantId) : undefined;
   const declared = (v?.defaults as { settings?: Record<string, unknown> } | undefined)?.settings?.[key];

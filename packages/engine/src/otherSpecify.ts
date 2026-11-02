@@ -53,6 +53,25 @@ export function isOtherOption(o: Option): boolean {
   return !!o.flags?.includes(OTHER_SPECIFY_FLAG);
 }
 
+/**
+ * DOES THIS LABEL ASK THE RESPONDENT TO SAY WHAT IT IS? (2026-11-02)
+ *
+ * The box is drawn for an option FLAGGED `other_specify`. Every place that creates options from words — the
+ * copilot's actions (`buildOptions`), the Studio's option rows and paste box, the document importer — asks this
+ * one function, so "Other (please specify)", "Other – Specify", "Please specify", "Something else" and
+ * "Other (write in)" get their box wherever they are typed. A plain "Other" is NOT one: it is a code researchers
+ * often want closed, and the flag stays the researcher's call there.
+ */
+export function looksLikeOtherSpecify(label: string | null | undefined): boolean {
+  const t = String(label ?? "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!t) return false;
+  if (/\bspecify\b|\bspecified\b/.test(t)) return true;
+  if (/^(?:something|anything|someone|somewhere|somebody)\s+else\b/.test(t)) return true;
+  if (/\bwrite[\s-]?in\b|\btype\s+in\b|\bplease\s+(?:describe|state|say|tell|write|enter|name)\b/.test(t)) return true;
+  if (/^others?\b\s*(?:[:(\-–—,…]|please\b|\.{3})/.test(t)) return true;
+  return false;
+}
+
 /** The flagged options of a question, in their programmed order. */
 export function otherOptions(q: Question): Option[] {
   return (q.options ?? []).filter(isOtherOption);

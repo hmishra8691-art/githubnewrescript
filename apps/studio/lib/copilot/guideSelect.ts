@@ -66,7 +66,7 @@ export const guideTexts = (ids: readonly GuideId[]): string[] => GUIDE_ORDER.fil
 const OPS_OF: [GuideId, readonly string[]][] = [
   ["analysis", ANALYSIS_ACTION_OPS], ["translation", LOCALIZATION_ACTION_OPS], ["quota", QUOTA_ACTION_OPS], ["listFill", LIST_FILL_ACTION_OPS],
   ["methods", METHOD_ACTION_OPS], ["qual", [...QUAL_ACTION_OPS, ...RESEARCH_ACTION_OPS]], ["aiInterview", AI_INTERVIEW_ACTION_OPS],
-  ["research", ["set_research", "add_hypothesis", "set_hypothesis", "remove_hypothesis"]],
+  ["research", ["set_research", "add_hypothesis", "set_hypothesis", "remove_hypothesis", "link_constructs"]],
   ["integrations", ["connect_panel", "disconnect_panel", "configure_alerts"]],
   ["quality", ["set_quality_settings"]],
   ["assessment", ASSESSMENT_ACTION_OPS],

@@ -1010,6 +1010,15 @@ const QuestionObject = z.object({
       optionSearch: z.enum(["auto", "always", "never"]).optional(),
       placeholder: z.string().optional(),
       /**
+       * "I DON'T KNOW" beside an open-text or numeric answer (2026-11-02). Off unless the researcher turns it on for
+       * this question. The choice is stored BESIDE the answer (`<answer key>__dk` = true, see the engine's
+       * dontKnow.ts), never as text or a number in the answer itself, and it is mutually exclusive with one: typing
+       * an answer clears it, choosing it clears the answer. Exported as `<VAR>_DK` (1 = don't know, 0 = answered).
+       */
+      dontKnow: z.boolean().optional(),
+      /** the label of that choice; absent = the respondent language's interface string "I don't know" (ui:dont_know) */
+      dontKnowLabel: z.string().optional(),
+      /**
        * COUNTRY-SHAPED VALIDATION. `phoneCountry` and `postalCountry` name an
        * entry in the engine's format tables; unset means the loose,
        * region-agnostic check the platform has always applied, so no existing

@@ -100,6 +100,7 @@ import {
   layoutColumns, MAX_LAYOUT_COLUMNS,
   rowOtherBoxSupported,
   applySemantic, inferSemantic, SEMANTICS, SEMANTIC_SPECS,
+  dontKnowEligible, looksLikeOtherSpecify,
 } from "@rescript/engine"; // also registers builtin question types
 import { optionLogicHasEffect, isEmptyConditionTree } from "@rescript/schema";
 import { useStudio, uid } from "./store";
@@ -335,8 +336,19 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
     focusLabel(el);
   });
 
+  /*
+   * "OTHER — SPECIFY" BY ITS WORDS (2026-11-02). The box a respondent types into is drawn for an option FLAGGED
+   * other/specify; an option merely labelled "Other (please specify)" or "Something else" was drawn as a plain
+   * choice with nowhere to say what it was — the root cause of "the specify box does not appear". When a label
+   * starts to read like one (engine `looksLikeOtherSpecify`) the flag is set with it. Only on that transition, so a
+   * flag the researcher removes by hand stays removed; and only where this list offers the flag at all.
+   */
+  const canOther = showFlags && (flagChoices ?? ALL_FLAGS.map((x) => x.value)).includes("other_specify");
+  const withOther = (o: Option, before?: string): Option =>
+    canOther && !o.flags?.includes("other_specify") && looksLikeOtherSpecify(o.label) && !(before != null && looksLikeOtherSpecify(before))
+      ? { ...o, flags: [...(o.flags ?? []), "other_specify"] as Option["flags"] } : o;
   const set = (i: number, patch: Partial<Option>) =>
-    onChange(options.map((o, j) => (j === i ? { ...o, ...patch } : o)));
+    onChange(options.map((o, j) => (j === i ? (patch.label !== undefined ? withOther({ ...o, ...patch }, o.label) : { ...o, ...patch }) : o)));
   /* the code a code field held when focus entered — one field has focus at a time */
   const codeAtFocus = React.useRef<string | null>(null);
   const commitCode = (e: React.FocusEvent<HTMLInputElement> | React.KeyboardEvent<HTMLInputElement>) => {
@@ -387,8 +399,8 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
     const parsed = parsePastedOptions(text, Number(nextCode(options)));
     if (parsed.length === 0) return false;
     const next = [...options];
-    next[i] = { ...next[i], label: parsed[0].label, code: options[i].label ? next[i].code : parsed[0].code };
-    next.splice(i + 1, 0, ...(parsed.slice(1).map((o) => ({ ...o, id: uid("opt") })) as Option[]));
+    next[i] = withOther({ ...next[i], label: parsed[0].label, code: options[i].label ? next[i].code : parsed[0].code }, options[i].label);
+    next.splice(i + 1, 0, ...(parsed.slice(1).map((o) => withOther({ ...o, id: uid("opt") } as Option))));
     pendingFocus.current = i + parsed.length - 1;
     setShowAll(true); // the pasted rows must be mounted for focus to land
     onChange(next);
@@ -418,7 +430,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
      * freeze more annoying than it needs to be.
      */
     if (frozen && pasteMode === "replace") return;
-    onChange(pastePlan.options.map((o) => (o.id ? o : { ...o, id: uid("opt") })));
+    onChange(pastePlan.options.map((o) => (o.id ? o : withOther({ ...o, id: uid("opt") }))));
     if (pastePlan.removed > 0) onAfterDelete?.();
     setFilter("");
     setShowAll(true);
@@ -2202,6 +2214,31 @@ export function QuestionEditor({ q }: { q: Question }) {
             placeholder="shown in the empty box"
             value={q.settings.placeholder ?? ""}
             onChange={(e) => patchSettings({ placeholder: e.target.value || undefined })} /></label>
+      )}
+
+      {/*
+        * "I DON'T KNOW" (2026-11-02, engine dontKnow.ts) — open text and numbers only, off unless switched on here.
+        * The choice is stored beside the answer and exported as its own column, so turning it on changes nothing
+        * about the answer's own variable.
+        */}
+      {dontKnowEligible(q) && (
+        <div className="row" style={{ gap: 12, alignItems: "flex-end", flexWrap: "wrap" }} data-testid="dont-know-setting">
+          <label className="row" style={{ gap: 8, fontSize: 13.5 }}>
+            <input type="checkbox" data-testid="dont-know-toggle"
+              checked={q.settings.dontKnow === true}
+              onChange={(e) => patchSettings({ dontKnow: e.target.checked ? true : undefined })} />
+            <span>
+              Enable “I don't know” option —{" "}
+              <span className="muted">respondents can choose it instead of {q.type === "numeric" ? "a number" : "typing an answer"}; exported as {q.variableName}_DK, never as an answer</span>
+            </span>
+          </label>
+          {q.settings.dontKnow === true && (
+            <label className="f" style={{ width: 240 }}><span>Its label</span>
+              <input className="input" data-testid="dont-know-label" placeholder="I don't know"
+                value={q.settings.dontKnowLabel ?? ""}
+                onChange={(e) => patchSettings({ dontKnowLabel: e.target.value || undefined })} /></label>
+          )}
+        </div>
       )}
 
       {/*

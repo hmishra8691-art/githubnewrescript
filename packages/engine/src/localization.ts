@@ -34,7 +34,9 @@ export type TranslatableKind =
   /* 2026-10-22 (#14c): a behaviour's popup / message text and title (show_popup, show_message effects) */
   | "ux_text"
   /* 2026-10-25 (translation tasks): a scale point's own label is a `scale_label`; the words beside a number, and a rating's comment box */
-  | "unit_label" | "comment_prompt";
+  | "unit_label" | "comment_prompt"
+  /* 2026-11-02: the label of an open-text / numeric question's "I don't know" choice (`settings.dontKnowLabel`) */
+  | "dont_know_label";
 
 export interface TranslatableElement {
   /** the stable address: `q:<qid>:text`, `q:<qid>:opt:<code>`, `flow:<nodeId>:message`, `ui:required`… */
@@ -74,6 +76,8 @@ export const K = {
   affix: (qid: string, which: "affixText" | "unitLabel") => `q:${qid}:${which === "affixText" ? "affix" : "unit"}`,
   /** a rating's comment-box prompt (`settings.commentPrompt`) */
   commentPrompt: (qid: string) => `q:${qid}:comment`,
+  /** an open-text / numeric question's own "I don't know" label (`settings.dontKnowLabel`) */
+  dontKnowLabel: (qid: string) => `q:${qid}:dk`,
   validation: (qid: string, index: number) => `q:${qid}:validation:${index}`,
   probePrompt: (qid: string) => `q:${qid}:probe`,
   pageTitle: (nodeId: string) => `flow:${nodeId}:title`,
@@ -104,6 +108,8 @@ export const UI_STRINGS: { id: string; en: string; hint: string }[] = [
   { id: "idle_prompt_ok", en: "I’m here", hint: "S5b: the inactivity prompt's button" },
   { id: "other_specify", en: "Please specify", hint: "placeholder of an “Other” text box" },
   { id: "other_required", en: "Please say what “Other” is before continuing.", hint: "validation" },
+  { id: "dont_know", en: "I don't know", hint: "the “I don't know” choice beside an open-text or numeric answer" },
+  { id: "dont_know_conflict", en: "Give an answer or choose “I don't know” — not both.", hint: "validation" },
   { id: "search_options", en: "Search {n} options…", hint: "placeholder of the option filter on long lists" },
   { id: "min_value", en: "Value must be at least {min}.", hint: "validation" },
   { id: "max_value", en: "Value must be at most {max}.", hint: "validation" },
@@ -258,6 +264,7 @@ export function translatableElements(def: SurveyDefinition): TranslatableElement
     if (points && typeof points === "object") for (const [pt, label] of Object.entries(points)) if (typeof label === "string") add(K.scalePoint(q.id, pt), "scale_label", label, `${q.code} · scale point ${pt} label`, { ...base, code: pt }, false);
     for (const which of ["affixText", "unitLabel"] as const) if (typeof s[which] === "string") add(K.affix(q.id, which), "unit_label", s[which] as string, `${q.code} · ${which === "affixText" ? "text beside the number" : "unit"}`, base, false);
     if (typeof s.commentPrompt === "string") add(K.commentPrompt(q.id), "comment_prompt", s.commentPrompt as string, `${q.code} · comment prompt`, base, false);
+    if (s.dontKnow === true && typeof s.dontKnowLabel === "string" && s.dontKnowLabel.trim()) add(K.dontKnowLabel(q.id), "dont_know_label", s.dontKnowLabel as string, `${q.code} · “I don't know” label`, base, true);
     (q.validation ?? []).forEach((rule, i) => add(K.validation(q.id, i), "validation_message", rule.message, `${q.code} · validation message ${i + 1}`, base, false));
     if (q.probe?.prompt) add(K.probePrompt(q.id), "probe_prompt", q.probe.prompt, `${q.code} · follow-up wording`, base);
   }
@@ -421,6 +428,7 @@ export function localizeDefinition(def: SurveyDefinition, lang: string | null | 
     if (points && typeof points === "object") settings.scalePointLabels = Object.fromEntries(Object.entries(points).map(([pt, label]) => [pt, typeof label === "string" ? t(K.scalePoint(q.id, pt), label) ?? label : label]));
     for (const which of ["affixText", "unitLabel"] as const) if (typeof s[which] === "string") settings[which] = t(K.affix(q.id, which), s[which] as string);
     if (typeof s.commentPrompt === "string") settings.commentPrompt = t(K.commentPrompt(q.id), s.commentPrompt as string);
+    if (typeof s.dontKnowLabel === "string") settings.dontKnowLabel = t(K.dontKnowLabel(q.id), s.dontKnowLabel as string);
     return {
       ...q,
       text: t(K.qText(q.id), q.text) ?? q.text,
@@ -1224,6 +1232,7 @@ export function setSourceText(def: SurveyDefinition, key: string, text: string):
       case "placeholder": s.placeholder = text; return true;
       case "probe": if (!q.probe) return false; q.probe = { ...q.probe, prompt: text }; return true;
       case "comment": s.commentPrompt = text; return true;
+      case "dk": s.dontKnowLabel = text; return true;
       case "affix": s.affixText = text; return true;
       case "unit": s.unitLabel = text; return true;
     }
