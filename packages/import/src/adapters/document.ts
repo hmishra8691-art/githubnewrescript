@@ -188,6 +188,8 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
   }
   flushFree();
   if (cur) finishDraft(cur);
+  /* I8: an instruction after the last question has no question to apply to — said, not lost */
+  for (const line of pending) if (INSTRUCTION.test(line)) issues.push({ location: `after the last question · “${line.trim().slice(0, 80)}”`, type: "dropped", severity: "medium", message: `The instruction “${line.trim().slice(0, 120)}” comes after the last question, so there was nothing to apply it to.`, suggestion: "Add it in Studio to the question it belongs to.", autoAttempted: false });
   void inferredTable;
 
   /* ------------------------------------------------------------ type inference */
@@ -260,6 +262,15 @@ function inferType(d: Draft, issues: Issue[]) {
       q.notes.push("a grid read from a table: the header row is the scale, the first column the statements");
       return;
     }
+    /*
+     * I8 (Word corpus): a table that is not a grid (one value column, a reference table, a nested table) used to
+     * vanish. It is kept as a table in the question's text, escaped, and said.
+     */
+    const cell = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br/>");
+    q.text = `${q.text}<table>${d.table.map((r, i) => `<tr>${r.map((c) => i === 0 ? `<th>${cell(c)}</th>` : `<td>${cell(c)}</td>`).join("")}</tr>`).join("")}</table>`;
+    q.notes.push("a table that is not a grid: kept as a table in the question text");
+    issues.push({ location: `${q.sourceId} · table`, type: "converted", severity: "low", message: `The table under ${q.sourceId} is not a grid (it needs a header row of at least two answer columns), so it was kept as a table in the question's text.`, suggestion: "If it should be a grid question, change the type in Studio.", autoAttempted: true, refs: [q.sourceId] });
+    d.table = undefined;
   }
   if (kind === "hidden") { q.kind = "hidden"; q.required = false; q.notes.push(`marked hidden (“${basis}”)`); return; }
   if (kind === "matrix_single" && !hasOpts) { kind = null; }
@@ -350,12 +361,37 @@ function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode:
       if (e) q.skips.push({ when: e, to, label: text });
       continue;
     }
+    /* "SKIP TO Q4 IF S2 = 2" — the condition written after the destination */
+    if ((m = /^(?:SKIP|GO|JUMP)\s+TO\s+(Q?\w+)\s+(?:IF|WHEN)\s+(.+)$/i.exec(text))) {
+      const to = skipTarget(m[1], byCode);
+      if (!to) { issues.push({ location: `${q.sourceId} · “${text}”`, type: "reference", severity: "medium", message: `${q.sourceId} says to skip to “${m[1]}”, which is not a question in the document.`, autoAttempted: true, refs: [q.sourceId] }); continue; }
+      const n0 = issues.length;
+      const e = resolveCondition(m[2], q, byCode, `${q.sourceId} · “${text}”`, issues);
+      tag(n0, { kind: "skip", text, questionId: q.sourceId, target: to, condition: m[2] });
+      if (e) q.skips.push({ when: e, to, label: text });
+      continue;
+    }
+    /* "TERMINATE IF S1 = 2" / "SCREEN OUT IF …" — the end written first */
+    if ((m = /^(?:THANK\s+AND\s+)?(?:TERMINATE|SCREEN\s*OUT|DISQUALIFY|CLOSE)\s+(?:IF|WHEN)\s+(.+)$/i.exec(text))) {
+      const n0 = issues.length;
+      const e = resolveCondition(m[1], q, byCode, `${q.sourceId} · “${text}”`, issues);
+      tag(n0, { kind: "terminate", text, questionId: q.sourceId, condition: m[1] });
+      if (e) q.skips.push({ when: e, to: { kind: "end", status: "screened" }, label: text });
+      continue;
+    }
     if ((m = /^IF\s+(.+?)\s*[,:]?\s*(?:THANK\s+AND\s+)?(?:TERMINATE|END|CLOSE|SCREEN\s*OUT|DISQUALIFY)\b/i.exec(text))) {
       const n0 = issues.length;
       const e = resolveCondition(m[1], q, byCode, `${q.sourceId} · “${text}”`, issues);
       tag(n0, { kind: "terminate", text, questionId: q.sourceId, condition: m[1] });
       if (e) q.skips.push({ when: e, to: { kind: "end", status: "screened" }, label: text });
       continue;
+    }
+    /*
+     * I8 (Word corpus): an instruction that reads like logic but matched none of the forms above used to vanish.
+     * It is now reported where it was written, so the person sees what was not carried over.
+     */
+    if (/\b(?:IF|ONLY|UNLESS|SKIP|GO\s+TO|JUMP|TERMINATE|SCREEN\s*OUT|DISQUALIFY)\b/i.test(text) && !/^(?:RANDOMI[SZ]E|ROTATE|SELECT|SINGLE|MULTI)/i.test(text)) {
+      issues.push({ location: `${q.sourceId} · “${text}”`, type: "dropped", severity: "medium", message: `${q.sourceId}: the instruction “${text}” was not turned into logic — its wording is not one this reader understands.`, suggestion: "Add the rule in Studio's Logic panel, or reword it (e.g. “ASK IF S1 = 1”, “IF S2 = 2 SKIP TO Q4”).", autoAttempted: true, refs: [q.sourceId] });
     }
   }
   if (conds.length) q.displayLogic = conds.length === 1 ? conds[0] : { t: "group", op: "and", children: conds };
@@ -382,6 +418,13 @@ function skipTarget(word: string, byCode: Map<string, CanonicalQuestion>): { kin
   const q = byCode.get(code) ?? byCode.get(word.toUpperCase());
   return q ? { kind: "question", id: q.sourceId } : null;
 }
+
+/**
+ * A question code in a condition: Q-numbered (Q5, Q10a, QID3) or any short letter prefix and a number (S1, A2,
+ * D3b, SC10) — screeners and demographics are rarely numbered with a Q. Only codes the document defines resolve;
+ * anything else is reported, never guessed.
+ */
+const CODE = String.raw`(?:Q\w+|[A-Z]{1,4}\d[\w.]*)`;
 
 const OPS: [RegExp, COp][] = [
   [/^(?:=|==|is|equals|is equal to|was|chose|selected|said|answered)$/i, "eq"],
@@ -424,7 +467,7 @@ export function resolveCondition(textIn: string, self: CanonicalQuestion, byCode
     }
   }
   /* NOT ( … ) and NOT <condition> */
-  const notM = /^NOT\s+(\(.*\))$/i.exec(text) ?? (/^NOT\s+(Q\w+.*)$/i.exec(text));
+  const notM = /^NOT\s+(\(.*\))$/i.exec(text) ?? (new RegExp(`^NOT\\s+(${CODE}.*)$`, "i").exec(text));
   if (notM) {
     const inner = resolveCondition(notM[1], self, byCode, location, issues);
     return inner ? { t: "group", op: "not", children: [inner] } : null;
@@ -455,27 +498,27 @@ export function resolveCondition(textIn: string, self: CanonicalQuestion, byCode
   };
   const q = (code: string) => byCode.get(code.toUpperCase());
   let m: RegExpExecArray | null;
-  if ((m = /^(Q\w+)\s*(?:IS\s+|WAS\s+|HAS\s+BEEN\s+)?(ANSWERED|NOT ANSWERED|UNANSWERED|BLANK)$/i.exec(text))) {
+  if ((m = new RegExp(`^(${CODE})\\s*(?:IS\\s+|WAS\\s+|HAS\\s+BEEN\\s+)?(ANSWERED|NOT ANSWERED|UNANSWERED|BLANK)$`, "i").exec(text))) {
     const t = q(m[1]); if (!t) return ambiguous(`${m[1]} is not a question in the document.`);
     return { t: "cmp", ref: { kind: "question", id: t.sourceId }, op: /not|un|blank/i.test(m[2]) ? "unanswered" : "answered" };
   }
-  if ((m = /^(Q\w+)\s*(=|==|!=|<>|>=|<=|>|<|\bis not\b|\bisn't\b|\bis\b|\bequals\b|\bwas\b)\s*(.+)$/i.exec(text))) {
+  if ((m = new RegExp(`^(${CODE})\\s*(=|==|!=|<>|>=|<=|>|<|\\bis not\\b|\\bisn't\\b|\\bis\\b|\\bequals\\b|\\bwas\\b)\\s*(.+)$`, "i").exec(text))) {
     const t = q(m[1]); if (!t) return ambiguous(`${m[1]} is not a question in the document.`);
     return cmpOn(t, m[2], m[3]);
   }
-  if ((m = /^(?:NOT\s+)?(?:selected|chose|picked|ticked|coded|code|answered|said|mentioned)\s+(.+?)\s+(?:in|at|to|for|on)\s+(Q\w+)$/i.exec(text))) {
+  if ((m = /^(?:NOT\s+)?(?:selected|chose|picked|ticked|coded|code|answered|said|mentioned)\s+(.+?)\s+(?:in|at|to|for|on)\s+(Q\w+|[A-Z]{1,4}\d[\w.]*)$/i.exec(text))) {
     const t = q(m[2]); if (!t) return ambiguous(`${m[2]} is not a question in the document.`);
     // "CODE Q2.1 IN Q2" names the option as Q2.1 — the question prefix is not part of the code
     const val = m[1].replace(new RegExp(`^${m[2]}\\.`, "i"), "");
     return cmpOn(t, /^NOT\s/i.test(text) ? "not" : "=", val);
   }
-  if ((m = /^(Q\w+)\s+(?:is\s+)?(?:code[sd]?|option|answer)\s+(.+)$/i.exec(text))) {
+  if ((m = new RegExp(`^(${CODE})\\s+(?:is\\s+)?(?:code[sd]?|option|answer)\\s+(.+)$`, "i").exec(text))) {
     const t = q(m[1]); if (!t) return ambiguous(`${m[1]} is not a question in the document.`);
     return cmpOn(t, "=", m[2]);
   }
   // about the question itself: "If No, …", "if code 3 …"
   if (self.options.length && (m = /^(?:NOT\s+)?(?:code\s+|answer\s+|option\s+)?(.+)$/i.exec(text)) && optionOf(self, m[1])) return cmpOn(self, /^NOT\s/i.test(text) ? "not" : "=", m[1]);
-  const mentions = text.match(/\bQ\d+\w*\b/gi);
+  const mentions = text.match(/\b(?:Q\d+\w*|[A-Z]{1,4}\d+\w*)\b/g);
   if (!mentions) return ambiguous(`the document says “${text}”, but no question or answer in it defines that.`);
   return ambiguous(`“${text}” could not be read as a condition on ${mentions.join(", ")}.`);
 }
@@ -499,7 +542,7 @@ function wrappedInParens(t: string): boolean {
 function splitTopLevel(t: string, op: "and" | "or"): string[] {
   const parts: string[] = [];
   let depth = 0, quote: string | null = null, last = 0;
-  const re = new RegExp(`^\\s+${op}\\s+(?=(?:Q\\w+|NOT\\b|\\(|(?:selected|answered|chose|code|coded)\\b))`, "i");
+  const re = new RegExp(`^\\s+${op}\\s+(?=(?:Q\\w+|[A-Z]{1,4}\\d[\\w.]*\\s*(?:=|!=|<>|>|<|is\\b|was\\b|equals\\b)|NOT\\b|\\(|(?:selected|answered|chose|code|coded)\\b))`, "i");
   for (let i = 0; i < t.length; i++) {
     const ch = t[i];
     if (quote) { if (ch === quote || (quote === "“" && ch === "”")) quote = null; continue; }

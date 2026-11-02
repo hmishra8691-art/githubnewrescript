@@ -2,6 +2,7 @@ import type { SurveyDefinition, Question } from "@rescript/schema";
 import { createResponseState, start, advance, setAnswer, visibleQuestions, validatePage, runQualityCheck, constantCondition, type ResponseState, type RuntimeStep } from "@rescript/engine";
 import type { CanonicalSurvey } from "./canonical.js";
 import type { MapResult } from "./map.js";
+import { runScenarios, type BehaviourReport } from "./equivalence.js";
 import { plainText } from "./canonical.js";
 
 /**
@@ -46,6 +47,8 @@ export interface VerificationReport {
     endStatuses: string[];
   };
   /** analysis compatibility: variable names and codes the data will carry, compared with the source's */
+  /** I8: behavioural equivalence — scenarios built from the source's own logic, run on the engine (equivalence.ts) */
+  behaviour?: BehaviourReport;
   analysis: { variablesKept: number; variablesRenamed: { source: string; rescript: string }[]; codesKept: number; codesChanged: { question: string; source: string; rescript: string }[]; rowsKept: number };
   ok: boolean;
 }
@@ -173,8 +176,37 @@ function mulberry(seed: number): () => number {
   return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 
-export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: number, opts: { maxPages?: number; embedded?: Record<string, string> } = {}): RuntimeWalk & { seen: Set<string> } {
+/**
+ * The questions something else in the survey can read — by id or by code, anywhere outside the question itself
+ * (a condition, a skip, a branch, a quota, an expression, a pipe). Only those can change where the respondent
+ * goes or what they see, so only those are worth the "deepest" walker's look-ahead: trying every answer of a
+ * question nothing reads cannot change the path. (A pure speed-up — the path chosen is the same.)
+ */
+export function readByOthers(def: SurveyDefinition): Set<string> {
+  /* placement (a page's question list), the import record and translations name questions without reading them — left out */
+  const all = JSON.stringify(def, (k, v) => (k === "questionIds" || k === "imports" || k === "localization" ? undefined : v));
+  const count = (hay: string, word: string) => { if (!word) return 0; const re = new RegExp(`(?<![A-Za-z0-9_])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`, "g"); return (hay.match(re) ?? []).length; };
+  const out = new Set<string>();
+  for (const q of def.questions) {
+    const own = JSON.stringify(q);
+    for (const w of new Set([q.id, q.code].filter(Boolean) as string[])) if (count(all, w) > count(own, w)) { out.add(q.id); break; }
+  }
+  return out;
+}
+
+export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: number, opts: {
+  maxPages?: number; embedded?: Record<string, string>; force?: Record<string, unknown>;
+  /** I8: stop once a page placed after this question is reached — a scenario about one question needs no more */
+  stopAfter?: string;
+  /** precomputed readByOthers(def) — the scenarios share one */
+  readBy?: Set<string>;
+  /** I8 lifecycle: hand back the respondent's final state (for an export) — never put in a report */
+  keepState?: boolean;
+} = {}): RuntimeWalk & { seen: Set<string>; state?: ResponseState } {
   const rnd = mulberry(seed);
+  const readBy = strategy === "deepest" ? (opts.readBy ?? readByOthers(def)) : null;
+  const position = opts.stopAfter ? [...placedQuestions(def)] : null;
+  const stopAt = position ? position.indexOf(opts.stopAfter!) : -1;
   const walk: RuntimeWalk & { seen: Set<string> } = { strategy, seed, pages: 0, questions: 0, end: null, refusals: [], error: null, loops: 0, seen: new Set() };
   const state: ResponseState = createResponseState(def, { seed, embedded: opts.embedded ?? {} });
   try {
@@ -183,14 +215,29 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
     while (!nav.done && walk.pages < max) {
       const step: RuntimeStep | undefined = nav.steps[nav.stepIndex];
       if (!step || step.kind !== "page") { nav = advance(def, state, {}); continue; }
+      /* stop at the first page that lies wholly after the question (a page holding it, or anything before it, still runs) */
+      if (position && stopAt >= 0 && step.questionIds.length && step.questionIds.every((id) => position.indexOf(id) > stopAt)) { walk.end = `stopped after ${opts.stopAfter}`; return opts.keepState ? { ...walk, state } : walk; }
       walk.pages++;
       if (step.loop) walk.loops++;
-      const qs = visibleQuestions(def, step, state, {});
-      for (const q of qs) {
-        walk.seen.add(q.id);
-        walk.questions++;
-        const v = answerFor(q, strategy, rnd);
-        if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null);
+      /*
+       * The respondent's page is live (the runtime's Runner re-reads visibleQuestions as answers change): a
+       * question whose display logic reads another question ON THE SAME PAGE appears or disappears as that one is
+       * answered. The walk settles the page the same way — answer what is visible, re-read, answer what appeared
+       * (a few rounds at most) — and counts as seen only what is visible once the page has settled.
+       */
+      const answered = new Set<string>();
+      let qs = visibleQuestions(def, step, state, {});
+      for (let round = 0; round < 4; round++) {
+        const fresh = qs.filter((q) => !answered.has(q.id));
+        if (!fresh.length) break;
+        for (const q of fresh) {
+          answered.add(q.id);
+          walk.questions++;
+          /* I8: a behavioural scenario fixes some answers; every other question is answered by the strategy */
+          const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(q, strategy, rnd);
+          if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null);
+        }
+        qs = visibleQuestions(def, step, state, {});
       }
       /*
        * "Deepest": a screener's first choice is often the one that screens
@@ -202,6 +249,8 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
       if (strategy === "deepest") {
         for (const q of qs) {
           if (!["single_select", "dropdown", "multi_select", "multi_dropdown"].includes(q.type)) continue;
+          if (opts.force && q.id in opts.force) continue;
+          if (readBy && !readBy.has(q.id)) continue;
           const cands = (q.options ?? []).filter((o) => !o.flags?.includes("other_specify") && o.logic?.visibility !== "always_hide").slice(0, 12);
           if (cands.length < 2) continue;
           let best: { value: unknown; ahead: number } | null = null;
@@ -226,6 +275,12 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
           if (best) setAnswer(def, state, q.id, best.value, step.loop ?? null);
         }
       }
+      if (strategy === "deepest") {
+        /* the chosen answers may have shown a same-page question: answer it too (the page must still validate) */
+        qs = visibleQuestions(def, step, state, {});
+        for (const q of qs.filter((x) => !answered.has(x.id))) { answered.add(q.id); walk.questions++; const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(q, strategy, rnd); if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null); }
+      }
+      for (const q of qs) walk.seen.add(q.id);
       const errors = validatePage(def, qs, { def, state, loop: step.loop ?? null });
       for (const e of errors) { const q = qs.find((x) => x.id === e.questionId); if (q && !walk.refusals.some((r) => r.questionId === q.id)) walk.refusals.push({ questionId: q.id, code: q.code, message: e.message }); }
       nav = advance(def, state, {}, { fromPageId: step.pageId });
@@ -234,7 +289,7 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
   } catch (e) {
     walk.error = (e as Error).message;
   }
-  return walk;
+  return opts.keepState ? { ...walk, state } : walk;
 }
 
 /** the questions the flow places, by id — what a walk could reach at all */
@@ -277,11 +332,14 @@ export function verifyRuntime(def: SurveyDefinition, opts: { seeds?: number[]; e
   return { walks, placed: answerable.length, reached: answerable.length - unreachable.length, unreachable, unanswerable: [...unanswerable.values()], errors, endStatuses: [...new Set(walks.map((w) => w.end ?? "").filter(Boolean))] };
 }
 
-export function verifyImport(c: CanonicalSurvey, m: MapResult, opts: { embedded?: Record<string, string> } = {}): VerificationReport {
+export function verifyImport(c: CanonicalSurvey, m: MapResult, opts: { embedded?: Record<string, string>; behaviourBudgetMs?: number } = {}): VerificationReport {
   const s = verifyStructure(c, m);
   const { analysis, ...structure } = s;
   const runtime = m.def ? verifyRuntime(m.def, opts) : { walks: [], placed: 0, reached: 0, unreachable: [], unanswerable: [], errors: ["no survey"], endStatuses: [] };
   const quality = m.def ? runQualityCheck(m.def) : null;
   const ok = !!m.def && structure.findings.every((f) => f.level !== "error") && runtime.errors.length === 0 && (quality?.errors ?? 1) === 0 && runtime.unreachable.every((u) => u.reason === "by_source");
-  return { structure, runtime, analysis, ok };
+  let behaviour: BehaviourReport | undefined;
+  /* bounded: the analysis waits for this — what does not fit in the budget is reported as not run */
+  try { behaviour = m.def ? runScenarios(c, m, { budgetMs: opts.behaviourBudgetMs ?? 8000 }) : undefined; } catch (e) { behaviour = { scenarios: [], passed: 0, failed: 0, notTestable: 0, notRun: 0, error: (e as Error).message }; }
+  return { structure, runtime, analysis, ok, ...(behaviour ? { behaviour } : {}) };
 }

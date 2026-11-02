@@ -42,7 +42,13 @@ export interface ImportVerification {
   structure: { checked: number; ok: number; findings: { level: "error" | "warning"; sourceId: string; message: string }[] };
   runtime: { walks: { strategy: string; seed: number; pages: number; questions: number; end: string | null; loops: number; error: string | null }[]; placed: number; reached: number; unreachable: { id: string; code: string; reason: "by_source" | "no_walk" }[]; unanswerable: { id: string; code: string; message: string }[]; errors: string[]; endStatuses: string[] };
   analysis: { variablesKept: number; variablesRenamed: { source: string; rescript: string }[]; codesKept: number; codesChanged: { question: string; source: string; rescript: string }[]; rowsKept: number };
+  /** I8: behavioural equivalence — the source's rules run on the engine, met and not met (apart from structure) */
+  behaviour?: ImportBehaviour;
   ok: boolean;
+}
+export interface ImportBehaviour {
+  scenarios: { id: string; rule: string; kind: string; met: boolean; given: string[]; result: "pass" | "fail" | "not_testable" | "not_run"; observed: string }[];
+  passed: number; failed: number; notTestable: number; notRun: number; error?: string;
 }
 export interface ImportReport {
   source: { platform: string; format: string; fileName: string; title?: string; label: string; reasons: string[] };
@@ -285,6 +291,11 @@ function FidelityBar({ f, verification }: { f: ImportFidelity; verification: Imp
         {f.unresolved.length > 0 && <span className="iqi-fid-warn" data-testid="iqi-unresolved-count">· {f.unresolved.length} unresolved reference{f.unresolved.length === 1 ? "" : "s"}</span>}
         {v && <span className={`iqi-fid-verify${v.ok ? "" : " warn"}`} data-testid="iqi-verify">· engine check: {v.runtime.reached}/{v.runtime.placed} questions reached, {v.runtime.endStatuses.join(" / ") || "no end"}{v.structure.findings.some((x) => x.level === "error") ? `, ${v.structure.findings.filter((x) => x.level === "error").length} structural error${v.structure.findings.filter((x) => x.level === "error").length === 1 ? "" : "s"}` : ""}{v.runtime.errors.length ? `, ${v.runtime.errors.length} runtime error${v.runtime.errors.length === 1 ? "" : "s"}` : ""}</span>}
         {verification && "error" in verification && <span className="iqi-fid-warn" data-testid="iqi-verify">· {verification.error}</span>}
+        {v?.behaviour && v.behaviour.scenarios.length > 0 && (
+          <span className={`iqi-fid-verify${v.behaviour.failed ? " warn" : ""}`} data-testid="iqi-behaviour" data-passed={v.behaviour.passed} data-failed={v.behaviour.failed}>
+            · behaviour: {v.behaviour.passed} of {v.behaviour.scenarios.length} logic scenarios behave as the source says{v.behaviour.failed ? `, ${v.behaviour.failed} do not` : ""}{v.behaviour.notTestable ? `, ${v.behaviour.notTestable} not testable` : ""}{v.behaviour.notRun ? `, ${v.behaviour.notRun} not run` : ""}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -331,6 +342,28 @@ function FidelityDetail({ f, verification }: { f: ImportFidelity; verification: 
           {v.runtime.unreachable.length > 0 && <p className="iqi-dim" data-testid="iqi-unreachable">Not reached: {v.runtime.unreachable.map((u) => `${u.code} (${u.reason === "by_source" ? "not in the source flow" : "no walk got there"})`).join(", ")}.</p>}
           {v.runtime.unanswerable.length > 0 && <p className="iqi-dim" data-testid="iqi-unanswerable">The walker could not satisfy: {v.runtime.unanswerable.map((u) => `${u.code} — ${u.message}`).join("; ")}.</p>}
           {v.runtime.errors.length > 0 && <p className="iq-error" data-testid="iqi-runtime-error">{v.runtime.errors.join("; ")}</p>}
+        </section>
+      )}
+      {v?.behaviour && (
+        <section data-testid="iqi-behaviour-detail">
+          <div className="iq-label">Behaviour — each rule of the source, met and not met, run on the engine</div>
+          {v.behaviour.error ? <p className="iq-error">{v.behaviour.error}</p> : v.behaviour.scenarios.length === 0 ? <p className="iqi-dim">The source has no display, skip or branch rule to test.</p> : (
+            <div className="iqi-map-scroll">
+              <table className="iqi-table">
+                <thead><tr><th>Result</th><th>Rule</th><th>Scenario</th><th>Observed / why</th></tr></thead>
+                <tbody>
+                  {[...v.behaviour.scenarios].sort((a, b) => ["fail", "not_testable", "not_run", "pass"].indexOf(a.result) - ["fail", "not_testable", "not_run", "pass"].indexOf(b.result)).map((x) => (
+                    <tr key={x.id} data-result={x.result} data-testid="iqi-behaviour-row">
+                      <td className={x.result === "fail" ? "iq-error" : x.result === "pass" ? "" : "iqi-dim"}>{x.result === "pass" ? "behaves" : x.result === "fail" ? "differs" : x.result === "not_testable" ? "not testable" : "not run"}</td>
+                      <td>{x.rule}</td>
+                      <td className="iqi-dim">{x.met ? "met" : "not met"}{x.given.length ? ` — ${x.given.join(", ")}` : ""}</td>
+                      <td className="iqi-dim">{x.observed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
     </div>

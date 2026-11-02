@@ -7,7 +7,10 @@
  *   C  Blocks: Import selected blocks (2 of 13) re-analyses the preview with only those (20 questions); the
  *      dependency on an unselected block is reported; Re-run with every block brings back all 121
  *
- *   node scripts/import-review-test.mjs     (Studio dev server with AI_API_URL=fake:)
+ *   D  (I8) Behaviour: a Word questionnaire with TERMINATE IF / IF … SKIP TO / ASK IF — the card says every logic
+ *      scenario behaves as the document says, and the Fidelity report lists each one, met and not met
+ *
+ *   node scripts/import-review-test.mjs     (Studio dev server with AI_API_URL=fake:; SECTIONS=ABCD by default)
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -15,7 +18,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { switchMode } from "./lib/nav.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
-const SECTIONS = (process.env.SECTIONS ?? "ABC").toUpperCase();
+const SECTIONS = (process.env.SECTIONS ?? "ABCD").toUpperCase();
 let passed = 0;
 const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
 const browser = await chromium.launch();
@@ -31,14 +34,17 @@ await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "domcontentloaded"
 await page.waitForSelector(".block-badge", { timeout: 120000 });
 await switchMode(page, "intelligent");
 await page.waitForSelector('[data-testid="intelligent-view"]');
-await page.setInputFiles('[data-testid="iq-file"]', { name: "large.qsf", mimeType: "application/json", buffer: qsf });
-await stageIs("estimated");
-await (await (await lastImport()).$('[data-testid="iqi-run"]')).click();
-await stageIs("ready");
-const fullCreated = await created();
-assert.ok(fullCreated >= 120, `the whole survey is in the preview (${fullCreated})`);
-await (await (await lastImport()).$('[data-testid="iqi-review-open"]')).click();
-await page.waitForSelector('[data-testid="iqr"]');
+let fullCreated = 0;
+if (/[ABC]/.test(SECTIONS)) {
+  await page.setInputFiles('[data-testid="iq-file"]', { name: "large.qsf", mimeType: "application/json", buffer: qsf });
+  await stageIs("estimated");
+  await (await (await lastImport()).$('[data-testid="iqi-run"]')).click();
+  await stageIs("ready");
+  fullCreated = await created();
+  assert.ok(fullCreated >= 120, `the whole survey is in the preview (${fullCreated})`);
+  await (await (await lastImport()).$('[data-testid="iqi-review-open"]')).click();
+  await page.waitForSelector('[data-testid="iqr"]');
+}
 
 if (SECTIONS.includes("A")) {
   assert.equal(await page.textContent('[data-testid="iqr-count-questions"]'), "121");
@@ -86,6 +92,27 @@ if (SECTIONS.includes("C")) {
   await page.click('[data-testid="iqr-close"]');
   assert.equal(await page.$('[data-testid="iqr"]'), null);
   ok("C: Import selected blocks → 20 questions, the outside dependency reported; Re-run with every block → the whole survey again");
+}
+
+if (SECTIONS.includes("D")) {
+  const docx = readFileSync(new URL("../packages/import/corpus/word/02-complex-instructions.docx", import.meta.url));
+  await page.setInputFiles('[data-testid="iq-file"]', { name: "category-study.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: docx });
+  await stageIs("estimated");
+  await (await (await lastImport()).$('[data-testid="iqi-run"]')).click();
+  await stageIs("ready");
+  const card = await lastImport();
+  const line = await card.$('[data-testid="iqi-behaviour"]');
+  assert.ok(line, "the card has a behaviour line");
+  assert.match(await line.textContent(), /behaviour: 6 of 6 logic scenarios behave as the source says/);
+  assert.equal(await line.getAttribute("data-failed"), "0");
+  await (await card.$('[data-testid="iqi-fidelity-btn"]')).click();
+  await page.waitForSelector('[data-testid="iqi-behaviour-detail"]');
+  const rows = await card.$$eval('[data-testid="iqi-behaviour-row"]', (els) => els.map((e) => [e.getAttribute("data-result"), e.textContent]));
+  assert.equal(rows.length, 6);
+  assert.ok(rows.every(([r]) => r === "pass"));
+  assert.ok(rows.some(([, t]) => /S1: if S1 = No → end \(screened\)/.test(t) && /met — S1 = No/.test(t) && /ended screened/.test(t)), "the screener scenario, its answers and what happened");
+  assert.ok(rows.some(([, t]) => /not met/.test(t) && /Q2 not shown/.test(t)), "the not-met side of a display rule");
+  ok("D: a Word questionnaire's rules run on the engine — 6 of 6 scenarios behave as the document says, each listed with what was given and what happened");
 }
 
 assert.deepEqual(pageErrors, [], "no page errors");

@@ -67,6 +67,10 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
     return empty(fileName, fp, [{ location: fileName, type: "parse", severity: "high", message: `The QSF is not valid JSON: ${(e as Error).message}`, autoAttempted: false }]);
   }
   const entry: Json = qsf.SurveyEntry ?? {};
+  /* I8 (invalid-QSF corpus): a file that is JSON but not shaped like an export is said so, never imported as an empty survey in silence */
+  if (!Array.isArray(qsf?.SurveyElements)) {
+    return empty(fileName, fp, [{ location: fileName, type: "parse", severity: "high", message: qsf?.SurveyElements === undefined ? "The QSF has no SurveyElements — it is not a complete Qualtrics export." : "The QSF's SurveyElements is not a list — the file is damaged or was edited by hand.", suggestion: "Export the survey from Qualtrics again (Tools → Import/Export → Export Survey).", autoAttempted: false }]);
+  }
   const elements: Json[] = arr(qsf.SurveyElements);
   const byType = (t: string) => elements.filter((e) => e.Element === t);
   /* the table of contents: every element kind, counted, with what became of it */
@@ -86,6 +90,11 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
   }
   const languages = new Set<string>();
   for (const [qid, p] of qsfQ) questions.set(qid, readQuestion(qid, p, issues, inventory, assets, languages));
+  /* a choice question with no choices at all (and none carried forward) cannot be answered — said, not left to the respondent to find */
+  for (const [qid, p] of qsfQ) {
+    const q = questions.get(qid)!;
+    if (p.QuestionType === "MC" && ["single", "multi", "dropdown", "multi_dropdown"].includes(q.kind) && !q.options.length && !p.DynamicChoices) issues.push({ location: qid, type: "structure", severity: "high", message: `${q.variable} is a choice question with no choices in the file — respondents could not answer it.`, suggestion: "Add its answers in Studio.", autoAttempted: false, refs: [qid] });
+  }
 
   // logic, now that every question exists
   for (const [qid, p] of qsfQ) {
@@ -139,6 +148,7 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
       for (const be of arr<Json>(b.BlockElements)) {
         if (be.Type === "Page Break") { if (pages[pages.length - 1].length) pages.push([]); }
         else if (be.Type === "Question" && be.QuestionID && questions.has(str(be.QuestionID))) pages[pages.length - 1].push(str(be.QuestionID));
+        else if (be.Type === "Question" && be.QuestionID) issues.push({ location: `${id} · ${str(be.QuestionID)}`, type: "reference", severity: "high", message: `Block “${str(b.Description) || id}” places question ${str(be.QuestionID)}, which is not in the file — it was not imported.`, suggestion: "Export the survey again; if the question was deleted in Qualtrics, nothing is lost.", autoAttempted: false, refs: [str(be.QuestionID)] });
       }
       if (pages.length > 1 && pages[pages.length - 1].length === 0) pages.pop();
       blocks.set(id, { id, description: str(b.Description), type: str(b.Type), pages, options: b.Options ?? {} });
