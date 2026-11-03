@@ -6,6 +6,7 @@ import { clientIp } from "@rescript/quality/server";
 import { resolveSampleSource } from "@rescript/engine";
 import type { PanelConfig } from "@rescript/schema";
 import { panelParams, runtimePanels } from "@/lib/panels";
+import { admitArrival, attachParticipation } from "@/lib/identity";
 import { sessionAllowed } from "@/lib/metering";
 import { sandboxAvailable, sandboxRow, sandboxSurvey, sandboxSurveyId, startSandboxSession } from "@/lib/sessionSandbox";
 
@@ -60,6 +61,10 @@ function sandboxStart(token: string, body: any) {
  * Resume is honoured only when the row belongs to the same survey and
  * environment and is still in progress; anything else starts a new session,
  * so a stale id can never read or write someone else's row.
+ *
+ * Since 0083 an arrival is also resolved to a Respondent Trust ID and reserved in the participation ledger, so
+ * the same person cannot take part twice through two different vendors. That check starts in SHADOW mode and
+ * refuses nobody until a project turns enforcement on — see lib/identity.ts.
  */
 export async function POST(req: NextRequest) {
   let body: any;
@@ -188,6 +193,27 @@ export async function POST(req: NextRequest) {
   const panelEntry = panels ? await panels.enter({ surveyId: d.surveyId, target: "survey", targetRef: d.versionId ?? null, params: panelParams(urlParams), isTest }) : null;
   if (panelEntry && (panelEntry.kind === "refused" || panelEntry.kind === "duplicate")) return NextResponse.json({ error: panelEntry.message, code: `panel_${panelEntry.kind}` }, { status: 409 });
   if (panelEntry && panelEntry.kind === "over_quota") return NextResponse.json({ error: panelEntry.message, code: "panel_over_quota", redirectUrl: panelEntry.redirect.url }, { status: 409 });
+  /*
+   * PHASE 3 (0083) — CROSS-VENDOR DEDUPLICATION. The panel check above refuses a second arrival from the SAME
+   * panel id. This asks whether it is the same PERSON as somebody who already took part, under a different
+   * vendor's id.
+   *
+   * Every project starts in `shadow`, where this refuses nobody: it resolves, reserves and records what it
+   * WOULD have refused, so a false-positive rate can be measured on real traffic first. It also fails open on
+   * every error path — a missing key, an unmigrated database, an unreachable table all admit the respondent.
+   */
+  const admission = await admitArrival(d.surveyId, {
+    vendorPid: panelEntry && panelEntry.kind === "admitted" ? panelEntry.pid : null,
+    ip: clientIp(req.headers),
+    userAgent: req.headers.get("user-agent"),
+  }, { isTest });
+  if (!admission.admit) {
+    return NextResponse.json(
+      { error: admission.decision?.reason ?? "You have already taken part in this study.", code: `rtid_${admission.decision?.code ?? "duplicate"}` },
+      { status: 409 },
+    );
+  }
+
   const session = await createSession(d, {
     isTest,
     ip: clientIp(req.headers),
@@ -199,6 +225,7 @@ export async function POST(req: NextRequest) {
   });
   if ("error" in session) return NextResponse.json({ error: session.error }, { status: 403 });
   if (panels && panelEntry?.kind === "admitted") await panels.attach(panelEntry.entryId, session.sessionId);
+  if (admission.ledgerId) await attachParticipation(admission.ledgerId, session.sessionId);
   const { data: made } = await db.from("responses").select("respondent_code").eq("session_id", session.sessionId).maybeSingle();
   console.info("[rescript:session] started", JSON.stringify({ surveyId: d.surveyId, environment: isTest ? "TEST" : "LIVE", session: session.sessionId.slice(0, 8), respondentCode: made?.respondent_code ?? null, versionId: d.versionId, sampleSource: sample.source, sampleSourceParam: sample.sourceParam ?? null }));
   return NextResponse.json({

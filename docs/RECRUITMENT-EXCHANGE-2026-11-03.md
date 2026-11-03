@@ -321,7 +321,7 @@ two rows — 0072 already treats them as one preset.
 |---|---|---|---|
 | **1 — Foundation** | Vendor registry, adapter framework + capability registry, manual pricing/feasibility/quotation/order, recruitment dashboard | **0081** | **built, see §8** |
 | **2 — Recruitment intelligence** | Audience builder (structured + NL), per-market targets, vendor capacity, allocation optimiser, budget controls | **0082** | **built, see §9** |
-| 3 — Trust infrastructure | RTID, `RTID_MATCH_KEY`, vendor participant mapping, participation ledger, atomic reservation, cross-vendor dedup with confidence states | 0083 | specified |
+| **3 — Trust infrastructure** | RTID, `RTID_MATCH_KEY`, vendor participant mapping, participation ledger, atomic reservation, cross-vendor dedup in shadow mode | **0083** | **built, see §10** |
 | 4 — Fraud intelligence | Admission gateway, access tokens, IP/device intelligence, the `admission` quality profile, risk scoring, quarantine and appeal | 0084 | specified |
 | 5 — Advanced optimisation | Vendor quality engine, dynamic reallocation, fraud network graph, forecasting, model evaluation | 0085 | specified |
 | 6 — Production integrations | Live vendor adapters, webhooks, settlement reconciliation, monitoring, load and security testing | 0086 | **blocked on vendor contracts** |
@@ -503,7 +503,110 @@ heuristic now: the unit is fixed at percent, documented, and clamped. A regressi
 
 ---
 
-## 10. Decisions needed
+## 10. Phase 3 — what was built
+
+Migration **0083**, a new `packages/identity`, and the admission path extended — **in shadow mode, refusing
+nobody**. §2 of this document is the specification this phase implements, and nothing in it was softened.
+
+### 10.1 The graded answer
+
+The schema is built around three resolutions rather than a yes/no, because three of the brief's four
+deduplication signals are not obtainable from the vendors it names:
+
+| Resolution | When | Confidence |
+|---|---|---|
+| `deterministic` | the same vendor's participant id, or an identity this platform holds | 100 |
+| `probabilistic` | different ids, but device/network/behaviour agree | 55 / 75 / 88 by signals agreeing |
+| `vendor_scoped` | nothing links this arrival outside the vendor that sent it | 0 |
+
+**Probabilistic never reaches 100, at any number of agreeing signals.** A household behind one router sharing
+one tablet produces three agreeing signals and is two people; no quantity of circumstantial evidence becomes
+proof, and a system that rounded 88 up to "certain" would be refusing someone a day's paid work on a guess.
+
+`rescript_rtid_resolve` returns **two** answers that are constantly confused and must not be: how *this
+arrival* was matched, and how well the *identity* is known overall. A person known deterministically from Cint,
+arriving from Dynata linked only by a shared device, is a probabilistic match to a deterministic identity.
+Reporting the identity's standing as the match's would turn circumstantial evidence into proof at exactly the
+moment it matters. The test suite caught me conflating them.
+
+### 10.2 Keys
+
+`RTID_MATCH_KEY` is a different key from `QUALITY_HASH_SALT`, and the reasoning is in `.env.example` beside it.
+The quality salt is per *survey*, which makes a device hash in one study incomparable with one in another — a
+real privacy property that exists on purpose. Cross-project matching relaxes it, so it is relaxed narrowly: its
+own key, its own table, its own retention, organisation-scoped so a trust id never spans customers. The
+per-survey hashes in `responses` are untouched; a match token is never written there and a `responses` hash is
+never usable as a match token.
+
+**Unset, the whole subsystem is off.** `keyRing()` throws rather than defaulting, and the runtime catches that
+and admits everyone. A system that silently derived matchable tokens under a guessable key would be worse than
+one that refused to run, because nobody would find out until the tokens were written.
+
+`identity_match_tokens` holds HMACs and has **no column a raw identifier could go in** — the schema makes the
+mistake impossible rather than forbidding it in a comment. RLS on, no policy, no grant: the `panel_secrets`
+pattern.
+
+### 10.3 Normalisation, and why it does less than you'd expect
+
+E-mail normalisation trims and lower-cases and **nothing else**. It is tempting to strip dots and `+tags`
+because Gmail treats them as equivalent, but plenty of providers deliver `a.b@` and `ab@` to different people
+and `+` is a legal, meaningful character. The asymmetry decides it: over-normalising **merges two people**,
+which here means refusing one of them entry and their earnings; under-normalising merely fails to match, which
+is recoverable. Phone numbers are normalised to digits with the prefix given and **no country is ever
+inferred** — guessing a country code and matching on the guess merges strangers.
+
+### 10.4 Atomic reservation
+
+`participation_ledger_live_uniq`, a partial unique index over `(survey_id, trust_id)` where the state is live
+and the row is not a shadow observation. Concurrent arrivals contend on it in the database, which is the only
+place the race can actually be won.
+
+`scripts/rtid-concurrency.sh` fires N genuinely parallel sessions at one person in one project, because a
+single-transaction SQL test cannot make a claim about concurrency — the transaction never races itself. At 24
+and at 16 arrivals: **exactly one admitted, the rest refused, zero errors, one live ledger row.**
+
+Reservations expire and `rescript_rtid_sweep` returns them. Without it, a respondent whose browser died on the
+consent page holds their own place forever and is refused as a duplicate of themselves — the most infuriating
+possible failure, and invisible unless somebody is looking for it.
+
+Several trust ids answering one deterministic token are recorded as a **merge candidate**, never merged.
+Merging rewrites participation history, and doing it inside an admission call that must answer in milliseconds
+is how a race corrupts a ledger.
+
+### 10.5 Shadow mode
+
+Every project starts at `dedupe_mode = 'shadow'`: identities resolve, the ledger is written, duplicates are
+recorded with `would_block`, and **nobody is refused**. Counting those events *is* the false-positive exposure,
+measurable on real traffic before anyone loses a paid piece of work. A deduplication system that starts by
+turning away real respondents with no measured baseline is one that gets switched off in week two.
+
+The runtime path fails open on every error — missing key, unmigrated schema, unreachable table all admit the
+respondent and log once. And even under enforcement, a probabilistic match below 85% never refuses anybody.
+
+`deduplicationStatement()` writes the honest headline for a final report: deterministic prevention where
+identity was available, circumstantial detection elsewhere, and the count of arrivals nothing could be said
+about at all. It cannot produce the words "zero duplicates", because that claim cannot be supported.
+
+### 10.6 Verification
+
+| Check | Result |
+|---|---|
+| 0083 applied twice over the full chain | clean |
+| `scripts/rtid-sql-test.sql` | 7 groups PASS |
+| `scripts/rtid-concurrency.sh` at 24 and 16 arrivals | PASS — exactly one admitted each time |
+| `packages/identity` | 20 pass |
+| `packages/recruitment` / `engine` / `schema` / `access` / `quality` | 56 / 2,668 / 18 / 123 / 67 |
+| `tsc --noEmit` studio / runtime | 0 / 0 |
+| `dependency-boundaries.mjs` | 2,199 files, 22 workspaces — 0 violations, and R3 now forbids `identity → recruitment` (verified by a deliberate violation) |
+| `auth-guard-audit.mjs` | 271 handlers — 0 problems |
+
+**Not verified:** no browser suite, no Supabase project, and — importantly — **no real traffic has been through
+shadow mode yet**, so the false-positive rate this phase exists to measure is still unmeasured. That is the
+gate on Phase 4 turning enforcement on.
+
+---
+
+## 11. Decisions needed
 
 1. **Vendor contracts.** Nothing in Phase 6 can proceed without at least one sample-provider
    agreement. Cint's marketplace API and Prolific's API are the two with the lowest barrier.
