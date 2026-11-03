@@ -6,3 +6,6 @@ export * from "./adapters/manual.js";
 export * from "./adapters/registry.js";
 export * from "./allocate.js";
 export * from "./budget.js";
+export * from "./quality.js";
+export * from "./forecast.js";
+export * from "./reallocate.js";

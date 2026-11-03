@@ -104,6 +104,13 @@ const PUBLIC = {
     "marks in_progress responses idle past their survey's window as abandoned (RUNTIME-07): the same bearer-token "
     + "credential as the media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's first statement, "
     + "refusing everything when it is unset. It sweeps every survey, so there is no project to gate on — and no session",
+  "cron/fraud-intelligence/route.ts":
+    "the hourly cross-arrival pass (0085): the fraud network graph, vendor quality from real outcomes, project "
+    + "forecasts, and the detector's own evaluation. The same bearer-token credential as the media job, checked "
+    + "against CRON_SECRET by `timingSafeEqual` in each handler's first statement and again in run(), refusing "
+    + "everything when it is unset. It sweeps every organisation that has identity data, so there is no project "
+    + "to gate on and no session. It OPENS cases and never resolves, refuses or voids anything — every finding "
+    + "waits for a human in the Fraud Intelligence Centre",
 };
 
 /**

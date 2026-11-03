@@ -17,7 +17,7 @@ import { AppHeader } from "@/components/ui/AppHeader";
  */
 
 export interface AccountHeaderProps {
-  active: "profile" | "security" | "ai" | "admin" | "billing" | "admin-billing";
+  active: "profile" | "security" | "ai" | "admin" | "billing" | "admin-billing" | "fraud";
   user: SessionUser | null;
   onSignOut: () => void;
 }
@@ -29,6 +29,7 @@ const TITLES: Record<AccountHeaderProps["active"], string> = {
   admin: "Administration",
   billing: "My usage",
   "admin-billing": "Billing administration",
+  fraud: "Fraud intelligence",
 };
 
 /** Initials from whatever name we actually have — one word still gives two letters. */
@@ -90,6 +91,8 @@ export function AccountHeader({ active, user, onSignOut }: AccountHeaderProps) {
         <a href="/security" className={active === "security" ? "active" : undefined}>Security</a>
         <a href="/settings/ai" className={active === "ai" ? "active" : undefined} data-testid="nav-ai">AI &amp; Integrations</a>
         <a href="/billing" className={active === "billing" ? "active" : undefined} data-testid="nav-billing">My usage</a>
+        {/* the review queue belongs to the organisation, not to one study: a ring spans every project it touched */}
+        <a href="/fraud" className={active === "fraud" ? "active" : undefined} data-testid="nav-fraud">Fraud intelligence</a>
         {user?.isPlatformAdmin && (
           <a href="/admin" className={active === "admin" ? "active" : undefined}>Administration</a>
         )}
