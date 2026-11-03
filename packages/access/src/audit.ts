@@ -189,6 +189,16 @@ export const AUDIT_EVENTS = [
   "notify.channel_removed",
   "panel.secret_changed",
 
+  /* the recruitment exchange (2026-11-03): configuring a sample vendor, its rate card, and the three actions that
+     commit real money — proposing an allocation, authorising it, and placing an order. The detail names the vendor,
+     the completes and the cost; never a credential. */
+  "recruitment.vendor_configured",
+  "recruitment.pricing_added",
+  "recruitment.allocation_proposed",
+  "recruitment.allocation_authorized",
+  "recruitment.order_placed",
+  "recruitment.progress_recorded",
+
   /* collaboration */
   "comment.created",
   "comment.resolved",
@@ -243,6 +253,12 @@ export function describeEvent(r: AuditRow): string {
     case "user.password_changed": return `${who} changed their password`;
     case "notify.channel_added": return `${who} added the ${str(d.kind) || "alert"} channel ${str(d.name) || ""}`.trim();
     case "notify.channel_removed": return `${who} removed the ${str(d.kind) || "alert"} channel ${str(d.name) || ""}`.trim();
+    case "recruitment.vendor_configured": return `${who} set the sample vendor ${str(d.vendor) || ""} to ${str(d.mode) || "a new mode"}`.replace(/\s+/g, " ").trim();
+    case "recruitment.pricing_added": return `${who} added a ${str(d.source) || "rate card"} price for ${str(d.vendor) || "a vendor"} in ${str(d.market) || "a market"}`;
+    case "recruitment.allocation_proposed": return `${who} proposed revision ${str(d.revision)} of the sample allocation: ${str(d.completes) || "?"} completes across ${str(d.vendors) || "?"} vendors for ${str(d.cost) || "?"}`;
+    case "recruitment.allocation_authorized": return `${who} authorised the sample allocation (${str(d.completes) || "?"} completes, ${str(d.cost) || "?"})`;
+    case "recruitment.order_placed": return `${who} placed an order with ${str(d.vendor) || "a vendor"} for ${str(d.completes) || "?"} completes at ${str(d.cpi) || "?"}`;
+    case "recruitment.progress_recorded": return `${who} recorded ${str(d.accepted) || "?"} accepted of ${str(d.delivered) || "?"} delivered from ${str(d.vendor) || "a vendor"}`;
     case "panel.secret_changed": return `${who} ${d.cleared ? "cleared" : "set"} the signing secret of the panel ${str(d.panel) || ""}`.trim();
     case "user.ai_credential_saved": return `${who} saved an API key for ${str(d.provider) || "an AI provider"}`;
     case "user.ai_credential_removed": return `${who} removed an API key for ${str(d.provider) || "an AI provider"}`;
@@ -359,6 +375,8 @@ export function auditCategory(action: string): AuditCategory {
   if (action.startsWith("lock.")) return "editing";
   if (action.startsWith("comment.")) return "collaboration";
   if (action.startsWith("responses.") || action.startsWith("analytics.")) return "data";
+  // recruitment is fieldwork: it belongs with the study's own events, not with access
+  if (action.startsWith("recruitment.") || action.startsWith("panel.")) return "survey";
   if (action.startsWith("survey.") || action.startsWith("script.") || action.startsWith("version.") || action.startsWith("deployment.") || action.startsWith("quota.")) return "survey";
   return "access";
 }

@@ -28,6 +28,7 @@ import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
 import { DataPanel } from "./DataPanel";
 import { FieldworkPanel } from "./FieldworkPanel";
+import { RecruitmentPanel } from "./RecruitmentPanel";
 import { DistributionPanel } from "./DistributionPanel";
 import { ProjectPanel } from "./ProjectPanel";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
@@ -49,7 +50,7 @@ import { ModeChooser } from "./ModeChooser";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "data" | "fieldwork"
+  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "data" | "fieldwork" | "recruitment"
   | "distribution" | "project" | "usage" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -114,6 +115,12 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
    * same reasoning that keeps Data and Versions live for a reviewer.
    */
   { key: "fieldwork", label: "Fieldwork", icon: "chart", group: "Results" },
+  /*
+   * The recruitment exchange (2026-11-03). Beside Fieldwork, in Results, and for the same reason: buying sample
+   * and watching it arrive are one job. Not in EDITING_TABS — a sample desk does not hold the edit lock — and
+   * the route, not this list, decides who may spend money (`deploy.manage`).
+   */
+  { key: "recruitment", label: "Recruitment", icon: "chart", group: "Results" },
   /*
    * §24. Beside Versions & Deploy, because sending a study is the step after
    * shipping it — and gated on `deploy.manage` at the route, not here: the
@@ -1101,6 +1108,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "allcode" && <AllCodePanel tools={(sel, all) => <ScriptBundleTools selected={sel} all={all} />} />}
           {tab === "data" && <DataPanel />}
           {tab === "fieldwork" && <FieldworkPanel />}
+          {tab === "recruitment" && <RecruitmentPanel />}
           {tab === "project" && <ProjectPanel />}
           {tab === "usage" && <UsagePanel />}
           {tab === "distribution" && <DistributionPanel />}
