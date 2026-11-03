@@ -501,6 +501,40 @@ export const RULES: RuleDef[] = [
     params: [p("windowSec", "Window", lvl(120, 300, 600, 900), "s"), p("count", "At least this many linked completes in the window", lvl(8, 5, 4, 3))],
   },
 
+  /* --------------------------------------------------------- admission
+
+     Evaluated BEFORE a respondent enters (0084), where the only evidence is the network they arrived on, the
+     device they arrived with, and what this identity has done before. They share the catalogue with the
+     post-hoc rules on purpose: one vocabulary, one set of weights, one dashboard. A reviewer should not have to
+     learn two systems to understand why somebody was held.
+
+     None of these refuse anybody. The highest score they can produce quarantines a participation for review;
+     refusal is not a decision this subsystem is allowed to make. */
+  {
+    id: "network.datacenter", category: "network", title: "Arrived from a datacenter, proxy or Tor",
+    description: "The network this respondent arrived on is a hosting provider, an anonymising proxy or a Tor exit — not a consumer connection. Real respondents occasionally use a VPN, so this is evidence, never a verdict.",
+    defaultSeverity: "medium", riskPoints: 20, qualityPenalty: 0, enabledIn: ALL, needs: ["network"],
+    params: [p("includeVpn", "Count a commercial VPN as well as datacenters and Tor", lvl(0, 0, 1, 1))],
+  },
+  {
+    id: "network.identity_density", category: "network", title: "Many identities from one network",
+    description: "Several distinct respondent identities have arrived from this network. A household, an office and a phone carrier's NAT all produce this legitimately, so the threshold is deliberately high.",
+    defaultSeverity: "medium", riskPoints: 15, qualityPenalty: 0, enabledIn: STD_UP, needs: ["network"],
+    params: [p("count", "Distinct identities on one network above this", lvl(25, 12, 8, 5))],
+  },
+  {
+    id: "device.identity_density", category: "device", title: "Many identities on one device",
+    description: "Several distinct respondent identities have arrived from this device signature. Shared family devices do this; so do click farms, at a different scale.",
+    defaultSeverity: "high", riskPoints: 25, qualityPenalty: 0, enabledIn: STD_UP, needs: ["device"],
+    params: [p("count", "Distinct identities on one device above this", lvl(8, 5, 3, 2))],
+  },
+  {
+    id: "history.refused_elsewhere", category: "custom", title: "Refused or rejected in earlier studies",
+    description: "This identity's completes have been rejected, or its entries refused as duplicates, in previous projects for this organisation.",
+    defaultSeverity: "medium", riskPoints: 18, qualityPenalty: 0, enabledIn: ALL, needs: [],
+    params: [p("rejections", "Prior rejected completes above this", lvl(4, 2, 1, 1)), p("duplicates", "…or prior duplicate attempts above this", lvl(6, 4, 3, 2))],
+  },
+
   /* ---------------------------------------------------------- screener */
   {
     id: "screener.repeat_attempts", category: "screener", title: "Repeated attempts to qualify",

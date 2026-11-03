@@ -24,7 +24,10 @@ import {
  *      no clustering. The slow analysis belongs in Phase 4 and runs after the person is already answering.
  */
 
-const OFF: Admission = { checked: false, admit: true, decision: null, ledgerId: null, trustId: null, mode: "off" };
+const OFF: Admission = {
+  checked: false, admit: true, decision: null, ledgerId: null, trustId: null, trustUuid: null,
+  customerId: null, networkToken: null, deviceToken: null, resolution: null, mode: "off",
+};
 
 export interface Admission {
   checked: boolean;
@@ -33,6 +36,13 @@ export interface Admission {
   ledgerId: string | null;
   /** the pseudonymous handle, for logs and the fraud dashboard. Never an identifier of the person. */
   trustId: string | null;
+  /* what the gateway needs to carry on from here (0084) — all derived, none of it an identifier of the person */
+  trustUuid: string | null;
+  customerId: string | null;
+  networkToken: string | null;
+  deviceToken: string | null;
+  /** how THIS ARRIVAL was matched, not how well the identity is known */
+  resolution: string | null;
   mode: DedupeMode;
 }
 
@@ -187,6 +197,11 @@ export async function admitArrival(
       decision,
       ledgerId: (res?.ledger_id as string | null) ?? null,
       trustId: (r.trust_id as string | null) ?? null,
+      trustUuid: (r.trust_uuid as string | null) ?? null,
+      customerId,
+      networkToken: tokens.find((t) => t.kind === "network")?.token ?? null,
+      deviceToken: tokens.find((t) => t.kind === "device")?.token ?? null,
+      resolution: (r.resolution as string | null) ?? null,
       mode,
     };
   } catch (e) {

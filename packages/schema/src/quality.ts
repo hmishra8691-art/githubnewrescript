@@ -306,6 +306,11 @@ export const QUALITY_RULE_PARAMS: Readonly<Record<string, readonly string[]>> = 
   "duplicate.multi_signal": ["similarity"],
   "cluster.coordinated": ["minSize", "linkSimilarity"],
   "cluster.burst": ["windowSec", "count"],
+  /* admission (0084): evaluated before entry, from the network, the device and this identity's own history */
+  "network.datacenter": ["includeVpn"],
+  "network.identity_density": ["count"],
+  "device.identity_density": ["count"],
+  "history.refused_elsewhere": ["rejections", "duplicates"],
   "screener.repeat_attempts": ["count"],
   "screener.inconsistent": [],
   "screener.fast": ["ratio"],

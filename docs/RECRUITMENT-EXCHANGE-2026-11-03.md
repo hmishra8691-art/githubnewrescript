@@ -322,7 +322,7 @@ two rows — 0072 already treats them as one preset.
 | **1 — Foundation** | Vendor registry, adapter framework + capability registry, manual pricing/feasibility/quotation/order, recruitment dashboard | **0081** | **built, see §8** |
 | **2 — Recruitment intelligence** | Audience builder (structured + NL), per-market targets, vendor capacity, allocation optimiser, budget controls | **0082** | **built, see §9** |
 | **3 — Trust infrastructure** | RTID, `RTID_MATCH_KEY`, vendor participant mapping, participation ledger, atomic reservation, cross-vendor dedup in shadow mode | **0083** | **built, see §10** |
-| 4 — Fraud intelligence | Admission gateway, access tokens, IP/device intelligence, the `admission` quality profile, risk scoring, quarantine and appeal | 0084 | specified |
+| **4 — Fraud intelligence** | Admission gateway, access tokens, IP/device intelligence, admission scoring in the shared catalogue, quarantine and appeal | **0084** | **built, see §11** |
 | 5 — Advanced optimisation | Vendor quality engine, dynamic reallocation, fraud network graph, forecasting, model evaluation | 0085 | specified |
 | 6 — Production integrations | Live vendor adapters, webhooks, settlement reconciliation, monitoring, load and security testing | 0086 | **blocked on vendor contracts** |
 
@@ -606,7 +606,108 @@ gate on Phase 4 turning enforcement on.
 
 ---
 
-## 11. Decisions needed
+## 11. Phase 4 — what was built
+
+Migration **0084**, the gateway endpoint, and admission scoring inside `packages/quality` rather than beside it.
+Nothing here refuses anybody on a risk score.
+
+### 11.1 The gateway
+
+`/r/<client>/<study>` — deliberately shaped like the survey link it redirects to, so a vendor swapping one for
+the other changes a single character and keeps every parameter it already appends. It resolves identity (0083),
+scores risk, records the decision, issues an access token and redirects to `/s/…?at=…`.
+
+Nothing is rendered. An admitted respondent should see the survey, not an interstitial telling them they were
+checked; a refused one goes to their vendor's own end link with the outcome that vendor's reconciliation
+expects, without being shown a message about fraud. It fails **open** at every step: unmigrated database,
+missing key, unreachable table all send the respondent through exactly as the plain link would. A gateway that
+can take a study offline is worse than no gateway.
+
+### 11.2 Access tokens
+
+`survey_access_tokens` stores the **SHA-256 of the token, never the token** — treated exactly as a password
+would be. Single use is a conditional update (`where redeemed_at is null`), so simultaneous redemptions contend
+in the database. `scripts/admission-concurrency.sh` fires N parallel redemptions of one token: at 20 and 12,
+**exactly one succeeded, the rest were told `already_used`, zero errors.**
+
+Failure says *why* — `already_used`, `expired`, `unknown` — because those lead a respondent to different next
+steps. A token for another survey answers `unknown` rather than admitting the row exists.
+
+**The honest limit of this phase: the token is recorded, not required.** Nothing yet refuses an arrival that
+skipped the gateway and went straight to the survey link — which is every arrival today, since no vendor has a
+`/r/` link. Requiring it is a one-line change in `session/start` and belongs in Phase 6, once gateway links are
+actually in use. Redemption also cannot refuse, because the runner re-posts on resume, by which time the token
+is legitimately spent; refusing would turn every tab refresh into a lockout.
+
+### 11.3 Scoring inside the existing engine
+
+`packages/quality` already had 58 rules and a worked-out combination of evidence. Admission adds **four rules to
+the same catalogue** — `network.datacenter`, `network.identity_density`, `device.identity_density`,
+`history.refused_elsewhere` — and runs them through the same `finalizeFlags` and `riskScore`, which already
+folds network and device into one fact because the same machine on the same connection is one piece of evidence,
+not two. One vocabulary, one set of weights, one dashboard; a reviewer does not learn a second system.
+
+Every rule states what it **saw**, never a verdict: "eleven identities from this network" is a fact,
+"suspicious" is not, and a test asserts no explanation contains the word.
+
+**The ceiling.** Every admission rule firing at once, at maximum intensity, reaches **74** — one below the
+brief's `critical` band. That band is not reachable before entry, and that is the point: it is reserved for
+evidence this layer does not have, namely the respondent's actual answers, timings and peers. Circumstantial
+evidence about a network and a device, however much of it there is, is not certainty about a person. The test
+pins the ceiling so a future weight change that pushed it past 75 fails loudly.
+
+### 11.4 Review, not refusal
+
+A high band opens a `fraud_case`, holds the complete from billing, and admits the respondent. Clearing a case
+releases the payment **and lowers the identity's standing risk** — without that, one false positive would follow
+a respondent for ever, opening a fresh case on every later arrival. Upholding quarantines the identity. An
+appeal is recorded and answerable, because an upheld case with no appeal is an accusation a person cannot
+answer, from a system whose false-positive rate nobody has measured.
+
+### 11.5 A Phase 3 bug this phase found
+
+`identity_match_tokens` had a unique index on `(customer_id, kind, token)`. For a deterministic token that is
+right. For a **probabilistic** one it was wrong in the direction that harms people: a network token belongs to a
+router, and a router has a household behind it. Under that index the second person to arrive from an address
+could not get their own row, so `rescript_rtid_resolve` found the **first** person's identity and silently
+returned it. **Two people sharing a home connection became one person**, and the second was then liable to be
+refused as a duplicate of a stranger. The Phase 4 test caught it.
+
+Two changes, both in 0084:
+
+- uniqueness scoped to what it is true of — deterministic unique per token, probabilistic unique per
+  *(token, identity)*, so many identities may legitimately share a network or device;
+- **circumstantial evidence no longer merges people.** A probabilistic match is adopted only at or above 85 —
+  the same threshold `decideAdmission` requires before it will act on a match. Below it, a new identity is
+  minted and the resemblance is recorded as a `merge_candidate` with its confidence. Evidence that cannot
+  license a refusal cannot license an identity either.
+
+The weaker links are not thrown away: the shared tokens are exactly what the density rules count, so a click
+farm running forty identities through one device still lights up — as a scored, reviewable fraud signal rather
+than a silent identity merge nobody can see. Phase 3's SQL test was rewritten around the corrected rule.
+
+### 11.6 Verification
+
+| Check | Result |
+|---|---|
+| 0084 applied twice over the full chain | clean |
+| `scripts/admission-sql-test.sql` | 6 groups PASS |
+| `scripts/admission-concurrency.sh` at 20 and 12 replays | PASS — exactly one redemption each time |
+| `scripts/rtid-sql-test.sql` (rewritten for the corrected resolver) | 7 groups PASS |
+| `packages/quality` | 83 pass (67 → 83) |
+| `identity` / `recruitment` / `engine` / `schema` / `access` | 20 / 56 / 2,668 / 18 / 123 |
+| `tsc --noEmit` studio / runtime | 0 / 0 |
+| `dependency-boundaries.mjs` | 2,203 files, 22 workspaces — 0 violations |
+| `auth-guard-audit.mjs` | 271 handlers — 0 problems |
+
+**Not verified:** no browser suite; no Supabase project; no traffic through the gateway, so the false-positive
+rate remains unmeasured. There is also no Fraud Intelligence Center UI yet (the brief's §29) — the data is all
+there and queryable, but a reviewer currently has no screen to work the queue from. That, the click-farm graph
+(§19) and vendor quality scoring are Phase 5.
+
+---
+
+## 12. Decisions needed
 
 1. **Vendor contracts.** Nothing in Phase 6 can proceed without at least one sample-provider
    agreement. Cint's marketplace API and Prolific's API are the two with the lowest barrier.

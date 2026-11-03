@@ -124,57 +124,55 @@ begin
     raise exception '2: the vendor mapping did not count the second entry';
   end if;
 
-  -- the SAME DEVICE arrives from Dynata under a different vendor id: circumstantial, one signal → 55
+  /*
+   * The SAME DEVICE arrives from Dynata under a different vendor id. One circumstantial signal is 55, which is
+   * BELOW the adoption threshold (0084), so this must NOT become the same person: a household behind one
+   * router is two people, and merging them would refuse the second as a duplicate of the first. A separate
+   * identity is created and the resemblance is recorded for a reviewer.
+   */
   select * into r from public.rescript_rtid_resolve(
     'c0000000-0000-0000-0000-000000000084',
     '[{"kind":"device","token":"dev-aaaaaaaaaaaaaaaa","strength":"probabilistic","key_id":"k1"}]'::jsonb,
     'c0000084-0000-0000-0000-00000000001b', 'DYNATA-PSID-9', 'c0000000-0000-0000-0000-000000000184');
-  if r.trust_uuid <> v_first then raise exception '2: a shared device did not link the two vendors'; end if;
-  if r.resolution <> 'probabilistic' then raise exception '2: a device match claimed %', r.resolution; end if;
-  if r.confidence >= 100 then raise exception '2: circumstantial evidence reached %, which is proof', r.confidence; end if;
-  if r.confidence <> 55 then raise exception '2: one agreeing signal scored %, expected 55', r.confidence; end if;
+  if r.trust_uuid = v_first then
+    raise exception '2: one shared device merged two people — a household on one router is two people';
+  end if;
+  if not r.minted then raise exception '2: the second person did not get their own identity'; end if;
+  if r.merge_candidates <> 1 then raise exception '2: the resemblance was not recorded for a reviewer'; end if;
+  if not exists (select 1 from public.identity_match_events
+                  where trust_id = r.trust_uuid and kind = 'merge_candidate' and confidence = 55) then
+    raise exception '2: the 55%% resemblance was not recorded with its confidence';
+  end if;
+  v_probable := r.trust_uuid;
 
   /*
-   * A signal only AGREES if it has been seen before. Presenting a brand-new network token alongside a known
-   * device is still one agreeing signal, not two — the network proves nothing on its first sighting. This
-   * arrival therefore still scores 55, and stores the network token for next time.
+   * Three agreeing signals reach 88, at or above the threshold, and DO adopt. That is the same bar
+   * `decideAdmission` requires before it will act on a match: evidence that cannot license a refusal cannot
+   * license an identity either.
    */
-  select * into r from public.rescript_rtid_resolve(
-    'c0000000-0000-0000-0000-000000000084',
-    '[{"kind":"device","token":"dev-aaaaaaaaaaaaaaaa","strength":"probabilistic","key_id":"k1"},
-      {"kind":"network","token":"net-bbbbbbbbbbbbbbbb","strength":"probabilistic","key_id":"k1"}]'::jsonb,
-    null, null, 'c0000000-0000-0000-0000-000000000184');
-  if r.trust_uuid <> v_first then raise exception '2: the second signal did not reach the same identity'; end if;
-  if r.confidence <> 55 then raise exception '2: an unseen network token agreed with something (%)', r.confidence; end if;
-
-  -- NOW both are known, so both agree: 75, and still not proof
-  select * into r from public.rescript_rtid_resolve(
-    'c0000000-0000-0000-0000-000000000084',
-    '[{"kind":"device","token":"dev-aaaaaaaaaaaaaaaa","strength":"probabilistic","key_id":"k1"},
-      {"kind":"network","token":"net-bbbbbbbbbbbbbbbb","strength":"probabilistic","key_id":"k1"}]'::jsonb,
-    null, null, 'c0000000-0000-0000-0000-000000000184');
-  if r.confidence <> 75 then raise exception '2: two agreeing signals scored %, expected 75', r.confidence; end if;
-
-  -- three agreeing signals: 88. A household sharing a router and a tablet produces exactly this, and is two
-  -- people, so no quantity of circumstantial agreement is allowed to reach 100.
+  -- give the first identity a network and a behavioural token, through its own deterministic vendor id
   perform public.rescript_rtid_resolve('c0000000-0000-0000-0000-000000000084',
-    '[{"kind":"behaviour","token":"beh-ffffffffffffffff","strength":"probabilistic","key_id":"k1"}]'::jsonb,
+    '[{"kind":"network","token":"net-bbbbbbbbbbbbbbbb","strength":"probabilistic","key_id":"k1"},
+      {"kind":"behaviour","token":"beh-ffffffffffffffff","strength":"probabilistic","key_id":"k1"}]'::jsonb,
     'c0000084-0000-0000-0000-00000000001a', 'CINT-PID-1', null);
+
   select * into r from public.rescript_rtid_resolve(
     'c0000000-0000-0000-0000-000000000084',
     '[{"kind":"device","token":"dev-aaaaaaaaaaaaaaaa","strength":"probabilistic","key_id":"k1"},
       {"kind":"network","token":"net-bbbbbbbbbbbbbbbb","strength":"probabilistic","key_id":"k1"},
       {"kind":"behaviour","token":"beh-ffffffffffffffff","strength":"probabilistic","key_id":"k1"}]'::jsonb,
     null, null, 'c0000000-0000-0000-0000-000000000184');
+  if r.trust_uuid <> v_first then raise exception '2: three agreeing signals did not reach the known identity'; end if;
+  if r.resolution <> 'probabilistic' then raise exception '2: a circumstantial match claimed %', r.resolution; end if;
   if r.confidence <> 88 then raise exception '2: three agreeing signals scored %, expected 88', r.confidence; end if;
   if r.confidence >= 100 then raise exception '2: circumstantial evidence reached proof'; end if;
+  if r.minted then raise exception '2: an adoptable match still minted a new identity'; end if;
 
-  -- and the identity's STANDING is reported separately from this arrival's match
-  if r.identity_resolution <> 'deterministic' then
-    raise exception '2: the identity standing is % — it was settled deterministically earlier', r.identity_resolution;
-  end if;
-  if r.resolution <> 'probabilistic' then
-    raise exception '2: a circumstantial arrival was reported as % because the identity is well known', r.resolution;
+  -- a probabilistic token is NOT unique per network: both identities legitimately hold the shared device token
+  if (select count(*) from public.identity_match_tokens
+       where customer_id = 'c0000000-0000-0000-0000-000000000084' and kind = 'device'
+         and token = 'dev-aaaaaaaaaaaaaaaa') < 2 then
+    raise exception '2: a shared device could not be recorded against both identities';
   end if;
 
   -- a DIFFERENT person, linked to a third vendor arrival by a shared e-mail token: deterministic
