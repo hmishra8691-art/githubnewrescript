@@ -35,6 +35,7 @@ import { applyResearchAction, coerceResearchAction, describeResearchAction, isRe
 import { applyQualAction, coerceQualAction, describeQualAction, isQualOp, qualGuideDiff, qualSectionChanges, QUAL_ACTION_OPS, type QualAction } from "./qualActions.js";
 import { AI_INTERVIEW_ACTION_OPS, applyAiInterviewAction, coerceAiInterviewAction, describeAiInterviewAction, isAiInterviewOp, type AiInterviewAction } from "./aiInterviewActions.js";
 import { INTEGRATION_ACTION_OPS, applyIntegrationAction, coerceIntegrationAction, describeIntegrationAction, integrationsDiff, isIntegrationOp, type IntegrationAction } from "./integrationActions.js";
+import { RECRUITMENT_ACTION_OPS, applyRecruitmentAction, coerceRecruitmentAction, describeRecruitmentAction, recruitmentDiff, isRecruitmentOp, type RecruitmentAction } from "./recruitmentActions.js";
 import { ASSESSMENT_ACTION_OPS, applyAssessmentAction, coerceAssessmentAction, describeAssessmentAction, isAssessmentOp, type AssessmentAction } from "./assessmentActions.js";
 import { validateActionOutcome, type ActionIssue } from "./actionValidation.js";
 import { impactOfAction, type ImpactReport } from "./impact.js";
@@ -166,6 +167,7 @@ export type SurveyAction =
   | AiInterviewAction
   /* panel recruitment and alerts (2026-10-22, G3) — see integrationActions.ts; they write def.panels / def.alerts (and, for the survey link, embedded data and empty end redirects) */
   | IntegrationAction
+  | RecruitmentAction
   /* assessments (K4 2026-10-25, ported 2026-10-29) — see assessmentActions.ts; they write question.assessment / def.assessment and nothing else */
   | AssessmentAction;
 
@@ -176,7 +178,7 @@ export const SURVEY_ACTION_OPS = [
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
-  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS, ...INTEGRATION_ACTION_OPS, ...ASSESSMENT_ACTION_OPS,
+  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS, ...INTEGRATION_ACTION_OPS, ...RECRUITMENT_ACTION_OPS, ...ASSESSMENT_ACTION_OPS,
 ] as const;
 
 /**
@@ -480,6 +482,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (aia !== null) return aia;
       const ia = op ? coerceIntegrationAction(op, o) : null;
       if (ia !== null) return ia;
+      const rca = op ? coerceRecruitmentAction(op, o) : null;
+      if (rca !== null) return rca;
       const asa = op ? coerceAssessmentAction(op, o) : null;
       if (asa !== null) return asa;
       return op ? `unknown action “${op}”` : "an action needs an op";
@@ -1247,6 +1251,11 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         ctx.uxWarnings.push(...r.warnings);
         return r;
       }
+      if (isRecruitmentOp(a.op)) {
+        const r = applyRecruitmentAction(def, a as RecruitmentAction);
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       if (isAiInterviewOp(a.op)) {
         const r = applyAiInterviewAction(def, a as AiInterviewAction);
         ctx.uxWarnings.push(...r.warnings);
@@ -1746,7 +1755,7 @@ export function describeAction(a: SurveyAction): string {
       const where = a.field ? `${a.target} ${a.field}` : a.target;
       return a.value === null ? `Remove the default value of ${where}` : `Default value of ${where}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
     }
-    default: return isAssessmentOp(a.op) ? describeAssessmentAction(a as AssessmentAction) : isIntegrationOp(a.op) ? describeIntegrationAction(a as IntegrationAction) : isAiInterviewOp(a.op) ? describeAiInterviewAction(a as AiInterviewAction) : isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isAssessmentOp(a.op) ? describeAssessmentAction(a as AssessmentAction) : isIntegrationOp(a.op) ? describeIntegrationAction(a as IntegrationAction) : isRecruitmentOp(a.op) ? describeRecruitmentAction(a as RecruitmentAction) : isAiInterviewOp(a.op) ? describeAiInterviewAction(a as AiInterviewAction) : isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 
@@ -1928,6 +1937,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     ...designDiff(before, after),
     ...qualGuideDiff(before, after),
     ...integrationsDiff(before, after),
+    ...recruitmentDiff(before, after),
     ...questionsModified.slice(0, 30).map((m) => `Change ${m.code}: ${m.changes.map((c) => c.field === "type" ? `${c.from} → ${c.to}` : c.field === "text" ? "wording" : c.field).join(", ")}`),
     dChanged ? `Change ${n(dChanged, "display condition")}` : "",
     blocksRenamed.length ? `Rename ${blocksRenamed.map((b) => `“${b.from}” → “${b.to}”`).join(", ")}` : "",

@@ -257,3 +257,4 @@ export * from "./taskEstimate.js";
 /* large generation as a plan of small steps, and the structured deliverable check (2026-10-29, ported from K2) */
 export * from "./deliverableValidation.js";
 export * from "./generationPlan.js";
+export * from "./recruitmentActions.js";

@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 import { randomUUID } from "node:crypto";
-import { AudienceSpecification, canTransition, type RecruitmentProjectStatus } from "@rescript/schema";
-import { blendedCpi, compareVendors, comparisonSource, totalCost, type FeasibilityInput } from "@rescript/recruitment";
+import { AudienceSpecification, canTransition, type AllocationStrategy, type RecruitmentProjectStatus } from "@rescript/schema";
+import {
+  allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
+  selectPricing, totalCost, type AllocationCandidate, type FeasibilityInput,
+} from "@rescript/recruitment";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { supabaseService } from "@/lib/authServer";
 import { noStore, recruitmentActor, refuseSpend } from "@/lib/recruitment/access";
@@ -18,6 +21,13 @@ export const runtime = "nodejs";
  *                                       and the orchestrator's log
  *   POST { action: "project", requiredCompletes, budget, currency?, deadline?, loiMinutes?, expectedIr?, strategy?, audience? }
  *   POST { action: "compare" }          re-run the comparison and record VendorFeasibilityReceived
+ *   POST { action: "markets", markets: [{market, requiredCompletes, expectedIr?, loiMinutes?}] }
+ *                                       a completes target per country; the optimiser then solves each one
+ *                                       against its own rate cards (0082)
+ *   POST { action: "optimise", strategy?, weights?, maxVendorShare?, exclude? }
+ *                                       PROPOSE an allocation. It is not saved and nothing is ordered: the
+ *                                       answer is a plan, with the arithmetic behind every row, for a human to
+ *                                       read and then allocate.
  *   POST { action: "allocate", rows }   write an allocation revision — the budget and the required completes are
  *                                       ceilings the DATABASE enforces, not warnings this route prints
  *   POST { action: "authorize" }        the researcher's authorisation; after this, orders may be placed
@@ -85,9 +95,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     : null;
   const { rows, source, vendorNames } = await comparisonFor(actor.customerId, audienceFor);
 
-  const [allocations, orders, events] = project
-    ? await Promise.all([store.allocations(project.id as string), store.orders(project.id as string), store.events(project.id as string, 50)])
-    : [[], [], []];
+  const [allocations, orders, events, markets] = project
+    ? await Promise.all([
+        store.allocations(project.id as string), store.orders(project.id as string),
+        store.events(project.id as string, 50), store.markets(project.id as string),
+      ])
+    : [[], [], [], []];
+  const capacity = await store.capacity(actor.customerId);
 
   // the dashboard's totals, from the orders themselves — nothing here is an estimate dressed as an actual
   const spend = orders.reduce((s, o) => s + Number(o.spend_amount ?? 0), 0);
@@ -103,6 +117,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     liveAdaptersAvailable: false,
     project: project ?? null,
     comparison: { rows, source },
+    markets, capacity,
+    /** the audience the study is currently looking for, from the definition (0082 / define_audience) */
+    audience: audienceFor?.audience ?? null,
     allocations: allocations.map((a) => ({ ...a, vendorName: vendorNames.get(String(a.integration_id)) ?? null })),
     orders: orders.map((o) => ({ ...o, vendorName: vendorNames.get(String(o.integration_id)) ?? null })),
     events,
@@ -115,7 +132,35 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       blendedCpi: blendedCpi(orders.map((o) => ({ completes: Number(o.accepted_completes ?? 0), cpi: Number(o.agreed_cpi ?? 0) }))),
       committed: totalCost(orders.map((o) => ({ completes: Number(o.ordered_completes ?? 0), cpi: Number(o.agreed_cpi ?? 0) }))),
     },
+    /*
+     * Budget headroom is budget minus COMMITTED, never minus spent. A dashboard built on the second number tells
+     * a researcher they have money they have already promised to three vendors.
+     */
+    budget: budgetState({
+      budget,
+      committed: totalCost(orders.filter((o) => ["placed", "live", "paused", "complete"].includes(String(o.status)))
+        .map((o) => ({ completes: Number(o.ordered_completes ?? 0), cpi: Number(o.agreed_cpi ?? 0) }))),
+      spent: spend,
+      accepted,
+      required,
+      plannedCostPerValidComplete: latestPlanned(allocations),
+      alertBps: Number(project?.budget_alert_bps ?? 8000),
+    }),
   });
+}
+
+/**
+ * The cost per valid complete the current allocation expects — what the budget projection falls back on until
+ * enough completes have actually been accepted to have a real rate. Null when nothing has been allocated.
+ */
+function latestPlanned(allocations: Record<string, unknown>[]): number | null {
+  if (!allocations.length) return null;
+  const revision = Math.max(...allocations.map((a) => Number(a.revision)));
+  const rows = allocations.filter((a) => Number(a.revision) === revision && a.cost_per_valid_complete !== null);
+  if (!rows.length) return null;
+  const completes = rows.reduce((t, a) => t + Number(a.allocated_completes ?? 0), 0);
+  if (completes <= 0) return null;
+  return rows.reduce((t, a) => t + Number(a.allocated_completes ?? 0) * Number(a.cost_per_valid_complete), 0) / completes;
 }
 
 async function loadAudience(specId: string | null): Promise<unknown> {
@@ -275,6 +320,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (completes === null || completes <= 0) return noStore({ error: "completes is required" }, 400);
       if (cpi === null || cpi < 0) return noStore({ error: "cpi is required" }, 400);
 
+      /*
+       * The database stops an ALLOCATION exceeding the budget; this stops an ORDER exceeding what is left of it
+       * after everything already promised. Those are different numbers and both have to hold.
+       */
+      {
+        const placed = (await store.orders(projectId)).filter((o) => ["placed", "live", "paused", "complete"].includes(String(o.status)));
+        const state = budgetState({
+          budget: Number(project.budget_amount),
+          committed: totalCost(placed.map((o) => ({ completes: Number(o.ordered_completes ?? 0), cpi: Number(o.agreed_cpi ?? 0) }))),
+          spent: placed.reduce((t, o) => t + Number(o.spend_amount ?? 0), 0),
+          accepted: placed.reduce((t, o) => t + Number(o.accepted_completes ?? 0), 0),
+          required: Number(project.required_completes),
+          alertBps: Number(project.budget_alert_bps ?? 8000),
+        });
+        const verdict = canCommit(state, completes * cpi);
+        if (!verdict.ok) return noStore({ error: verdict.reason, code: "over_budget" }, 409);
+      }
+
       const { data, error } = await db.from("recruitment_orders").insert({
         recruitment_project_id: projectId, integration_id: integrationId,
         ordered_completes: Math.round(completes), agreed_cpi: cpi, currency: integ.currency,
@@ -285,13 +348,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
       await store.recordEvent(projectId, "RecruitmentOrderCreated", `order:${data.id}`,
         { completes, cpi, integrationId }, actor.userId, integrationId, data.id as string);
+
+      // committed spend is recomputed in the database, which also reports a threshold CROSSING (once, not every order)
+      const commit = await store.recommit(projectId);
+      if (commit.crossed) {
+        await store.recordEvent(projectId, "BudgetThresholdReached", `budget:${projectId}:${commit.share_bps}`,
+          { committed: commit.committed, budget: commit.budget, shareBps: commit.share_bps }, actor.userId);
+      }
       if (canTransition(status, "fielding")) await db.from("recruitment_projects").update({ status: "fielding" }).eq("id", projectId);
       await audit({
         action: "recruitment.order_placed", userId: actor.userId, customerId: actor.customerId, surveyId: params.id,
         entity: "recruitment_order", entityId: data.id as string, detail: { completes, cpi, integrationId },
       });
       return noStore({
-        ok: true, orderId: data.id,
+        ok: true, orderId: data.id, committed: commit.committed, budgetThresholdCrossed: commit.crossed,
         // Phase 1 is honest about what placing an order here does
         note: "Recorded. No vendor was contacted: send the vendor your recruitment link and enter their job number and progress here.",
       });
@@ -321,6 +391,95 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         });
       }
       return noStore({ ok: true, ...result });
+    }
+
+    if (action === "markets") {
+      const given = Array.isArray(body.markets) ? body.markets as Record<string, unknown>[] : null;
+      if (!given) return noStore({ error: "markets is required" }, 400);
+      const rows = given.map((m) => ({
+        market: String(m.market ?? "").toUpperCase(),
+        requiredCompletes: Math.round(num(m.requiredCompletes ?? m.required) ?? 0),
+        expectedIr: num(m.expectedIr), loiMinutes: num(m.loiMinutes),
+      }));
+      for (const r of rows) {
+        if (!/^[A-Z]{2}$/.test(r.market)) return noStore({ error: `"${r.market}" is not a two-letter country code` }, 400);
+        if (r.requiredCompletes <= 0) return noStore({ error: `${r.market} needs a completes target` }, 400);
+      }
+      const sum = rows.reduce((t, r) => t + r.requiredCompletes, 0);
+      const required = Number(project.required_completes);
+      if (sum !== required) {
+        return noStore({
+          error: `The markets add up to ${sum.toLocaleString()} completes but the project needs ${required.toLocaleString()}. Change the markets or the project's total.`,
+          code: "markets_do_not_sum",
+        }, 400);
+      }
+      const saved = await store.setMarkets(projectId, rows);
+      return noStore({ ok: true, markets: saved, note: "Re-run Optimise: allocations made before this change were against the old markets." });
+    }
+
+    if (action === "optimise") {
+      const strategy = String(body.strategy ?? project.strategy ?? "balanced") as AllocationStrategy;
+      const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null) };
+      const { integrations, vendorNames } = await comparisonFor(actor.customerId, withAudience);
+      const [pricing, capacity, markets] = await Promise.all([
+        store.pricing(actor.customerId), store.capacity(actor.customerId), store.markets(projectId),
+      ]);
+      const history = await store.history(actor.customerId, integrations.map((i) => i.id));
+
+      const required = Number(project.required_completes);
+      const loi = Number(project.loi_minutes ?? 15) || 15;
+      const ir = Number(project.expected_ir ?? 100) || 100;
+      const targets = markets.length
+        ? markets.map((m) => ({ market: String(m.market), required: Number(m.required_completes), ir: Number(m.expected_ir ?? ir) || ir, loi: Number(m.loi_minutes ?? loi) || loi }))
+        : [{ market: "--", required, ir, loi }];
+
+      /*
+       * One candidate per vendor per market, priced from THAT market's rate card. A vendor with no price in a
+       * market simply is not a candidate there — which is how a US-only rate card stops being quoted for Japan.
+       */
+      const marketInputs = targets.map((t) => ({
+        market: t.market,
+        required: t.required,
+        candidates: integrations.filter((i) => i.enabled && (i.mode === "manual" || i.mode === "api")).flatMap((i): AllocationCandidate[] => {
+          const row = t.market === "--" ? null : selectPricing(pricing[i.id] ?? [], { market: t.market, ir: t.ir, loiMinutes: t.loi });
+          if (!row) return [];
+          const cap = capacity[i.id]?.[t.market] ?? null;
+          const h = history[i.id];
+          const n = h?.completes ?? 0;
+          return [{
+            integrationId: i.id, vendorName: vendorNames.get(i.vendorId) ?? "Vendor",
+            cpi: Math.round(row.cpi * (1 + i.markupBps / 10_000) * 100) / 100,
+            currency: row.currency,
+            capacity: cap?.available ?? null,
+            rejectionRate: h?.rejectionRate ?? null,
+            duplicateRate: h?.duplicateRate ?? null,
+            deliveryDays: cap?.deliveryDays ?? null,
+            qualityScore: null,
+            qualityConfidence: n >= 1000 ? "high" : n >= 300 ? "medium" : n >= 50 ? "low" : "none",
+            source: row.source,
+          }];
+        }),
+      }));
+
+      const plan = allocate({
+        markets: marketInputs,
+        budget: Number(project.budget_amount),
+        currency: String(project.budget_currency ?? "USD"),
+        strategy,
+        ...(body.weights ? { weights: body.weights as never } : {}),
+        ...(num(body.maxVendorShare) !== null ? { maxVendorShare: num(body.maxVendorShare)! } : {}),
+        ...(project.quality_floor !== null && project.quality_floor !== undefined ? { qualityFloor: Number(project.quality_floor) } : {}),
+        ...(Array.isArray(body.exclude) ? { excludeIntegrationIds: (body.exclude as unknown[]).map(String) } : {}),
+      });
+
+      await store.recordEvent(projectId, "AllocationProposed", `optimise:${projectId}:${Date.now()}`,
+        { strategy, feasible: plan.feasible, completes: plan.totalCompletes, cost: plan.totalCost, costPressure: plan.costPressure }, actor.userId);
+
+      return noStore({
+        ok: true, plan,
+        // proposing is not allocating: nothing was written and nothing was ordered
+        note: "This is a proposal. Nothing has been allocated or ordered — review it, then Allocate.",
+      });
     }
 
     return noStore({ error: "unknown action" }, 400);

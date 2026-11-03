@@ -231,8 +231,39 @@ function VendorForm({ vendor, busy, onSave }: {
 
 /* ------------------------------------------------------------ the recruitment dashboard */
 
+interface MarketRow { id?: string; market: string; required_completes: number; expected_ir: number | null; loi_minutes: number | null }
+
+interface BudgetView {
+  budget: number; committed: number; spent: number; headroom: number; unspent: number;
+  committedBps: number; spentBps: number; actualCostPerValidComplete: number | null;
+  accepted: number; remaining: number; projectedFinalCost: number | null; projectedOverrun: number | null;
+  overThreshold: boolean; overCommitted: boolean; summary: string;
+}
+
+interface PlanRow {
+  integrationId: string; market: string; vendorName: string; completes: number; cpi: number; currency: string;
+  cost: number; expectedValidCompletes: number; costPerValidComplete: number;
+  expectedDeliveryDays: number | null; source: Source; rationale: Record<string, unknown>;
+}
+
+interface PlanMarket {
+  market: string; required: number; allocated: number; shortfall: number; cost: number; blendedCpi: number;
+  expectedValidCompletes: number; expectedDeliveryDays: number | null;
+  excluded: { integrationId: string; vendorName: string; reason: string }[];
+}
+
+interface Plan {
+  strategy: string; weights: { cost: number; quality: number; speed: number };
+  rows: PlanRow[]; markets: PlanMarket[]; costPressure: number;
+  totalCompletes: number; totalCost: number; blendedCpi: number; expectedValidCompletes: number;
+  expectedDeliveryDays: number | null; feasible: boolean; shortfall: number; notes: string[];
+}
+
 interface RecruitmentData {
   project: Record<string, unknown> | null;
+  markets: MarketRow[];
+  budget?: BudgetView;
+  audience?: Record<string, unknown> | null;
   comparison: { rows: ComparisonRow[]; source: Source };
   allocations: Record<string, unknown>[];
   orders: Record<string, unknown>[];
@@ -247,6 +278,8 @@ function Recruitment({ surveyId }: { surveyId: string }) {
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [form, setForm] = React.useState({ completes: "", budget: "", loi: "15", ir: "30", country: "US", strategy: "balanced" });
+  const [plan, setPlan] = React.useState<Plan | null>(null);
+  const [strategy, setStrategy] = React.useState("balanced");
 
   const load = React.useCallback(async () => {
     const r = await fetch(`/api/surveys/${surveyId}/recruitment`, { cache: "no-store" });
@@ -307,6 +340,47 @@ function Recruitment({ surveyId }: { surveyId: string }) {
         </div>
         {data.project && <p className="muted">Status: <span className="mono">{status}</span></p>}
       </div>
+
+      {data.project && <AudienceCard />}
+
+      {data.project && (
+        <MarketsCard
+          markets={data.markets ?? []}
+          required={t.required}
+          currency={ccy}
+          busy={busy}
+          onSave={async (rows) => { const r = await post({ action: "markets", markets: rows }); if (r) setPlan(null); }}
+        />
+      )}
+
+      {data.project && data.budget && <BudgetCard b={data.budget} ccy={ccy} />}
+
+      {data.project && (
+        <OptimiseCard
+          plan={plan} strategy={strategy} setStrategy={setStrategy} busy={busy} ccy={ccy}
+          onOptimise={async () => {
+            setBusy(true);
+            const r = await fetch(`/api/surveys/${surveyId}/recruitment`, {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ action: "optimise", strategy }),
+            });
+            const j = await r.json();
+            setBusy(false);
+            if (!r.ok) { setError(j.error ?? "Could not optimise"); return; }
+            setError(null); setPlan(j.plan as Plan);
+          }}
+          onAllocate={async (p) => {
+            const rows = p.rows.map((r) => ({
+              market: r.market, integration_id: r.integrationId, allocated_completes: r.completes, cpi: r.cpi,
+              currency: r.currency, expected_valid_completes: r.expectedValidCompletes,
+              cost_per_valid_complete: r.costPerValidComplete, expected_delivery_days: r.expectedDeliveryDays,
+              rationale: r.rationale,
+            }));
+            const done = await post({ action: "allocate", rows });
+            if (done) setPlan(null);
+          }}
+        />
+      )}
 
       {data.project && (
         <div className="card">
@@ -390,6 +464,202 @@ function Recruitment({ surveyId }: { surveyId: string }) {
             deliver here — the same figures a live webhook will write once adapters exist.
           </p>
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ Phase 2: audience, markets, budget, the optimiser */
+
+/**
+ * The audience, as a structured editor over `definition.audience`.
+ *
+ * It writes through the Studio's own definition store, so the change is versioned, undoable and visible in the
+ * change list exactly like an edit Intelligent Mode made through `define_audience` — there is one audience and
+ * one way it is stored, whichever hand typed it.
+ */
+function AudienceCard() {
+  const s = useStudio();
+  const a = (s.def as { audience?: Record<string, unknown> } | undefined)?.audience;
+  const d = (a?.demographics ?? {}) as Record<string, unknown>;
+  const list = (v: unknown) => (Array.isArray(v) ? v.join(", ") : "");
+  const [open, setOpen] = React.useState(!a);
+
+  const setDemo = (patch: Record<string, unknown>) => s.update((def: Record<string, unknown>) => {
+    const cur = (def.audience ?? { version: 1, demographics: {}, advanced: {}, screeners: [], quotas: [] }) as Record<string, unknown>;
+    def.audience = { ...cur, demographics: { ...(cur.demographics as object), ...patch } };
+  });
+
+  const countries = (d.countries as string[] | undefined) ?? [];
+  return (
+    <div className="card">
+      <div className="row">
+        <strong className="grow">Audience</strong>
+        <button className="btn small" onClick={() => setOpen(!open)}>{open ? "Done" : "Edit"}</button>
+      </div>
+      {!a && !open && <p className="muted">No audience yet. Ask the copilot — &ldquo;US adults 25 to 45 who bought a car last year&rdquo; — or edit it here.</p>}
+      {a && (
+        <p className="muted">
+          <span className="mono">{countries.join(", ") || "no market"}</span>
+          {(d.ageMin !== undefined || d.ageMax !== undefined) && <> · aged {String(d.ageMin ?? "any")}–{String(d.ageMax ?? "any")}</>}
+          {Array.isArray(d.genders) && d.genders.length > 0 && <> · {(d.genders as string[]).join(", ")}</>}
+          {Array.isArray(a.screeners) && (a.screeners as unknown[]).length > 0 && <> · {(a.screeners as unknown[]).length} screener(s)</>}
+        </p>
+      )}
+      {open && (
+        <div className="row">
+          <label className="f"><span className="muted">Countries (ISO codes — GB, not UK)</span>
+            <input className="input mono" defaultValue={list(d.countries)} placeholder="US, GB, DE"
+              onBlur={(e) => setDemo({ countries: e.target.value.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean) })} /></label>
+          <label className="f"><span className="muted">Age from</span>
+            <input className="input mono" defaultValue={String(d.ageMin ?? "")} onBlur={(e) => setDemo({ ageMin: e.target.value ? Number(e.target.value) : undefined })} /></label>
+          <label className="f"><span className="muted">to</span>
+            <input className="input mono" defaultValue={String(d.ageMax ?? "")} onBlur={(e) => setDemo({ ageMax: e.target.value ? Number(e.target.value) : undefined })} /></label>
+          <label className="f"><span className="muted">Income bands</span>
+            <input className="input" defaultValue={list(d.incomeBands)} placeholder="$50–75k, $75k+"
+              onBlur={(e) => setDemo({ incomeBands: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A completes target per country. The optimiser prices each one against that market's own rate cards. */
+function MarketsCard({ markets, required, currency, onSave, busy }: {
+  markets: MarketRow[]; required: number; currency: string; busy: boolean;
+  onSave: (rows: { market: string; requiredCompletes: number }[]) => void;
+}) {
+  const [rows, setRows] = React.useState(() => markets.map((m) => ({ market: m.market, n: String(m.required_completes) })));
+  React.useEffect(() => { setRows(markets.map((m) => ({ market: m.market, n: String(m.required_completes) }))); }, [markets]);
+  const sum = rows.reduce((t, r) => t + (Number(r.n) || 0), 0);
+
+  return (
+    <div className="card">
+      <div className="row">
+        <strong className="grow">Markets</strong>
+        <span className="muted">{sum.toLocaleString()} of {required.toLocaleString()} completes assigned</span>
+      </div>
+      {markets.length === 0 && (
+        <p className="muted">
+          No markets set, so the whole study is priced against one rate card. For a multi-country study, give each
+          country its own target — German incidence and German CPI are not American ones.
+        </p>
+      )}
+      {rows.map((r, i) => (
+        <div className="row" key={i}>
+          <input className="input mono" value={r.market} maxLength={2} placeholder="US"
+            onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, market: e.target.value.toUpperCase() } : x))} />
+          <input className="input mono grow" value={r.n} placeholder="3000"
+            onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, n: e.target.value } : x))} />
+          <button className="btn small danger" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</button>
+        </div>
+      ))}
+      <div className="row">
+        <button className="btn small" onClick={() => setRows([...rows, { market: "", n: "" }])}>Add a market</button>
+        <button className="btn primary small" disabled={busy || sum !== required}
+          title={sum !== required ? `The markets must add up to ${required.toLocaleString()}` : undefined}
+          onClick={() => onSave(rows.filter((r) => r.market && r.n).map((r) => ({ market: r.market, requiredCompletes: Number(r.n) })))}>
+          Save markets
+        </button>
+        {sum !== required && rows.length > 0 && (
+          <span className="chip warn">The markets must add up to the project&rsquo;s {required.toLocaleString()} completes ({currency}).</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Headroom, not unspent budget — and what the project looks like it will actually cost. */
+function BudgetCard({ b, ccy }: { b: BudgetView; ccy: string }) {
+  return (
+    <div className="card">
+      <div className="row">
+        <strong className="grow">Budget</strong>
+        <span className="muted mono">{Math.round(b.committedBps / 100)}% committed</span>
+      </div>
+      <p className={b.overCommitted || (b.projectedOverrun ?? 0) > 0 ? "chip warn" : "muted"}>{b.summary}</p>
+      <div className="row">
+        <span className="muted">Spent <strong>{money(b.spent, ccy)}</strong></span>
+        <span className="muted">Committed <strong>{money(b.committed, ccy)}</strong></span>
+        <span className="muted" title="Budget minus committed — what can still be promised to a vendor">
+          Headroom <strong>{money(b.headroom, ccy)}</strong>
+        </span>
+        {b.actualCostPerValidComplete !== null && (
+          <span className="muted" title="What an accepted complete has actually cost, whatever the CPI said">
+            Actual per valid complete <strong>{money(b.actualCostPerValidComplete, ccy)}</strong>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The optimiser: propose, read the arithmetic, then allocate. Proposing writes nothing. */
+function OptimiseCard({ plan, strategy, setStrategy, onOptimise, onAllocate, busy, ccy }: {
+  plan: Plan | null; strategy: string; setStrategy: (s: string) => void;
+  onOptimise: () => void; onAllocate: (p: Plan) => void; busy: boolean; ccy: string;
+}) {
+  return (
+    <div className="card">
+      <div className="row">
+        <strong className="grow">Allocation</strong>
+        <label className="f"><span className="muted">Strategy</span>
+          <select className="input" value={strategy} onChange={(e) => setStrategy(e.target.value)}>
+            <option value="balanced">Balanced</option>
+            <option value="lowest_cost">Lowest cost</option>
+            <option value="highest_quality">Highest quality</option>
+            <option value="fastest_delivery">Fastest delivery</option>
+          </select></label>
+        <button className="btn small" disabled={busy} onClick={onOptimise}>Optimise</button>
+        {plan && <button className="btn primary small" disabled={busy || plan.rows.length === 0} onClick={() => onAllocate(plan)}>Allocate this</button>}
+      </div>
+
+      {!plan && <p className="muted">Optimise proposes a split across your vendors. It writes nothing and orders nothing.</p>}
+
+      {plan && (
+        <>
+          {!plan.feasible && <p className="chip warn">This plan does not meet the project as specified — {plan.shortfall.toLocaleString()} completes short.</p>}
+          {plan.notes.map((n, i) => <p className="muted" key={i}>{n}</p>)}
+          {plan.costPressure > 0 && (
+            <p className="muted">
+              The budget bound, so cheaper vendors were preferred over better-scoring ones. Raising the budget
+              would change this plan.
+            </p>
+          )}
+          <div className="row">
+            <span className="muted">{int(plan.totalCompletes)} completes</span>
+            <span className="muted">{money(plan.totalCost, ccy)}</span>
+            <span className="muted">blended {money(plan.blendedCpi, ccy)}</span>
+            <span className="muted">{int(plan.expectedValidCompletes)} expected to count</span>
+            {plan.expectedDeliveryDays !== null && <span className="muted">~{plan.expectedDeliveryDays} days</span>}
+          </div>
+
+          <table className="grid">
+            <thead><tr><th>Market</th><th>Vendor</th><th>Completes</th><th>CPI</th><th>Per valid</th><th>Cost</th><th>Why</th></tr></thead>
+            <tbody>
+              {plan.rows.map((r) => (
+                <tr key={`${r.market}:${r.integrationId}`}>
+                  <td className="mono">{r.market}</td>
+                  <td>{r.vendorName}</td>
+                  <td className="mono">{int(r.completes)}</td>
+                  <td className="mono">{money(r.cpi, r.currency)}</td>
+                  <td className="mono"><strong>{money(r.costPerValidComplete, r.currency)}</strong></td>
+                  <td className="mono">{money(r.cost, r.currency)}</td>
+                  <td className="muted">
+                    {String(r.rationale.capacityUsed ?? "")}
+                    {r.rationale.assumed ? <div>{String(r.rationale.assumed)}</div> : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {plan.markets.map((m) => m.excluded.length > 0 && (
+            <p className="muted" key={m.market}>
+              <span className="mono">{m.market}</span> left out: {m.excluded.map((e) => `${e.vendorName} (${e.reason})`).join("; ")}
+            </p>
+          ))}
+        </>
       )}
     </div>
   );

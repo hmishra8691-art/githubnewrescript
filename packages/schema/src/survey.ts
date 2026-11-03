@@ -11,6 +11,7 @@ import { ListFill } from "./listFill.js";
 import { MediaDisplay } from "./mediaDisplay.js";
 import { QualStudy } from "./qualStudy.js";
 import { AlertSettings, PanelConfig } from "./integrations.js";
+import { AudienceSpecification } from "./recruitment.js";
 import { AssessmentSettings } from "./assessment.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
@@ -938,6 +939,16 @@ export const SurveyDefinition = z.object({
   panels: z.array(PanelConfig).optional(),
   /** ALERTS (2026-10-22, see integrations.ts): which study events go to which channels. Absent = the organisation's defaults. */
   alerts: AlertSettings.optional(),
+  /**
+   * AUDIENCE (2026-11-03, see recruitment.ts): who this study is looking for — the structured specification the
+   * recruitment exchange prices and buys against. On the definition, like `panels`, so it is versioned with the
+   * study, cloned with it, undone with it, and editable by Intelligent Mode through the gate (`define_audience`).
+   *
+   * This is the WORKING specification. When a recruitment project is created it takes a snapshot into
+   * `audience_specifications` and buys against that, so editing the draft afterwards cannot silently change what
+   * was ordered. Absent on every study that never had one.
+   */
+  audience: AudienceSpecification.optional(),
   /** ASSESSMENT (2026-10-25, ported 2026-10-29, see assessment.ts): scoring, pass mark and the results report. Absent on every survey that is not a test. */
   assessment: AssessmentSettings.optional(),
   /**

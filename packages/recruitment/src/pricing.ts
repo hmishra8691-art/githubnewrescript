@@ -17,12 +17,20 @@ import { SOURCE_CONFIDENCE, type PricingSource, type VendorPricingRow } from "@r
  * finance team asks for afterwards.
  */
 
-/** Rates arrive from the database as percentages (0–100) and from callers sometimes as fractions. Normalise once. */
-function asFraction(rate: number | null | undefined): number {
-  if (rate === null || rate === undefined || !Number.isFinite(rate)) return 0;
-  if (rate < 0) return 0;
-  const f = rate > 1 ? rate / 100 : rate;
-  return Math.min(f, 1);
+/**
+ * A rate as a fraction. **Every rate in this subsystem is a PERCENTAGE, 0–100**, because that is what the columns
+ * hold (`numeric(5,2)` checked between 0 and 100) and what every schema field documents.
+ *
+ * This used to guess — `rate > 1 ? rate / 100 : rate` — so that it would accept either convention. The guess is
+ * wrong at exactly one value and that value is common: a duplicate rate of `1` means one percent, and the guess
+ * read it as 1.0, i.e. every single complete duplicated. A vendor with a 1% duplicate rate was scored as
+ * worthless and silently dropped from allocations. There is no heuristic that can tell 1% from 100% here, so
+ * there is no heuristic: the unit is fixed, documented, and clamped.
+ */
+function asFraction(ratePercent: number | null | undefined): number {
+  if (ratePercent === null || ratePercent === undefined || !Number.isFinite(ratePercent)) return 0;
+  if (ratePercent <= 0) return 0;
+  return Math.min(ratePercent, 100) / 100;
 }
 
 export function applyMarkup(cpi: number, markupBps: number): number {

@@ -21,11 +21,19 @@ test("the cheaper CPI is not the cheaper vendor — the brief's §25, as arithme
   assert.ok(dearer < cheap, "the $8.00 vendor costs less per complete that actually counts");
 });
 
-test("rates are accepted as percentages or fractions, and clamped", () => {
-  assert.equal(validYield(20, 8), validYield(0.2, 0.08));
+test("rates are percentages — 1 means one percent, not everything", () => {
+  assert.equal(validYield(20, 8), 0.8 * 0.92);
+  /*
+   * The regression this exists for: `asFraction` used to guess the unit with `rate > 1 ? rate / 100 : rate`,
+   * so a 1% duplicate rate was read as 100% and the vendor was scored as yielding nothing and dropped from
+   * every allocation. A rate of exactly 1 is the one value no heuristic can disambiguate.
+   */
+  assert.equal(validYield(1, 0), 0.99);
+  assert.equal(validYield(0, 1), 0.99);
   assert.equal(validYield(null, undefined), 1);
   assert.equal(validYield(-5, 0), 1);
-  assert.equal(validYield(150, 0), 0);
+  assert.equal(validYield(150, 0), 0, "clamped at 100%");
+  assert.equal(costPerValidComplete(7.2, 3, 1), 7.4977);
 });
 
 test("a vendor that yields nothing has no finite cost per valid complete", () => {

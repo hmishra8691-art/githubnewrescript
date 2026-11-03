@@ -320,7 +320,7 @@ two rows — 0072 already treats them as one preset.
 | Phase | Scope | Migration | State |
 |---|---|---|---|
 | **1 — Foundation** | Vendor registry, adapter framework + capability registry, manual pricing/feasibility/quotation/order, recruitment dashboard | **0081** | **built, see §8** |
-| 2 — Recruitment intelligence | Audience builder (structured + NL), feasibility engine, pricing engine, vendor comparison, allocation optimiser, budget controls | 0082 | specified |
+| **2 — Recruitment intelligence** | Audience builder (structured + NL), per-market targets, vendor capacity, allocation optimiser, budget controls | **0082** | **built, see §9** |
 | 3 — Trust infrastructure | RTID, `RTID_MATCH_KEY`, vendor participant mapping, participation ledger, atomic reservation, cross-vendor dedup with confidence states | 0083 | specified |
 | 4 — Fraud intelligence | Admission gateway, access tokens, IP/device intelligence, the `admission` quality profile, risk scoring, quarantine and appeal | 0084 | specified |
 | 5 — Advanced optimisation | Vendor quality engine, dynamic reallocation, fraud network graph, forecasting, model evaluation | 0085 | specified |
@@ -412,7 +412,98 @@ honest state of Phase 1 rather than a gap in its testing.
 
 ---
 
-## 9. Decisions needed
+## 9. Phase 2 — what was built
+
+Migration **0082**, the optimiser, budget control, and the audience as a first-class part of the study.
+Still no vendor is contacted.
+
+### 9.1 Markets (0082)
+
+Phase 1 priced a project against the first country in its audience. For "US, UK and Germany" that is wrong in
+the expensive direction. A project now carries a completes target **per market** (`recruitment_markets`), and
+`rescript_recruitment_allocate` was replaced with a market-aware version holding two ceilings: the approved
+budget across the whole project, and the required completes *per market* — over-delivering Germany does not
+excuse under-delivering the US. A market the project never declared is refused outright rather than invented.
+A project with no declared markets keeps Phase 1's single-pool behaviour exactly, and the Phase 1 SQL test
+still passes against the replacement.
+
+`vendor_capacity` records what a vendor says it can supply in a market, with provenance and a recorded date.
+A NULL `available_sample` means **they did not say** — not zero, not unlimited — and the optimiser treats it
+as unknown. Capacity expires, and an expired row is not served at all rather than served with a flag.
+
+### 9.2 The optimiser
+
+`packages/recruitment/src/allocate.ts`. Per market the problem is a transportation problem with box
+constraints, so a greedy fill in ascending score order is *exactly* optimal — no search needed. What makes it
+interesting is the budget, which couples the markets; that is handled with a Lagrangian, bisected for the
+smallest cost pressure whose plan fits, and the pressure is reported as `costPressure` so the plan can say out
+loud that it gave you cheaper vendors than your strategy asked for.
+
+Three properties were prioritised over squeezing the last percent, because a human authorises the output and
+then spends tens of thousands on it: **deterministic** (ties break on integration id, never on input order or
+map iteration), **explainable** (every row carries its arithmetic; every excluded vendor carries its reason),
+and **honest** about thin data. A vendor with no history is scored on a prior rather than on its own thin
+numbers — assuming zero rejection would make an unknown vendor look flawless and win every comparison — and
+its share of a market is capped. Those caps relax, with a note, when they would otherwise make a new
+organisation's first project unbuyable.
+
+### 9.3 Budget control
+
+`packages/recruitment/src/budget.ts`. One distinction governs it: **spent** is what delivered completes have
+cost; **committed** is what placed orders will cost. Headroom is budget minus committed, never minus spent — a
+dashboard built on the second number tells a researcher they have £28,000 left on the morning they have
+already promised £26,000 of it. `rescript_recruitment_recommit` recomputes committed spend in the database and
+reports a threshold **crossing** rather than a state, so `BudgetThresholdReached` fires once rather than on
+every order afterwards. The projection extrapolates from the rate the project is *actually* paying per
+accepted complete, but only once there are at least 100 of them — fifty completes is an anecdote, and
+extrapolating from one would cry wolf on every study's first hour.
+
+### 9.4 The audience
+
+`definition.audience` holds the working specification, like `definition.panels`: versioned with the study,
+cloned with it, undone with it. A recruitment project **snapshots** it into `audience_specifications` when it
+is created, so editing the draft afterwards cannot silently change what was ordered against.
+
+`define_audience` and `clear_audience` are new ops in `packages/engine/src/recruitmentActions.ts`, wired into
+the existing gate, preview diff and change list. Two decisions there are worth recording:
+
+- **An unrecognised country is refused, not guessed.** `countryCode` consults its word table *before* the
+  two-letter shape, because "uk" is both — and the ISO alpha-2 for the United Kingdom is GB. A rate card keyed
+  on "UK" matches nothing, prices nothing, and looks like a vendor problem.
+- **Refining merges.** `AudienceSpecification` gives every list a default of `[]`, so after parsing, "the
+  researcher did not mention income" and "the researcher wants no income filter" are the same empty array. A
+  plain spread would silently remove a filter they are still paying for, so `mergeSection` lets an empty list
+  never overwrite a populated one. Removing a filter is what `replace` is for, and it is asked for explicitly.
+
+### 9.5 A Phase 1 bug the Phase 2 tests caught
+
+`asFraction` in `pricing.ts` guessed whether a rate was a percentage or a fraction with `rate > 1 ? rate / 100
+: rate`. That guess is wrong at exactly one value, and that value is common: a duplicate rate of `1` means one
+percent and was read as 100%. **Any vendor with a 1% duplicate rate was scored as yielding nothing and
+silently dropped from every allocation.** There is no heuristic that can tell 1% from 100%, so there is no
+heuristic now: the unit is fixed at percent, documented, and clamped. A regression test pins it.
+
+### 9.6 Verification
+
+| Check | Result |
+|---|---|
+| 0082 applied twice over the full chain on scratch Postgres 16 | clean |
+| `scripts/recruitment-markets-sql-test.sql` | 6 groups PASS |
+| `scripts/recruitment-sql-test.sql` (Phase 1) re-run against the replaced allocator | 6 groups PASS — no regression |
+| `packages/recruitment` | 56 pass (29 → 56) |
+| `packages/engine` | 2,668 pass, including the new `recruitmentActions` suite |
+| `packages/schema`, `access`, `quality` | 18 / 123 / 67 pass |
+| Studio copilot + prompt-cache suites | 437 pass |
+| `tsc --noEmit` studio / runtime | 0 / 0 |
+| `dependency-boundaries.mjs` | 2,193 files, 11,062 imports — 0 violations |
+| `auth-guard-audit.mjs` | 271 handlers — 0 problems |
+| `gen-public-docs.mjs --check` | current (the new ops regenerate into the actions reference) |
+
+**Not verified here**, as in Phase 1: no browser suite ran, and no Supabase project was touched.
+
+---
+
+## 10. Decisions needed
 
 1. **Vendor contracts.** Nothing in Phase 6 can proceed without at least one sample-provider
    agreement. Cint's marketplace API and Prolific's API are the two with the lowest barrier.

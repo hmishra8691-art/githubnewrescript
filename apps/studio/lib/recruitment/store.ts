@@ -222,11 +222,94 @@ export function recruitmentStore() {
       return (count ?? 0) > 0;
     },
 
+    /* ------------------------------------------------------------ markets and capacity (0082) */
+
+    /** A project's completes target per country. Empty means the project is a single pool, as in 0081. */
+    async markets(projectId: string) {
+      const { data, error } = await db.from("recruitment_markets")
+        .select("id, market, required_completes, expected_ir, loi_minutes, budget_cap, notes")
+        .eq("recruitment_project_id", projectId).order("market");
+      if (error) throw new Error(error.message);
+      return data ?? [];
+    },
+
+    /**
+     * Replace a project's markets wholesale. Deleting a market with allocations against it would orphan them, so
+     * the caller is expected to re-allocate afterwards; the route says so.
+     */
+    async setMarkets(projectId: string, rows: { market: string; requiredCompletes: number; expectedIr?: number | null; loiMinutes?: number | null; budgetCap?: number | null }[]) {
+      const del = await db.from("recruitment_markets").delete().eq("recruitment_project_id", projectId);
+      if (del.error) throw new Error(del.error.message);
+      if (!rows.length) return [];
+      const { data, error } = await db.from("recruitment_markets").insert(rows.map((r) => ({
+        recruitment_project_id: projectId, market: r.market, required_completes: r.requiredCompletes,
+        expected_ir: r.expectedIr ?? null, loi_minutes: r.loiMinutes ?? null, budget_cap: r.budgetCap ?? null,
+      }))).select("id, market, required_completes, expected_ir, loi_minutes, budget_cap");
+      if (error) throw new Error(error.message);
+      return data ?? [];
+    },
+
+    /**
+     * The most recent, unexpired availability each vendor stated per market.
+     *
+     * A capacity figure is perishable. An expired row is not returned at all rather than returned with a flag,
+     * because a stale number that reaches a dashboard is indistinguishable from a fresh one by the time anybody
+     * reads it — and the optimiser's treatment of "unknown" is deliberately safe.
+     */
+    async capacity(customerId: string, integrationIds?: string[]): Promise<Record<string, Record<string, { available: number | null; expectedIr: number | null; deliveryDays: number | null; source: string; recordedAt: string }>>> {
+      const mine = await this.integrations(customerId);
+      const ids = integrationIds ? mine.filter((i) => integrationIds.includes(i.id)).map((i) => i.id) : mine.map((i) => i.id);
+      if (!ids.length) return {};
+      const { data, error } = await db.from("vendor_capacity")
+        .select("integration_id, market, available_sample, expected_ir, delivery_days, source, recorded_at, expires_at")
+        .in("integration_id", ids).order("recorded_at", { ascending: false });
+      if (error) throw new Error(error.message);
+      const now = Date.now();
+      const out: Record<string, Record<string, { available: number | null; expectedIr: number | null; deliveryDays: number | null; source: string; recordedAt: string }>> = {};
+      for (const r of data ?? []) {
+        const expires = r.expires_at ? Date.parse(String(r.expires_at)) : null;
+        if (expires !== null && expires <= now) continue;
+        const byMarket = (out[String(r.integration_id)] ??= {});
+        // ordered newest first, so the first row for a market wins
+        if (byMarket[String(r.market)]) continue;
+        byMarket[String(r.market)] = {
+          available: r.available_sample === null ? null : Number(r.available_sample),
+          expectedIr: r.expected_ir === null ? null : Number(r.expected_ir),
+          deliveryDays: r.delivery_days === null ? null : Number(r.delivery_days),
+          source: String(r.source), recordedAt: String(r.recorded_at),
+        };
+      }
+      return out;
+    },
+
+    async addCapacity(customerId: string, integrationId: string, row: {
+      market: string; available: number | null; expectedIr?: number | null; deliveryDays?: number | null;
+      source: string; sourceNote?: string | null; expiresAt?: string | null;
+    }, actor: string) {
+      const owned = await this.integration(customerId, integrationId);
+      if (!owned) throw new Error("No such integration in this organisation");
+      const { error } = await db.from("vendor_capacity").insert({
+        integration_id: integrationId, market: row.market, available_sample: row.available,
+        expected_ir: row.expectedIr ?? null, delivery_days: row.deliveryDays ?? null,
+        source: row.source, source_note: row.sourceNote ?? null, expires_at: row.expiresAt ?? null,
+        recorded_by: actor,
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    /** Recompute committed spend and report whether the budget alert threshold was crossed by this change. */
+    async recommit(projectId: string): Promise<{ committed: number; budget: number; crossed: boolean; share_bps: number }> {
+      const { data, error } = await db.rpc("rescript_recruitment_recommit", { p_project: projectId });
+      if (error) throw new Error(error.message);
+      const r = Array.isArray(data) ? data[0] : data;
+      return { committed: Number(r.committed), budget: Number(r.budget), crossed: r.crossed === true, share_bps: Number(r.share_bps) };
+    },
+
     /* ------------------------------------------------------------ a study's recruitment project */
 
     async project(surveyId: string) {
       const { data, error } = await db.from("recruitment_projects")
-        .select("id, customer_id, survey_id, audience_spec_id, required_completes, budget_amount, budget_currency, deadline, loi_minutes, expected_ir, strategy, weights, quality_floor, status, authorized_by, authorized_at, created_at")
+        .select("id, customer_id, survey_id, audience_spec_id, required_completes, budget_amount, budget_currency, deadline, loi_minutes, expected_ir, strategy, weights, quality_floor, status, budget_alert_bps, committed_amount, authorized_by, authorized_at, created_at")
         .eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(1).maybeSingle();
       if (error) throw new Error(error.message);
       return data ?? null;

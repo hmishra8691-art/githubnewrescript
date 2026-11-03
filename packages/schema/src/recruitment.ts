@@ -232,6 +232,8 @@ export type AllocationConstraints = z.infer<typeof AllocationConstraints>;
 
 export const AllocationRow = z.object({
   integrationId: z.string(),
+  /** the country this row buys in (0082). "--" for a project that declared no markets. */
+  market: z.string().regex(/^([A-Z]{2}|--)$/).default("--"),
   vendorName: z.string().max(120),
   completes: z.number().int().min(0),
   cpi: z.number().min(0),
@@ -246,10 +248,32 @@ export const AllocationRow = z.object({
 });
 export type AllocationRow = z.infer<typeof AllocationRow>;
 
+/** One market's result, so a multi-country plan can be read market by market rather than as one blended blur. */
+export const AllocationMarketResult = z.object({
+  market: z.string().regex(/^([A-Z]{2}|--)$/),
+  required: z.number().int().min(0),
+  allocated: z.number().int().min(0),
+  shortfall: z.number().int().min(0),
+  cost: z.number().min(0),
+  blendedCpi: z.number().min(0),
+  expectedValidCompletes: z.number().int().min(0),
+  expectedDeliveryDays: z.number().min(0).nullable().default(null),
+  /** vendors left out of this market, and why — a researcher is owed the reason, not a shorter list */
+  excluded: z.array(z.object({ integrationId: z.string(), vendorName: z.string(), reason: z.string().max(300) })).default([]),
+});
+export type AllocationMarketResult = z.infer<typeof AllocationMarketResult>;
+
 export const AllocationPlan = z.object({
   strategy: AllocationStrategy,
   weights: StrategyWeights,
   rows: z.array(AllocationRow).max(100),
+  markets: z.array(AllocationMarketResult).default([]),
+  /**
+   * The cost pressure the solver had to apply to fit the budget. 0 means the budget never bound and the plan is
+   * the straightforward best under the chosen strategy; above 0 means cheaper vendors were preferred over better
+   * ones to stay inside the ceiling, which is a thing the researcher should be told rather than discover.
+   */
+  costPressure: z.number().min(0).default(0),
   totalCompletes: z.number().int().min(0),
   totalCost: z.number().min(0),
   blendedCpi: z.number().min(0),
