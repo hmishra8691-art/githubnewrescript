@@ -7,6 +7,7 @@ import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent, researchPlanInt
 import { COPILOT_AI_INTERVIEW_GUIDE, aiInterviewIntent } from "./aiInterviewGuide.ts";
 import { COPILOT_QUAL_SYNTHESIS_GUIDE, qualSynthesisIntent } from "./qualSynthesisGuide.ts";
 import { COPILOT_INTEGRATIONS_GUIDE, integrationsIntent } from "./integrationsGuide.ts";
+import { COPILOT_AUDIENCE_GUIDE, audienceIntent } from "./audienceGuide.ts";
 import { COPILOT_QUALITY_GUIDE, qualityIntent } from "./qualityGuide.ts";
 import { COPILOT_ASSESSMENT_GUIDE, assessmentIntent } from "./assessmentGuide.ts";
 import { REPORTING_GUIDE } from "./reportingGuide.ts";
@@ -560,6 +561,8 @@ export function copilotUserPrompt(input: {
   aiInterview?: boolean;
   /** 2026-10-22 (G3): the panels & alerts guide (connect_panel, configure_alerts) — absent = read from the message */
   integrations?: boolean;
+  /** the audience guide (2026-11-03): who the study recruits, `define_audience` */
+  audience?: boolean;
   /** S5b: send the response-quality / paradata guide (absent: decided from the message) */
   quality?: boolean;
   /** 2026-10-25 (K4, ported 2026-10-29): the assessment guide (set_answer_key, set_assessment) — absent = read from the message */
@@ -612,6 +615,7 @@ export function copilotUserPrompt(input: {
     if (input.aiInterview ?? aiInterviewIntent(input.message)) parts.push(COPILOT_AI_INTERVIEW_GUIDE);
     /* 2026-10-22 (G3): panel recruitment and alert routing (connect_panel, configure_alerts) */
     if (input.integrations ?? integrationsIntent(input.message)) parts.push(COPILOT_INTEGRATIONS_GUIDE);
+    if (input.audience ?? audienceIntent(input.message)) parts.push(COPILOT_AUDIENCE_GUIDE);
     /* S5b (TE-12/13): the quality checks, the telemetry switches and read-only script timing (set_quality_settings) */
     if (input.quality ?? qualityIntent(input.message)) parts.push(COPILOT_QUALITY_GUIDE);
     /* 2026-10-25 (K4, ported 2026-10-29): scored tests — the answer key and the paper's marking; results are computed, never written */

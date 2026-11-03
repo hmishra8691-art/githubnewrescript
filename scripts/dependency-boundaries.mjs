@@ -10,7 +10,8 @@
  *
  *   R1 package→app      a package never imports an app (relative path or `@/`)
  *   R2 app→app          an app never imports another app
- *   R3 layer            schema imports no @rescript package; engine imports only schema
+ *   R3 layer            schema imports no @rescript package; engine imports only schema; identity imports none
+ *                       (it must not be able to see commercial terms when deciding whether to refuse somebody)
  *   R4 declared         a @rescript import must be declared in that workspace's package.json
  *                       (dependencies/peerDependencies; tests and fixtures may also use devDependencies)
  *   R5 renderer         the renderer ships to the browser: no server-only package
@@ -55,7 +56,13 @@ const BROWSER_ALL = new Set(["engine", "schema", "renderer"]);
 /** packages whose `.` entry (and what it reaches) ships to the browser */
 const BROWSER_ENTRY = { analytics: "src/index.ts", exporters: "src/index.ts" };
 const SERVER_ONLY = /^(@rescript\/(ai|billing|mail|access|reportvideo|interviews)(\/|$)|@rescript\/[^/]+\/server$|@supabase\/|server-only$|next(\/|$))/;
-const LAYER = { schema: [], engine: ["@rescript/schema"] };
+/*
+ * R3's layer table. `identity` is here for a reason worth stating: it resolves who a respondent is, and it must
+ * not be able to see what they are worth. Letting it import `recruitment` would put CPI, margin and vendor
+ * commercial terms one import away from the code that decides whether to refuse somebody entry, and the two
+ * must never be able to influence each other. It imports nothing from this repository at all.
+ */
+const LAYER = { schema: [], engine: ["@rescript/schema"], identity: [] };
 
 /**
  * Reasoned exceptions: { rule, file (repo-relative, exact), spec (import specifier, exact or RegExp), reason }.

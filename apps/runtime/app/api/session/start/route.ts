@@ -6,6 +6,8 @@ import { clientIp } from "@rescript/quality/server";
 import { resolveSampleSource } from "@rescript/engine";
 import type { PanelConfig } from "@rescript/schema";
 import { panelParams, runtimePanels } from "@/lib/panels";
+import { admitArrival, attachParticipation } from "@/lib/identity";
+import { redeemAccessToken } from "@/lib/gateway";
 import { sessionAllowed } from "@/lib/metering";
 import { sandboxAvailable, sandboxRow, sandboxSurvey, sandboxSurveyId, startSandboxSession } from "@/lib/sessionSandbox";
 
@@ -60,6 +62,10 @@ function sandboxStart(token: string, body: any) {
  * Resume is honoured only when the row belongs to the same survey and
  * environment and is still in progress; anything else starts a new session,
  * so a stale id can never read or write someone else's row.
+ *
+ * Since 0083 an arrival is also resolved to a Respondent Trust ID and reserved in the participation ledger, so
+ * the same person cannot take part twice through two different vendors. That check starts in SHADOW mode and
+ * refuses nobody until a project turns enforcement on — see lib/identity.ts.
  */
 export async function POST(req: NextRequest) {
   let body: any;
@@ -188,6 +194,27 @@ export async function POST(req: NextRequest) {
   const panelEntry = panels ? await panels.enter({ surveyId: d.surveyId, target: "survey", targetRef: d.versionId ?? null, params: panelParams(urlParams), isTest }) : null;
   if (panelEntry && (panelEntry.kind === "refused" || panelEntry.kind === "duplicate")) return NextResponse.json({ error: panelEntry.message, code: `panel_${panelEntry.kind}` }, { status: 409 });
   if (panelEntry && panelEntry.kind === "over_quota") return NextResponse.json({ error: panelEntry.message, code: "panel_over_quota", redirectUrl: panelEntry.redirect.url }, { status: 409 });
+  /*
+   * PHASE 3 (0083) — CROSS-VENDOR DEDUPLICATION. The panel check above refuses a second arrival from the SAME
+   * panel id. This asks whether it is the same PERSON as somebody who already took part, under a different
+   * vendor's id.
+   *
+   * Every project starts in `shadow`, where this refuses nobody: it resolves, reserves and records what it
+   * WOULD have refused, so a false-positive rate can be measured on real traffic first. It also fails open on
+   * every error path — a missing key, an unmigrated database, an unreachable table all admit the respondent.
+   */
+  const admission = await admitArrival(d.surveyId, {
+    vendorPid: panelEntry && panelEntry.kind === "admitted" ? panelEntry.pid : null,
+    ip: clientIp(req.headers),
+    userAgent: req.headers.get("user-agent"),
+  }, { isTest });
+  if (!admission.admit) {
+    return NextResponse.json(
+      { error: admission.decision?.reason ?? "You have already taken part in this study.", code: `rtid_${admission.decision?.code ?? "duplicate"}` },
+      { status: 409 },
+    );
+  }
+
   const session = await createSession(d, {
     isTest,
     ip: clientIp(req.headers),
@@ -199,6 +226,31 @@ export async function POST(req: NextRequest) {
   });
   if ("error" in session) return NextResponse.json({ error: session.error }, { status: 403 });
   if (panels && panelEntry?.kind === "admitted") await panels.attach(panelEntry.entryId, session.sessionId);
+  if (admission.ledgerId) await attachParticipation(admission.ledgerId, session.sessionId);
+
+  /*
+   * PHASE 4 (0084) — THE ACCESS TOKEN. An arrival that came through /r/<client>/<study> carries `at`: a
+   * short-lived, single-use secret the gateway issued when it made its decision. Redeeming it here binds this
+   * session to that decision, so "on what evidence was this respondent admitted?" is answerable afterwards.
+   *
+   * A failed redemption does NOT refuse the session, and the reason is resumes: the runner posts here again
+   * when a tab reloads, by which time the token is legitimately spent. Refusing would turn every refresh into
+   * a lockout. So a replay is recorded and the interview continues.
+   *
+   * This is also the honest limit of this phase: the token is RECORDED, not REQUIRED. Nothing yet refuses an
+   * arrival that skipped the gateway and went straight to the survey link — which is every arrival today,
+   * since no vendor has been given a /r/ link. Requiring it is a Phase 6 decision, after the gateway links are
+   * actually in use, and it is a one-line change here when that day comes.
+   */
+  const accessToken = typeof urlParams?.at === "string" ? urlParams.at : null;
+  if (accessToken && !isTest) {
+    const redeemed = await redeemAccessToken(accessToken, d.surveyId, session.sessionId);
+    if (!redeemed.ok) {
+      console.info("[rescript:gateway] access token not redeemed", JSON.stringify({
+        survey: d.surveyId.slice(0, 8), session: session.sessionId.slice(0, 8), reason: redeemed.reason,
+      }));
+    }
+  }
   const { data: made } = await db.from("responses").select("respondent_code").eq("session_id", session.sessionId).maybeSingle();
   console.info("[rescript:session] started", JSON.stringify({ surveyId: d.surveyId, environment: isTest ? "TEST" : "LIVE", session: session.sessionId.slice(0, 8), respondentCode: made?.respondent_code ?? null, versionId: d.versionId, sampleSource: sample.source, sampleSourceParam: sample.sourceParam ?? null }));
   return NextResponse.json({
