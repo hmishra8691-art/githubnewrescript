@@ -199,6 +199,12 @@ export const AUDIT_EVENTS = [
   "recruitment.order_placed",
   "recruitment.progress_recorded",
 
+  /* the fraud intelligence centre (2026-11-03, Phase 5): resolving a quarantined complete, and resolving a whole
+     detected network at once. Both decide whether a supplier is paid and whether a respondent is marked, so both
+     name the reviewer and the reason. §20 gives the respondent an appeal, which needs a record to appeal against. */
+  "fraud.case.resolve",
+  "fraud.cluster.resolve",
+
   /* collaboration */
   "comment.created",
   "comment.resolved",
@@ -259,6 +265,8 @@ export function describeEvent(r: AuditRow): string {
     case "recruitment.allocation_authorized": return `${who} authorised the sample allocation (${str(d.completes) || "?"} completes, ${str(d.cost) || "?"})`;
     case "recruitment.order_placed": return `${who} placed an order with ${str(d.vendor) || "a vendor"} for ${str(d.completes) || "?"} completes at ${str(d.cpi) || "?"}`;
     case "recruitment.progress_recorded": return `${who} recorded ${str(d.accepted) || "?"} accepted of ${str(d.delivered) || "?"} delivered from ${str(d.vendor) || "a vendor"}`;
+    case "fraud.case.resolve": return `${who} ${str(d.status) === "upheld" ? "upheld" : str(d.status) === "cleared" ? "cleared" : "withdrew"} a fraud case${d.note ? `: ${str(d.note)}` : ""}`;
+    case "fraud.cluster.resolve": return `${who} ${str(d.status) === "upheld" ? "upheld" : "cleared"} a suspected network of ${str(d.resolved) || "?"} cases${d.note ? `: ${str(d.note)}` : ""}`;
     case "panel.secret_changed": return `${who} ${d.cleared ? "cleared" : "set"} the signing secret of the panel ${str(d.panel) || ""}`.trim();
     case "user.ai_credential_saved": return `${who} saved an API key for ${str(d.provider) || "an AI provider"}`;
     case "user.ai_credential_removed": return `${who} removed an API key for ${str(d.provider) || "an AI provider"}`;

@@ -701,13 +701,175 @@ than a silent identity merge nobody can see. Phase 3's SQL test was rewritten ar
 | `auth-guard-audit.mjs` | 271 handlers — 0 problems |
 
 **Not verified:** no browser suite; no Supabase project; no traffic through the gateway, so the false-positive
-rate remains unmeasured. There is also no Fraud Intelligence Center UI yet (the brief's §29) — the data is all
-there and queryable, but a reviewer currently has no screen to work the queue from. That, the click-farm graph
-(§19) and vendor quality scoring are Phase 5.
+rate remains unmeasured. There was also no Fraud Intelligence Center UI at this point (the brief's §29) — the
+data was all there and queryable, but a reviewer had no screen to work the queue from. That, the click-farm
+graph (§19) and vendor quality scoring are §12 below.
 
 ---
 
-## 12. Decisions needed
+## 12. Phase 5 — what was built
+
+Phases 3 and 4 look at one arrival at a time. Phase 5 asks the three questions that only exist across many
+arrivals: *is this a ring rather than a person*, *is this vendor actually any good*, and *is this project going
+to finish*. It also builds the screen the previous two phases were missing, and — the part that matters most —
+the measurement that says whether any of it works.
+
+Migration **`0085_fraud_graph_and_quality.sql`** adds `fraud_network_clusters`, `vendor_quality_metrics`,
+`recruitment_forecasts` and `model_evaluations`, plus `fraud_cases.cluster_id`.
+
+### 12.1 The ring is the unit
+
+`packages/quality/src/cluster.ts` builds a graph over the probabilistic signals identities share — device,
+network, behaviour — and reports connected components as candidate rings.
+
+The hard problem is **carrier NAT**. Four hundred unrelated people behind one mobile operator's address share a
+network token, and a naive component walk reports them as the largest fraud ring ever detected. Two rules stop
+that:
+
+```ts
+export function signalWeight(kind: SignalKind, sharedBy: number, config: ClusterConfig): number {
+  if (sharedBy < 2) return 0;
+  if (sharedBy > config.maxIdentitiesPerSignal) return 0;   // infrastructure: no information about who is behind it
+  return KIND_WEIGHT[kind] / Math.log2(sharedBy);            // a link shared by many proves little
+}
+```
+
+A signal held by more than 50 identities is dropped entirely rather than down-weighted, because the
+down-weighted version still links them all into one component. The surviving edges are weighted by how *rare*
+the link is.
+
+The score is then deliberately a function of **both** size and ratio, never either alone:
+
+```
+score = 100 × (0.55·ratio + 0.20·size + 0.15·cohesion + 0.10·burst)
+```
+
+Six identities on one device scores 42 against a threshold of 45 and is **not** reported. Twelve on two devices
+— the same ratio, twice the evidence — scores 52 and is. Twelve across four devices is ratio 3.0 and is not
+reported at any size, because that is a household. A test pins all five of those cases, because the first
+version of that test asserted the wrong one and the code was right.
+
+A detected ring opens **one** case naming its members, with the arithmetic attached. Re-running the hourly pass
+updates that case rather than opening another, and a ring a human has already judged keeps its verdict —
+otherwise a reviewer clears the same network every hour forever.
+
+### 12.2 Vendor quality, with the uncertainty attached
+
+`packages/recruitment/src/quality.ts` and the SQL function `rescript_vendor_quality_recompute` compute each
+vendor's rates from **real order outcomes**, with a **Wilson score interval** beside every one.
+
+The motivating failure is simple: a 20% rejection rate over five completes and over five thousand are different
+claims, and a column holding only the point estimate cannot tell them apart. The optimiser (Phase 2) already
+ranks on the pessimistic bound — this is what finally gives it a bound to rank on.
+
+Wilson rather than the normal approximation because the normal interval for 0 successes in 5 trials is exactly
+`[0, 0]`: a brand-new vendor would look flawless on its first week. Wilson gives `[0%, 43%]`, which is the
+truth. Verified in SQL: the same 9.09% rejection rate is 10.9 points wide over 110 completes and 3.4 points over
+1,100.
+
+Two refusals are built in and tested:
+
+- **No score below 50 accepted completes.** Not a low score — `NULL`. Rendering "unknown" as zero buries every
+  new vendor relationship on its first day.
+- **A vendor with no history ranks LAST, not first.** The bug this guards against is reading a null rejection
+  rate as 0 and handing a brand-new supplier the whole project.
+
+### 12.3 Reallocation proposes; it does not act
+
+`reallocate.ts` detects two kinds of deviation and computes a costed replacement plan — and then stops.
+
+Applying it cancels part of one supplier's order and places it with another. That is a commercial act with a
+counterparty and a contract behind it, and a researcher who comes back from lunch to find the platform has
+unilaterally cancelled half of a vendor's order has lost more than the hour the automation saved. So the type
+itself carries `requiresApproval: true` and the notes end with *"Nothing has been ordered."*
+
+Three judgements worth stating:
+
+- **The shortfall is the projected gap, not today's.** A vendor at 300 of 1,000 with 80% of the field gone is on
+  track for 375, so 625 needs re-sourcing — not the 500 it is behind pro-rata right now.
+- **Pace alone is the wrong test near a deadline.** 60% of pro-rata with half the period left is a *watch*; the
+  same 60% with a fifth left is an *act*, because recovering would take four times their own observed rate.
+- **Quality is judged on the OPTIMISTIC bound.** The pessimistic bound is right for *choosing* vendors; the
+  optimistic one is right for *accusing* them. Six rejections in 40 screened is 15% against 8% assumed and is
+  not actioned; the same rate over 2,000 screened is.
+
+### 12.4 Forecasting has two outcomes, not three
+
+`forecast.ts` returns a forecast or an `insufficient` with the reason. There is deliberately no "low confidence
+estimate", because in practice that is read as an estimate.
+
+Two independent gates, both of which must clear: **30 accepted completes** and **6 hours of field**. A project
+running at 400/hour clears the sample gate in minutes and still waits out the clock, because response rates
+follow the local clock and the first two hours of a launch are the rate of the launch, not of the project.
+
+An `insufficient` result carries no date and no rate — nothing a reader could multiply out themselves.
+
+### 12.5 The detector grades itself, and currently scores nothing
+
+`rescript_model_evaluate` measures precision and the false-positive rate over **resolved** cases only. An upheld
+case is a true positive, a cleared one a false positive; a suspicion is neither.
+
+Below 30 resolved cases it reports `insufficient` and publishes no numbers. Today that is the honest state: no
+traffic has been through shadow mode, so nothing has been resolved. The SQL test pins the two properties that
+matter — 29 resolutions is still insufficient, and **a hundred open cases move precision not at all**. Counting
+suspicions as confirmations is how every fraud system reports 99% accuracy right up until somebody checks.
+
+### 12.6 The Fraud Intelligence Centre
+
+`apps/studio/app/fraud/page.tsx`, with `/api/fraud` behind it — the screen §29 asks for and the previous two
+phases did not have.
+
+- Networks are shown as networks, with one decision for the whole ring.
+- Every case shows the reasons and the evidence that produced its score. A reviewer being asked to withhold a
+  supplier's payment should not have to take a number on trust.
+- **Upholding requires a typed reason.** §20 gives the respondent an appeal, which is worth nothing without a
+  stated reason to appeal against.
+- A banner at the top says the scores have not been validated, and the evaluation panel says so in numbers —
+  and keeps saying so until reviewers have worked the queue.
+
+There is no bulk "uphold everything open" and no filter that resolves a selection. An unmeasured false-positive
+rate is not a thing to automate against.
+
+`/api/cron/fraud-intelligence` runs the graph, the quality recompute, the forecasts and the evaluation hourly
+(`vercel.json`, minute 29). It opens cases. It refuses nobody, voids nothing, and marks no identity — the Phase 4
+rule, unchanged.
+
+### 12.7 A bug in 0085 the SQL test caught
+
+`rescript_cluster_upsert` returns `(cluster_id, case_id, created)` and queries `fraud_cases`, which has its own
+`cluster_id` column:
+
+```sql
+select id into v_case from public.fraud_cases
+  where cluster_id = v_cluster and ...;     -- ambiguous: OUT parameter or column?
+```
+
+PostgreSQL refuses the whole call. The function would have detected a ring, begun opening its case, and then
+errored — every time, silently, from a background job nobody watches. Fixed by aliasing the table.
+
+### 12.8 Verification
+
+| Check | Result |
+|---|---|
+| 85-migration chain applied to a clean database | clean |
+| 0081–0085 each applied twice | clean |
+| `scripts/fraud-graph-sql-test.sql` | 11 assertions PASS |
+| `packages/quality` | 96 pass (83 → 96) |
+| `packages/recruitment` | 89 pass (56 → 89) |
+| `identity` / `engine` / `schema` / `access` | 20 / 2,668 / 18 / 123 — all pass |
+| `tsc --noEmit` studio | 0 errors |
+| `dependency-boundaries.mjs` | 2,214 files, 11,134 imports, 22 workspaces — 0 violations |
+| `auth-guard-audit.mjs` | 273 handlers — 0 problems |
+| `gen-public-docs.mjs --check` | current |
+
+**Not verified:** no browser suite, no Supabase project, and — the one that matters — still no traffic. Every
+threshold on this page (45 for a cluster, 50 accepted completes for a score, 30 resolved cases for precision,
+5 points for a quality deviation) is a considered guess. The machinery to measure them now exists; the
+measurement does not.
+
+---
+
+## 13. Decisions needed
 
 1. **Vendor contracts.** Nothing in Phase 6 can proceed without at least one sample-provider
    agreement. Cint's marketplace API and Prolific's API are the two with the lowest barrier.
