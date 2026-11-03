@@ -55,6 +55,15 @@ export interface QuotationRequest extends FeasibilityRequest {
 export interface OrderRequest {
   recruitmentProjectId: string;
   orderId: string;
+  /**
+   * The audience, so a live adapter can apply targeting at order time (Phase 6).
+   *
+   * Optional because the manual adapter has no use for it — an operator carries the audience to the vendor's
+   * own portal themselves. For an API adapter it is not optional in practice: ordering without it recruits the
+   * general population and bills for it, so an adapter that needs targeting must refuse rather than proceed
+   * with none.
+   */
+  audience?: AudienceSpecification;
   completes: number;
   cpi: number;
   currency: string;
