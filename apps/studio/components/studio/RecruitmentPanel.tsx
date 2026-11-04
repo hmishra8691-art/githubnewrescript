@@ -317,17 +317,41 @@ interface Plan {
   expectedDeliveryDays: number | null; feasible: boolean; shortfall: number; notes: string[];
 }
 
+/** What every caller receives — no supply chain in it (lib/recruitment/abstraction.ts builds this). */
+interface ResearcherPlanView {
+  currency: string;
+  requiredCompletes: number;
+  markets: Array<{ market: string; required: number; planned: number; delivered: number; accepted: number; expectedDeliveryDays: number | null }>;
+  price: number;
+  pricePerComplete: number | null;
+  feasible: boolean;
+  shortfall: number;
+  expectedDeliveryDays: number | null;
+  capacity: "broad" | "adequate" | "limited" | "unknown";
+  quality: { score: number | null; confidence: "none" | "low" | "medium" | "high" };
+  notes: string[];
+}
+
 interface RecruitmentData {
   project: Record<string, unknown> | null;
   markets: MarketRow[];
   budget?: BudgetView;
   audience?: Record<string, unknown> | null;
-  comparison: { rows: ComparisonRow[]; source: Source };
-  allocations: Record<string, unknown>[];
-  orders: Record<string, unknown>[];
+  plan?: ResearcherPlanView;
+  /*
+   * OPTIONAL, and that is the point. These arrive only for platform administrators; for everybody else they
+   * are absent, not empty. Typing them as required is what let the panel read `data.comparison.source` on a
+   * payload that no longer carried it.
+   */
+  canSeeVendors?: boolean;
+  comparison?: { rows: ComparisonRow[]; source: Source };
+  allocations?: Record<string, unknown>[];
+  orders?: Record<string, unknown>[];
   totals: {
     required: number; accepted: number; delivered: number; rejected: number; duplicates: number;
-    remaining: number; spend: number; budget: number; budgetRemaining: number; blendedCpi: number; committed: number;
+    remaining: number; budget: number;
+    /* acquisition figures — present only for platform administrators */
+    spend?: number; budgetRemaining?: number; blendedCpi?: number; committed?: number;
   };
 }
 
@@ -450,9 +474,14 @@ function Recruitment({ surveyId }: { surveyId: string }) {
             <span className="muted">Duplicate attempts <strong>{int(t.duplicates)}</strong></span>
           </div>
           <div className="row">
-            <span className="muted">Spent <strong>{money(t.spend, ccy)}</strong> of {money(t.budget, ccy)}</span>
-            <span className="muted">Committed <strong>{money(t.committed, ccy)}</strong></span>
-            <span className="muted">Blended CPI <strong>{t.blendedCpi > 0 ? money(t.blendedCpi, ccy) : "—"}</strong></span>
+            {/* acquisition figures: administrators only, and absent rather than zero for everybody else */}
+            {data.canSeeVendors && t.spend !== undefined && (
+              <>
+                <span className="muted">Spent <strong>{money(t.spend, ccy)}</strong> of {money(t.budget, ccy)}</span>
+                <span className="muted">Committed <strong>{money(t.committed ?? null, ccy)}</strong></span>
+                <span className="muted">Blended CPI <strong>{(t.blendedCpi ?? 0) > 0 ? money(t.blendedCpi ?? null, ccy) : "—"}</strong></span>
+              </>
+            )}
           </div>
           {t.accepted === 0 && t.delivered === 0 && (
             <p className="muted">Nothing has been delivered yet. These are counts, not forecasts: they move when a vendor&rsquo;s progress is entered.</p>
@@ -460,9 +489,57 @@ function Recruitment({ surveyId }: { surveyId: string }) {
         </div>
       )}
 
+      {data.plan && (
+        <div className="card">
+          <div className="row">
+            <strong className="grow">Recruitment plan</strong>
+            <span className="muted">Rescript Recruitment Network</span>
+          </div>
+          <div className="row" style={{ gap: 24, flexWrap: "wrap" }}>
+            <div><div className="muted" style={{ fontSize: 12 }}>Completes required</div><strong>{int(data.plan.requiredCompletes)}</strong></div>
+            <div><div className="muted" style={{ fontSize: 12 }}>Price</div><strong>{money(data.plan.price, data.plan.currency)}</strong></div>
+            <div><div className="muted" style={{ fontSize: 12 }}>Per complete</div><strong>{money(data.plan.pricePerComplete, data.plan.currency)}</strong></div>
+            <div><div className="muted" style={{ fontSize: 12 }}>Capacity</div><strong>{data.plan.capacity}</strong></div>
+            <div>
+              <div className="muted" style={{ fontSize: 12 }}>Quality</div>
+              <strong>{data.plan.quality.score === null ? "not yet measured" : data.plan.quality.score.toFixed(0)}</strong>
+            </div>
+          </div>
+          {!data.plan.feasible && (
+            <p className="chip warn">
+              This plan cannot be filled as specified{data.plan.shortfall > 0 ? ` — ${int(data.plan.shortfall)} completes short` : ""}.
+            </p>
+          )}
+          {data.plan.markets.length > 0 && (
+            <table className="grid">
+              <thead><tr><th>Market</th><th>Required</th><th>Planned</th><th>Delivered</th><th>Accepted</th><th>Expected days</th></tr></thead>
+              <tbody>
+                {data.plan.markets.map((m) => (
+                  <tr key={m.market}>
+                    <td className="mono">{m.market}</td>
+                    <td className="mono">{int(m.required)}</td>
+                    <td className="mono">{int(m.planned)}</td>
+                    <td className="mono">{int(m.delivered)}</td>
+                    <td className="mono">{int(m.accepted)}</td>
+                    <td className="mono">{m.expectedDeliveryDays === null ? "—" : m.expectedDeliveryDays.toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {data.plan.notes.map((n) => <p key={n} className="muted">{n}</p>)}
+        </div>
+      )}
+
+      {/*
+        * SUPPLY-CHAIN BLOCKS. `comparison` and `orders` are sent only to platform administrators, so these are
+        * rendered only when they arrived. Reading them unconditionally is what crashed this panel for everybody
+        * else: the payload changed shape and the component did not.
+        */}
+      {data.canSeeVendors && data.comparison && (
       <div className="card">
         <div className="row">
-          <strong className="grow">Vendor comparison</strong>
+          <strong className="grow">Recruitment partner comparison</strong>
           <span className="muted">Ranked by cost per valid accepted complete · {SOURCE_LABEL[data.comparison.source]}</span>
         </div>
         <p className="muted">
@@ -493,19 +570,20 @@ function Recruitment({ surveyId }: { surveyId: string }) {
               </tr>
             ))}
             {data.comparison.rows.length === 0 && (
-              <tr><td colSpan={8} className="muted">No vendors are configured yet. Add one in the marketplace.</td></tr>
+              <tr><td colSpan={8} className="muted">No partners are configured yet. Add one under Recruitment partners.</td></tr>
             )}
           </tbody>
         </table>
       </div>
+      )}
 
-      {data.orders.length > 0 && (
+      {data.canSeeVendors && (data.orders?.length ?? 0) > 0 && (
         <div className="card">
           <strong>Orders</strong>
           <table className="grid">
             <thead><tr><th>Vendor</th><th>Ordered</th><th>Delivered</th><th>Accepted</th><th>Spend</th><th>Status</th></tr></thead>
             <tbody>
-              {data.orders.map((o) => (
+              {(data.orders ?? []).map((o) => (
                 <tr key={String(o.id)}>
                   <td>{String(o.vendorName ?? "—")}</td>
                   <td className="mono">{int(Number(o.ordered_completes))}</td>

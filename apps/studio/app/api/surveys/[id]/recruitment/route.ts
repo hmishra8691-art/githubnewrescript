@@ -224,14 +224,26 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     canSeeVendors: actor.canSeeVendors,
     ...supplyChain,
     events,
+    /*
+     * COUNTS FOR EVERYBODY, COST FOR ADMINISTRATORS.
+     *
+     * `spend`, `committed` and `blendedCpi` are what the sample cost US — the acquisition figures, before any
+     * margin. They sat in this object and reached every researcher, which is the exact leak the abstraction
+     * layer exists to prevent; the first version of its guard missed them because it matched key names
+     * exactly and the key is called `blendedCpi`, not `cpi`.
+     *
+     * `budget` stays: it is the researcher's own approved ceiling, not a supplier's price.
+     */
     totals: {
       required, accepted, delivered, rejected, duplicates,
       remaining: Math.max(required - accepted, 0),
-      spend: Math.round(spend * 100) / 100,
       budget,
-      budgetRemaining: Math.round((budget - spend) * 100) / 100,
-      blendedCpi: blendedCpi(orders.map((o) => ({ completes: Number(o.accepted_completes ?? 0), cpi: Number(o.agreed_cpi ?? 0) }))),
-      committed: totalCost(orders.map((o) => ({ completes: Number(o.ordered_completes ?? 0), cpi: Number(o.agreed_cpi ?? 0) }))),
+      ...(actor.canSeeVendors ? {
+        spend: Math.round(spend * 100) / 100,
+        budgetRemaining: Math.round((budget - spend) * 100) / 100,
+        blendedCpi: blendedCpi(orders.map((o) => ({ completes: Number(o.accepted_completes ?? 0), cpi: Number(o.agreed_cpi ?? 0) }))),
+        committed: totalCost(orders.map((o) => ({ completes: Number(o.ordered_completes ?? 0), cpi: Number(o.agreed_cpi ?? 0) }))),
+      } : {}),
     },
     /*
      * Budget headroom is budget minus COMMITTED, never minus spent. A dashboard built on the second number tells

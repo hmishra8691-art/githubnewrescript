@@ -92,3 +92,26 @@ test("the guard tolerates cycles and odd input rather than throwing", () => {
   for (let i = 0; i < 40; i++) { const next = {}; node.next = next; node = next as Record<string, unknown>; }
   assert.equal(findVendorIdentity(deep).ok, true, "depth is capped rather than recursing forever");
 });
+
+test("a cost field is caught whatever it has been named", () => {
+  /*
+   * The leak this pins, which the first version of the guard missed: totals.blendedCpi is the average price
+   * paid to suppliers. It reached every researcher, and an exact-match list containing "cpi" did not see it
+   * because the key is "blendedCpi".
+   */
+  assert.equal(findVendorIdentity({ totals: { blendedCpi: 4.2 } }).ok, false);
+  assert.equal(findVendorIdentity({ totals: { committed: 9000 } }).ok, false);
+  assert.equal(findVendorIdentity({ totals: { spend: 4100 } }).ok, false);
+  assert.equal(findVendorIdentity({ costPerValidComplete: 7 }).ok, false);
+  assert.equal(findVendorIdentity({ acquisitionCost: 1 }).ok, false);
+});
+
+test("what the researcher PAYS is not a leak — only what it cost us is", () => {
+  const ok = findVendorIdentity({ price: 10000, pricePerComplete: 10, budget: 12000, currency: "GBP" });
+  assert.deepEqual(ok.found, [], "price and budget are the researcher's own figures");
+});
+
+test("the counts a researcher needs survive the guard", () => {
+  const counts = { required: 1000, accepted: 400, delivered: 450, rejected: 30, duplicates: 20, remaining: 600 };
+  assert.equal(findVendorIdentity({ totals: counts }).ok, true);
+});

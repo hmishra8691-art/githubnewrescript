@@ -136,6 +136,20 @@ const FORBIDDEN_KEYS = Object.freeze([
   "vendororderref", "ratecard", "pricing", "margin", "marginbps", "credentials", "hint",
 ]);
 
+/**
+ * Fragments that make a key forbidden wherever they appear in it.
+ *
+ * Exact matching is not enough, and the case that proved it was real: `totals.blendedCpi` is the average
+ * price paid to suppliers, it reached every researcher, and a list containing "cpi" did not catch it because
+ * the key was not called "cpi". A cost is a cost whatever it has been named — `blendedCpi`, `committed`,
+ * `spend`, `acquisitionCost`, `costPerValidComplete` — so the fragments are checked as substrings.
+ *
+ * `price` is deliberately absent: what the researcher pays is theirs to see. Only what it cost US is not.
+ */
+const FORBIDDEN_FRAGMENTS = Object.freeze([
+  "cpi", "cost", "margin", "markup", "vendor", "integration", "credential", "spend", "committed",
+]);
+
 export interface LeakReport { ok: boolean; found: string[] }
 
 /**
@@ -156,7 +170,10 @@ export function findVendorIdentity(payload: unknown, path = "$"): LeakReport {
     }
     if (typeof node !== "object") return;
     for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-      if (FORBIDDEN_KEYS.includes(key.toLowerCase())) found.push(`${at}.${key}`);
+      const k = key.toLowerCase();
+      if (FORBIDDEN_KEYS.includes(k) || FORBIDDEN_FRAGMENTS.some((f) => k.includes(f))) {
+        found.push(`${at}.${key}`);
+      }
       walk(value, `${at}.${key}`, depth + 1);
     }
   };
