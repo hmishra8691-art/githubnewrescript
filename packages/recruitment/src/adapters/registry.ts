@@ -76,3 +76,17 @@ export class AdapterRegistry {
 
 type VendorCapabilityMethod =
   | "authenticate" | "feasibility" | "quote" | "createOrder" | "orderStatus" | "cancelOrder" | "reconcile";
+
+/**
+ * The vendors this build can actually talk to (Phase 6).
+ *
+ * One list, consulted by the registry and by the route that decides whether `api` mode may be chosen. Phase 1
+ * refused `api` for EVERY vendor, which was true then and is not now — but the refusal still has to hold for a
+ * vendor with no adapter, or the marketplace would let somebody configure an API integration that cannot make
+ * a single call. A vendor is here only once its adapter exists.
+ */
+export const LIVE_ADAPTER_SLUGS: readonly string[] = Object.freeze(["prolific"]);
+
+export function hasLiveAdapter(vendorSlug: string): boolean {
+  return LIVE_ADAPTER_SLUGS.includes(vendorSlug);
+}

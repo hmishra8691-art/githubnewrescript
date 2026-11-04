@@ -1,11 +1,13 @@
 import { NextRequest } from "next/server";
 import { randomUUID } from "node:crypto";
-import { AudienceSpecification, canTransition, type AllocationStrategy, type RecruitmentProjectStatus } from "@rescript/schema";
+import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
   allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
   selectPricing, totalCost, type AllocationCandidate, type FeasibilityInput,
 } from "@rescript/recruitment";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
+import { liveRegistry, LIVE_FEASIBILITY_MS } from "@/lib/recruitment/live";
+import { openCredentials } from "@/lib/recruitment/credentials";
 import { supabaseService } from "@/lib/authServer";
 import { noStore, recruitmentActor, refuseSpend } from "@/lib/recruitment/access";
 import { recruitmentStore } from "@/lib/recruitment/store";
@@ -71,12 +73,63 @@ async function comparisonFor(customerId: string, project: Record<string, unknown
   const audience = AudienceSpecification.parse(
     (project?.audience as unknown) ?? { demographics: { countries: [] } },
   );
-  const rows = compareVendors(inputs, {
+  const req = {
     audience,
     requiredCompletes: Number(project?.required_completes ?? 0) || 1,
     loiMinutes: Number(project?.loi_minutes ?? 15) || 15,
     expectedIr: Number(project?.expected_ir ?? 100) || 100,
-  });
+  };
+  const rows = compareVendors(inputs, req);
+
+  /*
+   * LIVE FEASIBILITY (Phase 6b). Every row above came from a rate card. For an integration actually in `api`
+   * mode, ask the vendor instead and replace the row — but only replace it on success. A vendor that is down
+   * must leave the researcher with the rate-card estimate and a note, not with a hole in the comparison, and
+   * `source` then still tells them which figure they are reading.
+   *
+   * The calls run together and each is bounded, because a comparison across eight vendors must not take eight
+   * timeouts' worth of wall clock. Credentials are opened here, used, and never returned.
+   */
+  const live = integrations.filter((i) => i.enabled && i.mode === "api" && i.hasCredentials);
+  if (live.length) {
+    const registry = liveRegistry();
+    const slugOf = new Map(vendors.map((v) => [v.id, v.slug]));
+    const settled = await Promise.allSettled(live.map(async (i) => {
+      const slug = slugOf.get(i.vendorId) ?? "";
+      const sealed = await store.sealedCredentials(customerId, i.id);
+      if (!sealed) throw new Error("no sealed credentials");
+      const ctx = {
+        integrationId: i.id, vendorName: nameOf.get(i.vendorId) ?? "Vendor", mode: i.mode,
+        customerId, currency: i.currency, markupBps: i.markupBps,
+        credentials: openCredentials(customerId, i.id, sealed),
+        signal: AbortSignal.timeout(LIVE_FEASIBILITY_MS),
+      };
+      const estimate = await registry.invoke(
+        { integrationId: i.id, vendorName: ctx.vendorName, vendorSlug: slug, mode: i.mode, recorded: [] },
+        "feasibility", "feasibility",
+        (adapter, c) => adapter.feasibility!(c, req),
+        ctx,
+      );
+      return { integrationId: i.id, estimate: estimate as FeasibilityEstimate };
+    }));
+
+    for (const [n, result] of settled.entries()) {
+      const target = live[n];
+      const at = rows.findIndex((r) => r.integrationId === target.id);
+      if (at < 0) continue;
+      if (result.status === "fulfilled") {
+        rows[at] = { ...rows[at], ...result.value.estimate };
+      } else {
+        const why = result.reason instanceof Error ? result.reason.message : "the vendor could not be reached";
+        const note = `Live figures unavailable, so this row is from the rate card: ${why}`;
+        rows[at] = {
+          ...rows[at],
+          caveat: rows[at].caveat ? `${rows[at].caveat} ${note}` : note,
+        };
+      }
+    }
+  }
+
   return { rows, source: comparisonSource(rows), vendorNames: nameOf, integrations };
 }
 
