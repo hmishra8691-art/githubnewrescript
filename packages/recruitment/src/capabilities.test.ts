@@ -51,9 +51,36 @@ test("the matrix covers every capability, so a screen cannot read one as absent-
 test("the summary sentence says what is true, and never implies a vendor is live", () => {
   assert.match(integrationSummary("awaiting", capabilityMatrix("awaiting", ALL, [])), /Awaiting integration/);
   assert.match(integrationSummary("redirect_only", capabilityMatrix("redirect_only", ALL, [])), /Recruitment links only/);
-  assert.match(integrationSummary("manual", capabilityMatrix("manual", ALL, [])), /no pricing configured/);
+  // with no pricing count given, the sentence makes NO claim about pricing — it cannot know
+  assert.match(integrationSummary("manual", capabilityMatrix("manual", ALL, [])), /enters feasibility and orders by hand/);
+  assert.doesNotMatch(integrationSummary("manual", capabilityMatrix("manual", ALL, [])), /pricing|priced|rate card/i);
   assert.match(integrationSummary("manual", capabilityMatrix("manual", ALL, [declared("feasibility")])), /entered by an operator/);
   const fresh = integrationSummary("api", capabilityMatrix("api", ALL, [declared("quote"), declared("order")]));
   assert.match(fresh, /none yet verified/);
   assert.doesNotMatch(fresh, /\bverified,/);
+});
+
+test("the manual summary does not contradict the rate card beside it", () => {
+  const matrix = capabilityMatrix("manual", ALL, []);
+
+  /*
+   * The bug this pins: the sentence described PRICING while reading only the capability matrix, which knows
+   * nothing about rate cards. An integration with two priced markets and no recorded capabilities announced
+   * "no pricing configured yet" directly above a line reading "Rate card: 2 rows".
+   */
+  const withRates = integrationSummary("manual", matrix, 2);
+  assert.doesNotMatch(withRates, /no pricing|no rate card/i, "it must not deny pricing that exists");
+  assert.match(withRates, /priced in 2 markets/);
+
+  const without = integrationSummary("manual", matrix, 0);
+  assert.match(without, /no rate card yet/, "and must say so plainly when there genuinely is none");
+
+  assert.match(integrationSummary("manual", matrix, 1), /priced in 1 market(?!s)/, "singular reads correctly");
+});
+
+test("recorded operations and priced markets are reported together, not instead of each other", () => {
+  const matrix = capabilityMatrix("manual", ALL, [declared("feasibility"), declared("order")]);
+  const s = integrationSummary("manual", matrix, 3);
+  assert.match(s, /priced in 3 markets/);
+  assert.match(s, /2 operations configured/);
 });

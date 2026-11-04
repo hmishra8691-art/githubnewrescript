@@ -70,6 +70,8 @@ export async function GET(req: NextRequest) {
       const implemented = mode === "manual" ? MANUAL.capabilities : [];
       const matrix = capabilityMatrix(mode, implemented, recorded);
       const rates = integ ? pricing[integ.id] ?? [] : [];
+      // computed once: the summary sentence and the response field must agree about what is actually priced
+      const priced = pricedMarkets(rates);
       return {
         id: v.id, slug: v.slug, name: v.name, legalName: v.legalName, website: v.website, logoUrl: v.logoUrl,
         description: v.description, panelPreset: v.panelPreset, own: v.customerId !== null,
@@ -78,9 +80,9 @@ export async function GET(req: NextRequest) {
               currency: integ.currency, notes: integ.notes, enabled: integ.enabled, lastContactAt: integ.lastContactAt,
               lastError: integ.lastError }
           : null,
-        mode, summary: integrationSummary(mode, matrix), capabilities: matrix,
+        mode, summary: integrationSummary(mode, matrix, priced.length), capabilities: matrix,
         /** the markets this vendor can actually be priced in — not the markets it claims to cover */
-        pricedMarkets: pricedMarkets(rates),
+        pricedMarkets: priced,
         rateCardRows: rates.length,
         history: integ ? history[integ.id] ?? null : null,
       };
