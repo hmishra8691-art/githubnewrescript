@@ -324,11 +324,12 @@ two rows — 0072 already treats them as one preset.
 | **3 — Trust infrastructure** | RTID, `RTID_MATCH_KEY`, vendor participant mapping, participation ledger, atomic reservation, cross-vendor dedup in shadow mode | **0083** | **built, see §10** |
 | **4 — Fraud intelligence** | Admission gateway, access tokens, IP/device intelligence, admission scoring in the shared catalogue, quarantine and appeal | **0084** | **built, see §11** |
 | 5 — Advanced optimisation | Vendor quality engine, dynamic reallocation, fraud network graph, forecasting, model evaluation | 0085 | specified |
-| 6 — Production integrations | Live vendor adapters, webhooks, settlement reconciliation, monitoring, load and security testing | 0086 | **blocked on vendor contracts** |
+| **6 — Production integrations** | Transport (retry, backoff, circuit breaker), the Prolific adapter, webhook receipt and verification, settlement reconciliation | **0086** | **built, see §13.** Cint and load/security testing remain |
 
-Phase 6 cannot start until Miures holds credentials. Phases 1–5 are independent of that and
-deliver a working exchange over manually configured vendors, which is how a sample desk
-operates today and is a genuine product on its own.
+Phase 6 was planned as blocked on vendor contracts. Most of it turned out not to be: the
+transport, the webhook door, settlement reconciliation and one real adapter are all buildable
+against published documentation, and only *verification against a live account* needs the
+contract. What remains genuinely blocked is narrower than the original plan assumed — see §13.9.
 
 ---
 
@@ -862,14 +863,179 @@ errored — every time, silently, from a background job nobody watches. Fixed by
 | `auth-guard-audit.mjs` | 273 handlers — 0 problems |
 | `gen-public-docs.mjs --check` | current |
 
-**Not verified:** no browser suite, no Supabase project, and — the one that matters — still no traffic. Every
+**Not verified at the time:** no browser suite, no Supabase project, and — the one that matters — still no traffic. Every
 threshold on this page (45 for a cluster, 50 accepted completes for a score, 30 resolved cases for precision,
 5 points for a quality deviation) is a considered guess. The machinery to measure them now exists; the
 measurement does not.
 
 ---
 
-## 13. Decisions needed
+## 13. Phase 6 — what was built
+
+The plan called this phase blocked on vendor contracts. Most of it was not. A vendor's API
+documentation is public; what a contract buys is the right to *call* it. So the transport, the
+webhook door, settlement reconciliation and one complete adapter were all built against
+published documentation, and what remains blocked is only verification against a live account.
+
+Migration **`0086_live_integrations.sql`** adds `vendor_api_calls`, `vendor_circuit_state`,
+`vendor_webhook_receipts`, `settlement_reconciliations` and `settlement_differences`.
+
+### 13.1 Retry is a question about safety, not about failure
+
+`packages/recruitment/src/http.ts`. The useful question is never "did it fail" — it is "is
+trying again safe". A feasibility lookup may be retried freely. An order placement may not,
+unless the vendor de-duplicates on a key:
+
+```ts
+export function mayRetry(policy: RetryPolicy, status: number | null, method: string): boolean {
+  if (policy === "never") return false;
+  if (policy === "safe" && method !== "GET" && method !== "HEAD") return false;  // the caller is mistaken
+  if (status === null) return true;
+  return RETRYABLE_STATUS.has(status);
+}
+```
+
+A caller that marks a write as `safe` is refused rather than obeyed, because the cost of
+honouring that mistake is buying the same sample twice. And when a non-retryable write times
+out, the error says the order's state is **unknown** rather than that it failed — an operator
+told "failed" re-orders.
+
+Backoff is full jitter rather than a fixed ladder: equal backoff puts every client back on a
+recovering API at the same instant, which is how an outage is extended by the retries that
+followed it.
+
+### 13.2 A circuit breaker that admits what it cannot do
+
+A 400 does not trip the breaker. Our own malformed request must not take a working vendor
+offline for every project that includes it; only transport failures, 5xx and 429 count.
+
+More importantly, the in-process breaker is documented as a **fast path, not the truth**. On
+serverless hosting each invocation may be a cold process, so in-memory state is frequently
+empty and the breaker then behaves as if closed. A breaker that silently does nothing in
+production while passing its tests is worse than no breaker, so it takes an optional durable
+state store and `vendor_circuit_state` exists for one to be built on. Without it, it degrades
+to per-process — honest, and weak, and said so in the file.
+
+### 13.3 The Prolific adapter, and four things Prolific is not
+
+Written against `docs.prolific.com`: base `https://api.prolific.com/api/v1`,
+`Authorization: Token <token>`, `POST /eligibility-count/`, `POST /studies/` then
+`POST /studies/{id}/transition/`.
+
+Four constraints fall out of what Prolific actually is, rather than what the adapter interface
+would like it to be:
+
+- **It does not quote a CPI.** It pays a participant a reward and charges a fee. So `quote` is
+  not declared as a capability, and `maxSource` is `vendor_reported` — never `live`.
+- **Its eligibility count returns 0 to mean "fewer than five".** A privacy floor, not a
+  measurement. Writing that 0 into `available` would let the optimiser read "we may not tell
+  you" as "there is nobody" and silently drop a vendor with sample. It becomes `null` with the
+  reason attached.
+- **A match count is not a forecast of completes.** How many people fit the filters and how
+  many will take the study are different numbers, and the gap between them is the whole
+  recruitment problem. The estimate says which one it is.
+- **Only age is mapped to a real filter.** Prolific's other filter ids are account- and
+  locale-specific, discovered at runtime. A wrong `selected_values` is *accepted* by the API
+  and quietly recruits the wrong population — discovered weeks later, in the data. Every other
+  criterion is named in `unmapped` instead, and repeated on the order acknowledgement so the
+  operator learns it twice.
+
+Screeners are deliberately *not* listed as unmapped: they are asked inside the survey, so
+calling them dropped would be false.
+
+### 13.4 Why ordering is two calls
+
+A draft commits nothing; publishing spends money. Creating the draft first means an ambiguous
+timeout leaves an orphaned unpublished study — free, and deletable. A single combined call that
+timed out would leave a study that may or may not be live and may or may not be paying people.
+
+A publish failure therefore returns the draft id and says *nothing has been recruited and
+nothing has been spent*, with instructions to publish or delete it. `OrderRequest` gained an
+optional `audience`; ordering without one is refused outright, because on Prolific that
+recruits the general population and bills for it.
+
+### 13.5 The webhook door
+
+`webhook.ts` and `apps/studio/app/api/webhooks/vendors/[vendor]/route.ts`. This is the one
+endpoint a stranger is invited to call, and what arrives decides whether a supplier is paid.
+Three things must hold, each failing closed: **authentic** (constant-time HMAC over the exact
+bytes), **fresh** (a signed timestamp inside five minutes, in *both* directions — a future
+timestamp is how a replay is given a long life), and **new** (an event id not seen before).
+
+Verification runs over the **raw body**. Prolific's own example re-serialises a parsed body
+with `json.dumps`, which works only while both sides serialise identically; one difference in
+key order and a genuine event is rejected as a forgery. A test pins exactly that.
+
+**Nothing is dropped.** A forged, stale or unsigned delivery is stored with its verdict and
+quarantined. An endpoint that silently discards what it cannot verify is indistinguishable from
+a broken one, and it hides both an attacker probing it and an integration nobody finished
+configuring. A rising count of `bad_signature` and a rising count of `no_secret` are different
+problems, and both are invisible if unverifiable deliveries are thrown away.
+
+De-duplication is a unique index in the database, not a check in the handler. A select-then-insert
+loses the race between two simultaneous retries, and losing it means paying for one complete
+twice. `scripts/webhook-concurrency.sh` fires 24 simultaneous deliveries of one event id;
+exactly one is new.
+
+### 13.6 Three accounts of one order
+
+`settlement.ts`. At the end of a project there are three records of the same work — what the
+vendor claims, what the platform accepted, and what is payable once fraud holds are applied —
+and they are never quite the same.
+
+The temptation is to produce one number. That number is always wrong for somebody and, worse,
+hides *why*: a vendor shown "we owe you £4,120" cannot tell a quality rejection from a clerical
+mismatch. So there is a line per disagreement, each with its cause, and the total is reported
+three times.
+
+It reports **both directions**, including completes the platform accepted that the vendor has
+not billed for — the half a one-sided reconciliation misses entirely, and usually a sign the
+vendor's own records are incomplete. A price disagreement settles the participation at the
+agreed rate and reports the difference, rather than withholding the whole payment over a
+rounding dispute. Nothing here resolves anything: `settled_at` is set only by a human.
+
+### 13.7 Health that is observed rather than declared
+
+`rescript_vendor_health_recompute` computes `vendor_integrations.health` from the call log, so
+it stops being an operator's opinion. A vendor nobody has called is `unknown` — not healthy,
+not failing. The same refusal §12.2 makes about vendor quality.
+
+`vendor_api_calls` stores the **path only**. A query string on a recruitment API routinely
+carries a participant identifier, and this table is kept long enough for health trends — long
+enough that storing one would be a quiet re-identification surface sitting beside the registry
+§10 went to such lengths to keep hashed. A test asserts no stored path contains `?`.
+
+### 13.8 Verification
+
+| Check | Result |
+|---|---|
+| 0086 applied twice over the full chain | clean |
+| `scripts/live-integrations-sql-test.sql` | 8 assertions PASS |
+| `scripts/webhook-concurrency.sh` at 24 deliveries | PASS — exactly one new |
+| `packages/recruitment` | 146 pass (89 → 146) |
+| `quality` / `identity` / `access` / `schema` | 96 / 20 / 123 / 18 — all pass |
+| `tsc --noEmit` studio / runtime | 0 / 0 |
+| `dependency-boundaries.mjs` | 2,223 files, 11,166 imports — 0 violations |
+| `auth-guard-audit.mjs` | 273 handlers — 0 problems |
+
+### 13.9 What is still not built, and why
+
+**There is no Cint adapter.** `WebSearch` is disabled in the environment this was built in, and
+Cint's API documentation could not be read. Writing an adapter from memory would be precisely
+the misrepresentation the capability registry exists to prevent — a vendor appearing integrated
+when nothing has been checked. The Prolific adapter is the template; Cint needs its documentation
+and perhaps two hours.
+
+**Nothing has been run against a live account.** The adapter is written against published
+documentation and tested against scripted responses. Until a real call succeeds, every
+integration stays `verified_at = null`, and §8's rule holds: declared is not verified, and every
+surface shows the difference.
+
+**No load or security testing.** The original Phase 6 scope included both. Neither was done.
+
+---
+
+## 14. Decisions needed
 
 1. **Vendor contracts.** Nothing in Phase 6 can proceed without at least one sample-provider
    agreement. Cint's marketplace API and Prolific's API are the two with the lowest barrier.

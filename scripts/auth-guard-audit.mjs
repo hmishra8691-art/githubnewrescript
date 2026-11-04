@@ -104,6 +104,13 @@ const PUBLIC = {
     "marks in_progress responses idle past their survey's window as abandoned (RUNTIME-07): the same bearer-token "
     + "credential as the media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's first statement, "
     + "refusing everything when it is unset. It sweeps every survey, so there is no project to gate on — and no session",
+  "webhooks/vendors/[vendor]/route.ts":
+    "vendor event deliveries (0086): not a person and no session, and the sender is the public internet. "
+    + "Authenticated by the vendor's own HMAC signature over the RAW body plus its signed timestamp, checked "
+    + "before the body is parsed and refusing everything when no secret is configured. A delivery that fails "
+    + "verification is STORED AND QUARANTINED rather than acted on or dropped, because an endpoint that "
+    + "discards what it cannot verify hides both an attacker probing it and an integration nobody finished "
+    + "configuring. De-duplication is a unique index in the database, not a check in this handler",
   "cron/fraud-intelligence/route.ts":
     "the hourly cross-arrival pass (0085): the fraud network graph, vendor quality from real outcomes, project "
     + "forecasts, and the detector's own evaluation. The same bearer-token credential as the media job, checked "
