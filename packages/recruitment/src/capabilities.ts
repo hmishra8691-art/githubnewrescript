@@ -103,16 +103,33 @@ export function requireCapability(
  * A one-line description of what an organisation's relationship with a vendor currently is, for the marketplace
  * card. Deliberately plain: a researcher deciding where to spend $40,000 is owed a sentence, not a badge.
  */
-export function integrationSummary(mode: VendorMode, matrix: Record<VendorCapability, CapabilityState>): string {
+export function integrationSummary(
+  mode: VendorMode,
+  matrix: Record<VendorCapability, CapabilityState>,
+  /**
+   * How many markets this integration has a rate card for.
+   *
+   * The manual summary used to describe PRICING while reading only the capability matrix, which knows nothing
+   * about rate cards — so an integration with two priced markets and no recorded capabilities announced "no
+   * pricing configured yet" directly above a line reading "Rate card: 2 rows". Omitted, the sentence now talks
+   * about operations and makes no claim about pricing at all.
+   */
+  pricedMarketCount?: number,
+): string {
   if (mode === "awaiting") return "Awaiting integration — nothing can be ordered yet";
   if (mode === "inactive") return "Inactive";
   if (mode === "redirect_only") return "Recruitment links only — feasibility and orders are handled in the vendor's own dashboard";
   const verified = Object.values(matrix).filter((s) => s === "verified").length;
   const declared = Object.values(matrix).filter((s) => s === "declared").length;
   if (mode === "manual") {
-    return declared + verified === 0
-      ? "Manual — no pricing configured yet"
-      : `Manual — ${declared + verified} operation${declared + verified === 1 ? "" : "s"} configured, entered by an operator`;
+    const ops = declared + verified;
+    const opsPhrase = ops === 0
+      ? "an operator enters feasibility and orders by hand"
+      : `${ops} operation${ops === 1 ? "" : "s"} configured, entered by an operator`;
+    if (pricedMarketCount === undefined) return `Manual — ${opsPhrase}`;
+    return pricedMarketCount === 0
+      ? "Manual — no rate card yet, so nothing can be priced or compared"
+      : `Manual — priced in ${pricedMarketCount} market${pricedMarketCount === 1 ? "" : "s"}; ${opsPhrase}`;
   }
   if (verified === 0) return `API — ${declared} operation${declared === 1 ? "" : "s"} configured, none yet verified against the vendor`;
   return `API — ${verified} verified, ${declared} configured but not yet verified`;
