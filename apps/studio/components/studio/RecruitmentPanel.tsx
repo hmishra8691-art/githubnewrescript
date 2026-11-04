@@ -60,14 +60,34 @@ const int = (n: number | null | undefined) => (n === null || n === undefined ? "
 
 export function RecruitmentPanel() {
   const s = useStudio();
-  const [view, setView] = React.useState<"marketplace" | "recruitment">("marketplace");
+  /*
+   * Recruitment first. The marketplace is the administrator's view of the supply chain, and for everybody else
+   * it does not exist — the tab is absent rather than disabled, because a disabled tab labelled "Vendor
+   * marketplace" discloses that there are vendors and that somebody else manages them.
+   */
+  const [view, setView] = React.useState<"marketplace" | "recruitment">("recruitment");
+  const [canSeeVendors, setCanSeeVendors] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const r = await fetch("/api/recruitment/vendors", { cache: "no-store" });
+      /* a 403 is the answer, not an error: this account is not a platform administrator */
+      if (alive) setCanSeeVendors(r.ok);
+    })();
+    return () => { alive = false; };
+  }, []);
+
   return (
     <div className="sec">
-      <div className="row">
-        <button className={`btn small${view === "marketplace" ? " primary" : ""}`} onClick={() => setView("marketplace")}>Vendor marketplace</button>
-        <button className={`btn small${view === "recruitment" ? " primary" : ""}`} onClick={() => setView("recruitment")}>Smart recruitment</button>
-      </div>
-      {view === "marketplace" ? <Marketplace /> : <Recruitment surveyId={s.surveyDbId} />}
+      {canSeeVendors && (
+        <div className="row">
+          <button className={`btn small${view === "recruitment" ? " primary" : ""}`} onClick={() => setView("recruitment")}>Smart recruitment</button>
+          <button className={`btn small${view === "marketplace" ? " primary" : ""}`} onClick={() => setView("marketplace")}>Recruitment partners</button>
+          <span className="muted" style={{ fontSize: 12.5 }}>Partners are visible to platform administrators only</span>
+        </div>
+      )}
+      {canSeeVendors && view === "marketplace" ? <Marketplace /> : <Recruitment surveyId={s.surveyDbId} />}
     </div>
   );
 }
