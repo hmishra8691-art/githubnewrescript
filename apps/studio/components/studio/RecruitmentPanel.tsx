@@ -9,11 +9,12 @@ import { useStudio } from "./store";
  * the brief's §5 and §34: *nothing here may imply a capability that does not exist.* In practice that means:
  *
  *   - a capability is rendered as a WORD — "verified", "configured", "—" — never as a tick. A tick beside
- *     "Feasibility" reads as "we can ask them", and in Phase 1 nobody can ask anybody anything;
+ *     "Feasibility" reads as "we can ask them", and until a call has actually succeeded nobody knows that;
  *   - every price carries where it came from, and "Live quotation" is a provenance this build cannot produce,
  *     so the rate-card form does not offer it;
- *   - API mode is shown, disabled, with the reason. Hiding it would be tidier and would leave a reader thinking
- *     the platform simply has not got round to Dynata, rather than that no adapter exists yet;
+ *   - API mode is offered only for a vendor this build has an adapter for, and shown DISABLED WITH THE REASON
+ *     for the rest. Hiding it would be tidier and would leave a reader thinking the platform simply has not got
+ *     round to Dynata, rather than that nothing here can call Dynata;
  *   - the comparison ranks by cost per VALID ACCEPTED complete and shows the quoted CPI beside it, so the row
  *     that wins can be seen not to be the cheapest one;
  *   - a vendor that cannot be ranked stays in the table with its reason. Dropping it would read as "unavailable"
@@ -27,8 +28,9 @@ type Source = "live" | "vendor_reported" | "historical" | "administrator";
 interface VendorView {
   id: string; slug: string; name: string; legalName: string | null; website: string | null;
   description: string | null; panelPreset: string | null; own: boolean;
-  integration: { id: string; mode: Mode; health: string; markupBps: number; currency: string; notes: string | null; enabled: boolean } | null;
+  integration: { id: string; mode: Mode; health: string; markupBps: number; currency: string; notes: string | null; enabled: boolean; hasCredentials?: boolean } | null;
   mode: Mode; summary: string; capabilities: Record<string, CapState>;
+  hasLiveAdapter?: boolean; hasCredentials?: boolean;
   pricedMarkets: string[]; rateCardRows: number;
   history: { completes: number; rejectionRate: number | null; duplicateRate: number | null } | null;
 }
@@ -170,6 +172,8 @@ function VendorForm({ vendor, busy, onSave }: {
   const [markup, setMarkup] = React.useState(String(vendor.integration?.markupBps ?? 0));
   const [currency, setCurrency] = React.useState(vendor.integration?.currency ?? "USD");
   const [rate, setRate] = React.useState({ market: "US", irMin: "0", irMax: "100", loiMin: "0", loiMax: "120", cpi: "", source: "vendor_reported" as Source });
+  /* never pre-filled from the server: a sealed token is not readable, and an empty box keeps the one already stored */
+  const [token, setToken] = React.useState("");
 
   return (
     <div className="sec">
@@ -180,7 +184,14 @@ function VendorForm({ vendor, busy, onSave }: {
             {(["manual", "redirect_only", "awaiting", "inactive"] as Mode[]).map((m) => (
               <option key={m} value={m}>{MODE_LABEL[m]}</option>
             ))}
-            <option value="api" disabled>API — no adapter exists yet</option>
+            {/*
+              * Offered only where this build has an adapter for THIS vendor. Shown-but-disabled elsewhere, with
+              * the reason: hiding it would read as "the platform has not got round to Dynata" rather than
+              * "nothing here can call Dynata".
+              */}
+            <option value="api" disabled={!vendor.hasLiveAdapter}>
+              {vendor.hasLiveAdapter ? "API — calls the vendor directly" : "API — no adapter for this vendor yet"}
+            </option>
           </select>
         </label>
         <label className="f">
@@ -193,8 +204,28 @@ function VendorForm({ vendor, busy, onSave }: {
         </label>
         <button className="btn primary small" disabled={busy} onClick={() => void onSave({
           action: "integration", vendorId: vendor.id, mode, markupBps: Number(markup) || 0, currency,
+          ...(mode === "api" && token.trim() ? { token: token.trim() } : {}),
         })}>Save</button>
       </div>
+
+      {mode === "api" && (
+        <div className="row">
+          <label className="f grow">
+            <span className="muted">
+              API token{vendor.integration?.hasCredentials ? " — one is already stored; leave blank to keep it" : ""}
+            </span>
+            <input
+              className="input mono" type="password" autoComplete="off" value={token}
+              placeholder={vendor.integration?.hasCredentials ? "•••• stored" : "paste the vendor's API token"}
+              onChange={(e) => setToken(e.target.value)}
+            />
+          </label>
+          <p className="muted" style={{ fontSize: 12.5, maxWidth: 460 }}>
+            Sealed with your organisation&rsquo;s key and never shown again — only a masked hint. Saving in API
+            mode does not mark anything verified: that happens when a call to the vendor actually succeeds.
+          </p>
+        </div>
+      )}
 
       {vendor.integration && (
         <>

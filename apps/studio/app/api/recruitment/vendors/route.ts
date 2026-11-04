@@ -85,10 +85,15 @@ export async function GET(req: NextRequest) {
         description: v.description, panelPreset: v.panelPreset, own: v.customerId !== null,
         integration: integ
           ? { id: integ.id, mode: integ.mode, health: integ.health, hint: integ.hint, markupBps: integ.markupBps,
+              hasCredentials: integ.hasCredentials,
               currency: integ.currency, notes: integ.notes, enabled: integ.enabled, lastContactAt: integ.lastContactAt,
               lastError: integ.lastError }
           : null,
         mode, summary: integrationSummary(mode, matrix, priced.length), capabilities: matrix,
+        /* whether THIS build can talk to THIS vendor, so the form offers API mode only where it would work */
+        hasLiveAdapter: hasLiveAdapter(v.slug),
+        /* whether a token is already sealed — never the token, and never the ciphertext */
+        hasCredentials: integ?.hasCredentials === true,
         /** the markets this vendor can actually be priced in — not the markets it claims to cover */
         pricedMarkets: priced,
         rateCardRows: rates.length,
