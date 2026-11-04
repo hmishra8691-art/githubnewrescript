@@ -345,7 +345,8 @@ export function recruitmentStore() {
 
     async allocations(projectId: string, revision?: number) {
       let q = db.from("sample_allocations")
-        .select("id, revision, integration_id, allocated_completes, cpi, currency, expected_valid_completes, cost_per_valid_complete, expected_delivery_days, rationale, created_at")
+        /* `market` added by 0082 and never selected here, so nothing downstream could group an allocation by market */
+        .select("id, revision, integration_id, market, allocated_completes, cpi, currency, expected_valid_completes, cost_per_valid_complete, expected_delivery_days, rationale, created_at")
         .eq("recruitment_project_id", projectId);
       if (revision !== undefined) q = q.eq("revision", revision);
       const { data, error } = await q.order("revision", { ascending: false });

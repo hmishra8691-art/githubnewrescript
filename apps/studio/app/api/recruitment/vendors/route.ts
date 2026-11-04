@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { PRICING_SOURCES, VENDOR_CAPABILITIES, VENDOR_MODES, type PricingSource, type VendorCapability, type VendorMode } from "@rescript/schema";
 import { capabilityMatrix, integrationSummary, createManualAdapter, pricedMarkets, hasLiveAdapter, LIVE_ADAPTER_SLUGS } from "@rescript/recruitment";
 import { audit, isFailure, requireUser } from "@/lib/guard";
-import { noStore, recruitmentActor, refuseManage } from "@/lib/recruitment/access";
+import { noStore, recruitmentActor, refuseVendorVisibility } from "@/lib/recruitment/access";
 import { sealCredentials, credentialsKeyReady } from "@/lib/recruitment/credentials";
 import { recruitmentStore } from "@/lib/recruitment/store";
 
@@ -22,8 +22,13 @@ export const runtime = "nodejs";
  *   POST { action: "pricing", integrationId, market, irMin, irMax, loiMin, loiMax, cpi, currency, source, sourceNote?, validFrom?, validTo? }
  *   DELETE ?pricing=<id>                       remove a rate-card row
  *
- * Reading and changing: the organisation's programmers, researchers and administrators (lib/recruitment/access.ts).
- * CPI and margin are commercial information about the organisation, so clients and viewers see none of this.
+ * Reading and changing: PLATFORM ADMINISTRATORS ONLY (lib/recruitment/access.ts, `canSeeVendors`).
+ *
+ * Narrowed from "programmers, researchers and administrators": a researcher plans recruitment, authorises
+ * spend and reads the dashboard without ever learning which panel company supplied a complete. That is a
+ * commercial requirement about the supply chain, and the only version of it that holds is the API never
+ * sending the information — a field that reaches the browser has reached the researcher, whatever the
+ * component rendered.
  *
  * PHASE 1 HAS NO LIVE VENDOR ADAPTER. `mode: "api"` is refused here with the reason, because an API integration
  * needs sealed credentials and there is no adapter to use them — and a mode that claims an API this platform
@@ -44,7 +49,7 @@ export async function GET(req: NextRequest) {
   const authed = await requireUser(req);
   const actor = recruitmentActor(authed);
   if (isFailure(actor)) return actor.response;
-  if (!actor.canManage) return refuseManage();
+  if (!actor.canSeeVendors) return refuseVendorVisibility();
 
   const store = recruitmentStore();
   const [vendors, integrations, capabilities, pricing] = await Promise.all([
@@ -108,7 +113,7 @@ export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
   const actor = recruitmentActor(authed);
   if (isFailure(actor)) return actor.response;
-  if (!actor.canManage) return refuseManage();
+  if (!actor.canSeeVendors) return refuseVendorVisibility();
 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return noStore({ error: "bad json" }, 400); }
@@ -241,7 +246,7 @@ export async function DELETE(req: NextRequest) {
   const authed = await requireUser(req);
   const actor = recruitmentActor(authed);
   if (isFailure(actor)) return actor.response;
-  if (!actor.canManage) return refuseManage();
+  if (!actor.canSeeVendors) return refuseVendorVisibility();
   const id = req.nextUrl.searchParams.get("pricing");
   if (!id) return noStore({ error: "pricing is required" }, 400);
   const gone = await recruitmentStore().deletePricing(actor.customerId, id);

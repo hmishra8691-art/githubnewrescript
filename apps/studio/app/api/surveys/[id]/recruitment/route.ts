@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
   allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
-  selectPricing, totalCost, type AllocationCandidate, type FeasibilityInput,
+  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, type AllocationCandidate, type FeasibilityInput,
 } from "@rescript/recruitment";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { liveRegistry, LIVE_FEASIBILITY_MS } from "@/lib/recruitment/live";
+import { researcherPlan } from "@/lib/recruitment/abstraction";
 import { openCredentials } from "@/lib/recruitment/credentials";
 import { supabaseService } from "@/lib/authServer";
 import { noStore, recruitmentActor, refuseSpend } from "@/lib/recruitment/access";
@@ -165,16 +166,63 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const required = Number(project?.required_completes ?? 0);
   const budget = Number(project?.budget_amount ?? 0);
 
-  return noStore({
-    ok: true,
-    liveAdaptersAvailable: false,
-    project: project ?? null,
+  /*
+   * TWO PAYLOADS, NOT ONE FILTERED.
+   *
+   * A researcher gets the plan and the progress; a platform administrator additionally gets the supply chain
+   * behind it. The researcher's version is BUILT, not stripped — the per-vendor arrays are never spread into
+   * it — because a `{ ...row }` written in a hurry is exactly how a vendor field comes back, and a filter can
+   * only remove what somebody remembered to list.
+   *
+   * `lib/recruitment/abstraction.ts` holds the mapper, and its test walks the result for forbidden keys and for
+   * this organisation's own vendor names, so the guarantee is checked rather than asserted in a comment.
+   */
+  const supplyChain = actor.canSeeVendors ? {
     comparison: { rows, source },
-    markets, capacity,
-    /** the audience the study is currently looking for, from the definition (0082 / define_audience) */
-    audience: audienceFor?.audience ?? null,
+    capacity,
     allocations: allocations.map((a) => ({ ...a, vendorName: vendorNames.get(String(a.integration_id)) ?? null })),
     orders: orders.map((o) => ({ ...o, vendorName: vendorNames.get(String(o.integration_id)) ?? null })),
+    liveAdaptersAvailable: LIVE_ADAPTER_SLUGS.length > 0,
+  } : {};
+
+  const plan = researcherPlan({
+    currency: String(project?.budget_currency ?? "USD"),
+    requiredCompletes: required,
+    markets: (markets as Array<Record<string, unknown>>).map((m) => {
+      const code = String(m.market);
+      const forMarket = allocations.filter((a) => String(a.market ?? "") === code);
+      const ordersFor = orders.filter((o) => forMarket.some((a) => a.integration_id === o.integration_id));
+      return {
+        market: code,
+        required: Number(m.required_completes ?? 0),
+        allocated: forMarket.reduce((t, a) => t + Number(a.allocated_completes ?? 0), 0),
+        delivered: ordersFor.reduce((t, o) => t + Number(o.delivered_completes ?? 0), 0),
+        accepted: ordersFor.reduce((t, o) => t + Number(o.accepted_completes ?? 0), 0),
+        cost: forMarket.reduce((t, a) => t + Number(a.allocated_completes ?? 0) * Number(a.cpi ?? 0), 0),
+        expectedDeliveryDays: forMarket.length
+          ? Math.max(...forMarket.map((a) => Number(a.expected_delivery_days ?? 0)))
+          : null,
+      };
+    }),
+    sourceCount: new Set(allocations.map((a) => String(a.integration_id))).size,
+    price: budget,
+    feasible: rows.some((r) => r.rankable),
+    shortfall: Math.max(required - accepted, 0),
+    expectedDeliveryDays: null,
+    qualityScore: null,
+    qualityConfidence: "none",
+  });
+
+  return noStore({
+    ok: true,
+    project: project ?? null,
+    markets,
+    /** the audience the study is currently looking for, from the definition (0082 / define_audience) */
+    audience: audienceFor?.audience ?? null,
+    /** one plan, in markets — never a per-source breakdown */
+    plan,
+    canSeeVendors: actor.canSeeVendors,
+    ...supplyChain,
     events,
     totals: {
       required, accepted, delivered, rejected, duplicates,
