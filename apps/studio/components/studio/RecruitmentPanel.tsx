@@ -73,7 +73,7 @@ export function RecruitmentPanel() {
 /* ------------------------------------------------------------ the marketplace */
 
 function Marketplace() {
-  const [data, setData] = React.useState<{ vendors: VendorView[]; liveAdaptersAvailable: boolean } | null>(null);
+  const [data, setData] = React.useState<{ vendors: VendorView[]; liveAdaptersAvailable: boolean; liveAdapterVendors?: string[] } | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState<string | null>(null);
@@ -102,11 +102,18 @@ function Marketplace() {
 
   return (
     <div className="sec">
-      {!data.liveAdaptersAvailable && (
+      {!data.liveAdaptersAvailable ? (
         <p className="chip warn">
           No live vendor adapter exists yet. Every relationship below is manual: an operator enters feasibility,
           prices and orders, and reconciles against the vendor&rsquo;s own invoice. Live API integrations arrive
           once the vendor contracts are in place.
+        </p>
+      ) : (
+        <p className="chip">
+          {(data.liveAdapterVendors ?? []).join(", ")} can be set to API mode, which needs an API token and
+          calls the vendor directly. Every other relationship here is manual: an operator enters feasibility,
+          prices and orders, and reconciles against the vendor&rsquo;s own invoice. No integration is shown as
+          verified until a call to that vendor has actually succeeded.
         </p>
       )}
       {error && <p className="chip warn">{error}</p>}

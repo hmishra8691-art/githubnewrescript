@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { PRICING_SOURCES, VENDOR_CAPABILITIES, VENDOR_MODES, type PricingSource, type VendorCapability, type VendorMode } from "@rescript/schema";
-import { capabilityMatrix, integrationSummary, createManualAdapter, pricedMarkets, hasLiveAdapter } from "@rescript/recruitment";
+import { capabilityMatrix, integrationSummary, createManualAdapter, pricedMarkets, hasLiveAdapter, LIVE_ADAPTER_SLUGS } from "@rescript/recruitment";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 import { noStore, recruitmentActor, refuseManage } from "@/lib/recruitment/access";
 import { sealCredentials, credentialsKeyReady } from "@/lib/recruitment/credentials";
@@ -60,8 +60,16 @@ export async function GET(req: NextRequest) {
     ok: true,
     /** every mode and capability the UI may offer, so the client never invents one */
     modes: VENDOR_MODES, capabilities: VENDOR_CAPABILITIES, sources: PRICING_SOURCES,
-    /** Phase 1: no adapter speaks to a vendor, and the UI says so rather than offering a switch that lies */
-    liveAdaptersAvailable: false,
+    /*
+     * Which vendors this build can actually talk to (Phase 6b). Hardcoded `false` in Phase 1, when it was
+     * true — and left behind when the first adapter landed, so the marketplace kept announcing that no live
+     * adapter existed while refusing to explain why Prolific could nonetheless be set to API mode.
+     *
+     * The UI shows the banner when this list is empty, and names the vendors when it is not, so a researcher
+     * reads "every relationship here is manual" only when that is the case.
+     */
+    liveAdaptersAvailable: LIVE_ADAPTER_SLUGS.length > 0,
+    liveAdapterVendors: vendors.filter((v) => LIVE_ADAPTER_SLUGS.includes(v.slug)).map((v) => v.name),
     vendors: vendors.map((v) => {
       const integ = byVendor.get(v.id) ?? null;
       const mode: VendorMode = integ?.mode ?? "awaiting";
