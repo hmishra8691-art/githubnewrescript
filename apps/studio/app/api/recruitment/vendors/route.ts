@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
 import { PRICING_SOURCES, VENDOR_CAPABILITIES, VENDOR_MODES, type PricingSource, type VendorCapability, type VendorMode } from "@rescript/schema";
-import { capabilityMatrix, integrationSummary, createManualAdapter, pricedMarkets } from "@rescript/recruitment";
+import { capabilityMatrix, integrationSummary, createManualAdapter, pricedMarkets, hasLiveAdapter } from "@rescript/recruitment";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 import { noStore, recruitmentActor, refuseManage } from "@/lib/recruitment/access";
+import { sealCredentials, credentialsKeyReady } from "@/lib/recruitment/credentials";
 import { recruitmentStore } from "@/lib/recruitment/store";
 
 export const dynamic = "force-dynamic";
@@ -108,11 +109,44 @@ export async function POST(req: NextRequest) {
 
       const mode = body.mode === undefined ? undefined : String(body.mode) as VendorMode;
       if (mode !== undefined && !VENDOR_MODES.includes(mode)) return noStore({ error: `mode must be one of ${VENDOR_MODES.join(", ")}` }, 400);
+      /*
+       * API MODE (Phase 6b). Phase 1 refused this for every vendor, which was true while no adapter existed.
+       * Now it is refused only where it is still true — a vendor this build cannot talk to — and otherwise
+       * requires credentials, because 0081's own constraint will not accept an `api` row without them and a
+       * mode that claims an API with nothing behind it is the misrepresentation the marketplace exists to
+       * prevent.
+       */
+      let sealedCredentials: { sealed: string; keyId: string; hint: string } | null = null;
       if (mode === "api") {
-        return noStore({
-          error: "No live vendor adapter exists yet, so this integration cannot be set to API mode. Use Manual while an operator enters feasibility and orders by hand; live adapters arrive with vendor contracts.",
-          code: "no_live_adapter",
-        }, 409);
+        const vendor = vendors.find((v) => v.id === vendorId);
+        const slug = String(vendor?.slug ?? "");
+        if (!hasLiveAdapter(slug)) {
+          return noStore({
+            error: `This build has no adapter for ${vendor?.name ?? "this vendor"}, so it cannot be set to API mode. Use Manual while an operator enters feasibility and orders by hand.`,
+            code: "no_live_adapter",
+          }, 409);
+        }
+        const ready = credentialsKeyReady();
+        if (!ready.ok) return noStore({ error: ready.reason, code: "no_envelope_key" }, 409);
+
+        const token = typeof body.token === "string" ? body.token.trim() : "";
+        const existingRow = await store.integrations(actor.customerId);
+        const already = existingRow.find((i) => i.vendorId === vendorId)?.hasCredentials === true;
+        if (!token && !already) {
+          return noStore({
+            error: "API mode needs an API token. It is sealed with the organisation's key and shown again only as a masked hint.",
+            code: "credentials_required",
+          }, 400);
+        }
+        if (token) {
+          /*
+           * The AAD binds the ciphertext to the integration row, so the id must exist first. An integration
+           * that does not exist yet is created in `awaiting` and promoted once its credentials are sealed —
+           * two writes, but never an `api` row without credentials, which the database would reject anyway.
+           */
+          const base = await store.upsertIntegration(actor.customerId, vendorId, { mode: "awaiting" }, actor.userId);
+          sealedCredentials = sealCredentials(actor.customerId, base.id, { token });
+        }
       }
       const markupBps = num(body.markupBps);
       if (markupBps !== null && (markupBps < 0 || markupBps > 10_000)) return noStore({ error: "markupBps must be between 0 and 10000" }, 400);
@@ -120,6 +154,11 @@ export async function POST(req: NextRequest) {
       if (currency !== undefined && !CURRENCY.test(currency)) return noStore({ error: "currency must be a three-letter code" }, 400);
 
       const row = await store.upsertIntegration(actor.customerId, vendorId, {
+        ...(sealedCredentials ? {
+          credentialsSealed: sealedCredentials.sealed,
+          credentialsKeyId: sealedCredentials.keyId,
+          hint: sealedCredentials.hint,
+        } : {}),
         ...(mode !== undefined ? { mode } : {}),
         ...(markupBps !== null ? { markupBps } : {}),
         ...(currency !== undefined ? { currency } : {}),

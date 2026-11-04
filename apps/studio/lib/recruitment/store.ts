@@ -41,11 +41,17 @@ export interface IntegrationRow {
   currency: string;
   notes: string | null;
   enabled: boolean;
+  /** whether a sealed API credential exists. Never the credential itself, and never the ciphertext. */
+  hasCredentials: boolean;
 }
 
 const VENDOR_COLUMNS = "id, customer_id, slug, name, legal_name, website, logo_url, regions, description, panel_preset, status";
 // never `credentials_sealed`, never `credentials_key_id`
-const INTEGRATION_COLUMNS = "id, vendor_id, mode, hint, health, last_contact_at, last_error, markup_bps, currency, notes, enabled";
+/*
+ * `credentials_sealed` is selected only so its PRESENCE can be reported. It is turned into a boolean in the
+ * mapper below and never leaves this file, so no route can serialise the blob into a response by accident.
+ */
+const INTEGRATION_COLUMNS = "id, vendor_id, mode, hint, health, last_contact_at, last_error, markup_bps, currency, notes, enabled, credentials_sealed";
 const PRICING_COLUMNS = "id, integration_id, market, ir_min, ir_max, loi_min, loi_max, cpi, currency, source, source_note, valid_from, valid_to";
 
 const vendor = (r: Record<string, unknown>): VendorRow => ({
@@ -62,6 +68,7 @@ const integration = (r: Record<string, unknown>): IntegrationRow => ({
   lastContactAt: (r.last_contact_at as string | null) ?? null, lastError: (r.last_error as string | null) ?? null,
   markupBps: Number(r.markup_bps ?? 0), currency: String(r.currency ?? "USD"),
   notes: (r.notes as string | null) ?? null, enabled: r.enabled !== false,
+  hasCredentials: typeof r.credentials_sealed === "string" && r.credentials_sealed.length > 0,
 });
 
 const pricing = (r: Record<string, unknown>): VendorPricingRow => ({
@@ -166,8 +173,26 @@ export function recruitmentStore() {
 
     /* ------------------------------------------------------------ writes */
 
+    /**
+     * The sealed credential for ONE integration, read only when a call is about to be made.
+     *
+     * Deliberately not part of `integrations()`: a list query that carried every organisation's ciphertext
+     * would put it in memory on every page load of the marketplace, for no reason. The caller opens it with
+     * lib/recruitment/credentials.ts and never returns it.
+     */
+    async sealedCredentials(customerId: string, integrationId: string): Promise<string | null> {
+      const { data, error } = await db.from("vendor_integrations")
+        .select("credentials_sealed")
+        .eq("id", integrationId).eq("customer_id", customerId).maybeSingle();
+      if (error) throw new Error(error.message);
+      const sealed = (data as { credentials_sealed?: string | null } | null)?.credentials_sealed;
+      return typeof sealed === "string" && sealed.length > 0 ? sealed : null;
+    },
+
     async upsertIntegration(customerId: string, vendorId: string, patch: {
       mode?: VendorMode; markupBps?: number; currency?: string; notes?: string | null; enabled?: boolean;
+      /* sealed by lib/recruitment/credentials.ts; this store never sees a plaintext token (0086) */
+      credentialsSealed?: string; credentialsKeyId?: string; hint?: string;
     }, actor: string): Promise<IntegrationRow> {
       const existing = await db.from("vendor_integrations").select("id")
         .eq("customer_id", customerId).eq("vendor_id", vendorId).maybeSingle();
@@ -177,6 +202,9 @@ export function recruitmentStore() {
       if (patch.currency !== undefined) row.currency = patch.currency;
       if (patch.notes !== undefined) row.notes = patch.notes;
       if (patch.enabled !== undefined) row.enabled = patch.enabled;
+      if (patch.credentialsSealed !== undefined) row.credentials_sealed = patch.credentialsSealed;
+      if (patch.credentialsKeyId !== undefined) row.credentials_key_id = patch.credentialsKeyId;
+      if (patch.hint !== undefined) row.hint = patch.hint;
 
       if (existing.data?.id) {
         const { data, error } = await db.from("vendor_integrations").update(row)
