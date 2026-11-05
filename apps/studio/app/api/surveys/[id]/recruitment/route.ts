@@ -143,6 +143,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (isFailure(actor)) return actor.response;
 
   const store = recruitmentStore();
+  const db = supabaseService();
   const project = await store.project(params.id);
   const audienceFor = project
     ? { ...project, audience: await loadAudience(project.audience_spec_id as string | null) }
@@ -185,6 +186,19 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     liveAdaptersAvailable: LIVE_ADAPTER_SLUGS.length > 0,
   } : {};
 
+  /*
+   * Quota progress (0088). Counts and targets only — a quota cell is the researcher's own targeting and
+   * carries nothing about the supply chain, so unlike the commercial figures it is not narrowed to
+   * administrators.
+   */
+  const quotas = project
+    ? (await db.from("quota_progress")
+        .select("cell_id, label, dimension, target, accepted, in_progress, turned_away, last_complete_at")
+        .eq("recruitment_project_id", project.id as string)
+        .order("dimension", { ascending: true })
+        .order("cell_id", { ascending: true })).data ?? []
+    : [];
+
   const plan = researcherPlan({
     currency: String(project?.budget_currency ?? "USD"),
     requiredCompletes: required,
@@ -221,6 +235,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     audience: audienceFor?.audience ?? null,
     /** one plan, in markets — never a per-source breakdown */
     plan,
+    quotas,
     canSeeVendors: actor.canSeeVendors,
     ...supplyChain,
     events,

@@ -338,6 +338,7 @@ interface RecruitmentData {
   budget?: BudgetView;
   audience?: Record<string, unknown> | null;
   plan?: ResearcherPlanView;
+  quotas?: QuotaRow[];
   /*
    * OPTIONAL, and that is the point. These arrive only for platform administrators; for everybody else they
    * are absent, not empty. Typing them as required is what let the panel read `data.comparison.source` on a
@@ -384,6 +385,122 @@ interface PlanVerdictView {
  * lever that would move it — more budget, more time, or a market nobody has priced — rather than a general
  * complaint that the plan does not work.
  */
+interface QuotaRow {
+  cell_id: string; label: string; dimension: string;
+  target: number; accepted: number; in_progress: number; turned_away: number;
+  last_complete_at: string | null;
+}
+
+/** A bar that shows overshoot rather than capping at full — somebody paid for those completes. */
+function Bar({ done, target }: { done: number; target: number }) {
+  const pct = target > 0 ? (done / target) * 100 : 0;
+  const over = pct > 100;
+  return (
+    <div style={{ background: "rgba(0,0,0,.07)", borderRadius: 3, height: 6, width: "100%", position: "relative" }}>
+      <div style={{
+        width: `${Math.min(pct, 100)}%`, height: "100%", borderRadius: 3,
+        background: over ? "#b54708" : pct >= 100 ? "#067647" : "#4338ca",
+      }} />
+    </div>
+  );
+}
+
+/**
+ * THE RECRUITMENT DASHBOARD.
+ *
+ * Everything here is a COUNT, not a projection — what arrived, what was accepted, what each quota cell holds.
+ * The one forecast on the page is labelled as one and comes from the engine that refuses to produce it below
+ * thirty completes and six hours, so an empty project shows "not enough yet" rather than a date.
+ */
+function DashboardCard({ plan, quotas }: { plan: ResearcherPlanView; quotas: QuotaRow[] }) {
+  const accepted = plan.markets.reduce((s, m) => s + m.accepted, 0);
+  const delivered = plan.markets.reduce((s, m) => s + m.delivered, 0);
+  const required = plan.requiredCompletes;
+  const remaining = Math.max(required - accepted, 0);
+
+  return (
+    <div className="card" data-testid="recruitment-dashboard">
+      <div className="row">
+        <strong className="grow">Recruitment progress</strong>
+        <span className="muted" style={{ fontSize: 12.5 }}>
+          {accepted.toLocaleString()} of {required.toLocaleString()} accepted
+        </span>
+      </div>
+      <Bar done={accepted} target={required} />
+
+      <div className="row" style={{ gap: 24, flexWrap: "wrap", marginTop: 10 }}>
+        <div><div className="muted" style={{ fontSize: 12 }}>Accepted</div><strong>{int(accepted)}</strong></div>
+        <div><div className="muted" style={{ fontSize: 12 }}>Delivered</div><strong>{int(delivered)}</strong></div>
+        <div><div className="muted" style={{ fontSize: 12 }}>Remaining</div><strong>{int(remaining)}</strong></div>
+        <div><div className="muted" style={{ fontSize: 12 }}>Budget</div><strong>{money(plan.price, plan.currency)}</strong></div>
+        <div><div className="muted" style={{ fontSize: 12 }}>Per complete</div><strong>{money(plan.pricePerComplete, plan.currency)}</strong></div>
+        <div>
+          <div className="muted" style={{ fontSize: 12 }}>Quality</div>
+          <strong>{plan.quality.score === null ? "not yet measured" : plan.quality.score.toFixed(0)}</strong>
+        </div>
+      </div>
+
+      {delivered === 0 && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          Nothing has arrived yet. These are counts, not forecasts — a completion date appears once there is
+          enough field history to project one honestly.
+        </p>
+      )}
+
+      {plan.markets.length > 0 && (
+        <>
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 2, marginTop: 10 }}>By market</p>
+          <table className="grid">
+            <thead><tr><th>Market</th><th>Target</th><th>Accepted</th><th>Progress</th><th>Days</th></tr></thead>
+            <tbody>
+              {plan.markets.map((m) => (
+                <tr key={m.market}>
+                  <td className="mono">{m.market}</td>
+                  <td className="mono">{int(m.required)}</td>
+                  <td className="mono">{int(m.accepted)}</td>
+                  <td style={{ minWidth: 120 }}><Bar done={m.accepted} target={m.required} /></td>
+                  <td className="mono">{m.expectedDeliveryDays === null ? "—" : m.expectedDeliveryDays.toFixed(0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {quotas.length > 0 && (
+        <>
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 2, marginTop: 12 }}>Quotas</p>
+          <table className="grid" data-testid="quota-progress">
+            <thead><tr><th>Cell</th><th>Dimension</th><th>Target</th><th>Accepted</th><th>Progress</th><th>In progress</th><th>Turned away</th></tr></thead>
+            <tbody>
+              {quotas.map((q) => {
+                const over = q.target > 0 && q.accepted > q.target;
+                const full = q.target > 0 && q.accepted >= q.target;
+                return (
+                  <tr key={q.cell_id}>
+                    <td>
+                      {q.label || q.cell_id}
+                      {over && <div style={{ color: "#b54708", fontSize: 12 }}>over by {int(q.accepted - q.target)}</div>}
+                      {full && !over && <div className="muted" style={{ fontSize: 12 }}>full</div>}
+                    </td>
+                    <td className="muted mono" style={{ fontSize: 12.5 }}>{q.dimension}</td>
+                    <td className="mono">{q.target > 0 ? int(q.target) : "—"}</td>
+                    <td className="mono">{int(q.accepted)}</td>
+                    <td style={{ minWidth: 120 }}><Bar done={q.accepted} target={q.target} /></td>
+                    <td className="mono">{int(q.in_progress)}</td>
+                    {/* the number that justifies changing a quota: people who matched but found it full */}
+                    <td className="mono">{q.turned_away > 0 ? int(q.turned_away) : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
 function VerdictCard({ v, onApply }: { v: PlanVerdictView; onApply?: (patch: Record<string, unknown>) => void }) {
   const tone =
     v.verdict === "achievable" ? { label: "Achievable", colour: "#067647" }
@@ -659,6 +776,8 @@ function Recruitment({ surveyId }: { surveyId: string }) {
           )}
         </div>
       )}
+
+      {data.project && data.plan && <DashboardCard plan={data.plan} quotas={data.quotas ?? []} />}
 
       {data.plan && (
         <div className="card">
