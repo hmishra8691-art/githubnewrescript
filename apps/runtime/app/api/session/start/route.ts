@@ -8,6 +8,7 @@ import type { PanelConfig } from "@rescript/schema";
 import { panelParams, runtimePanels } from "@/lib/panels";
 import { admitArrival, attachParticipation } from "@/lib/identity";
 import { redeemAccessToken } from "@/lib/gateway";
+import { claimedFor, holdSlot, quotaProject } from "@/lib/quota";
 import { sessionAllowed } from "@/lib/metering";
 import { sandboxAvailable, sandboxRow, sandboxSurvey, sandboxSurveyId, startSandboxSession } from "@/lib/sessionSandbox";
 
@@ -227,6 +228,22 @@ export async function POST(req: NextRequest) {
   if ("error" in session) return NextResponse.json({ error: session.error }, { status: 403 });
   if (panels && panelEntry?.kind === "admitted") await panels.attach(panelEntry.entryId, session.sessionId);
   if (admission.ledgerId) await attachParticipation(admission.ledgerId, session.sessionId);
+
+  /*
+   * QUOTA HOLD (0089). A slot in every cell the vendor's claim puts this respondent in, so a cell with ten
+   * places left is not oversold to the fifty people already answering.
+   *
+   * Taken here and not at /r/ because this is the first moment there is a row to hang it on: a hold with no
+   * session is a hold nothing can release, and a respondent who closes the tab would keep it for ever. The
+   * database makes it idempotent on the session id, so a reload or a second tab reserves nothing further.
+   *
+   * TEST sessions hold nothing. A programmer running the survey ten times must not close a cell the field is
+   * still filling — the same reason `increment_quota_counts` has counted test and live apart since 0006.
+   */
+  if (!isTest) {
+    const project = await quotaProject(d.surveyId);
+    if (project?.mapped) await holdSlot(project.id, session.sessionId, claimedFor(project, panelParams(urlParams)));
+  }
 
   /*
    * PHASE 4 (0084) — THE ACCESS TOKEN. An arrival that came through /r/<client>/<study> carries `at`: a

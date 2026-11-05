@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { BLOCKING_STATUSES, loadDeployment } from "@/lib/deployment";
 import { clientIp } from "@rescript/quality/server";
 import { admitArrival } from "@/lib/identity";
-import { runGateway, type AdmissionMode } from "@/lib/gateway";
+import { runGateway } from "@/lib/gateway";
 import { panelParams, runtimePanels } from "@/lib/panels";
+import { doorCheck, quotaProject, recordTurnedAway } from "@/lib/quota";
 import type { PanelConfig } from "@rescript/schema";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +31,13 @@ export const runtime = "nodejs";
  * OPEN at every step: an unmigrated database, a missing key, an unreachable table all send the respondent to
  * the survey exactly as the plain link would have. A gateway that can take a study offline is worse than no
  * gateway.
+ *
+ * ## The one refusal that is not about fraud (0088 / 0089)
+ *
+ * A full quota cell. It is checked here, at the door, because this is the only moment at which turning
+ * somebody away is cheap: thirty seconds, against the twenty minutes of a survey they would be owed an
+ * incentive for either way. A respondent refused for a full cell is sent to the vendor's QUOTA FULL end link,
+ * which is a different outcome from a screen-out in every panel's reconciliation and is paid differently.
  */
 
 function surveyUrl(req: NextRequest, client: string, study: string, token: string | null): URL {
@@ -83,12 +90,43 @@ export async function GET(req: NextRequest, { params }: { params: { client: stri
     userAgent: req.headers.get("user-agent"),
   });
 
+  /* one read for both of this project's settings: the gateway's mode and the quota's vendor mapping */
+  const project = await quotaProject(dep.surveyId);
+
+  /*
+   * The quota, before a token is minted and before the admission decision is written down — neither should
+   * record an arrival that is about to be sent back.
+   *
+   * A duplicate is still decided first (`admission.admit`): that refusal is about THIS person and the
+   * vendor's invoice reconciliation turns on it, where a full cell is about everybody like them. And the
+   * check is skipped entirely when no mapping is declared, because nothing could resolve and the round trip
+   * would buy an answer of "no cells matched" every time.
+   */
+  if (project?.mapped && admission.admit) {
+    const door = await doorCheck(project, panelParams(urlParams));
+    if (!door.admit) {
+      await recordTurnedAway(project.id, door.fullCells);
+      console.info("[rescript:quota] turned away at the door", JSON.stringify({
+        survey: dep.surveyId.slice(0, 8), cells: door.fullCells,
+      }));
+      if (entry && entry.kind === "admitted" && panels) {
+        const back = await panels.exit({ entryId: entry.entryId, outcome: "quota_full" });
+        if (back && typeof back.url === "string" && back.url) return NextResponse.redirect(back.url, 302);
+      }
+      /* no end link configured: the same shape the panel's own over-quota answer uses */
+      return NextResponse.json(
+        { error: "This study already has enough responses from people in your group.", code: "quota_full" },
+        { status: 409 },
+      );
+    }
+  }
+
   if (!admission.checked || !admission.customerId) {
     // nothing is configured for this study — send them on, exactly as the plain link would
     return NextResponse.redirect(surveyUrl(req, client, study, null), 302);
   }
 
-  const mode = await admissionMode(dep.surveyId);
+  const mode = project?.admissionMode ?? "off";
   const outcome = await runGateway({
     customerId: admission.customerId,
     surveyId: dep.surveyId,
@@ -120,17 +158,4 @@ export async function GET(req: NextRequest, { params }: { params: { client: stri
   }
 
   return NextResponse.redirect(surveyUrl(req, client, study, outcome.token), 302);
-}
-
-/** The project's admission setting. Absent project, unmigrated database, anything unexpected: off. */
-async function admissionMode(surveyId: string): Promise<AdmissionMode> {
-  try {
-    const { data } = await supabaseAdmin()
-      .from("recruitment_projects").select("admission_mode")
-      .eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    const mode = data?.admission_mode as AdmissionMode | undefined;
-    return mode === "review" || mode === "observe" ? mode : "off";
-  } catch {
-    return "off";
-  }
 }

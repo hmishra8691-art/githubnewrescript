@@ -27,6 +27,7 @@
     "@rescript/designs": "workspace:*",
     "@rescript/engine": "workspace:*",
     "@rescript/exporters": "workspace:*",
+    "@rescript/identity": "workspace:*",
     "@rescript/import": "workspace:*",
     "@rescript/mail": "workspace:*",
     "@rescript/media": "workspace:*",

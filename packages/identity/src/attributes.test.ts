@@ -1,9 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  claimedAttributes, observedAttributes, mergeAttributes, attributeConflicts, holdCorrection,
-  type QuotaMapping,
-} from "./attributes.js";
+import { claimedAttributes, observedAttributes, parseQuotaMapping, type QuotaMapping } from "./attributes.js";
 
 const mapping: QuotaMapping = {
   gender: { criterion: "gender", values: { m: "male", male: "male", "1": "male", f: "female", female: "female", "2": "female" } },
@@ -50,43 +47,17 @@ test("age bands are inclusive at their edges", () => {
   assert.equal(band("not a number"), undefined, "an unparseable age is no age, not band one");
 });
 
-test("the survey's answer wins over the vendor's claim", () => {
+test("the survey's answer and the vendor's claim are resolved through the SAME mapping", () => {
+  /*
+   * The merge, the disagreement and the hold correction used to be tested here. They are now one statement in
+   * `rescript_quota_complete_session` (0089), under the lock that makes them correct when two people finish at
+   * the same instant — see scripts/quota-holds-sql-test.sql tests 7 and 8. What is still this file's job is
+   * that both halves speak the same vocabulary, which is what makes comparing them meaningful at all.
+   */
   const claimed = claimedAttributes({ gender: "m", age: "29" }, mapping).attributes;
   const observed = observedAttributes([{ id: "scr_gender", answer: "a woman" }], mapping).attributes;
-  const merged = mergeAttributes(claimed, observed);
-  assert.equal(merged.gender, "female", "the person answered directly; the panel is repeating an old profile");
-  assert.equal(merged.ageBand, "18-34", "and what the survey did not ask keeps the vendor's value");
-});
-
-test("a disagreement is named, for counting against the vendor", () => {
-  const claimed = { gender: "male", ageBand: "25-34" };
-  const observed = { gender: "female", ageBand: "55+" };
-  assert.deepEqual(attributeConflicts(claimed, observed), [
-    { criterion: "ageBand", claimed: "25-34", observed: "55+" },
-    { criterion: "gender", claimed: "male", observed: "female" },
-  ]);
-});
-
-test("a question the survey did not ask is NOT a disagreement", () => {
-  // otherwise every vendor looks like a liar for the criteria nobody checked
-  assert.deepEqual(attributeConflicts({ gender: "male", income: "high" }, { gender: "male" }), []);
-});
-
-test("agreement produces no conflict", () => {
-  assert.deepEqual(attributeConflicts({ gender: "male" }, { gender: "male" }), []);
-});
-
-test("the hold is released on what was CLAIMED and counted on what was observed", () => {
-  /*
-   * The leak this prevents: the door held a slot in the male cell, the completion counts into female, and the
-   * male cell holds a slot for somebody who finished as somebody else. Over a field period that closes a cell
-   * which is not full.
-   */
-  const claimed = { gender: "male", ageBand: "18-34" };
-  const observed = { gender: "female" };
-  const { release, count } = holdCorrection(claimed, observed);
-  assert.deepEqual(release, { gender: "male", ageBand: "18-34" }, "release exactly what was held");
-  assert.deepEqual(count, { gender: "female", ageBand: "18-34" }, "count what is true");
+  assert.deepEqual(claimed, { gender: "male", ageBand: "18-34" });
+  assert.deepEqual(observed, { gender: "female" }, "a URL parameter and a screener answer land on the same criterion");
 });
 
 test("no mapping at all yields no attributes and admits everybody", () => {
@@ -107,4 +78,39 @@ test("values are matched case-insensitively, both sides", () => {
 test("resolution is deterministic and the reports are sorted", () => {
   const a = claimedAttributes({ zebra: "1", apple: "2", gender: "m" }, mapping);
   assert.deepEqual(a.unmapped, ["apple", "zebra"]);
+});
+
+test("a mapping that declares a criterion but can never resolve one is refused", () => {
+  const r = parseQuotaMapping({ gender: { criterion: "gender" } });
+  assert.equal(r.ok, false);
+  assert.match(r.problems[0], /no values or bands/);
+});
+
+test("every problem is reported, not just the first", () => {
+  const r = parseQuotaMapping({
+    "not a param!": { criterion: "gender", values: { m: "male" } },
+    age: { criterion: "ageBand", bands: [{ min: 60, max: 30, value: "backwards" }] },
+    region: { criterion: "", values: { n: "north" } },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.problems.length, 3, "an administrator fixing one at a time saves four times");
+});
+
+test("a band unbounded at both ends is refused, because it swallows every value", () => {
+  const r = parseQuotaMapping({ age: { criterion: "ageBand", bands: [{ value: "everyone" }] } });
+  assert.equal(r.ok, false);
+  assert.match(r.problems[0], /unbounded at both ends/);
+});
+
+test("a valid mapping comes back normalised, and no mapping at all is valid", () => {
+  const r = parseQuotaMapping({ gender: { criterion: " gender ", values: { "M": " male " } } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.mapping.gender, { criterion: "gender", values: { m: "male" } },
+    "keys lower-cased so the vendor's casing cannot miss, values trimmed");
+  assert.deepEqual(parseQuotaMapping(undefined), { ok: true, mapping: {}, problems: [] });
+});
+
+test("the parsed mapping is the one that resolves — normalisation is not cosmetic", () => {
+  const parsed = parseQuotaMapping({ g: { criterion: "gender", values: { "M": "male" } } });
+  assert.equal(claimedAttributes({ g: "m" }, parsed.mapping).attributes.gender, "male");
 });

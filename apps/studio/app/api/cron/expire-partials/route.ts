@@ -102,6 +102,7 @@ async function run(req: Request): Promise<NextResponse> {
 
     let abandoned = 0;
     let released = 0;
+    let slots = 0;
     let more = false;
     outer: for (const [cutoff, surveyIds] of byCutoff) {
       const inactive = inactiveSinceFilter(cutoff);
@@ -129,12 +130,25 @@ async function run(req: Request): Promise<NextResponse> {
             if (lfErr) console.error("[rescript:expire-partials] list fill release failed", { session: r.session_id.slice(0, 8), error: lfErr.message });
             else released++;
           }
+          /*
+           * The quota slots, for the whole slice in one statement (0089). Not a loop like the list fill above:
+           * a slice is five hundred rows, and the arithmetic cannot be done one row at a time anyway — several
+           * different claims can match the same cell, so the releases have to be totalled per CELL before
+           * anything is written. A database without 0089 has no holds; the call is skipped on its error and
+           * nothing else about the sweep changes.
+           */
+          const sessions = (changed ?? []).map((r) => (r as { session_id: string }).session_id).filter(Boolean);
+          if (sessions.length) {
+            const { data: back, error: qErr } = await db.rpc("rescript_quota_release_abandoned", { p_sessions: sessions });
+            if (qErr) console.error("[rescript:expire-partials] quota holds not released", { sessions: sessions.length, error: qErr.message });
+            else slots += Number(back ?? 0);
+          }
           if (rowIds.length < SLICE) break;
         }
       }
     }
-    if (abandoned) console.info("[rescript:expire-partials] partials abandoned", { abandoned, released, more, ms: Date.now() - startedAt });
-    return NextResponse.json({ ok: true, surveys: surveys.length, expiring: plan.length, abandoned, released, more });
+    if (abandoned) console.info("[rescript:expire-partials] partials abandoned", { abandoned, released, slots, more, ms: Date.now() - startedAt });
+    return NextResponse.json({ ok: true, surveys: surveys.length, expiring: plan.length, abandoned, released, quotaSlots: slots, more });
   } catch (e) {
     console.error("[rescript:expire-partials] sweep failed", { error: (e as Error).message });
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 503 });

@@ -217,6 +217,9 @@ importers:
       '@rescript/exporters':
         specifier: workspace:*
         version: link:../../packages/exporters
+      '@rescript/identity':
+        specifier: workspace:*
+        version: link:../../packages/identity
       '@rescript/import':
         specifier: workspace:*
         version: link:../../packages/import

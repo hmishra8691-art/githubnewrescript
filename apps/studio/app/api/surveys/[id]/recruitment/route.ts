@@ -3,14 +3,15 @@ import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
   allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
-  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, recommend, type AllocationCandidate, type FeasibilityInput,
+  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, planQuotas, recommend, type AllocationCandidate, type FeasibilityInput,
 } from "@rescript/recruitment";
+import { parseQuotaMapping } from "@rescript/identity";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { liveRegistry, LIVE_FEASIBILITY_MS } from "@/lib/recruitment/live";
 import { researcherPlan } from "@/lib/recruitment/abstraction";
 import { openCredentials } from "@/lib/recruitment/credentials";
 import { supabaseService } from "@/lib/authServer";
-import { noStore, recruitmentActor, refuseSpend } from "@/lib/recruitment/access";
+import { noStore, recruitmentActor, refuseSpend, refuseVendorVisibility } from "@/lib/recruitment/access";
 import { recruitmentStore } from "@/lib/recruitment/store";
 
 export const dynamic = "force-dynamic";
@@ -178,12 +179,33 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * `lib/recruitment/abstraction.ts` holds the mapper, and its test walks the result for forbidden keys and for
    * this organisation's own vendor names, so the guarantee is checked rather than asserted in a comment.
    */
+  /*
+   * Read on its own and guarded, not added to `store.project()`'s select. A column named in that select does
+   * not exist until 0089 is applied, and naming it there would take the whole recruitment panel down for every
+   * project on a database that has not run the migration yet — the same shape of failure as the `market`
+   * column in 0082. An unmigrated database here simply has no mapping, which is true.
+   */
+  let quotaMapping: Record<string, unknown> = {};
+  if (actor.canSeeVendors && project) {
+    try {
+      const { data } = await db.from("recruitment_projects").select("quota_mapping").eq("id", project.id as string).maybeSingle();
+      const raw = (data as { quota_mapping?: unknown } | null)?.quota_mapping;
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) quotaMapping = raw as Record<string, unknown>;
+    } catch { /* 0089 not applied: no mapping */ }
+  }
+
   const supplyChain = actor.canSeeVendors ? {
     comparison: { rows, source },
     capacity,
     allocations: allocations.map((a) => ({ ...a, vendorName: vendorNames.get(String(a.integration_id)) ?? null })),
     orders: orders.map((o) => ({ ...o, vendorName: vendorNames.get(String(o.integration_id)) ?? null })),
     liveAdaptersAvailable: LIVE_ADAPTER_SLUGS.length > 0,
+    /*
+     * The vendor parameter mapping (0089) is here and not beside the quota counts, for the same reason as the
+     * rest of this block: the criterion is the researcher's, but the parameter NAMES are the suppliers'. Read
+     * back, they would say how many different suppliers a project has and roughly who they are.
+     */
+    quotaMapping,
   } : {};
 
   /*
@@ -291,6 +313,50 @@ function latestPlanned(allocations: Record<string, unknown>[]): number | null {
   return rows.reduce((t, a) => t + Number(a.allocated_completes ?? 0) * Number(a.cost_per_valid_complete), 0) / completes;
 }
 
+/**
+ * Write the researcher's quota cells down where the runtime can check against them (0088's `quota_sync`).
+ *
+ * Called whenever the specification or the completes target changes, because a percentage cell's absolute
+ * target is a function of both: "40% aged 18–34" is 400 completes at 1,000 and 600 at 1,500, and a cell left
+ * at its old number steers recruitment at a target nobody asked for. `accepted` survives the rewrite — a
+ * researcher raising a target has not un-recruited the people already counted.
+ *
+ * An invalid specification is NOT written. A dimension summing to 120% is a mistake worth seeing, and
+ * syncing it would put the mistake in front of every arriving respondent instead.
+ */
+async function syncQuotaCells(
+  db: ReturnType<typeof supabaseService>, projectId: string, spec: unknown, requiredCompletes: number,
+): Promise<{ cells: number; ok: boolean; statement: string; warning: string | null }> {
+  const cells = Array.isArray((spec as { quotas?: unknown[] } | null)?.quotas)
+    ? (spec as { quotas: never[] }).quotas : [];
+  const plan = planQuotas(cells, requiredCompletes);
+  if (!plan.ok) return { cells: 0, ok: false, statement: plan.statement, warning: null };
+
+  const { error } = await db.rpc("rescript_quota_sync", {
+    p_project: projectId,
+    p_cells: plan.cells.map((c) => ({
+      id: c.id, label: c.label, dimension: c.dimension, criteria: c.criteria, targetCompletes: c.targetCompletes,
+    })),
+  });
+  /* a database without 0088 has nowhere to put them; the specification is still saved and still valid */
+  if (error) return { cells: 0, ok: true, statement: plan.statement, warning: "Quota cells could not be written down yet." };
+
+  /*
+   * The gap worth naming out loud: cells with no mapping are counted at the END of every interview and
+   * enforced at the START of none, because nothing can tell from a vendor's URL which cell somebody is in.
+   * The quota still holds — it just costs a full interview per person turned away instead of thirty seconds.
+   */
+  let warning: string | null = null;
+  if (plan.cells.length) {
+    const { data } = await db.from("recruitment_projects").select("quota_mapping").eq("id", projectId).maybeSingle();
+    const mapping = (data as { quota_mapping?: unknown } | null)?.quota_mapping;
+    if (!mapping || typeof mapping !== "object" || !Object.keys(mapping as object).length) {
+      warning = "These cells are counted when an interview finishes, but nobody can be turned away at the door until a vendor parameter mapping is declared.";
+    }
+  }
+  return { cells: plan.cells.length, ok: true, statement: plan.statement, warning };
+}
+
 async function loadAudience(specId: string | null): Promise<unknown> {
   if (!specId) return null;
   const { data } = await supabaseService().from("audience_specifications").select("spec").eq("id", specId).maybeSingle();
@@ -323,9 +389,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (budget === null || budget < 0) return noStore({ error: "budget is required" }, 400);
 
       let specId: string | null = null;
+      let parsedAudience: unknown = null;
       if (body.audience !== undefined && body.audience !== null) {
         const parsed = AudienceSpecification.safeParse(body.audience);
         if (!parsed.success) return noStore({ error: "The audience specification is not valid", detail: parsed.error.issues.slice(0, 5) }, 400);
+        parsedAudience = parsed.data;
         const { data, error } = await db.from("audience_specifications").insert({
           customer_id: actor.customerId, survey_id: params.id, spec: parsed.data,
           natural_language: parsed.data.naturalLanguage ?? null, created_by: actor.userId,
@@ -345,23 +413,85 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       };
       if (specId) row.audience_spec_id = specId;
 
+      let projectId: string;
       if (existing) {
         const { error } = await db.from("recruitment_projects").update(row).eq("id", existing.id);
         if (error) throw new Error(error.message);
-        return noStore({ ok: true, projectId: existing.id });
+        projectId = existing.id as string;
+      } else {
+        const { data, error } = await db.from("recruitment_projects").insert({
+          ...row, customer_id: actor.customerId, survey_id: params.id, created_by: actor.userId, status: "draft",
+        }).select("id").single();
+        if (error) throw new Error(error.message);
+        projectId = data.id as string;
+        await store.recordEvent(projectId, "RecruitmentRequested", `req:${projectId}`, { requiredCompletes, budget }, actor.userId);
       }
-      const { data, error } = await db.from("recruitment_projects").insert({
-        ...row, customer_id: actor.customerId, survey_id: params.id, created_by: actor.userId, status: "draft",
-      }).select("id").single();
-      if (error) throw new Error(error.message);
-      await store.recordEvent(data.id as string, "RecruitmentRequested", `req:${data.id}`, { requiredCompletes, budget }, actor.userId);
-      return noStore({ ok: true, projectId: data.id });
+
+      /*
+       * The quota cells follow the project, not a separate save. Both inputs they depend on are settled here:
+       * the specification and the completes target. Leaving the sync to its own button is how a researcher
+       * edits a quota, sees it in the form, and recruits against the old one for a week.
+       */
+      const quotas = await syncQuotaCells(
+        db, projectId,
+        specId ? parsedAudience : await loadAudience((existing?.audience_spec_id as string | null) ?? null),
+        Math.round(requiredCompletes),
+      );
+      return noStore({ ok: true, projectId, quotas });
     }
 
     const project = await store.project(params.id);
     if (!project) return noStore({ error: "This study has no recruitment project yet." }, 409);
     const projectId = project.id as string;
     const status = String(project.status) as RecruitmentProjectStatus;
+
+    /*
+     * THE VENDOR PARAMETER MAPPING (0089) — PLATFORM ADMINISTRATORS ONLY.
+     *
+     * What `?gender=m` means. It is the one piece of quota configuration that is about a VENDOR rather than
+     * about the research: the criterion is the researcher's, the parameter name and its codes belong to
+     * whoever is supplying the sample, and reading them back would tell a researcher how many different
+     * suppliers a project has and what each of them is called. Same gate as the vendor directory, for the
+     * same reason — the API not sending it is the only version of that boundary that holds.
+     *
+     * GET is through the main handler's `supplyChain` payload; this writes.
+     */
+    if (action === "mapping") {
+      if (!actor.canSeeVendors) return refuseVendorVisibility();
+      const check = parseQuotaMapping(body.mapping ?? {});
+      if (!check.ok) {
+        /*
+         * Every problem, and nothing saved. A mapping half of which resolves is worse than none: it reads
+         * some respondents correctly and silently drops the rest into "attributes unknown", where they are
+         * admitted, hold no slot, and are counted only on whatever the screener happened to ask.
+         */
+        return noStore({ error: "This mapping cannot be used as written.", problems: check.problems }, 400);
+      }
+      const { error } = await db.from("recruitment_projects")
+        .update({ quota_mapping: check.mapping, updated_at: new Date().toISOString() })
+        .eq("id", projectId);
+      if (error) {
+        /* the column arrives with 0089; say which migration rather than relaying a column-not-found */
+        if (/quota_mapping/.test(error.message)) {
+          return noStore({ error: "This database has not run migration 0089 yet, so there is nowhere to keep the mapping.", code: "migration_missing" }, 409);
+        }
+        throw new Error(error.message);
+      }
+      const criteria = [...new Set(Object.values(check.mapping).map((m) => m.criterion))].sort();
+      await audit({
+        action: "recruitment.mapping_set", userId: actor.userId, customerId: actor.customerId, surveyId: params.id,
+        entity: "recruitment_project", entityId: projectId,
+        /* the parameter NAMES, never a respondent's values — this is a configuration change, not sample data */
+        detail: { parameters: Object.keys(check.mapping).length, criteria: criteria.join(", ") },
+      });
+      return noStore({
+        ok: true,
+        mapping: check.mapping,
+        statement: Object.keys(check.mapping).length
+          ? `${Object.keys(check.mapping).length} parameter${Object.keys(check.mapping).length === 1 ? "" : "s"} now resolve to ${criteria.join(", ")}. Respondents arriving with anything else are admitted and counted on what the survey asks them.`
+          : "No mapping is declared, so nobody will be turned away at the door. Quota cells are still counted when an interview finishes.",
+      });
+    }
 
     if (action === "compare") {
       const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null) };

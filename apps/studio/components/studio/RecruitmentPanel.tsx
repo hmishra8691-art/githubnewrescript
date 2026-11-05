@@ -345,6 +345,8 @@ interface RecruitmentData {
    * payload that no longer carried it.
    */
   canSeeVendors?: boolean;
+  /** vendor parameter → quota criterion (0089). Administrators only, for the same reason as the rest of this block. */
+  quotaMapping?: Record<string, unknown>;
   comparison?: { rows: ComparisonRow[]; source: Source };
   allocations?: Record<string, unknown>[];
   orders?: Record<string, unknown>[];
@@ -389,6 +391,78 @@ interface QuotaRow {
   cell_id: string; label: string; dimension: string;
   target: number; accepted: number; in_progress: number; turned_away: number;
   last_complete_at: string | null;
+}
+
+/**
+ * WHAT `?gender=m` MEANS — platform administrators only.
+ *
+ * The one piece of quota configuration that is about a supplier rather than about the research. One vendor
+ * sends `?gender=m`, another `?g=1`, another `?sex=Male`; no rule reads all three, and a guess is how a
+ * project counts every man as a woman for a week before anybody notices. So it is declared, and a parameter
+ * nobody declares produces no attribute at all.
+ *
+ * Deliberately a declaration box rather than a guided form. The shape is small, administrators are the only
+ * people who see it, and every rejection comes back naming the exact thing to change — which is more useful
+ * here than a wizard that can only express the cases somebody anticipated.
+ */
+function MappingCard({ surveyId, mapping, onSaved }: {
+  surveyId: string; mapping: Record<string, unknown>; onSaved: () => void;
+}) {
+  const [text, setText] = React.useState(() => JSON.stringify(mapping ?? {}, null, 2));
+  const [problems, setProblems] = React.useState<string[]>([]);
+  const [statement, setStatement] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const declared = Object.keys(mapping ?? {}).length;
+
+  async function save() {
+    let parsed: unknown;
+    try { parsed = JSON.parse(text || "{}"); }
+    catch (e) { setProblems([`That is not valid JSON: ${(e as Error).message}`]); setStatement(null); return; }
+    setBusy(true);
+    const r = await fetch(`/api/surveys/${surveyId}/recruitment`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "mapping", mapping: parsed }),
+    });
+    const j = await r.json();
+    setBusy(false);
+    if (!r.ok) { setProblems(Array.isArray(j.problems) && j.problems.length ? j.problems : [String(j.error ?? "Could not save")]); setStatement(null); return; }
+    /* show what was STORED, not what was typed: keys are lower-cased and values trimmed on the way in, and a
+       box still showing the original would disagree with what the door actually reads */
+    if (j.mapping && typeof j.mapping === "object") setText(JSON.stringify(j.mapping, null, 2));
+    setProblems([]); setStatement(String(j.statement ?? "Saved.")); onSaved();
+  }
+
+  return (
+    <div className="card" data-testid="quota-mapping">
+      <div className="row">
+        <strong className="grow">Vendor parameter mapping</strong>
+        <span className="muted" style={{ fontSize: 12 }}>Administrators only</span>
+      </div>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
+        What the parameters on a recruitment link mean, and what the screener questions mean. Without it, quota
+        cells are still counted when an interview finishes — but nobody can be turned away at the door, so a
+        full cell costs a whole interview per person instead of thirty seconds.
+      </p>
+      <textarea
+        className="input mono" rows={10} spellCheck={false} value={text}
+        onChange={(e) => setText(e.target.value)}
+        style={{ fontSize: 12, width: "100%", marginTop: 6 }}
+        placeholder={'{\n  "gender": { "criterion": "gender", "values": { "m": "male", "f": "female" } },\n  "age": { "criterion": "ageBand", "bands": [{ "max": 34, "value": "18-34" }, { "min": 35, "value": "35+" }] },\n  "scr_gender": { "criterion": "gender", "values": { "a man": "male", "a woman": "female" } }\n}'}
+      />
+      <div className="row" style={{ marginTop: 6 }}>
+        <button className="btn" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save mapping"}</button>
+        <span className="muted grow" style={{ fontSize: 12 }}>
+          {declared ? `${declared} parameter${declared === 1 ? "" : "s"} declared` : "Nothing declared yet"}
+        </span>
+      </div>
+      {problems.length > 0 && (
+        <ul className="muted" style={{ fontSize: 12.5, marginTop: 6, color: "var(--warn, #b4531a)" }}>
+          {problems.map((p, i) => <li key={i}>{p}</li>)}
+        </ul>
+      )}
+      {statement && <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>{statement}</p>}
+    </div>
+  );
 }
 
 /** A bar that shows overshoot rather than capping at full — somebody paid for those completes. */
@@ -778,6 +852,10 @@ function Recruitment({ surveyId }: { surveyId: string }) {
       )}
 
       {data.project && data.plan && <DashboardCard plan={data.plan} quotas={data.quotas ?? []} />}
+
+      {data.canSeeVendors && data.project && (
+        <MappingCard surveyId={surveyId} mapping={data.quotaMapping ?? {}} onSaved={() => void load()} />
+      )}
 
       {data.plan && (
         <div className="card">

@@ -10,6 +10,7 @@ import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS 
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 import { surveyFieldworkEvents, responseEvents } from "@/lib/notifyEmit";
 import { sanitizeTelemetry } from "@/lib/telemetrySanitize";
+import { countComplete, observedFor, quotaProject, releaseSlot } from "@/lib/quota";
 
 /** S5b: question id → type, for the server-side answer-history check */
 const questionTypes = (d: any): Record<string, string> => Object.fromEntries(((d?.questions ?? []) as { id: string; type: string }[]).map((q) => [q.id, q.type]));
@@ -275,6 +276,43 @@ export async function POST(req: NextRequest) {
         ? await db.rpc("rescript_complete_balance", { p_survey: existing.survey_id, p_session: sessionId })
         : await db.rpc("rescript_release_balance", { p_survey: existing.survey_id, p_session: sessionId, p_reason: newStatus });
       if (bErr) console.error("[rescript:balance] end-of-interview update failed", { sessionId: sessionId.slice(0, 8), status: newStatus, error: bErr.message });
+    }
+    /*
+     * RECRUITMENT QUOTAS (0088 / 0089), which are not the survey's own quotas above.
+     *
+     * The survey's quota cells (`rescript_count_quota_cells`) are about the QUESTIONNAIRE — they close a
+     * branch when enough people have answered a certain way. These are about the SAMPLE a project is buying,
+     * and they carry a slot that was reserved at the door on what the vendor claimed.
+     *
+     * A complete releases that slot and counts against what the SURVEY observed, which can be a different
+     * cell: the vendor said male, the screener says female, and without the release the male cell holds a
+     * slot for somebody who finished as somebody else. Anything else — screened out, terminated, quota full —
+     * releases and counts nothing: that respondent did not consume a place in the sample.
+     *
+     * Not gated on a mapping being declared. If one is removed mid-field, a hold taken under the old mapping
+     * still has to be given back, and a completed session never reaches the abandonment sweep that would
+     * otherwise catch it. The call is a primary-key lookup that finds nothing in the ordinary case.
+     *
+     * TEST sessions are left alone, for the reason session/start does not hold for them.
+     */
+    if (!existing.is_test) {
+      const project = await quotaProject(existing.survey_id);
+      if (project) {
+        if (newStatus === "complete") {
+          const observed = observedFor(project, (update.answers as Record<string, unknown>) ?? answers ?? {});
+          const counted = await countComplete(project.id, sessionId, observed);
+          if (counted && (counted.overshot.length || counted.nowFull.length || counted.corrected)) {
+            console.info("[rescript:quota] complete counted", JSON.stringify({
+              survey: existing.survey_id.slice(0, 8), session: sessionId.slice(0, 8),
+              cells: counted.counted, nowFull: counted.nowFull, overshot: counted.overshot,
+              /* the vendor's demographic claim did not survive the screener — a fact about the SAMPLE */
+              claimCorrected: counted.corrected,
+            }));
+          }
+        } else {
+          await releaseSlot(sessionId, newStatus);
+        }
+      }
     }
     if (existing.respondent_id) {
       await db.from("respondents").update({ status: newStatus }).eq("id", existing.respondent_id);
