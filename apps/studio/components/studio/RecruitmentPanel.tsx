@@ -355,7 +355,16 @@ interface RecruitmentData {
   };
 }
 
+interface AdviceView {
+  kind: string;
+  headline: string;
+  detail: string;
+  patch: Record<string, unknown>;
+  resultingVerdict: string;
+}
+
 interface PlanVerdictView {
+  advice?: AdviceView[];
   verdict: "achievable" | "over_budget" | "too_fast" | "short_of_capacity" | "cannot_price";
   summary: string;
   blockers: string[];
@@ -375,7 +384,7 @@ interface PlanVerdictView {
  * lever that would move it — more budget, more time, or a market nobody has priced — rather than a general
  * complaint that the plan does not work.
  */
-function VerdictCard({ v }: { v: PlanVerdictView }) {
+function VerdictCard({ v, onApply }: { v: PlanVerdictView; onApply?: (patch: Record<string, unknown>) => void }) {
   const tone =
     v.verdict === "achievable" ? { label: "Achievable", colour: "#067647" }
     : v.verdict === "cannot_price" ? { label: "Not yet priced", colour: "#854a0e" }
@@ -409,6 +418,28 @@ function VerdictCard({ v }: { v: PlanVerdictView }) {
         <ul style={{ margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
           {v.blockers.map((b) => <li key={b}>{b}</li>)}
         </ul>
+      )}
+
+      {/*
+        * WHAT TO DO ABOUT IT. Each of these was produced by re-planning with one input changed and kept only
+        * because the verdict improved — so "accept" applies a figure that has already been checked, rather
+        * than a round number somebody would then have to test themselves.
+        */}
+      {!!v.advice?.length && (
+        <div style={{ marginTop: 10 }}>
+          <strong style={{ fontSize: 13 }}>What would help</strong>
+          {v.advice.map((a) => (
+            <div className="row" key={a.kind + a.headline} style={{ alignItems: "flex-start", marginTop: 6 }}>
+              <div className="grow">
+                <div><strong style={{ fontWeight: 500 }}>{a.headline}</strong></div>
+                <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>{a.detail}</div>
+              </div>
+              {onApply && Object.keys(a.patch).length > 0 && (
+                <button className="btn small" onClick={() => onApply(a.patch)}>Apply</button>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       {v.markets.length > 0 && (
@@ -544,7 +575,24 @@ function Recruitment({ surveyId }: { surveyId: string }) {
         {data.project && <p className="muted">Status: <span className="mono">{status}</span></p>}
       </div>
 
-      {verdict && <VerdictCard v={verdict} />}
+      {verdict && (
+        <VerdictCard
+          v={verdict}
+          onApply={(patch) => {
+            /* applying a recommendation fills the form; the researcher still presses Check feasibility */
+            setForm((f) => ({
+              ...f,
+              ...(patch.budget !== undefined ? { budget: String(patch.budget) } : {}),
+              ...(patch.timelineDays !== undefined ? { timelineDays: String(patch.timelineDays) } : {}),
+              ...(patch.requiredCompletes !== undefined ? { completes: String(patch.requiredCompletes) } : {}),
+              ...(Array.isArray(patch.markets)
+                ? { markets: (patch.markets as Array<{ market: string; completes: number }>).map((m) => ({ market: m.market, completes: String(m.completes) })) }
+                : {}),
+            }));
+            setVerdict(null);
+          }}
+        />
+      )}
 
       {data.project && <AudienceCard />}
 

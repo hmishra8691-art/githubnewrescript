@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
   allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
-  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, type AllocationCandidate, type FeasibilityInput,
+  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, recommend, type AllocationCandidate, type FeasibilityInput,
 } from "@rescript/recruitment";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { liveRegistry, LIVE_FEASIBILITY_MS } from "@/lib/recruitment/live";
@@ -597,7 +597,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
        * The cost, the margin and the rule behind them are ADMINISTRATOR information. A researcher gets the
        * verdict, what it would cost them, and what stands in the way — nothing about what we paid for it.
        */
+      /*
+       * Recommendations are computed from the plan that was just produced, by re-planning each candidate change.
+       * They cost a handful of extra solves and they are the difference between "over budget" and something a
+       * researcher can act on without guessing.
+       */
+      const advice = recommend(planned, {
+        requiredCompletes: completes, budget, currency, loiMinutes: loi, expectedIr: ir,
+        markets: askedMarkets, timelineDays,
+      }, { candidates, marginRules, ...(project ? { recruitmentProjectId: String(project.id) } : {}) });
+
       const forResearcher = {
+        advice,
         verdict: planned.verdict,
         summary: planned.summary,
         blockers: planned.blockers,
