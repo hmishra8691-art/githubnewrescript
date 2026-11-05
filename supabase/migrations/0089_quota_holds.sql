@@ -52,7 +52,7 @@
 /* ------------------------------------------------------------ the project's mapping */
 
 alter table public.recruitment_projects
-  -- vendor parameter name -> { criterion, values?, bands? }. See packages/recruitment/src/attributes.ts.
+  -- vendor parameter name -> { criterion, values?, bands? }. See packages/identity/src/attributes.ts.
   add column if not exists quota_mapping jsonb not null default '{}'::jsonb;
 
 do $$ begin
