@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { AudienceSpecification, type VendorPricingRow } from "@rescript/schema";
-import { compareVendors, comparisonSource, estimateForVendor, qualityConfidence, type FeasibilityInput } from "./feasibility.js";
+import { compareVendors, comparisonSource, estimateForVendor, type FeasibilityInput } from "./feasibility.js";
 
 const audience = (countries: string[] = ["US"]) =>
   AudienceSpecification.parse({ demographics: { countries, ageMin: 25, ageMax: 45 } });
@@ -49,12 +49,20 @@ test("the markup an administrator agreed is applied to the vendor's CPI, and the
   assert.equal(e.source, "vendor_reported");
 });
 
-test("quality confidence is blunt on purpose", () => {
-  assert.equal(qualityConfidence(undefined), "none");
-  assert.equal(qualityConfidence(40), "none");
-  assert.equal(qualityConfidence(50), "low");
-  assert.equal(qualityConfidence(300), "medium");
-  assert.equal(qualityConfidence(1000), "high");
+test("confidence is carried from the hourly pass, not re-derived from the complete count", () => {
+  /*
+   * This file used to grade the evidence itself, from `completes`. That was one of four copies of the same
+   * ladder, and the one that counts the orders is `rescript_vendor_quality_recompute`. A vendor whose history
+   * arrives WITHOUT a graded confidence is unknown — which is the honest answer, because nothing has scored
+   * it — rather than quietly graded again here on a number that happens to be to hand.
+   */
+  const graded = estimateForVendor(vendor("Scored", { history: { completes: 2000, rejectionRate: 5, qualityScore: 90, qualityConfidence: "high" } }), params);
+  assert.equal(graded.qualityConfidence, "high");
+  assert.equal(graded.qualityScore, 90);
+
+  const ungraded = estimateForVendor(vendor("Unscored", { history: { completes: 2000, rejectionRate: 5 } }), params);
+  assert.equal(ungraded.qualityConfidence, "none", "2000 completes nobody has scored is still unknown");
+  assert.equal(ungraded.qualityScore, null);
 });
 
 test("the comparison ranks by cost per valid complete, so the cheapest CPI can lose", () => {
@@ -73,7 +81,7 @@ test("the comparison ranks by cost per valid complete, so the cheapest CPI can l
 test("a vendor that cannot be ranked goes to the bottom with its reason, and is not dropped", () => {
   const rows = compareVendors([
     vendor("Awaiting", { mode: "awaiting" }),
-    vendor("Priced", { pricing: [price(7)], history: { completes: 2000, rejectionRate: 5 } }),
+    vendor("Priced", { pricing: [price(7)], history: { completes: 2000, rejectionRate: 5, qualityConfidence: "high" } }),
   ], params);
   assert.equal(rows.length, 2);
   assert.equal(rows[0]!.vendorName, "Priced");
@@ -88,7 +96,7 @@ test("a quality figure with no history behind it is flagged rather than ranked o
 });
 
 test("projected cost and expected valid completes are reported together, because one without the other misleads", () => {
-  const rows = compareVendors([vendor("V", { pricing: [price(8)], history: { completes: 2000, rejectionRate: 10, duplicateRate: 5 } })], params);
+  const rows = compareVendors([vendor("V", { pricing: [price(8)], history: { completes: 2000, rejectionRate: 10, duplicateRate: 5, qualityConfidence: "high" } })], params);
   assert.equal(rows[0]!.projectedCost, 40000);        // 5000 × $8.00, the whole budget
   assert.equal(rows[0]!.expectedValidCompletes, 4275); // of which 4,275 would actually count
 });

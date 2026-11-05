@@ -199,6 +199,9 @@ export const AUDIT_EVENTS = [
   "recruitment.order_placed",
   "recruitment.progress_recorded",
   "recruitment.mapping_set",
+  "recruitment.settlement_reconciled",
+  "recruitment.settlement_line_resolved",
+  "recruitment.reallocation_proposed",
 
   /* the fraud intelligence centre (2026-11-03, Phase 5): resolving a quarantined complete, and resolving a whole
      detected network at once. Both decide whether a supplier is paid and whether a respondent is marked, so both
@@ -266,6 +269,9 @@ export function describeEvent(r: AuditRow): string {
     case "recruitment.allocation_authorized": return `${who} authorised the sample allocation (${str(d.completes) || "?"} completes, ${str(d.cost) || "?"})`;
     case "recruitment.order_placed": return `${who} placed an order with ${str(d.vendor) || "a vendor"} for ${str(d.completes) || "?"} completes at ${str(d.cpi) || "?"}`;
     case "recruitment.progress_recorded": return `${who} recorded ${str(d.accepted) || "?"} accepted of ${str(d.delivered) || "?"} delivered from ${str(d.vendor) || "a vendor"}`;
+    case "recruitment.settlement_reconciled": return `${who} reconciled a vendor invoice: ${str(d.claimed) || "?"} claimed, ${str(d.agreed) || "?"} agreed, ${str(d.currency) || ""} ${str(d.payable) || "?"} payable, ${str(d.differences) || "0"} difference(s)`;
+    case "recruitment.settlement_line_resolved": return `${who} resolved a settlement line as ${str(d.resolution) || "?"}${d.settled === true ? " — the reconciliation is now settled" : ` (${str(d.remaining) || "0"} still open)`}`;
+    case "recruitment.reallocation_proposed": return `${who} asked for a reallocation: ${str(d.deviations) || "0"} deviation(s), ${str(d.moves) || "0"} move(s) proposed`;
     case "recruitment.mapping_set": return `${who} set the vendor parameter mapping: ${str(d.parameters) || "0"} parameter(s) resolving to ${str(d.criteria) || "nothing"}`;
     case "fraud.case.resolve": return `${who} ${str(d.status) === "upheld" ? "upheld" : str(d.status) === "cleared" ? "cleared" : "withdrew"} a fraud case${d.note ? `: ${str(d.note)}` : ""}`;
     case "fraud.cluster.resolve": return `${who} ${str(d.status) === "upheld" ? "upheld" : "cleared"} a suspected network of ${str(d.resolved) || "?"} cases${d.note ? `: ${str(d.note)}` : ""}`;

@@ -8,13 +8,25 @@ import { supabaseService } from "@/lib/authServer";
 /**
  * THE BACKGROUND PASS (2026-11-03, Phase 5).
  *
- * Three jobs that can only be done across many arrivals, run hourly for each organisation that has any:
+ * Four jobs that can only be done across many arrivals, run hourly for each organisation that has any:
  *
  *   1. THE GRAPH        group identities by the probabilistic signals they share, and open ONE case per ring.
  *                       0084 scores each arrival alone and cannot see that forty of them are one operation.
- *   2. VENDOR QUALITY   recompute each vendor's rates from real outcomes, with the Wilson interval, so the
- *                       optimiser has something better than the rate card's self-reported figures.
+ *   2. VENDOR QUALITY   recompute each vendor's rates from real outcomes, with the Wilson interval. Since the
+ *                       Studio reads this rather than recomputing it, this pass is now the ONLY thing that
+ *                       turns orders into a score — if it does not run, every vendor is honestly unknown.
  *   3. FORECASTS        project completion and final cost for every fielding project — or write down why not.
+ *   4. VENDOR HEALTH    ok / degraded / failing / unknown from the API calls actually made in the last hour.
+ *                       Without it `vendor_integrations.health` keeps whatever it last said, which is worse
+ *                       than saying nothing: a vendor that failed at nine still reads "ok" at five.
+ *
+ * ## Which organisations
+ *
+ * The identity table used to decide this on its own, which quietly made jobs 2, 3 and 4 conditional on
+ * something none of them is about. An organisation buying sample through manual relationships has no
+ * respondent trust ids at all, so it got no vendor scores, no forecasts and no health — and nothing said so.
+ * The list is now the union of organisations with recent identity traffic and organisations with a vendor
+ * relationship of any kind.
  *
  * And then it evaluates itself: `rescript_model_evaluate` measures precision and the false-positive rate over
  * RESOLVED cases. With none resolved it writes `insufficient` and no numbers, which is the honest state today
@@ -61,6 +73,8 @@ interface CustomerResult {
   casesOpened: number;
   vendorsScored: number;
   forecasts: { made: number; insufficient: number };
+  /** integrations whose health was recomputed from calls actually made; 0 means nobody called anybody */
+  vendorsHealthChecked: number;
   evaluation: string | null;
   skipped?: string;
 }
@@ -71,17 +85,22 @@ async function run(req: Request): Promise<NextResponse> {
   const startedAt = Date.now();
 
   /*
-   * Only organisations with identity data. An organisation that has never switched the exchange on costs one
-   * row of this query and nothing else — the pass must not become a tax on everybody for a feature few use.
+   * Organisations with recent identity traffic (the graph) OR a vendor relationship (quality, forecasts,
+   * health). An organisation that has switched on neither costs two rows of these queries and nothing else —
+   * the pass must not become a tax on everybody for a feature few use.
    */
-  const { data: active, error } = await db
-    .from("respondent_trust_ids")
-    .select("customer_id")
-    .gte("last_seen_at", new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString())
-    .limit(20_000);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const since = new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString();
+  const [identities, vendors] = await Promise.all([
+    db.from("respondent_trust_ids").select("customer_id").gte("last_seen_at", since).limit(20_000),
+    db.from("vendor_integrations").select("customer_id").limit(5_000),
+  ]);
+  if (identities.error) return NextResponse.json({ error: identities.error.message }, { status: 500 });
 
-  const customerIds = [...new Set((active ?? []).map((r) => String((r as { customer_id: string }).customer_id)))]
+  const customerIds = [...new Set([
+    ...(identities.data ?? []).map((r) => String((r as { customer_id: string }).customer_id)),
+    /* a database without 0081 has no vendor table; that is no vendors, not a failed pass */
+    ...(vendors.error ? [] : (vendors.data ?? []).map((r) => String((r as { customer_id: string }).customer_id))),
+  ])]
     .sort()
     .slice(0, MAX_CUSTOMERS);
 
@@ -89,7 +108,8 @@ async function run(req: Request): Promise<NextResponse> {
   for (const customerId of customerIds) {
     if (Date.now() - startedAt > BUDGET_MS) {
       results.push({ customerId, identities: 0, clusters: 0, casesOpened: 0, vendorsScored: 0,
-        forecasts: { made: 0, insufficient: 0 }, evaluation: null, skipped: "time budget spent — next hour" });
+        forecasts: { made: 0, insufficient: 0 }, vendorsHealthChecked: 0, evaluation: null,
+        skipped: "time budget spent — next hour" });
       continue;
     }
     results.push(await oneCustomer(db, customerId));
@@ -106,7 +126,7 @@ async function run(req: Request): Promise<NextResponse> {
 async function oneCustomer(db: Db, customerId: string): Promise<CustomerResult> {
   const out: CustomerResult = {
     customerId, identities: 0, clusters: 0, casesOpened: 0, vendorsScored: 0,
-    forecasts: { made: 0, insufficient: 0 }, evaluation: null,
+    forecasts: { made: 0, insufficient: 0 }, vendorsHealthChecked: 0, evaluation: null,
   };
 
   /* ---------------------------------------------------------------- 1. the graph */
@@ -169,6 +189,18 @@ async function oneCustomer(db: Db, customerId: string): Promise<CustomerResult> 
     p_customer: customerId, p_window_days: 90,
   });
   out.vendorsScored = typeof scored === "number" ? scored : 0;
+
+  /* ---------------------------------------------------------------- 2b. vendor health (0086)
+
+     From the calls actually made in the last hour, not from an operator's opinion. A vendor nobody has called
+     keeps `unknown`, which is neither healthy nor failing — the same refusal the quality score makes. Run
+     beside the quality pass because both are about the same relationship and both need the hourly cadence. */
+
+  const { data: health, error: hErr } = await db.rpc("rescript_vendor_health_recompute", {
+    p_customer: customerId, p_window_minutes: 60,
+  });
+  /* 0086 not applied, or no api-mode vendors: no health to recompute, and nothing about that is an error */
+  if (!hErr) out.vendorsHealthChecked = typeof health === "number" ? health : 0;
 
   /* ---------------------------------------------------------------- 3. forecasts */
 

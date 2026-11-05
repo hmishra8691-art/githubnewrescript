@@ -93,38 +93,36 @@ begin
   raise notice 'PASS 4  one live rule per target; superseded rules are kept';
 end $$;
 
-/* ============================================================ 5. resolution picks the most specific */
+/* ============================================================ 5. the rules this table hands the resolver
+
+   0090 removed `rescript_margin_resolve`: the precedence (override → project → recruitment_type → market →
+   default) is decided ONCE, in packages/recruitment/src/margin.ts, on the path that actually quotes work.
+   Tests 5 and 6 used to assert that a second implementation here agreed with it, which is the kind of test
+   that passes right up until the two drift. What this table still owes the resolver is the correct SET of
+   live rules, and that is what these two now check.                                                        */
 
 do $$
-declare v record;
+declare v_scopes text[];
 begin
   insert into public.commercial_margins (customer_id, scope, margin_bps)
   values ('f0000000-0000-0000-0000-0000000000f1', 'default', 3000);
 
-  select * into v from public.rescript_margin_resolve(
-    'f0000000-0000-0000-0000-0000000000f1', 'GB', null, null, now(), 3000);
-  if v.scope <> 'market' or v.margin_bps <> 2500 then
-    raise exception 'expected the GB market rate of 2500 bps, got % at scope %', v.margin_bps, v.scope;
-  end if;
+  select array_agg(scope order by scope) into v_scopes
+    from public.commercial_margins
+   where customer_id = 'f0000000-0000-0000-0000-0000000000f1'
+     and effective_from <= now()
+     and (effective_to is null or effective_to > now());
 
-  select * into v from public.rescript_margin_resolve(
-    'f0000000-0000-0000-0000-0000000000f1', 'GB', 'f0000000-0000-0000-0000-0000000004f1', null, now(), 3000);
-  if v.scope <> 'override' or v.margin_bps <> 1500 then
-    raise exception 'the override did not beat the market rate: got % at scope %', v.margin_bps, v.scope;
-  end if;
-
-  select * into v from public.rescript_margin_resolve(
-    'f0000000-0000-0000-0000-0000000000f1', 'US', null, null, now(), 3000);
-  if v.scope <> 'default' or v.margin_bps <> 3000 then
-    raise exception 'an unpriced market did not fall back to the default';
-  end if;
-  raise notice 'PASS 5  override beats market beats default, and the function agrees with the engine';
+  if not ('default' = any (v_scopes)) then raise exception 'the default rule is not live'; end if;
+  if not ('market' = any (v_scopes)) then raise exception 'the GB market rule is not live'; end if;
+  if not ('override' = any (v_scopes)) then raise exception 'the override is not live'; end if;
+  raise notice 'PASS 5  every live rule is readable, with its scope — the resolver chooses, this table supplies';
 end $$;
 
-/* ============================================================ 6. an expired rule stops applying */
+/* ============================================================ 6. an expired rule stops being supplied */
 
 do $$
-declare v record;
+declare v_live integer;
 begin
   /*
    * Expire it realistically: a rule that ran for nine days and ended yesterday. Setting only `effective_to`
@@ -135,11 +133,18 @@ begin
      set effective_from = now() - interval '10 days', effective_to = now() - interval '1 day'
    where customer_id = 'f0000000-0000-0000-0000-0000000000f1' and scope = 'override';
 
-  select * into v from public.rescript_margin_resolve(
-    'f0000000-0000-0000-0000-0000000000f1', 'GB', 'f0000000-0000-0000-0000-0000000004f1', null, now(), 3000);
-  if v.scope = 'override' then raise exception 'an expired override is still being applied'; end if;
-  if v.margin_bps <> 2500 then raise exception 'expected to fall back to the GB rate, got %', v.margin_bps; end if;
-  raise notice 'PASS 6  an expired rule stops applying and the next most specific takes over';
+  select count(*) into v_live
+    from public.commercial_margins
+   where customer_id = 'f0000000-0000-0000-0000-0000000000f1' and scope = 'override'
+     and effective_from <= now() and (effective_to is null or effective_to > now());
+
+  if v_live <> 0 then raise exception 'an expired override is still being handed to the resolver'; end if;
+
+  if (select count(*) from public.commercial_margins
+       where customer_id = 'f0000000-0000-0000-0000-0000000000f1' and scope = 'override') <> 1 then
+    raise exception 'the expired rule was deleted rather than ended — the price it set must stay readable';
+  end if;
+  raise notice 'PASS 6  an expired rule stops being live but is kept, so an old quote stays explainable';
 end $$;
 
 /* ============================================================ 7. a recorded calculation must add up */

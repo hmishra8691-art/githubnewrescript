@@ -16,6 +16,22 @@ import type { MarginRule } from "@rescript/recruitment";
  * used by the adapter dispatch and nothing else, and it returns the plaintext to a caller that never logs it.
  */
 
+/**
+ * What the hourly pass has scored for one vendor (0085's `vendor_quality_metrics`).
+ *
+ * Every field can be null except `completes` and `qualityConfidence`, and the nulls mean "not enough history
+ * to say" rather than zero. A rejection rate of 0 and a rejection rate nobody has measured are different
+ * claims, and a column that cannot tell them apart is how a vendor with no track record wins a project.
+ */
+export interface VendorHistoryRow {
+  completes: number;
+  rejectionRate: number | null;
+  duplicateRate: number | null;
+  qualityScore: number | null;
+  qualityConfidence: "none" | "low" | "medium" | "high";
+  medianDeliveryDays: number | null;
+}
+
 export interface VendorRow {
   id: string;
   customerId: string | null;
@@ -140,33 +156,43 @@ export function recruitmentStore() {
     },
 
     /**
-     * How this vendor has actually performed for this organisation. Phase 1 computes it from the panel entries
-     * 0072 already records — the outcomes are real, the sample is whatever has been fielded so far, and the
-     * caller decides whether there is enough of it to rank on (`qualityConfidence`).
+     * How this vendor has actually performed for this organisation.
+     *
+     * READ, never recomputed. `rescript_vendor_quality_recompute` (0085, run by the hourly pass) is the one
+     * place that turns orders into a rate, a Wilson interval, a score and a confidence; this reads the row it
+     * wrote. Until that change there were FOUR implementations of the same judgement — here, in quality.ts, in
+     * feasibility.ts and inline in the planner's candidate builder — and they had already begun to disagree:
+     * one used z = 1.96 and another z = 1.959964.
+     *
+     * A vendor with no row is simply absent from the result, which the caller reads as `qualityConfidence:
+     * "none"`. That is the truthful answer — nothing has scored this vendor — and it is exactly the state the
+     * optimiser's prior substitution and confidence share cap were built for. It is NOT the same as a bad
+     * score, and aggregating the raw orders here to fill the gap would be the fifth implementation.
      */
-    async history(customerId: string, integrationIds: string[]): Promise<Record<string, { completes: number; rejectionRate: number | null; duplicateRate: number | null }>> {
+    async history(customerId: string, integrationIds: string[]): Promise<Record<string, VendorHistoryRow>> {
       if (!integrationIds.length) return {};
-      const { data, error } = await db.from("recruitment_orders")
-        .select("integration_id, delivered_completes, accepted_completes, rejected_completes, duplicate_attempts, recruitment_projects!inner(customer_id)")
-        .eq("recruitment_projects.customer_id", customerId)
-        .in("integration_id", integrationIds);
-      if (error) throw new Error(error.message);
-      const agg: Record<string, { delivered: number; accepted: number; rejected: number; duplicates: number }> = {};
-      for (const r of data ?? []) {
+      const { data, error } = await db.from("vendor_quality_metrics")
+        .select("integration_id, accepted, rejection_rate, duplicate_rate, quality_score, confidence, median_delivery_days, window_days, computed_at")
+        .eq("customer_id", customerId)
+        .is("market", null)
+        .in("integration_id", integrationIds)
+        .order("computed_at", { ascending: false });
+      /* 0085 not applied: no metrics, so no history, so every vendor is unknown rather than wrongly scored */
+      if (error) return {};
+
+      const out: Record<string, VendorHistoryRow> = {};
+      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
         const k = String(r.integration_id);
-        const a = (agg[k] ??= { delivered: 0, accepted: 0, rejected: 0, duplicates: 0 });
-        a.delivered += Number(r.delivered_completes ?? 0);
-        a.accepted += Number(r.accepted_completes ?? 0);
-        a.rejected += Number(r.rejected_completes ?? 0);
-        a.duplicates += Number(r.duplicate_attempts ?? 0);
-      }
-      const out: Record<string, { completes: number; rejectionRate: number | null; duplicateRate: number | null }> = {};
-      for (const [k, a] of Object.entries(agg)) {
-        // with nothing delivered there is no rate, and 0 would read as "perfect"
+        // ordered newest first, so the first row for an integration is the one to keep
+        if (out[k]) continue;
+        const confidence = String(r.confidence ?? "none");
         out[k] = {
-          completes: a.accepted,
-          rejectionRate: a.delivered > 0 ? (a.rejected / a.delivered) * 100 : null,
-          duplicateRate: a.delivered + a.duplicates > 0 ? (a.duplicates / (a.delivered + a.duplicates)) * 100 : null,
+          completes: Number(r.accepted ?? 0),
+          rejectionRate: r.rejection_rate === null || r.rejection_rate === undefined ? null : Number(r.rejection_rate),
+          duplicateRate: r.duplicate_rate === null || r.duplicate_rate === undefined ? null : Number(r.duplicate_rate),
+          qualityScore: r.quality_score === null || r.quality_score === undefined ? null : Number(r.quality_score),
+          qualityConfidence: confidence === "high" || confidence === "medium" || confidence === "low" ? confidence : "none",
+          medianDeliveryDays: r.median_delivery_days === null || r.median_delivery_days === undefined ? null : Number(r.median_delivery_days),
         };
       }
       return out;

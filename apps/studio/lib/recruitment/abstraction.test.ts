@@ -115,3 +115,64 @@ test("the counts a researcher needs survive the guard", () => {
   const counts = { required: 1000, accepted: 400, delivered: 450, rejected: 30, duplicates: 20, remaining: 600 };
   assert.equal(findVendorIdentity({ totals: counts }).ok, true);
 });
+
+/*
+ * The reallocation answer (Phase 5) is assembled in the route rather than by `researcherPlan`, so the guard
+ * that covers the plan does not cover it. Its shape is pinned here instead, because what makes it safe is
+ * which fields were BUILT into it — a filter only removes what somebody remembered to list, and `{ ...row }`
+ * is how a field comes back.
+ */
+const reallocationForResearcher = (deviations: Array<Record<string, unknown>>) => ({
+  ok: true,
+  deviations: deviations.map((d) => ({
+    market: d.market, kind: d.kind, severity: d.severity, shortfall: d.shortfall, detail: d.detail,
+  })),
+  reSource: [{ market: "GB", completes: 400 }],
+  requiresApproval: true,
+  statement: "400 completes need re-sourcing. Nothing has been changed — this is a proposal.",
+});
+
+test("a reallocation tells a researcher a market is behind, never which supplier", () => {
+  const payload = reallocationForResearcher([{
+    integrationId: "int-1", market: "GB", kind: "pace", severity: "act", shortfall: 400,
+    detail: "600 of 1,000 with 70% of the field period gone — on track for about 857, 143 short.",
+  }]);
+  assert.deepEqual(findVendorIdentity(payload).found, []);
+  assert.deepEqual(findVendorNames(payload, ["Cint", "Prolific"]).found, []);
+  assert.equal((payload.deviations[0] as Record<string, unknown>).integrationId, undefined,
+    "the integration id is the supply chain; the fact that something is behind is not");
+});
+
+test("the deviation sentences are counts and percentages, which is why they can be shown at all", () => {
+  /*
+   * If `detectDeviations` ever started naming the vendor in its `detail`, this payload would carry it
+   * straight through — the sentence is passed along whole. This is the test that would catch it.
+   */
+  const payload = reallocationForResearcher([{
+    integrationId: "int-2", market: "US", kind: "quality", severity: "watch", shortfall: 0,
+    detail: "Rejection running at 18.0% (at least 14.2% on 2,000 screened) against 8.0% assumed in the plan.",
+  }]);
+  assert.deepEqual(findVendorNames(payload, ["Cint", "Prolific", "Dynata"]).found, []);
+  assert.deepEqual(findVendorIdentity(payload).found, []);
+});
+
+test("the commercial half of a reallocation is caught if it is ever sent to a researcher", () => {
+  /*
+   * The guard earns its keep only by failing on the payload it exists to refuse. The administrator's half
+   * carries the deviations WITH their integration ids and a revised plan naming each supplier — so a route
+   * that dropped the `canSeeVendors` check, or spread the proposal in whole, fails here.
+   */
+  const leaked = {
+    ...reallocationForResearcher([]),
+    supplyChain: {
+      deviations: [{ integrationId: "int-1", market: "GB", kind: "pace", severity: "act", shortfall: 400, detail: "…" }],
+      revisedPlan: { rows: [{ integrationId: "int-9", vendorName: "Cint", cpi: 4.2 }] },
+      headroom: 4000, currency: "GBP", notes: ["…"],
+    },
+  };
+  const leak = findVendorIdentity(leaked);
+  assert.equal(leak.ok, false, "a supplyChain block reaching a researcher must be caught");
+  assert.ok(leak.found.some((f) => f.includes("integrationId")));
+  assert.ok(leak.found.some((f) => f.includes("cpi")));
+  assert.equal(findVendorNames(leaked, ["Cint"]).ok, false, "and the supplier is named in it");
+});

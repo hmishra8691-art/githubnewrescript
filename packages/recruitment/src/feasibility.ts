@@ -27,6 +27,15 @@ export interface VendorHistory {
   medianDeliveryDays?: number | null;
   /** 0–100, from `vendor_quality_metrics`; null until there is enough history */
   qualityScore?: number | null;
+  /**
+   * How much evidence stands behind that score, as the hourly pass graded it.
+   *
+   * Supplied rather than derived here. This file used to run its own 1000/300/50 ladder over `completes`,
+   * which was the third of four copies of the same judgement; the one that counts the orders is
+   * `rescript_vendor_quality_recompute`. Absent means nothing has scored this vendor — which is "none", and
+   * is not the same as a poor score.
+   */
+  qualityConfidence?: FeasibilityEstimate["qualityConfidence"];
 }
 
 export interface FeasibilityInput {
@@ -49,19 +58,6 @@ export interface FeasibilityParams {
   loiMinutes: number;
   expectedIr: number;
   at?: string;
-}
-
-/**
- * How much history a quality score needs before it may be ranked on. The thresholds are deliberately blunt and
- * deliberately high: a vendor's rejection rate over 40 interviews is noise, and the cost of treating noise as
- * signal is sending 40% of a project to a vendor that had one good week.
- */
-export function qualityConfidence(completes: number | undefined): FeasibilityEstimate["qualityConfidence"] {
-  const n = completes ?? 0;
-  if (n >= 1000) return "high";
-  if (n >= 300) return "medium";
-  if (n >= 50) return "low";
-  return "none";
 }
 
 /**
@@ -90,7 +86,7 @@ export function estimateForVendor(input: FeasibilityInput, params: FeasibilityPa
     expectedDuplicateRate: input.history?.duplicateRate ?? null,
     deliveryDays: input.history?.medianDeliveryDays ?? null,
     qualityScore: input.history?.qualityScore ?? null,
-    qualityConfidence: qualityConfidence(input.history?.completes),
+    qualityConfidence: input.history?.qualityConfidence ?? "none",
     source: "administrator",
     unmapped: [...(input.unmapped ?? [])],
   };

@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
   allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
-  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, planQuotas, recommend, type AllocationCandidate, type FeasibilityInput,
+  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, planQuotas, proposeReallocation, recommend,
+  type AllocationCandidate, type FeasibilityInput, type ObservedVendor,
 } from "@rescript/recruitment";
 import { parseQuotaMapping } from "@rescript/identity";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
@@ -714,7 +715,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           if (!row) return [];
           const cap = capacity[i.id]?.[t.market] ?? null;
           const h = history[i.id];
-          const n = h?.completes ?? 0;
           return [{
             integrationId: i.id, vendorName: vendorNames.get(i.vendorId) ?? "Vendor",
             /* the vendor's own rate. The MARGIN is applied by the planner, not here — one place, not two. */
@@ -723,9 +723,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             capacity: cap?.available ?? null,
             rejectionRate: h?.rejectionRate ?? null,
             duplicateRate: h?.duplicateRate ?? null,
-            deliveryDays: cap?.deliveryDays ?? null,
-            qualityScore: null,
-            qualityConfidence: n >= 1000 ? "high" : n >= 300 ? "medium" : n >= 50 ? "low" : "none",
+            deliveryDays: h?.medianDeliveryDays ?? cap?.deliveryDays ?? null,
+            /*
+             * Score and confidence from the hourly pass (0085), not from a ladder written out here. This was
+             * `qualityScore: null` with the thresholds inline, which meant the project's quality floor could
+             * never bite and the quality weight was always applied to nothing.
+             */
+            qualityScore: h?.qualityScore ?? null,
+            qualityConfidence: h?.qualityConfidence ?? "none",
             source: row.source,
           }];
         }),
@@ -774,6 +779,153 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       });
     }
 
+    /*
+     * REALLOCATION (Phase 5) — what to do when a vendor is not delivering what the plan assumed.
+     *
+     * Detects, then proposes. It never applies: `requiresApproval` is a literal `true` on the type, and the
+     * only way completes move is a human posting the revised rows to `allocate` afterwards. An alert that
+     * silently rewrites a project is worse than no alert, and this one would be rewriting it with money.
+     *
+     * Two payloads, like everything else here. A researcher learns that a market is behind, by how much, and
+     * whether it can still recover; an administrator additionally learns which supplier, what the replacement
+     * costs, and what is left uncommitted. The deviation sentences themselves name no vendor — they are counts
+     * and percentages — so the researcher's half is BUILT from the fields, not filtered out of the full one.
+     */
+    if (action === "reallocate") {
+      const allocations = await store.allocations(projectId);
+      const orders = await store.orders(projectId);
+      if (!orders.length) {
+        return noStore({
+          ok: true, deviations: [], reSource: [],
+          statement: "Nothing has been ordered for this project yet, so there is nothing to reallocate.",
+        });
+      }
+
+      /*
+       * How much of the field period has gone. From the FIRST order placed to the deadline — not from the
+       * project row's creation, which would make a project drafted in March and fielded in June look nine
+       * tenths elapsed on its first day.
+       */
+      const placedAts = orders.map((o) => o.placed_at as string | null).filter((v): v is string => !!v).sort();
+      const startedAt = placedAts[0] ? Date.parse(placedAts[0]) : Date.parse(String(project.created_at));
+      const deadline = project.deadline ? Date.parse(String(project.deadline)) : null;
+      const now = Date.now();
+      const elapsedFraction = deadline && deadline > startedAt
+        ? Math.min(1, Math.max(0, (now - startedAt) / (deadline - startedAt)))
+        : null;
+      if (elapsedFraction === null) {
+        /* without a deadline there is no pro-rata expectation, and inventing one would invent the deviations too */
+        return noStore({
+          ok: true, deviations: [], reSource: [],
+          statement: "This project has no deadline, so there is no pace to be behind. Set one to see delivery against it.",
+          code: "no_deadline",
+        }, 200);
+      }
+
+      const marketOf = new Map(allocations.map((a) => [String(a.id), String(a.market ?? "")]));
+      const assumedOf = new Map(allocations.map((a) => {
+        const expected = Number(a.expected_valid_completes ?? 0);
+        const allocated = Number(a.allocated_completes ?? 0);
+        /* what the plan assumed would be rejected, read back out of the two numbers it was built from */
+        const assumed = allocated > 0 && expected > 0 ? ((allocated - expected) / allocated) * 100 : null;
+        return [String(a.id), assumed];
+      }));
+
+      const observed: ObservedVendor[] = orders
+        .filter((o) => ["placed", "live", "paused", "complete"].includes(String(o.status)))
+        .map((o) => ({
+          integrationId: String(o.integration_id),
+          market: marketOf.get(String(o.allocation_id ?? "")) || String(body.market ?? "") || "--",
+          ordered: Number(o.ordered_completes ?? 0),
+          delivered: Number(o.delivered_completes ?? 0),
+          accepted: Number(o.accepted_completes ?? 0),
+          rejected: Number(o.rejected_completes ?? 0),
+          assumedRejectionRate: assumedOf.get(String(o.allocation_id ?? "")) ?? null,
+          cpi: Number(o.agreed_cpi ?? 0),
+          currency: String(o.currency ?? project.budget_currency ?? "USD"),
+          spend: Number(o.spend_amount ?? 0) || null,
+        }));
+
+      const markets = [...new Set(observed.map((o) => o.market))].filter((m) => /^[A-Z]{2}$/.test(m));
+      const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null) };
+      const { integrations, vendorNames } = await comparisonFor(actor.customerId, withAudience);
+      const [pricing, capacity, history] = await Promise.all([
+        store.pricing(actor.customerId), store.capacity(actor.customerId),
+        store.history(actor.customerId, integrations.map((i) => i.id)),
+      ]);
+      const loi = Number(project.loi_minutes ?? 15) || 15;
+      const ir = Number(project.expected_ir ?? 35) || 35;
+
+      const candidates = markets.map((market) => ({
+        market,
+        candidates: integrations.filter((i) => i.enabled && (i.mode === "manual" || i.mode === "api")).flatMap((i): AllocationCandidate[] => {
+          const row = selectPricing(pricing[i.id] ?? [], { market, ir, loiMinutes: loi });
+          if (!row) return [];
+          const cap = capacity[i.id]?.[market] ?? null;
+          const h = history[i.id];
+          return [{
+            integrationId: i.id, vendorName: vendorNames.get(i.vendorId) ?? "Vendor",
+            cpi: row.cpi, currency: row.currency,
+            capacity: cap?.available ?? null,
+            rejectionRate: h?.rejectionRate ?? null,
+            duplicateRate: h?.duplicateRate ?? null,
+            deliveryDays: h?.medianDeliveryDays ?? cap?.deliveryDays ?? null,
+            qualityScore: h?.qualityScore ?? null,
+            qualityConfidence: h?.qualityConfidence ?? "none",
+            source: row.source,
+          }];
+        }),
+      }));
+
+      const proposal = proposeReallocation({
+        elapsedFraction,
+        observed,
+        candidates,
+        budget: Number(project.budget_amount ?? 0),
+        committed: Number(project.committed_amount ?? 0),
+        currency: String(project.budget_currency ?? "USD"),
+        strategy: String(project.strategy ?? "balanced") as AllocationStrategy,
+        ...(project.weights && typeof project.weights === "object" && Object.keys(project.weights).length
+          ? { weights: project.weights as { cost: number; quality: number; speed: number } } : {}),
+      });
+
+      await audit({
+        action: "recruitment.reallocation_proposed", userId: actor.userId, customerId: actor.customerId, surveyId: params.id,
+        entity: "recruitment_project", entityId: projectId,
+        detail: {
+          deviations: proposal.deviations.length,
+          moves: proposal.reSource.reduce((t, r) => t + r.completes, 0),
+          elapsed: Math.round(elapsedFraction * 100),
+        },
+      });
+
+      const act = proposal.deviations.filter((d) => d.severity === "act").length;
+      return noStore({
+        ok: true,
+        /* no integrationId: which supplier is behind is supply-chain information, the fact that one is is not */
+        deviations: proposal.deviations.map((d) => ({
+          market: d.market, kind: d.kind, severity: d.severity, shortfall: d.shortfall, detail: d.detail,
+        })),
+        reSource: proposal.reSource,
+        requiresApproval: true,
+        statement: !proposal.deviations.length
+          ? `Delivery is tracking the plan with ${Math.round(elapsedFraction * 100)}% of the field period gone.`
+          : act
+            ? `${proposal.reSource.reduce((t, r) => t + r.completes, 0).toLocaleString()} completes need re-sourcing. Nothing has been changed — this is a proposal.`
+            : "Something is worth watching, but nothing is far enough off plan to move completes yet.",
+        ...(actor.canSeeVendors ? {
+          supplyChain: {
+            deviations: proposal.deviations,
+            revisedPlan: proposal.revisedPlan,
+            headroom: proposal.headroom,
+            currency: proposal.currency,
+            notes: proposal.notes,
+            observed: observed.length,
+          },
+        } : {}),
+      });
+    }
+
     if (action === "optimise") {
       const strategy = String(body.strategy ?? project.strategy ?? "balanced") as AllocationStrategy;
       const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null) };
@@ -802,7 +954,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           if (!row) return [];
           const cap = capacity[i.id]?.[t.market] ?? null;
           const h = history[i.id];
-          const n = h?.completes ?? 0;
           return [{
             integrationId: i.id, vendorName: vendorNames.get(i.vendorId) ?? "Vendor",
             cpi: Math.round(row.cpi * (1 + i.markupBps / 10_000) * 100) / 100,
@@ -810,9 +961,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             capacity: cap?.available ?? null,
             rejectionRate: h?.rejectionRate ?? null,
             duplicateRate: h?.duplicateRate ?? null,
-            deliveryDays: cap?.deliveryDays ?? null,
-            qualityScore: null,
-            qualityConfidence: n >= 1000 ? "high" : n >= 300 ? "medium" : n >= 50 ? "low" : "none",
+            deliveryDays: h?.medianDeliveryDays ?? cap?.deliveryDays ?? null,
+            qualityScore: h?.qualityScore ?? null,
+            qualityConfidence: h?.qualityConfidence ?? "none",
             source: row.source,
           }];
         }),
