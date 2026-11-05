@@ -29,9 +29,29 @@ export const maxDuration = 60;
  * inactivity filter, so a respondent who saves between our read and our
  * write keeps their session. Bounded in slices and time; the next run (hourly)
  * picks up what this one did not reach.
+ *
+ * ## And the third thing nobody was releasing (0083)
+ *
+ * An EXPIRED PARTICIPATION RESERVATION. `rescript_rtid_reserve` holds one live
+ * row per (survey, trust id) behind a unique partial index, and `expired` is
+ * deliberately outside that index — but nothing moved a lapsed reservation
+ * into it. The row stayed `reserved`, kept holding the index, and the same
+ * person coming back was refused as a duplicate of themselves. 0083 wrote
+ * `rescript_rtid_sweep` for exactly this and said so in its own comment:
+ * "the most infuriating possible failure, and invisible unless somebody is
+ * looking for it". Nothing called it until now.
+ *
+ * It runs FIRST and under a budget of its own, because the harm is live: a
+ * respondent is locked out of a study while a partial row merely sits there.
+ * The default reservation lasts an hour, so an hourly sweep frees them within
+ * about one TTL of expiry, which is the closest this cadence can get.
  */
 
 const BUDGET_MS = 45_000;
+/* the reservation sweep's own slice of the budget, so a large partial backlog can never starve it */
+const RTID_BUDGET_MS = 10_000;
+const RTID_SLICE = 1000;
+const RTID_PASSES = 10;
 const SLICE = 500;
 const SURVEY_PAGE = 1000;
 const IN_CHUNK = 100;
@@ -66,6 +86,37 @@ async function run(req: Request): Promise<NextResponse> {
   const overBudget = () => Date.now() - startedAt > BUDGET_MS;
 
   try {
+    /*
+     * 0. expired participation reservations (0083), oldest first.
+     *
+     * One global call rather than one per customer: the function takes no
+     * customer, orders by `expires_at` and takes its rows `for update skip
+     * locked`, so two overlapping runs divide the work instead of blocking.
+     * Looped while a batch comes back full, inside its own budget.
+     *
+     * A database without 0083 has no such function. That is not an error here
+     * — it is an instance that never switched identity on — so it is noted
+     * once and the rest of the sweep carries on.
+     */
+    let reservations = 0;
+    let reservationsMore = false;
+    for (let pass = 0; pass < RTID_PASSES; pass++) {
+      if (Date.now() - startedAt > RTID_BUDGET_MS) { reservationsMore = true; break; }
+      const { data, error: rtidErr } = await db.rpc("rescript_rtid_sweep", { p_limit: RTID_SLICE });
+      if (rtidErr) {
+        console.warn("[rescript:expire-partials] reservation sweep unavailable (migration 0083?)", rtidErr.message);
+        break;
+      }
+      const freed = Number(data ?? 0);
+      reservations += freed;
+      /* a short batch means the queue is drained; a full one means there may be more */
+      if (freed < RTID_SLICE) break;
+      if (pass === RTID_PASSES - 1) reservationsMore = true;
+    }
+    if (reservations) {
+      console.info("[rescript:expire-partials] expired reservations returned to the pool", { reservations, more: reservationsMore });
+    }
+
     /* 1. every survey, with the raw settings paths of its draft (fallback) */
     const surveys: { id: string; versionId: string | null; draft: SettingsPaths }[] = [];
     for (let from = 0; ; from += SURVEY_PAGE) {
@@ -148,7 +199,11 @@ async function run(req: Request): Promise<NextResponse> {
       }
     }
     if (abandoned) console.info("[rescript:expire-partials] partials abandoned", { abandoned, released, slots, more, ms: Date.now() - startedAt });
-    return NextResponse.json({ ok: true, surveys: surveys.length, expiring: plan.length, abandoned, released, quotaSlots: slots, more });
+    return NextResponse.json({
+      ok: true, surveys: surveys.length, expiring: plan.length,
+      abandoned, released, quotaSlots: slots, more,
+      reservations, reservationsMore,
+    });
   } catch (e) {
     console.error("[rescript:expire-partials] sweep failed", { error: (e as Error).message });
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 503 });
