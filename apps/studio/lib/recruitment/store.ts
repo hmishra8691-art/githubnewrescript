@@ -1,6 +1,7 @@
 import "server-only";
 import { supabaseService } from "@/lib/authServer";
 import type { VendorCapabilityState, VendorMode, VendorPricingRow } from "@rescript/schema";
+import type { MarginRule } from "@rescript/recruitment";
 
 /**
  * THE RECRUITMENT STORE (2026-11-03) — every read and write of migration 0081, in one place, through the service
@@ -187,6 +188,34 @@ export function recruitmentStore() {
       if (error) throw new Error(error.message);
       const sealed = (data as { credentials_sealed?: string | null } | null)?.credentials_sealed;
       return typeof sealed === "string" && sealed.length > 0 ? sealed : null;
+    },
+
+    /**
+     * The organisation's margin rules (0087).
+     *
+     * Read for every plan, because the margin decides the price and therefore whether a project is over
+     * budget. Returns an empty list when none are configured, and the engine then uses the platform default —
+     * which is a real rate, not a missing one, and `resolveMargin` says so in its reason.
+     */
+    async marginRules(customerId: string): Promise<MarginRule[]> {
+      const { data, error } = await db.from("commercial_margins")
+        .select("id, scope, margin_bps, market, recruitment_type, recruitment_project_id, note, effective_from, effective_to")
+        .eq("customer_id", customerId);
+      if (error) throw new Error(error.message);
+      return (data ?? []).map((r) => {
+        const row = r as Record<string, unknown>;
+        return {
+          id: String(row.id),
+          scope: row.scope as MarginRule["scope"],
+          marginBps: Number(row.margin_bps ?? 0),
+          market: (row.market as string | null) ?? null,
+          recruitmentType: (row.recruitment_type as string | null) ?? null,
+          recruitmentProjectId: (row.recruitment_project_id as string | null) ?? null,
+          note: (row.note as string | null) ?? null,
+          effectiveFrom: (row.effective_from as string | null) ?? null,
+          effectiveTo: (row.effective_to as string | null) ?? null,
+        };
+      });
     },
 
     async upsertIntegration(customerId: string, vendorId: string, patch: {

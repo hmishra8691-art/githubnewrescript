@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
   allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
-  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, type AllocationCandidate, type FeasibilityInput,
+  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, type AllocationCandidate, type FeasibilityInput,
 } from "@rescript/recruitment";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { liveRegistry, LIVE_FEASIBILITY_MS } from "@/lib/recruitment/live";
@@ -528,6 +528,94 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
       const saved = await store.setMarkets(projectId, rows);
       return noStore({ ok: true, markets: saved, note: "Re-run Optimise: allocations made before this change were against the old markets." });
+    }
+
+    /*
+     * PLAN (Phase 3). Six inputs — completes, budget, LOI, incidence, markets, timeline — and a verdict,
+     * computed and returned without writing anything. A researcher should learn that a project is over budget
+     * BEFORE it is saved, not after authorising it.
+     *
+     * It builds the same candidates `optimise` does, from the same rate cards, so the verdict and the eventual
+     * allocation cannot disagree. What it adds is the margin: the budget is the researcher's PRICE ceiling, and
+     * `planRecruitment` holds the optimiser to the cost that corresponds to it.
+     */
+    if (action === "plan") {
+      const completes = num(body.requiredCompletes) ?? Number(project?.required_completes ?? 0);
+      const budget = num(body.budget) ?? Number(project?.budget_amount ?? 0);
+      const loi = num(body.loiMinutes) ?? Number(project?.loi_minutes ?? 15) ?? 15;
+      const ir = num(body.expectedIr) ?? Number(project?.expected_ir ?? 35) ?? 35;
+      const timelineDays = num(body.timelineDays) ?? 14;
+      const currency = String(body.currency ?? project?.budget_currency ?? "USD");
+      const askedMarkets = Array.isArray(body.markets)
+        ? (body.markets as Array<Record<string, unknown>>)
+            .map((m) => ({ market: String(m.market ?? "").toUpperCase(), completes: Math.round(num(m.completes) ?? 0) }))
+            .filter((m) => /^[A-Z]{2}$/.test(m.market) && m.completes > 0)
+        : [];
+
+      if (!completes || !budget) return noStore({ error: "requiredCompletes and budget are needed to plan." }, 400);
+      if (!askedMarkets.length) return noStore({ error: "At least one market with a completes target is needed." }, 400);
+
+      const withAudience = { ...(project ?? {}), audience: await loadAudience((project?.audience_spec_id as string | null) ?? null) };
+      const { integrations, vendorNames } = await comparisonFor(actor.customerId, withAudience);
+      const [pricing, capacity] = await Promise.all([
+        store.pricing(actor.customerId), store.capacity(actor.customerId),
+      ]);
+      const history = await store.history(actor.customerId, integrations.map((i) => i.id));
+
+      const candidates = askedMarkets.map((t) => ({
+        market: t.market,
+        candidates: integrations.filter((i) => i.enabled && (i.mode === "manual" || i.mode === "api")).flatMap((i): AllocationCandidate[] => {
+          const row = selectPricing(pricing[i.id] ?? [], { market: t.market, ir, loiMinutes: loi });
+          if (!row) return [];
+          const cap = capacity[i.id]?.[t.market] ?? null;
+          const h = history[i.id];
+          const n = h?.completes ?? 0;
+          return [{
+            integrationId: i.id, vendorName: vendorNames.get(i.vendorId) ?? "Vendor",
+            /* the vendor's own rate. The MARGIN is applied by the planner, not here — one place, not two. */
+            cpi: row.cpi,
+            currency: row.currency,
+            capacity: cap?.available ?? null,
+            rejectionRate: h?.rejectionRate ?? null,
+            duplicateRate: h?.duplicateRate ?? null,
+            deliveryDays: cap?.deliveryDays ?? null,
+            qualityScore: null,
+            qualityConfidence: n >= 1000 ? "high" : n >= 300 ? "medium" : n >= 50 ? "low" : "none",
+            source: row.source,
+          }];
+        }),
+      }));
+
+      const marginRules = await store.marginRules(actor.customerId);
+      const planned = planRecruitment(
+        { requiredCompletes: completes, budget, currency, loiMinutes: loi, expectedIr: ir, markets: askedMarkets, timelineDays },
+        candidates, marginRules,
+        project ? { recruitmentProjectId: String(project.id) } : {},
+      );
+
+      /*
+       * The cost, the margin and the rule behind them are ADMINISTRATOR information. A researcher gets the
+       * verdict, what it would cost them, and what stands in the way — nothing about what we paid for it.
+       */
+      const forResearcher = {
+        verdict: planned.verdict,
+        summary: planned.summary,
+        blockers: planned.blockers,
+        markets: planned.markets,
+        expectedDeliveryDays: planned.expectedDeliveryDays,
+        totalShortfall: planned.totalShortfall,
+        price: planned.pricing?.price ?? null,
+        pricePerComplete: planned.pricing?.pricePerComplete ?? null,
+        fullPrice: planned.fullPrice,
+        currency,
+      };
+
+      return noStore({
+        ok: true,
+        plan: forResearcher,
+        ...(actor.canSeeVendors ? { commercial: planned.pricing, sourceCount: planned.sourceCount } : {}),
+        note: "Nothing has been saved. This is what the plan would cost and whether it can be filled.",
+      });
     }
 
     if (action === "optimise") {

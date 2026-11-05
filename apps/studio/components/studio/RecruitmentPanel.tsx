@@ -355,11 +355,96 @@ interface RecruitmentData {
   };
 }
 
+interface PlanVerdictView {
+  verdict: "achievable" | "over_budget" | "too_fast" | "short_of_capacity" | "cannot_price";
+  summary: string;
+  blockers: string[];
+  markets: Array<{ market: string; required: number; planned: number; shortfall: number; expectedDeliveryDays: number | null; priced: boolean }>;
+  expectedDeliveryDays: number | null;
+  totalShortfall: number;
+  price: number | null;
+  pricePerComplete: number | null;
+  fullPrice: number | null;
+  currency: string;
+}
+
+/**
+ * The feasibility answer, before anything is saved.
+ *
+ * The verdict leads, because it is the one thing the researcher came for. The blockers follow, each naming the
+ * lever that would move it — more budget, more time, or a market nobody has priced — rather than a general
+ * complaint that the plan does not work.
+ */
+function VerdictCard({ v }: { v: PlanVerdictView }) {
+  const tone =
+    v.verdict === "achievable" ? { label: "Achievable", colour: "#067647" }
+    : v.verdict === "cannot_price" ? { label: "Not yet priced", colour: "#854a0e" }
+    : v.verdict === "short_of_capacity" ? { label: "Not enough sample", colour: "#b42318" }
+    : v.verdict === "too_fast" ? { label: "Timeline too short", colour: "#b54708" }
+    : { label: "Over budget", colour: "#b54708" };
+
+  return (
+    <div className="card" data-testid="recruitment-verdict">
+      <div className="row">
+        <strong className="grow" style={{ color: tone.colour }}>{tone.label}</strong>
+        <span className="muted" style={{ fontSize: 12.5 }}>Nothing has been saved</span>
+      </div>
+      <p style={{ lineHeight: 1.55, marginTop: 4 }}>{v.summary}</p>
+
+      {v.price !== null && (
+        <div className="row" style={{ gap: 24, flexWrap: "wrap" }}>
+          <div><div className="muted" style={{ fontSize: 12 }}>Price</div><strong>{money(v.price, v.currency)}</strong></div>
+          <div><div className="muted" style={{ fontSize: 12 }}>Per complete</div><strong>{money(v.pricePerComplete, v.currency)}</strong></div>
+          {v.expectedDeliveryDays !== null && (
+            <div><div className="muted" style={{ fontSize: 12 }}>Expected</div><strong>{v.expectedDeliveryDays.toFixed(0)} days</strong></div>
+          )}
+          {/* what the FULL sample would cost, when the plan had to be trimmed to fit */}
+          {v.fullPrice !== null && v.verdict === "over_budget" && (
+            <div><div className="muted" style={{ fontSize: 12 }}>Full sample</div><strong>{money(v.fullPrice, v.currency)}</strong></div>
+          )}
+        </div>
+      )}
+
+      {v.blockers.length > 0 && (
+        <ul style={{ margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
+          {v.blockers.map((b) => <li key={b}>{b}</li>)}
+        </ul>
+      )}
+
+      {v.markets.length > 0 && (
+        <table className="grid" style={{ marginTop: 10 }}>
+          <thead><tr><th>Market</th><th>Needed</th><th>Can supply</th><th>Short</th><th>Days</th></tr></thead>
+          <tbody>
+            {v.markets.map((m) => (
+              <tr key={m.market}>
+                <td className="mono">{m.market}</td>
+                <td className="mono">{int(m.required)}</td>
+                <td className="mono">{m.priced ? int(m.planned) : <span className="muted">not priced</span>}</td>
+                <td className="mono">{m.shortfall > 0 ? int(m.shortfall) : "—"}</td>
+                <td className="mono">{m.expectedDeliveryDays === null ? "—" : m.expectedDeliveryDays.toFixed(0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function Recruitment({ surveyId }: { surveyId: string }) {
   const [data, setData] = React.useState<RecruitmentData | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [form, setForm] = React.useState({ completes: "", budget: "", loi: "15", ir: "30", country: "US", strategy: "balanced" });
+  /*
+   * THE SIX. Completes, budget, LOI, incidence, markets and timeline — and nothing else above the fold.
+   * `strategy` is gone from here: the engine balances cost, quality and speed, and asking a researcher to
+   * choose between them is asking them to reason about a supply chain they cannot see.
+   */
+  const [form, setForm] = React.useState({
+    completes: "", budget: "", loi: "15", ir: "35", timelineDays: "14",
+    markets: [{ market: "US", completes: "" }] as Array<{ market: string; completes: string }>,
+  });
+  const [verdict, setVerdict] = React.useState<PlanVerdictView | null>(null);
   const [plan, setPlan] = React.useState<Plan | null>(null);
   const [strategy, setStrategy] = React.useState("balanced");
 
@@ -402,26 +487,64 @@ function Recruitment({ surveyId }: { surveyId: string }) {
       {error && <p className="chip warn">{error}</p>}
 
       <div className="card">
+        <strong>What do you need?</strong>
         <div className="row">
           <label className="f"><span className="muted">Completes needed</span>
-            <input className="input mono" value={form.completes} onChange={(e) => setForm({ ...form, completes: e.target.value })} placeholder="5000" /></label>
+            <input className="input mono" value={form.completes} onChange={(e) => setForm({ ...form, completes: e.target.value })} placeholder="2000" /></label>
           <label className="f"><span className="muted">Budget</span>
-            <input className="input mono" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} placeholder="40000" /></label>
-          <label className="f"><span className="muted">LOI (min)</span>
+            <input className="input mono" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} placeholder="10000" /></label>
+          <label className="f"><span className="muted">Survey length (min)</span>
             <input className="input mono" value={form.loi} onChange={(e) => setForm({ ...form, loi: e.target.value })} /></label>
-          <label className="f"><span className="muted">Expected IR (%)</span>
+          <label className="f"><span className="muted">Expected incidence (%)</span>
             <input className="input mono" value={form.ir} onChange={(e) => setForm({ ...form, ir: e.target.value })} /></label>
-          <label className="f"><span className="muted">Market</span>
-            <input className="input mono" value={form.country} maxLength={2} onChange={(e) => setForm({ ...form, country: e.target.value.toUpperCase() })} /></label>
-          <button className="btn primary small" disabled={busy || !form.completes || !form.budget} onClick={() => void post({
+          <label className="f"><span className="muted">Timeline (days)</span>
+            <input className="input mono" value={form.timelineDays} onChange={(e) => setForm({ ...form, timelineDays: e.target.value })} /></label>
+        </div>
+
+        <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
+          <span className="muted" style={{ fontSize: 12.5, width: "100%" }}>Markets, and how many completes from each</span>
+          {form.markets.map((m, i) => (
+            <React.Fragment key={i}>
+              <label className="f" style={{ maxWidth: 90 }}>
+                <input className="input mono" value={m.market} maxLength={2} placeholder="US"
+                  onChange={(e) => setForm({ ...form, markets: form.markets.map((x, j) => j === i ? { ...x, market: e.target.value.toUpperCase() } : x) })} /></label>
+              <label className="f" style={{ maxWidth: 130 }}>
+                <input className="input mono" value={m.completes} placeholder="completes"
+                  onChange={(e) => setForm({ ...form, markets: form.markets.map((x, j) => j === i ? { ...x, completes: e.target.value } : x) })} /></label>
+              {form.markets.length > 1 && (
+                <button className="btn small" onClick={() => setForm({ ...form, markets: form.markets.filter((_, j) => j !== i) })}>Remove</button>
+              )}
+            </React.Fragment>
+          ))}
+          <button className="btn small" onClick={() => setForm({ ...form, markets: [...form.markets, { market: "", completes: "" }] })}>Add market</button>
+        </div>
+
+        <div className="row">
+          <button
+            className="btn primary small"
+            disabled={busy || !form.completes || !form.budget || !form.markets.some((m) => m.market && m.completes)}
+            onClick={async () => {
+              const r = await post({
+                action: "plan",
+                requiredCompletes: Number(form.completes), budget: Number(form.budget),
+                loiMinutes: Number(form.loi), expectedIr: Number(form.ir),
+                timelineDays: Number(form.timelineDays),
+                markets: form.markets.filter((m) => m.market && m.completes)
+                  .map((m) => ({ market: m.market, completes: Number(m.completes) })),
+              });
+              if (r?.plan) setVerdict(r.plan as PlanVerdictView);
+            }}
+          >Check feasibility</button>
+          <button className="btn small" disabled={busy || !form.completes || !form.budget} onClick={() => void post({
             action: "project", requiredCompletes: Number(form.completes), budget: Number(form.budget),
-            loiMinutes: Number(form.loi), expectedIr: Number(form.ir), strategy: form.strategy,
-            audience: { demographics: { countries: [form.country] } },
-          })}>{data.project ? "Update" : "Create"} recruitment project</button>
-          {data.project && <button className="btn small" disabled={busy} onClick={() => void post({ action: "compare" })}>Compare vendors</button>}
+            loiMinutes: Number(form.loi), expectedIr: Number(form.ir),
+            audience: { demographics: { countries: form.markets.map((m) => m.market).filter(Boolean) } },
+          })}>{data.project ? "Update" : "Create"} project</button>
         </div>
         {data.project && <p className="muted">Status: <span className="mono">{status}</span></p>}
       </div>
+
+      {verdict && <VerdictCard v={verdict} />}
 
       {data.project && <AudienceCard />}
 
