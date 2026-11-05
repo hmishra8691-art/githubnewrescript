@@ -737,16 +737,153 @@ function Recruitment({ surveyId }: { surveyId: string }) {
  * change list exactly like an edit Intelligent Mode made through `define_audience` — there is one audience and
  * one way it is stored, whichever hand typed it.
  */
+/**
+ * CUSTOM ELIGIBILITY. A screener is a question asked inside the survey, not a filter sent to a supplier — which
+ * is the distinction that decides whether a criterion costs incidence or costs nothing.
+ *
+ * Every one carries its own expected incidence, because that is what turns "we need 1,000 people who bought a
+ * car last year" into a number of invitations. Left blank it is unknown, and the planner says so rather than
+ * assuming everybody qualifies.
+ */
+function ScreenersEditor() {
+  const s = useStudio();
+  const a = (s.def as { audience?: Record<string, unknown> } | undefined)?.audience;
+  const rows = (Array.isArray(a?.screeners) ? a!.screeners : []) as Array<Record<string, unknown>>;
+
+  const write = (next: Array<Record<string, unknown>>) => s.update((def: Record<string, unknown>) => {
+    const cur = (def.audience ?? { version: 1, demographics: {}, advanced: {}, screeners: [], quotas: [] }) as Record<string, unknown>;
+    def.audience = { ...cur, screeners: next };
+  });
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="row">
+        <strong className="grow" style={{ fontSize: 13 }}>Custom eligibility</strong>
+        <button className="btn small" onClick={() => write([...rows, { id: `s${Date.now()}`, text: "", qualifyingAnswers: [] }])}>Add criterion</button>
+      </div>
+      {!rows.length && <p className="muted" style={{ fontSize: 12.5 }}>Anything the demographic fields cannot express — asked as a question in the survey.</p>}
+      {rows.map((r, i) => (
+        <div className="row" key={String(r.id)}>
+          <label className="f grow"><span className="muted">Question</span>
+            <input className="input" defaultValue={String(r.text ?? "")} placeholder="Did you buy a car in the last 12 months?"
+              onBlur={(e) => write(rows.map((x, j) => j === i ? { ...x, text: e.target.value } : x))} /></label>
+          <label className="f"><span className="muted">Qualifying answers</span>
+            <input className="input" defaultValue={Array.isArray(r.qualifyingAnswers) ? (r.qualifyingAnswers as string[]).join(", ") : ""} placeholder="Yes"
+              onBlur={(e) => write(rows.map((x, j) => j === i ? { ...x, qualifyingAnswers: e.target.value.split(",").map((v) => v.trim()).filter(Boolean) } : x))} /></label>
+          <label className="f" style={{ maxWidth: 120 }}><span className="muted">Incidence %</span>
+            <input className="input mono" defaultValue={r.expectedIncidence === undefined ? "" : String(r.expectedIncidence)} placeholder="unknown"
+              onBlur={(e) => write(rows.map((x, j) => j === i ? { ...x, expectedIncidence: e.target.value ? Number(e.target.value) : undefined } : x))} /></label>
+          <button className="btn small" onClick={() => write(rows.filter((_, j) => j !== i))}>Remove</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * QUOTAS, validated as DIMENSIONS.
+ *
+ * "Male 50 / Female 50" and "18–34 40 / 35–54 35 / 55+ 25" are five cells summing to 250%, and they are
+ * correct: they describe the same respondents along two independent dimensions. The validator groups by the
+ * criterion each cell constrains, so each dimension is checked against 100 on its own — and a flat sum, which
+ * would reject this, is never taken.
+ */
+function QuotasEditor() {
+  const s = useStudio();
+  const a = (s.def as { audience?: Record<string, unknown> } | undefined)?.audience;
+  const rows = (Array.isArray(a?.quotas) ? a!.quotas : []) as Array<Record<string, unknown>>;
+  const [criterion, setCriterion] = React.useState("gender");
+
+  const write = (next: Array<Record<string, unknown>>) => s.update((def: Record<string, unknown>) => {
+    const cur = (def.audience ?? { version: 1, demographics: {}, advanced: {}, screeners: [], quotas: [] }) as Record<string, unknown>;
+    def.audience = { ...cur, quotas: next };
+  });
+
+  /* grouped the same way the engine groups them, so what is shown matches what is validated */
+  const byDimension = new Map<string, Array<Record<string, unknown>>>();
+  for (const r of rows) {
+    const keys = Object.keys((r.criteria ?? {}) as object).sort().join("+") || "*";
+    byDimension.set(keys, [...(byDimension.get(keys) ?? []), r]);
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="row">
+        <strong className="grow" style={{ fontSize: 13 }}>Quotas</strong>
+        <input className="input mono" style={{ maxWidth: 140 }} value={criterion}
+          onChange={(e) => setCriterion(e.target.value)} placeholder="gender" />
+        <button className="btn small" disabled={!criterion.trim()} onClick={() => write([...rows, {
+          id: `q${Date.now()}`, label: "", target: 0, mode: "percent", criteria: { [criterion.trim()]: "" },
+        }])}>Add cell</button>
+      </div>
+      {!rows.length && <p className="muted" style={{ fontSize: 12.5 }}>No quotas — the sample fills in whatever composition arrives.</p>}
+
+      {[...byDimension.entries()].map(([dim, cells]) => {
+        const pct = cells.filter((c) => (c.mode ?? "percent") === "percent").reduce((t, c) => t + (Number(c.target) || 0), 0);
+        const over = pct > 100.5;
+        return (
+          <div key={dim} style={{ marginTop: 6 }}>
+            <div className="row">
+              <span className="muted mono" style={{ fontSize: 12.5 }}>{dim}</span>
+              <span className="muted" style={{ fontSize: 12.5, color: over ? "#b42318" : undefined }}>
+                {pct.toFixed(0)}%{over ? " — cannot be filled" : pct < 99.5 ? ` · ${(100 - pct).toFixed(0)}% unconstrained` : ""}
+              </span>
+            </div>
+            {cells.map((r) => {
+              const i = rows.indexOf(r);
+              const key = Object.keys((r.criteria ?? {}) as object)[0] ?? criterion;
+              return (
+                <div className="row" key={String(r.id)}>
+                  <label className="f"><span className="muted">Label</span>
+                    <input className="input" defaultValue={String(r.label ?? "")} placeholder="Male"
+                      onBlur={(e) => write(rows.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} /></label>
+                  <label className="f"><span className="muted">{key}</span>
+                    <input className="input" defaultValue={String(((r.criteria ?? {}) as Record<string, unknown>)[key] ?? "")} placeholder="male"
+                      onBlur={(e) => write(rows.map((x, j) => j === i ? { ...x, criteria: { ...(x.criteria as object), [key]: e.target.value } } : x))} /></label>
+                  <label className="f" style={{ maxWidth: 110 }}><span className="muted">Target</span>
+                    <input className="input mono" defaultValue={String(r.target ?? "")}
+                      onBlur={(e) => write(rows.map((x, j) => j === i ? { ...x, target: Number(e.target.value) || 0 } : x))} /></label>
+                  <label className="f" style={{ maxWidth: 110 }}><span className="muted">Mode</span>
+                    <select className="input" defaultValue={String(r.mode ?? "percent")}
+                      onChange={(e) => write(rows.map((x, j) => j === i ? { ...x, mode: e.target.value } : x))}>
+                      <option value="percent">percent</option>
+                      <option value="count">completes</option>
+                    </select></label>
+                  <button className="btn small" onClick={() => write(rows.filter((_, j) => j !== i))}>Remove</button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function AudienceCard() {
   const s = useStudio();
   const a = (s.def as { audience?: Record<string, unknown> } | undefined)?.audience;
   const d = (a?.demographics ?? {}) as Record<string, unknown>;
+  const adv = (a?.advanced ?? {}) as Record<string, unknown>;
   const list = (v: unknown) => (Array.isArray(v) ? v.join(", ") : "");
   const [open, setOpen] = React.useState(!a);
+  const [advanced, setAdvanced] = React.useState(false);
+
+  /** What is set behind the collapsed section, so closing it does not hide that something is in there. */
+  const advancedSummary = [
+    ...Object.entries(adv).filter(([, v]) => Array.isArray(v) && v.length).map(([k]) => k),
+    ...(Array.isArray(a?.screeners) && (a!.screeners as unknown[]).length ? ["screeners"] : []),
+    ...(Array.isArray(a?.quotas) && (a!.quotas as unknown[]).length ? ["quotas"] : []),
+  ].join(", ");
 
   const setDemo = (patch: Record<string, unknown>) => s.update((def: Record<string, unknown>) => {
     const cur = (def.audience ?? { version: 1, demographics: {}, advanced: {}, screeners: [], quotas: [] }) as Record<string, unknown>;
     def.audience = { ...cur, demographics: { ...(cur.demographics as object), ...patch } };
+  });
+
+  const setAdv = (patch: Record<string, unknown>) => s.update((def: Record<string, unknown>) => {
+    const cur = (def.audience ?? { version: 1, demographics: {}, advanced: {}, screeners: [], quotas: [] }) as Record<string, unknown>;
+    def.audience = { ...cur, advanced: { ...(cur.advanced as object), ...patch } };
   });
 
   const countries = (d.countries as string[] | undefined) ?? [];
@@ -766,18 +903,92 @@ function AudienceCard() {
         </p>
       )}
       {open && (
-        <div className="row">
-          <label className="f"><span className="muted">Countries (ISO codes — GB, not UK)</span>
-            <input className="input mono" defaultValue={list(d.countries)} placeholder="US, GB, DE"
-              onBlur={(e) => setDemo({ countries: e.target.value.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean) })} /></label>
-          <label className="f"><span className="muted">Age from</span>
-            <input className="input mono" defaultValue={String(d.ageMin ?? "")} onBlur={(e) => setDemo({ ageMin: e.target.value ? Number(e.target.value) : undefined })} /></label>
-          <label className="f"><span className="muted">to</span>
-            <input className="input mono" defaultValue={String(d.ageMax ?? "")} onBlur={(e) => setDemo({ ageMax: e.target.value ? Number(e.target.value) : undefined })} /></label>
-          <label className="f"><span className="muted">Income bands</span>
-            <input className="input" defaultValue={list(d.incomeBands)} placeholder="$50–75k, $75k+"
-              onBlur={(e) => setDemo({ incomeBands: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
-        </div>
+        <>
+          <div className="row">
+            <label className="f"><span className="muted">Countries (ISO codes — GB, not UK)</span>
+              <input className="input mono" defaultValue={list(d.countries)} placeholder="US, GB, DE"
+                onBlur={(e) => setDemo({ countries: e.target.value.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean) })} /></label>
+            <label className="f"><span className="muted">Age from</span>
+              <input className="input mono" defaultValue={String(d.ageMin ?? "")} onBlur={(e) => setDemo({ ageMin: e.target.value ? Number(e.target.value) : undefined })} /></label>
+            <label className="f"><span className="muted">to</span>
+              <input className="input mono" defaultValue={String(d.ageMax ?? "")} onBlur={(e) => setDemo({ ageMax: e.target.value ? Number(e.target.value) : undefined })} /></label>
+            <label className="f"><span className="muted">Gender</span>
+              <input className="input" defaultValue={list(d.genders)} placeholder="male, female"
+                onBlur={(e) => setDemo({ genders: e.target.value.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean) })} /></label>
+          </div>
+
+          {/*
+            * ADVANCED, COLLAPSED. Everything below is optional and most projects never open it. Showing it by
+            * default is how a six-field form becomes a thirty-field one, which is the problem this redesign
+            * exists to undo.
+            */}
+          <div className="row" style={{ marginTop: 6 }}>
+            <button className="btn small" onClick={() => setAdvanced(!advanced)}>
+              {advanced ? "▾" : "▸"} Advanced targeting &amp; quotas
+            </button>
+            {!advanced && <span className="muted" style={{ fontSize: 12.5 }}>{advancedSummary || "optional"}</span>}
+          </div>
+
+          {advanced && (
+            <>
+              <div className="row">
+                <label className="f"><span className="muted">Income bands</span>
+                  <input className="input" defaultValue={list(d.incomeBands)} placeholder="$50–75k, $75k+"
+                    onBlur={(e) => setDemo({ incomeBands: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Education</span>
+                  <input className="input" defaultValue={list(d.education)} placeholder="degree, postgraduate"
+                    onBlur={(e) => setDemo({ education: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Employment</span>
+                  <input className="input" defaultValue={list(d.employment)} placeholder="full-time, self-employed"
+                    onBlur={(e) => setDemo({ employment: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Marital status</span>
+                  <input className="input" defaultValue={list(d.maritalStatus)} placeholder="married, single"
+                    onBlur={(e) => setDemo({ maritalStatus: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+              </div>
+              <div className="row">
+                <label className="f"><span className="muted">Regions / states</span>
+                  <input className="input" defaultValue={list(d.regions)} placeholder="California, Maharashtra"
+                    onBlur={(e) => setDemo({ regions: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Cities</span>
+                  <input className="input" defaultValue={list(d.cities)} placeholder="London, Mumbai"
+                    onBlur={(e) => setDemo({ cities: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Occupation</span>
+                  <input className="input" defaultValue={list(d.occupation)} placeholder="nurse, teacher"
+                    onBlur={(e) => setDemo({ occupation: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+              </div>
+
+              <p className="muted" style={{ fontSize: 12.5, marginBottom: 2 }}>Professional &amp; behavioural</p>
+              <div className="row">
+                <label className="f"><span className="muted">Industry</span>
+                  <input className="input" defaultValue={list(adv.industries)} placeholder="healthcare, finance"
+                    onBlur={(e) => setAdv({ industries: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Job title</span>
+                  <input className="input" defaultValue={list(adv.jobTitles)} placeholder="CTO, procurement manager"
+                    onBlur={(e) => setAdv({ jobTitles: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Seniority</span>
+                  <input className="input" defaultValue={list(adv.seniority)} placeholder="director, C-level"
+                    onBlur={(e) => setAdv({ seniority: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Company size</span>
+                  <input className="input" defaultValue={list(adv.companySize)} placeholder="50–249, 1000+"
+                    onBlur={(e) => setAdv({ companySize: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+              </div>
+              <div className="row">
+                <label className="f"><span className="muted">Product ownership</span>
+                  <input className="input" defaultValue={list(adv.productOwnership)} placeholder="electric car, dishwasher"
+                    onBlur={(e) => setAdv({ productOwnership: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Brand usage</span>
+                  <input className="input" defaultValue={list(adv.brandUsage)} placeholder="brands they use"
+                    onBlur={(e) => setAdv({ brandUsage: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+                <label className="f"><span className="muted">Purchase behaviour</span>
+                  <input className="input" defaultValue={list(adv.purchaseBehaviour)} placeholder="bought in last 6 months"
+                    onBlur={(e) => setAdv({ purchaseBehaviour: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>
+              </div>
+
+              <ScreenersEditor />
+              <QuotasEditor />
+            </>
+          )}
+        </>
       )}
     </div>
   );

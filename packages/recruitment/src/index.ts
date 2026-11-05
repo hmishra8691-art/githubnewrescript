@@ -15,3 +15,4 @@ export * from "./webhook.js";
 export * from "./settlement.js";
 export * from "./margin.js";
 export * from "./plan.js";
+export * from "./quotas.js";
