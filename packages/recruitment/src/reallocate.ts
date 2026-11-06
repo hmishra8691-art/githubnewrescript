@@ -122,6 +122,38 @@ const MATERIAL_SHORTFALL = 0.1;
  * and a vendor behind pace in the first tenth of the field period. Each of those produces an alert in a naive
  * implementation and each of them trains the researcher to ignore alerts.
  */
+/**
+ * WHAT THE PLAN ASSUMED WOULD BE REJECTED, per allocation row (platform audit 2026-11-05, calculation defect 1).
+ *
+ * The optimiser writes the rate it planned with into `rationale.rejectionRate`, in percent, beside the
+ * duplicate rate and the yield (allocate.ts). The Studio used to recover it instead by inverting the stored
+ * pair, `(allocated − expectedValid) / allocated` — but `expectedValid` is
+ * `floor(allocated × (1 − r) × (1 − d))`, so the inversion returns the COMBINED rejection-and-duplicate loss,
+ * and `detectDeviations` then compared it against an observed rejection-ONLY rate. An order of 1,000 at 8%
+ * rejection and 4% duplicates stored 883; the inversion said 11.7%, and with the 5-point tolerance a vendor had
+ * to pass 16.7% before quality was called. A vendor running at 15% against an 8% quote was never flagged.
+ *
+ * The stored rate is read first. The inversion remains only for a row allocated before the rationale carried
+ * one, and is then corrected for the duplicate rate when that is known.
+ */
+export function assumedRejectionOfAllocation(a: {
+  rationale?: unknown;
+  expected_valid_completes?: unknown;
+  allocated_completes?: unknown;
+}): number | null {
+  const rationale = (a.rationale && typeof a.rationale === "object" ? a.rationale : {}) as Record<string, unknown>;
+  const stored = Number(rationale.rejectionRate);
+  if (Number.isFinite(stored) && stored >= 0) return Math.min(stored, 100);
+  const expected = Number(a.expected_valid_completes ?? 0);
+  const allocated = Number(a.allocated_completes ?? 0);
+  if (!(allocated > 0 && expected > 0)) return null;
+  const yieldTotal = expected / allocated; // (1 − r)(1 − d), floored
+  const dup = Number(rationale.duplicateRate);
+  const dupFraction = Number.isFinite(dup) && dup > 0 ? Math.min(dup, 100) / 100 : 0;
+  const survive = dupFraction < 1 ? yieldTotal / (1 - dupFraction) : yieldTotal;
+  return Math.max(0, Math.min(100, (1 - survive) * 100));
+}
+
 export function detectDeviations(input: ReallocationInput): Deviation[] {
   const elapsed = Math.min(1, Math.max(0, input.elapsedFraction));
   const paceTol = input.paceTolerance ?? DEFAULT_PACE_TOLERANCE;

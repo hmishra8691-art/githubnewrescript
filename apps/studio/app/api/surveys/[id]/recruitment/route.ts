@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
   allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
-  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, planQuotas, proposeReallocation, recommend,
+  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, planQuotas, proposeReallocation, recommend, assumedRejectionOfAllocation,
   type AllocationCandidate, type FeasibilityInput, type ObservedVendor,
 } from "@rescript/recruitment";
 import { parseQuotaMapping } from "@rescript/identity";
@@ -823,13 +823,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
 
       const marketOf = new Map(allocations.map((a) => [String(a.id), String(a.market ?? "")]));
-      const assumedOf = new Map(allocations.map((a) => {
-        const expected = Number(a.expected_valid_completes ?? 0);
-        const allocated = Number(a.allocated_completes ?? 0);
-        /* what the plan assumed would be rejected, read back out of the two numbers it was built from */
-        const assumed = allocated > 0 && expected > 0 ? ((allocated - expected) / allocated) * 100 : null;
-        return [String(a.id), assumed];
-      }));
+      /* the rate the plan was built with, read from the allocation's rationale — not inverted out of the yield (audit 2026-11-05, calculation defect 1) */
+      const assumedOf = new Map(allocations.map((a) => [String(a.id), assumedRejectionOfAllocation(a)]));
 
       const observed: ObservedVendor[] = orders
         .filter((o) => ["placed", "live", "paused", "complete"].includes(String(o.status)))

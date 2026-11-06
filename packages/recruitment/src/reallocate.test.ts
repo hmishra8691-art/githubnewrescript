@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { detectDeviations, proposeReallocation, deliveryProgress, type ObservedVendor, type ReallocationInput } from "./reallocate.js";
+import { detectDeviations, proposeReallocation, deliveryProgress, assumedRejectionOfAllocation, type ObservedVendor, type ReallocationInput } from "./reallocate.js";
 import type { AllocationCandidate } from "./allocate.js";
 
 const cand = (id: string, cpi: number, capacity: number | null = 5000): AllocationCandidate => ({
@@ -152,4 +152,28 @@ test("delivery progress is arithmetic, kept separate from judgement", () => {
   ]);
   assert.deepEqual(p, { ordered: 1000, accepted: 400, rejected: 50, fill: 0.4, rejectionRate: 11.11, spend: 2000 });
   assert.equal(deliveryProgress([]).rejectionRate, null, "nothing screened is not a rate of zero");
+});
+
+/* ---------------------------------------------------------------- the assumed rate (audit 2026-11-05, calculation defect 1) */
+
+test("the assumed rejection rate is read from the allocation's rationale, not inverted out of the yield", () => {
+  // 1,000 at 8% rejection, 4% duplicates → expectedValid = floor(1000 × .92 × .96) = 883
+  const row = { allocated_completes: 1000, expected_valid_completes: 883, rationale: { rejectionRate: 8, duplicateRate: 4, yield: 0.8832 } };
+  assert.equal(assumedRejectionOfAllocation(row), 8);
+});
+
+test("a vendor running at 15% against an 8% quote is now flagged (the inversion put the bar at 16.7%)", () => {
+  const row = { allocated_completes: 1000, expected_valid_completes: 883, rationale: { rejectionRate: 8, duplicateRate: 4 } };
+  const inverted = ((1000 - 883) / 1000) * 100; // what the Studio used to derive: 11.7
+  assert.ok(inverted > 11 && inverted < 12);
+  const v = (assumed: number): ObservedVendor => ({ integrationId: "v", market: "GB", ordered: 2000, delivered: 2000, accepted: 1700, rejected: 300, assumedRejectionRate: assumed, cpi: 3, currency: "GBP" });
+  const input = (assumed: number): ReallocationInput => ({ observed: [v(assumed)], candidates: [], elapsedFraction: 0.5, qualityTolerance: 5, budget: 10000, committed: 3000, currency: "GBP", strategy: "balanced" });
+  assert.ok(!detectDeviations(input(inverted)).some((d) => d.kind === "quality"), "the lossy derivation missed it");
+  assert.ok(detectDeviations(input(assumedRejectionOfAllocation(row)!)).some((d) => d.kind === "quality"), "the stored rate catches it");
+});
+
+test("a row allocated before the rationale carried the rate falls back to the inversion, corrected for duplicates when known", () => {
+  assert.equal(assumedRejectionOfAllocation({ allocated_completes: 1000, expected_valid_completes: 883, rationale: {} })?.toFixed(1), "11.7");
+  assert.equal(assumedRejectionOfAllocation({ allocated_completes: 1000, expected_valid_completes: 883, rationale: { duplicateRate: 4 } })?.toFixed(1), "8.0");
+  assert.equal(assumedRejectionOfAllocation({ allocated_completes: 0, expected_valid_completes: 0, rationale: {} }), null);
 });

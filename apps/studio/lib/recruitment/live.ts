@@ -1,5 +1,6 @@
 import "server-only";
 import { AdapterRegistry, createManualAdapter, createProlificAdapter } from "@rescript/recruitment";
+import { liveHttpOptions } from "./vendorCalls";
 
 /**
  * THE LIVE ADAPTER REGISTRY (Phase 6b) — built once per process, with the manual adapter as the fallback.
@@ -23,6 +24,11 @@ let cached: AdapterRegistry | null = null;
 
 export function liveRegistry(): AdapterRegistry {
   if (cached) return cached;
-  cached = new AdapterRegistry([createProlificAdapter()], MANUAL);
+  /*
+   * Platform audit 2026-11-05: `vendorFetch` was built with a call recorder and a durable breaker and nothing ever
+   * passed them, so vendor_api_calls stayed empty, health never moved and the breaker reset with the process.
+   * Every live adapter now gets both (vendorCalls.ts).
+   */
+  cached = new AdapterRegistry([createProlificAdapter(liveHttpOptions)], MANUAL);
   return cached;
 }
