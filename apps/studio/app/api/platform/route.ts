@@ -100,7 +100,51 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   /* G3 2026-10-22 */
   { migration: "0072", what: "alerts (channels with sealed webhook URLs, rules, the outbox, the delivery log) and panel recruitment (sealed signing secrets, panel entries)", table: "panel_entries", column: "outcome" },
   { migration: "0074", what: "durable Intelligent Mode tasks and steps (a long generation that survives the page)", table: "intelligent_steps", column: "idempotency_key" },
+  /*
+   * AND IT STOPPED AGAIN, AT 0074 (platform audit, 2026-11-05). Sixteen
+   * migrations shipped after it — assessments, the Back trail, save ordering,
+   * import sessions, the whole recruitment exchange, the quota chain — and a
+   * database at 0074 read as up to date. The same failure the comment above
+   * records at 0015, with the same cause: a list nobody is reminded to extend.
+   *
+   * Two things change. The rows below bring the list to 0091, and from 0091
+   * on every migration writes its own number into `schema_marks` as it runs
+   * (see MARKS below), so the newest migration the database has seen is read
+   * rather than inferred — and a probe list that falls behind the marks is
+   * reported as exactly that.
+   *
+   * 0075 (a function), 0079 (a function) and 0090 (a dropped function and a
+   * comment) created no table or column and have no probe; their features
+   * detect themselves.
+   */
+  { migration: "0076", what: "assessments (the server-side score of a submitted paper)", table: "assessment_results" },
+  { migration: "0077", what: "section navigation: the respondent's Back trail on the response row", table: "responses", column: "nav" },
+  { migration: "0078", what: "save ordering (save_seq on the response row)", table: "responses", column: "save_seq" },
+  { migration: "0080", what: "import sessions: history, the source file, rollback", table: "import_sessions" },
+  { migration: "0081", what: "the recruitment exchange: vendors, integrations, orders", table: "vendor_integrations" },
+  { migration: "0082", what: "recruitment markets, capacity and budget thresholds", table: "recruitment_markets" },
+  { migration: "0083", what: "Respondent Trust ID and the participation ledger", table: "respondent_trust_ids" },
+  { migration: "0084", what: "the admission gateway and its decision record", table: "admission_decisions" },
+  { migration: "0085", what: "the fraud network graph, vendor quality and forecasts", table: "vendor_quality_metrics" },
+  { migration: "0086", what: "live vendor integrations: API call log, circuit state, webhook receipts", table: "vendor_api_calls" },
+  { migration: "0087", what: "the commercial margin engine", table: "margin_applications" },
+  { migration: "0088", what: "quota monitoring (recruitment quota cells)", table: "quota_progress" },
+  { migration: "0089", what: "quota holds and the vendor parameter mapping", table: "quota_holds" },
+  { migration: "0091", what: "the security posture in the migration chain, and schema_marks", table: "schema_marks", column: "migration" },
 ];
+
+/**
+ * MARKS (0091). The migrations that wrote their own row into `schema_marks`.
+ * Read beside the probes: `newestMark` is the highest migration the database
+ * says it has run; if it is above the last probe, this build's list is behind
+ * the database and the warning says so — the drift the two comments above
+ * record is then a visible fact instead of a discovery for the next audit.
+ */
+async function readMarks(db: ReturnType<typeof supabaseAdmin>): Promise<string[]> {
+  const { data, error } = await db.from("schema_marks").select("migration").order("migration", { ascending: true }).limit(500);
+  if (error || !Array.isArray(data)) return [];
+  return data.map((r) => String((r as { migration: string }).migration)).filter((m) => /^\d{4}$/.test(m));
+}
 
 export async function GET(_req: NextRequest) {
   /*
@@ -144,8 +188,10 @@ export async function GET(_req: NextRequest) {
    * configured, and this stays honestly unknown.
    */
   const probed = info.configured.database && info.configured.serviceKey;
+  let marks: string[] = [];
   if (probed) {
     const db = supabaseAdmin();
+    marks = await readMarks(db);
     for (const probe of PROBES) {
       const { error } = await db
         .from(probe.table)
@@ -181,6 +227,10 @@ export async function GET(_req: NextRequest) {
       probed,
       level: !probed ? null : missing.length ? missing[0].migration : (PROBES[PROBES.length - 1]?.migration ?? null),
       complete: probed && missing.length === 0,
+      /* 0091: what the database says of itself — every migration from 0091 on records its own number */
+      marks,
+      newestMark: marks.length ? marks[marks.length - 1] : null,
+      lastProbe: PROBES[PROBES.length - 1]?.migration ?? null,
     },
     capabilities: { services: capabilityStatus.services, capabilities: capabilityStatus.capabilities },
     warnings: [
@@ -189,6 +239,10 @@ export async function GET(_req: NextRequest) {
       ...capabilityStatus.warnings.filter((w) => !w.startsWith(`Language model`)),
       ...(missing.length
         ? [`${missing.length} migration${missing.length === 1 ? "" : "s"} not applied — the first is ${missing[0].migration} (${missing[0].what}).`]
+        : []),
+      /* the database is ahead of this build's probe list: the list has drifted (it did at 0015 and at 0074) */
+      ...(marks.length && (PROBES[PROBES.length - 1]?.migration ?? "0000") < marks[marks.length - 1]
+        ? [`The database records migration ${marks[marks.length - 1]} but this build's probe list stops at ${PROBES[PROBES.length - 1]?.migration} — extend PROBES in apps/studio/app/api/platform/route.ts.`]
         : []),
     ],
     mail: (() => {

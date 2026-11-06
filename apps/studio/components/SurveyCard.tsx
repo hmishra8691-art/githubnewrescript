@@ -362,8 +362,11 @@ export function SurveyCard({
               {people.length} contributor{people.length === 1 ? "" : "s"}
             </>
           ) : (
-            <span className="muted" title="Contributors are counted from signed-in users. Studio sign-in is not enabled yet, so nobody is attributed.">
-              {loading ? "—" : "Sign-in not enabled"}
+            /* platform audit 2026-11-05: this used to read "Sign-in not enabled" with a tooltip saying Studio sign-in
+               was not enabled yet — on a platform where the reader had just signed in. Contributors are the
+               signed-in people who have edited the survey; a survey nobody has edited yet has none. */
+            <span className="muted" title="Contributors are the signed-in people who have edited this survey.">
+              {loading ? "—" : "No contributors yet"}
             </span>
           )}
         </div>

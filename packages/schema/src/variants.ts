@@ -9,11 +9,12 @@ import { Registry } from "./registry.js";
  * `single_choice`), so reporting, logic, piping, exports and the variable
  * dictionary never fragment across hundreds of visual treatments.
  *
- * `status: "stable"` variants are fully implemented end to end.
- * `status: "planned"` variants are registered so the taxonomy, picker and
- * future implementations live in ONE place — the picker shows them greyed
- * out, and implementing one later means filling in renderer/capabilities
- * here plus a renderer component, never touching the core.
+ * Every registered variant is `status: "stable"`: implemented end to end.
+ * A `"planned"` status (a greyed "coming soon" card in the picker) existed
+ * for variants registered ahead of their implementation; the helper that
+ * created them was never called and the picker's branch for them could never
+ * render (platform audit, 2026-11-05), so both are gone. A variant that is
+ * not implemented is not registered.
  */
 
 export type ResponseModel =
@@ -318,7 +319,7 @@ export interface QuestionVariantDef {
     validation?: { kind: string; value?: unknown; message?: string }[];
     instruction?: string;
   };
-  status: "stable" | "planned";
+  status: "stable";
   mobile: boolean;
   /**
    * This variant is a duplicate of another one and has been retired from the
@@ -475,21 +476,6 @@ function stable(
     status: "stable",
     ...def,
   };
-}
-
-function planned(f: Fam, names: [string, string][]): QuestionVariantDef[] {
-  return names.map(([name, description]) => ({
-    id: `${f.family}.${name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`,
-    ...f,
-    name,
-    description,
-    baseType: "custom_component",
-    responseModel: "none" as ResponseModel,
-    capabilities: [],
-    validations: [],
-    status: "planned" as const,
-    mobile: true,
-  }));
 }
 
 /* ------------------------------------------------------------------ catalog */
@@ -2831,10 +2817,10 @@ for (const v of QUESTION_VARIANTS) {
 
 /* ------------------------------------------------------------- utilities */
 
-export function variantFamilies(): { family: string; familyLabel: string; stable: number; planned: number }[] {
-  const map = new Map<string, { family: string; familyLabel: string; stable: number; planned: number }>();
+export function variantFamilies(): { family: string; familyLabel: string; stable: number }[] {
+  const map = new Map<string, { family: string; familyLabel: string; stable: number }>();
   for (const v of QUESTION_VARIANTS) {
-    const e = map.get(v.family) ?? { family: v.family, familyLabel: v.familyLabel, stable: 0, planned: 0 };
+    const e = map.get(v.family) ?? { family: v.family, familyLabel: v.familyLabel, stable: 0 };
     /*
      * `stable` counts what a programmer can actually PICK as a distinct type
      * in this family: selectable, and not a preset (a preset is shown under
@@ -2843,8 +2829,7 @@ export function variantFamilies(): { family: string; familyLabel: string; stable
      * every preset — so the Single Select family advertised 20 when it offers
      * 12, and the number nobody trusted was the one meant to help them.
      */
-    if (v.status === "planned") e.planned++;
-    else if (isSelectableVariant(v) && !v.presetOf) e.stable++;
+    if (isSelectableVariant(v) && !v.presetOf) e.stable++;
     // a preset whose parent lives elsewhere is something this family OFFERS (a card in its pane), so it counts here
     else if (isSelectableVariant(v) && v.presetOf && variantRegistry.get(v.presetOf)?.family !== v.family) e.stable++;
     map.set(v.family, e);
@@ -2878,7 +2863,6 @@ export function pickerTypesOf(family: string): {
    * Two places to find them, one thing created.
    */
   crossPresets: { preset: QuestionVariantDef; parent: QuestionVariantDef }[];
-  planned: QuestionVariantDef[];
 } {
   const inFamily = variantsOf(family);
   const types = inFamily
@@ -2887,8 +2871,7 @@ export function pickerTypesOf(family: string): {
   const crossPresets = inFamily
     .filter((v) => isSelectableVariant(v) && v.presetOf && variantRegistry.get(v.presetOf)?.family !== family)
     .map((preset) => ({ preset, parent: variantRegistry.get(preset.presetOf!)! }));
-  const planned = inFamily.filter((v) => v.status === "planned");
-  return { types, crossPresets, planned };
+  return { types, crossPresets };
 }
 
 /** Presets registered in a family whose parent lives in another — what that family offers beyond its own types. */

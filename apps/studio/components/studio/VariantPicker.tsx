@@ -122,7 +122,7 @@ export function VariantPickerModal({ onPick, onMode, onClose }: {
    * each card carries its own "start from" row — including presets whose
    * registry entry lives in another family. One home per question.
    */
-  const { types, crossPresets, planned } = pickerTypesOf(family);
+  const { types, crossPresets } = pickerTypesOf(family);
   const modes = SURVEY_MODES.filter((m) => m.families.includes(family));
 
   return (
@@ -219,17 +219,6 @@ export function VariantPickerModal({ onPick, onMode, onClose }: {
                 </div>
                 <div style={{ color: "var(--subtle)", fontSize: 13, marginTop: 2 }}>{m.description}</div>
               </div>
-            </div>
-          ))}
-          {planned.map((v) => (
-            <div key={v.id}
-              className="card"
-              data-testid={`picker-variant-${v.id}`} data-status={v.status}
-              style={{ padding: "10px 14px", opacity: 0.55 }}>
-              <div className="card-title" style={{ fontSize: 14 }}>
-                {v.name}<span className="chip">coming soon</span>
-              </div>
-              <div style={{ color: "var(--subtle)", fontSize: 13, marginTop: 2 }}>{v.description}</div>
             </div>
           ))}
         </div>
