@@ -7,6 +7,7 @@ import { MAX_PICK, chartChoices, combinedFilter, crossFilter, exploreDefinition,
 import { conditionText } from "./FilterBuilder";
 import { InterpretationPanel } from "./InterpretationPanel";
 import { SelectTick, analysisKey } from "./selection";
+import { useDetail } from "./detail";
 
 /**
  * EXPLORE — the interactive board (Analytics upgrade M3).
@@ -22,6 +23,7 @@ interface Panel { id: string; definition: AnalysisDefinition; because: string; s
 const ROLE_WORD: Record<string, string> = { category: "category", quantity: "quantity", text: "text", other: "" };
 
 export function ExploreBoard(p: { api: AxApi; dataset: DatasetSpec; variables: VariableMeta[]; themes: { id: string; name: string; theme: ReportTheme }[]; canEdit: boolean; onSaved: () => void; onOpenInBuilder: (a: Row) => void; onAsk: () => void }) {
+  const { level } = useDetail();
   const [search, setSearch] = React.useState("");
   const [picked, setPicked] = React.useState<string[]>([]);
   const [panels, setPanels] = React.useState<Panel[]>([]);
@@ -146,7 +148,7 @@ export function ExploreBoard(p: { api: AxApi; dataset: DatasetSpec; variables: V
                   <div className="ax-explore-panel-title" title={panel.because}>{panel.definition.name}{panel.savedId && <span className="axa-chip" style={{ marginLeft: 6 }}>saved</span>}</div>
                   <span className="grow" />
                   {r && choices.length > 1 && <select className="select small" value={panel.spec.type} onChange={(e) => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, spec: { ...x.spec, type: e.target.value as ChartType } } : x)))} aria-label="Chart type" data-testid="ax-explore-chart-type">{choices.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select>}
-                  <button className={`btn small ghost ${panel.table ? "on" : ""}`} onClick={() => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, table: !x.table } : x)))} data-testid="ax-explore-table">{panel.table ? "Chart" : "Table"}</button>
+                  {level !== "simple" && <button className={`btn small ghost ${panel.table ? "on" : ""}`} onClick={() => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, table: !x.table } : x)))} data-testid="ax-explore-table">{panel.table ? "Chart" : "Table"}</button>}
                   {r && <button className={`btn small ghost ${panel.explain ? "on" : ""}`} onClick={() => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, explain: !x.explain } : x)))} data-testid="ax-explore-explain">Explain</button>}
                   {p.canEdit && !panel.savedId && <button className="btn small" onClick={() => void save(panel)} data-testid="ax-explore-save">Save</button>}
                   {panel.savedId && <SelectTick keyName={analysisKey(panel.definition.kind, panel.savedId)} label={panel.definition.name} />}

@@ -24,6 +24,7 @@ import { OverviewDashboard } from "./OverviewDashboard";
 import { ExploreBoard } from "./ExploreBoard";
 import { PresentWorkbench } from "./PresentWorkbench";
 import { useSelection } from "./selection";
+import { DetailSwitch, useDetail } from "./detail";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
@@ -46,12 +47,13 @@ export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit
 export function AnalyticsWorkspace(p: WorkspaceProps) {
   const api = React.useMemo(() => new AxApi(p.surveyId), [p.surveyId]);
   const selection = useSelection();
+  const { level } = useDetail();
   /* the view on show. "ask" is not a view: it opens the Ask panel over whichever place you are in */
   const [tab, setTabRaw] = React.useState<Exclude<WsTab, "ask">>(p.initialTab && p.initialTab !== "ask" ? p.initialTab : "home");
   const [askOpen, setAskOpen] = React.useState(p.initialTab === "ask");
   /* ARCHITECT is a mode over the same engine, analyses and permissions (components/analytics/architect); the catalogue is read again whenever the lists refresh */
   const [refreshKey, setRefreshKey] = React.useState(0);
-  const [archFocus, setArchFocus] = React.useState<{ key: string; label: string; analysisId: string | null } | null>(null);
+  const [archFocus, setArchFocus] = React.useState<{ key: string; label: string; analysisId: string | null; advice?: { type: string; reason: string; denominator?: string; notes?: string[] } | null } | null>(null);
   /* a drill-down from Overview: open this analysis in Architect's Focus once the catalogue is there */
   const [archRequest, setArchRequest] = React.useState<FocusRequest | null>(null);
   const openInArchitect = (analysisId: string, planned: string | null) => { setArchRequest({ analysisId: analysisId || null, planned, nonce: Date.now() }); setTab("architect"); };
@@ -150,6 +152,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         <label className="ax-field" style={{ minWidth: 220 }}><span>Dataset</span><select className="select" value={env} onChange={(e) => setEnv(e.target.value as DatasetSpec["environment"])} data-testid="ax-dataset"><option value="LIVE">Production responses ({counts.LIVE ?? "…"})</option><option value="TEST">Test responses ({counts.TEST ?? "…"})</option><option value="ALL">All responses</option></select></label>
         <label className="ax-field"><span>Quality</span><select className="select" value={quality} onChange={(e) => setQuality(e.target.value as DatasetSpec["dataset"])}><option value="all">All complete responses</option><option value="clean">Clean only (quality engine)</option></select></label>
         <span className="grow" />
+        <label className="ax-field"><span>Detail</span><DetailSwitch /></label>
         <div className="muted" style={{ fontSize: 12.5, textAlign: "right" }}>Analyses run server-side on stored responses.<br />Only results reach this page.</div>
       </div>
       <div className="ax-places" role="navigation" aria-label="Modes">
@@ -198,7 +201,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
       {askMounted && (
         <aside ref={drawerRef} id="ax-ask-drawer" className="ax-ask-drawer" role="complementary" aria-label="Ask" hidden={!askOpen} data-testid="ax-ask-drawer" onKeyDown={(e) => { if (e.key === "Escape") setAskOpen(false); }}>
           <div className="ax-ask-drawer-head"><b>Ask</b><span className="muted" style={{ fontSize: 12.5 }}>on {tab === "architect" && archFocus ? archFocus.label : PLACES.find((x) => x.key === place)?.label}</span><span className="grow" /><button className="btn small" onClick={() => setAskOpen(false)} data-testid="ax-ask-close" aria-label="Close Ask">Close</button></div>
-          <AskPanel api={api} dataset={dataset} analyses={analyses} canEdit={p.canEdit} onChanged={refresh} embedded
+          <AskPanel api={api} dataset={dataset} analyses={analyses} canEdit={p.canEdit} onChanged={refresh} embedded where={PLACES.find((x) => x.key === place)?.label} whyChart={tab === "architect" ? archFocus?.advice ?? null : null}
             focus={tab === "architect" ? (archFocus?.analysisId ? { analysisId: archFocus.analysisId, name: archFocus.label } : null) : place === "explore" && currentAnalysisId ? { analysisId: currentAnalysisId, name: String(analyses.find((a) => a.id === currentAnalysisId)?.name ?? builder.initial?.analysis?.name ?? "this analysis") } : null} />
         </aside>
       )}

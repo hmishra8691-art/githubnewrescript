@@ -2,6 +2,7 @@
 import React from "react";
 import type { AnalysisDefinition } from "@rescript/analytics";
 import type { AxApi, InterpretPayload } from "./api";
+import { useDetail } from "./detail";
 
 /**
  * THE TWO LAYERS, on screen (M5). The plain reading first — what was analysed, why, what it means, the patterns,
@@ -10,9 +11,11 @@ import type { AxApi, InterpretPayload } from "./api";
  * Nothing here is computed in the browser; the engine's reading comes from `POST analytics/interpret`.
  */
 export function InterpretationPanel(p: { api: AxApi; analysisId?: string | null; definition?: AnalysisDefinition | null; /** re-read when this changes (a saved configuration, a new dataset) */ nonce?: string | number; compact?: boolean; statsOpen?: boolean }) {
+  const { level } = useDetail();
   const [data, setData] = React.useState<InterpretPayload | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [stats, setStats] = React.useState(!!p.statsOpen);
+  const [stats, setStats] = React.useState(!!p.statsOpen || level === "advanced");
+  React.useEffect(() => { if (level === "advanced") setStats(true); if (level === "simple") setStats(false); }, [level]);
   const [asking, setAsking] = React.useState(false);
   const key = p.analysisId ?? (p.definition ? JSON.stringify(p.definition) : null);
   React.useEffect(() => {
@@ -33,7 +36,7 @@ export function InterpretationPanel(p: { api: AxApi; analysisId?: string | null;
   const badge = i.verdict === "significant" ? <span className="axa-verdict supported">significant</span> : i.verdict === "not_significant" ? <span className="axa-verdict inconclusive">not significant</span> : null;
   return (
     <div className={`ax-interp ${p.compact ? "compact" : ""}`} data-testid="ax-interp" data-verdict={i.verdict}>
-      <div className="ax-interp-head"><b>In plain language</b>{badge}<span className="grow" /><button className="btn small ghost" onClick={() => setStats((s) => !s)} data-testid="ax-interp-stats-toggle">{stats ? "Hide statistics" : "Statistics"}</button></div>
+      <div className="ax-interp-head"><b>In plain language</b>{badge}<span className="grow" />{level !== "simple" && <button className="btn small ghost" onClick={() => setStats((s) => !s)} data-testid="ax-interp-stats-toggle">{stats ? "Hide statistics" : "Statistics"}</button>}</div>
       {stats && (
         <div className="ax-interp-stats mono" data-testid="ax-interp-stats">
           {i.statistical.map((s, k) => <div key={k}>{s}</div>)}
@@ -45,7 +48,7 @@ export function InterpretationPanel(p: { api: AxApi; analysisId?: string | null;
         <dt>Meaning</dt><dd>{i.plain.meaning}</dd>
         {!p.compact && i.plain.patterns.length > 0 && <><dt>Patterns</dt><dd>{i.plain.patterns.map((s, k) => <div key={k}>{s}</div>)}</dd></>}
         {!p.compact && i.plain.objective && <><dt>Objective</dt><dd>{i.plain.objective}</dd></>}
-        {!p.compact && <><dt>Next</dt><dd>{i.plain.next.map((s, k) => <div key={k}>{s}</div>)}</dd></>}
+        {!p.compact && level !== "simple" && <><dt>Next</dt><dd>{i.plain.next.map((s, k) => <div key={k}>{s}</div>)}</dd></>}
       </dl>
       {i.caveats.length > 0 && !p.compact && <div className="axa-warning">{i.caveats.join(" ")}</div>}
       <div className="ax-interp-model">

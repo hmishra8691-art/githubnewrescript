@@ -4,6 +4,7 @@ import type { AnalysisDefinition, CatalogueEntry, ChartSpec, VariableMeta } from
 import { ConfigEditor } from "./ConfigEditor";
 import { InterpretationPanel } from "../InterpretationPanel";
 import type { AxApi } from "../api";
+import { useDetail } from "../detail";
 import type { Row, RunResult } from "../api";
 import { STATUS_WORD } from "./Explorer";
 
@@ -18,7 +19,9 @@ import { STATUS_WORD } from "./Explorer";
  *                     kept, never used as the label
  */
 export function Properties(p: { entry: CatalogueEntry | null; result: RunResult | undefined; analysis: Row | undefined; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; canEdit: boolean; onOpenInBuilder: (id: string) => void; variables: VariableMeta[]; onSaveDefinition: (analysisId: string, d: AnalysisDefinition) => Promise<void>; api: AxApi; /** bumps when the analysis was saved or the dataset changed */ nonce: string }) {
-  const [tech, setTech] = React.useState(false);
+  const { level } = useDetail();
+  const [tech, setTech] = React.useState(level === "advanced");
+  React.useEffect(() => { setTech(level === "advanced"); }, [level]);
   const [editing, setEditing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   React.useEffect(() => { setEditing(false); }, [p.entry?.key]);

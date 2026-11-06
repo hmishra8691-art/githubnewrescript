@@ -7,6 +7,7 @@ import { Workspace, specFor, type FocusView, type WorkspaceView } from "./Worksp
 import { Properties } from "./Properties";
 import { useResults } from "./useResults";
 import { useSelection } from "../selection";
+import { useDetail } from "../detail";
 import { DEFAULT_PANES, PANES_KEY, clampPane, explorerEntries, readPanes, selectionSummary, type ExplorerCategory, type Panes, type Selection } from "@/lib/analyticsArchitect";
 
 /**
@@ -35,7 +36,7 @@ export function ArchitectAnalytics(p: {
   /** bumps when the Classic side changed something (a save, a delete) so the catalogue is read again */
   refreshKey: number;
   /** the entry in focus, for Ask */
-  onFocusChange?: (focus: { key: string; label: string; analysisId: string | null } | null) => void;
+  onFocusChange?: (focus: { key: string; label: string; analysisId: string | null; advice?: { type: string; reason: string; denominator?: string; notes?: string[] } | null } | null) => void;
   /** a drill-down from elsewhere (Overview): open this analysis in Focus once the catalogue is loaded */
   focusRequest?: FocusRequest | null;
 }) {
@@ -45,6 +46,7 @@ export function ArchitectAnalytics(p: {
   const [filter, setFilter] = React.useState("");
   /* the ticks are the workspace-wide selection (M6); the focus is this pane's own */
   const basket = useSelection();
+  const { level } = useDetail();
   const [focusedKey, setFocusedKey] = React.useState<string | null>(null);
   const selection = React.useMemo<Selection>(() => ({ keys: basket.items.map((i) => i.key), focus: focusedKey }), [basket.items, focusedKey]);
   const [view, setView] = React.useState<WorkspaceView>("focus");
@@ -79,9 +81,9 @@ export function ArchitectAnalytics(p: {
     setFocusedKey(key);
     if (key) { setView("focus"); const e = catalogue?.all.find((x) => x.key === key); setSpec(e ? specFor(e, p.charts, e.analysisId ? results.results[e.analysisId] : undefined) : null); }
   };
-  React.useEffect(() => { p.onFocusChange?.(focused ? { key: focused.key, label: focused.label, analysisId: focused.analysisId ?? null } : null); }, [focused]); // eslint-disable-line react-hooks/exhaustive-deps
   /* the focused entry's spec follows its result once it arrives (the recommendation is only known then) */
   const focusedResult = focused?.analysisId ? results.results[focused.analysisId] : undefined;
+  React.useEffect(() => { p.onFocusChange?.(focused ? { key: focused.key, label: focused.label, analysisId: focused.analysisId ?? null, advice: focusedResult?.advice ? { type: focusedResult.advice.type, reason: focusedResult.advice.reason, denominator: focusedResult.advice.denominator, notes: focusedResult.advice.notes } : null } : null); }, [focused, focusedResult]); // eslint-disable-line react-hooks/exhaustive-deps
   React.useEffect(() => { if (focused && focusedResult && !spec) setSpec(specFor(focused, p.charts, focusedResult)); }, [focused, focusedResult, spec, p.charts]);
 
   const served = React.useRef(0);
@@ -128,7 +130,7 @@ export function ArchitectAnalytics(p: {
           </div>
           {view === "focus" && (
             <div className="axa-seg" role="tablist" aria-label="Focus view">
-              {(["combined", "table", "chart", "details"] as const).map((v) => <button key={v} role="tab" aria-selected={focusView === v} className={`axa-seg-btn ${focusView === v ? "on" : ""}`} onClick={() => setFocusView(v)} data-testid={`axa-focus-${v}`}>{v[0].toUpperCase() + v.slice(1)}</button>)}
+              {(["combined", "table", "chart", "details"] as const).filter((v) => level !== "simple" || v !== "details").map((v) => <button key={v} role="tab" aria-selected={focusView === v} className={`axa-seg-btn ${focusView === v ? "on" : ""}`} onClick={() => setFocusView(v)} data-testid={`axa-focus-${v}`}>{v[0].toUpperCase() + v.slice(1)}</button>)}
             </div>
           )}
           <span className="muted" style={{ fontSize: 12.5 }} data-testid="axa-summary">{catalogue ? selectionSummary(catalogue, selection) : ""}</span>

@@ -3010,3 +3010,9 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .ax-present-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .ax-notice.ok { color: #15803d; } .ax-notice.warn { color: #b45309; } .ax-notice.error { color: #b91c1c; }
 @media (max-width: 1100px) { .ax-present-grid { grid-template-columns: 1fr; } .ax-present-side { position: static; } }
+
+/* ------------------------------------------------------------ ASK: dictation and why-this-chart (M7) */
+.ax-dictate { display: inline-flex; align-items: center; gap: 6px; }
+.ax-dictate-interim { font-size: 12px; font-style: italic; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ax-dictate-problem { font-size: 12px; color: #b91c1c; }
+.ax-ask-why { border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); padding: 8px 10px; font-size: 13px; margin-top: 8px; }

@@ -6,6 +6,7 @@ import { Chart } from "./charts/Chart";
 import { useResults } from "./architect/useResults";
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 import { SelectTick } from "./selection";
+import { useDetail } from "./detail";
 
 /**
  * THE EXECUTIVE OVERVIEW (Analytics upgrade M2) — the default landing of Analytics: the study at a glance for a
@@ -23,6 +24,7 @@ import { SelectTick } from "./selection";
  * are the saved analyses' own results (useResults), computed server-side.
  */
 export function OverviewDashboard(p: { api: AxApi; dataset: DatasetSpec; analyses: Row[]; refreshKey: number; onOpenAnalysis: (analysisId: string, planned: string | null) => void; onPlan: () => void; onArchitect: () => void; onFindings: () => void }) {
+  const { level } = useDetail();
   const [data, setData] = React.useState<OverviewPayload | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [polishing, setPolishing] = React.useState(false);
@@ -107,7 +109,7 @@ export function OverviewDashboard(p: { api: AxApi; dataset: DatasetSpec; analyse
                   {r ? <div className="ax-ov-chart"><Chart result={r} spec={{ type: k.chart, options: {} } as ChartSpec} compact height={180} /></div>
                     : k.analysisId && results.status[k.analysisId] === "error" ? <div className="muted" style={{ fontSize: 12 }}>Chart unavailable — open the analysis.</div>
                     : k.analysisId ? <div className="ax-ov-chart muted" style={{ fontSize: 12 }}>Drawing…</div> : null}
-                  <div className="ax-ov-evidence mono">{k.evidence}</div>
+                  {level !== "simple" && <div className="ax-ov-evidence mono">{k.evidence}</div>}
                   <div className="ax-ov-why">{k.why}</div>
                   <div className="row" style={{ marginTop: 2 }}><SelectTick keyName={`findings:${k.id}`} label={k.title} /></div>
                 </article>
@@ -125,7 +127,7 @@ export function OverviewDashboard(p: { api: AxApi; dataset: DatasetSpec; analyse
           {o.hypotheses.map((h) => (
             <div key={h.label} className="ax-ov-hyp" data-verdict={h.verdict}>
               <span className={`axa-verdict ${h.verdict}`}>{h.word}</span>
-              <div><b>{h.label}</b> {h.text}<div className="muted" style={{ fontSize: 12.5 }}>{h.reason}</div></div>
+              <div><b>{h.label}</b> {h.text}{level !== "simple" && <div className="muted" style={{ fontSize: 12.5 }}>{h.reason}</div>}</div>
             </div>
           ))}
         </section>
@@ -148,7 +150,7 @@ export function OverviewDashboard(p: { api: AxApi; dataset: DatasetSpec; analyse
         <section className="ax-ov-card" data-testid="ax-ov-correlations">
           <div className="ax-ov-card-head"><h3>Correlations</h3></div>
           {!o.correlations.length && <p className="muted">No correlation in the plan reached significance{o.run ? "" : " — no run yet"}.</p>}
-          {o.correlations.map((k) => <button key={k.id} className="ax-ov-row" onClick={() => open(k)}><b>{k.title}</b><span>{k.plain}</span><span className="mono muted">{k.evidence}</span></button>)}
+          {o.correlations.map((k) => <button key={k.id} className="ax-ov-row" onClick={() => open(k)}><b>{k.title}</b><span>{k.plain}</span>{level !== "simple" && <span className="mono muted">{k.evidence}</span>}</button>)}
         </section>
         <section className="ax-ov-card" data-testid="ax-ov-beyond">
           <div className="ax-ov-card-head"><h3>Beyond the plan</h3></div>

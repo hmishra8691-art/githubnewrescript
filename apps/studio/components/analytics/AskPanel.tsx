@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { DictateButton } from "./DictateButton";
 import type { AskItem, AskOp, AskProposal, DatasetSpec, UndoRecord } from "@rescript/analytics";
 import { AxApi, type Row } from "./api";
 import { ReportBuilderDialog } from "./ReportBuilderDialog";
@@ -27,8 +28,11 @@ const loadHistory = (id: string): HistoryEntry[] => { try { const r = JSON.parse
 const saveHistory = (id: string, h: HistoryEntry[]) => { try { localStorage.setItem(histKey(id), JSON.stringify(h.slice(0, 20))); } catch { /* history is a convenience */ } };
 const BADGE: Record<Status, { text: string; color: string }> = { proposed: { text: "Proposed — not applied", color: "#2563eb" }, done: { text: "Done", color: "#15803d" }, blocked: { text: "Blocked", color: "#b45309" }, failed: { text: "Failed", color: "#b91c1c" } };
 
-export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = null, embedded = false }: { api: AxApi; dataset: DatasetSpec; analyses: Row[]; canEdit: boolean; onChanged: () => Promise<void> | void;
-  /** the analysis open in Explore: "this" in a request means it (Phase 5) */ focus?: { analysisId: string; name: string } | null; /** shown in the side panel, which has its own heading */ embedded?: boolean }) {
+export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = null, embedded = false, where, whyChart }: { api: AxApi; dataset: DatasetSpec; analyses: Row[]; canEdit: boolean; onChanged: () => Promise<void> | void;
+  /** the analysis open in Explore / Architect: "this" in a request means it (Phase 5) */ focus?: { analysisId: string; name: string } | null; /** shown in the side panel, which has its own heading */ embedded?: boolean;
+  /** the mode Ask was opened from, and what is on screen there (M7) */ where?: string; /** the chart advice of the analysis in focus — "Why this chart?" is answered from it, no model */ whyChart?: { type: string; reason: string; denominator?: string; notes?: string[] } | null }) {
+  const [why, setWhy] = React.useState(false);
+  React.useEffect(() => { setWhy(false); }, [focus?.analysisId]);
   const [request, setRequest] = React.useState("");
   const [proposal, setProposal] = React.useState<AskProposal & { model?: { status: string; detail: string } } | null>(null);
   const [shown, setShown] = React.useState<Shown[]>([]);
@@ -94,15 +98,23 @@ export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = n
   return (
     <div className="ax-panel" data-testid="ax-ask">
       {!embedded && <h3 style={{ marginTop: 0 }}>Ask</h3>}
-      <div className="ax-ask-focus muted" data-testid="ax-ask-focus" data-open={focus ? "1" : "0"} style={{ fontSize: 13, marginBottom: 6 }}>{focus ? <>Looking at <b>{focus.name}</b> — say “this” to mean it.</> : <>No analysis is open. Open one in Explore to say “this”, or name the question.</>}</div>
+      <div className="ax-ask-focus muted" data-testid="ax-ask-focus" data-open={focus ? "1" : "0"} style={{ fontSize: 13, marginBottom: 6 }}>{focus ? <>Looking at <b>{focus.name}</b>{where ? ` in ${where}` : ""} — say “this” to mean it.</> : <>No analysis is open. Open one in Explore to say “this”, or name the question.</>}</div>
       <p className="muted" style={{ marginTop: 0 }}>Say what you want done with the analyses. You get a proposal to review first — nothing changes until you apply it, and no number is ever written for you: every statistic comes from your data.</p>
       <textarea className="input" rows={2} value={request} onChange={(e) => setRequest(e.target.value)} placeholder="e.g. Create cross-tabs of satisfaction by age and gender" disabled={!canEdit} data-testid="ax-ask-input"
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void propose(); }} />
       <div className="row" style={{ marginTop: 6, gap: 6, flexWrap: "wrap" }}>
         {(focus ? FOCUS_EXAMPLES : EXAMPLES).map((x) => <button key={x} type="button" className="ax-chip" onClick={() => setRequest(x)} disabled={!canEdit}>{x}</button>)}
+        {whyChart && <button type="button" className={`ax-chip ${why ? "on" : ""}`} onClick={() => setWhy((w) => !w)} data-testid="ax-ask-why-chart">Why this chart?</button>}
         <span className="grow" />
+        <DictateButton value={request} onChange={setRequest} disabled={!canEdit || busy !== null} onDone={(t) => { if (t.trim()) void propose(t); }} />
         <button className="btn primary" onClick={() => void propose()} disabled={!canEdit || !request.trim() || busy !== null} data-testid="ax-ask-propose">{busy === "propose" ? "Reading your request…" : "Propose"}</button>
       </div>
+      {why && whyChart && (
+        <div className="ax-ask-why" data-testid="ax-ask-why">
+          <b>{whyChart.type.replace(/_/g, " ")}</b> — {whyChart.reason}{whyChart.denominator ? <div className="muted">{whyChart.denominator}</div> : null}{(whyChart.notes ?? []).map((n, i) => <div key={i} className="muted">{n}</div>)}
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>From the engine's chart advice for this result — not a model. Say “use a horizontal bar for this” to change it.</div>
+        </div>
+      )}
       {!canEdit && <div className="ax-warn" style={{ marginTop: 8 }}>You can read analyses here but not change them.</div>}
       {error && <div className="ax-error" style={{ marginTop: 8 }} data-testid="ax-ask-error">{error}</div>}
 
