@@ -19,3 +19,6 @@ export * from "./autoCode.js";
 export * from "./groups.js";
 export * from "./groupService.js";
 export * from "./groupStoreDb.js";
+/* platform audit 2026-11-05: the mixed-methods hand-off */
+export * from "./handoff.js";
+export * from "./deckQuotes.js";

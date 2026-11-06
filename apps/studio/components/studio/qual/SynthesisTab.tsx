@@ -4,6 +4,7 @@ import { compareGroups, formatTimestamp, themeCounts, OBJECTIVE_WORDS, VERDICT_W
 import { allSegments } from "@/lib/qual/qualWorkspace";
 import type { WorkspaceView } from "./qualApi";
 import type { SynthesisApi, SynthesisState, AskResult } from "./synthesisApi";
+import { HandoffCard } from "./HandoffCard";
 
 /**
  * SYNTHESIS (2026-10-22) — Research Tools → Qualitative → Synthesis: AI theme summaries (what people said, nuance,
@@ -46,6 +47,9 @@ export function SynthesisTab({ ws, api, run }: { ws: WorkspaceView; api: Synthes
     <div data-testid="qual-synthesis">
       <div className="alert info" data-testid="syn-note">AI-written from the coded excerpts only: every sentence cites the excerpts it rests on (uncited sentences, sentences naming a group without its evidence and sentences stating numbers the excerpts do not give are dropped). Every count below is computed by the Studio. {FREQUENCY_NOTE}</div>
       {!ws.can.code && <div className="alert info">Reading only: writing or editing the synthesis needs Data: View and Data Analytics: Edit.</div>}
+
+      {/* platform audit 2026-11-05: the mixed-methods hand-off — the themes become the quantitative phase's design */}
+      {themes.length > 0 && <HandoffCard ws={ws} st={st} />}
 
       <div className="card ql-section" data-testid="syn-themes">
         <div className="ql-row"><div className="eyebrow">Theme summaries</div><span className="grow" />

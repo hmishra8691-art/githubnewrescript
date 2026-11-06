@@ -55,6 +55,7 @@ export function deckSlideSection(slide: DeckSlide): string | null {
     case "method": return "method";
     case "caveats": return "caveats";
     case "wave_change": return "since-the-last-wave";
+    case "quotes": return "in-their-own-words";
     default: return null;
   }
 }
@@ -210,6 +211,20 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
       case "caveats": {
         frame(s, slide.title, "Caveats");
         bullets(s, slide.bullets, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.5 }, st.type.body - 1);
+        break;
+      }
+      case "quotes": {
+        /* platform audit 2026-11-05: verbatims from the qualitative phase, each with who said it and where */
+        frame(s, slide.title, "In their own words");
+        const n = slide.quotes.length;
+        const avail = H - 1.2 - 0.5;
+        const each = Math.min(1.25, avail / Math.max(1, n));
+        slide.quotes.forEach((q, i) => {
+          const y = 1.2 + i * each;
+          card(s, { x: g, y, w: W - 2 * g, h: each - 0.12 });
+          s.addText(`“${q.quote}”`, { x: g + 0.2, y: y + 0.08, w: W - 2 * g - 0.4, h: each - 0.5, fontSize: n > 3 ? st.type.body - 1 : st.type.body, italic: true, color: text, fontFace: font, valign: "top", fit: "shrink" });
+          s.addText(`— ${[q.speaker, q.source, q.time].filter(Boolean).join(" · ")}${q.negativeCase ? " · a contrasting view" : ""}`, { x: g + 0.2, y: y + each - 0.42, w: W - 2 * g - 0.4, h: 0.26, fontSize: st.type.caption, color: subtle, fontFace: font });
+        });
         break;
       }
       case "wave_change": {

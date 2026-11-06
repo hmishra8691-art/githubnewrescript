@@ -17,6 +17,8 @@ import { billingProjectFor, meteredAi } from "@/lib/metering";
 import { aiReadyFor, connectionTag } from "@/lib/byok/connect";
 import { outputBudget } from "@/lib/copilot/budget";
 import { buildFor, loadDefinition, previousRun } from "@/lib/analytics";
+import { deckQuotesFor } from "@rescript/analytics";
+import { synthesisContext } from "@/lib/qual/synthesisContext";
 
 /**
  * A DOCUMENT FROM THE RESEARCH ENGINE (Research Engine audit, Phase 5).
@@ -74,7 +76,7 @@ const SOURCES = new Set(["copilot", "research_tab", "workflow", "api"]);
 
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
-  let body: { surveyId?: unknown; output?: unknown; definition?: unknown; rows?: unknown; narrative?: unknown; fake?: unknown; environment?: unknown; dataset?: unknown; previous?: unknown; theme?: unknown; structure?: unknown; regenerate?: unknown; source?: unknown; visibility?: unknown };
+  let body: { surveyId?: unknown; output?: unknown; definition?: unknown; rows?: unknown; narrative?: unknown; fake?: unknown; environment?: unknown; dataset?: unknown; previous?: unknown; theme?: unknown; structure?: unknown; regenerate?: unknown; source?: unknown; visibility?: unknown; quotes?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : json({ error: "bad json" }, 400); }
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
   const sandbox = surveyId === "sandbox";
@@ -226,14 +228,28 @@ export async function POST(req: NextRequest) {
   } else if (body.narrative === false) gate = "not asked";
   else gate = "no model configured - the engine's words stand";
 
-  const opts = { audience: output.audience, client, author, date, results, narrative };
+  /*
+   * IN THEIR OWN WORDS (platform audit 2026-11-05; capability qualitative:quotes). The qualitative phase's
+   * reviewed excerpts — a person's review, never an AI suggestion — reach the survey deck and report, one
+   * section per theme, redacted with the study's own name list. A survey with no qualitative coding adds
+   * nothing; a qualitative store that cannot be read adds nothing either (the deck is the deliverable).
+   */
+  let quotes: ReturnType<typeof deckQuotesFor> = [];
+  if (db && body.quotes !== false) {
+    try {
+      const qc = await synthesisContext(db, surveyId);
+      if (qc.state.excerpts.length) quotes = deckQuotesFor(qc.state, qc.segments, { sources: qc.sources, redact: { names: qc.names } });
+    } catch { /* no qualitative data, or the tables are not applied: the deck stands without quotes */ }
+  }
+
+  const opts = { audience: output.audience, client, author, date, results, narrative, ...(quotes.length ? { quotes } : {}) };
   if (output.type === "findings_pptx") {
     const deck = deckFromRun(def, run, opts);
     /* the same section order as the findings Word report (#18) */
     const buf = await buildDeckPptx({ deck, results, author, footer: client ? `Prepared for ${client}` : undefined, ...(look.theme ? { theme: themeToReportTheme(look.theme) } : {}), sectionOrder: sectionOrderFor(look.structure, "findings") });
     const pc = checkPptx(buf);
     if (!pc.ok) return { ok: false, status: 500, error: `The deck was produced but failed its check, so it is not offered: ${pc.problems.slice(0, 3).join("; ")}.`, code: "invalid_document" };
-    return { bytes: new Uint8Array(buf), fileName: `${base}-findings-${output.audience}.pptx`, mime: PPTX, summary: `${describeDeck(deck)} - ${run.n} completes`, narrative: gate };
+    return { bytes: new Uint8Array(buf), fileName: `${base}-findings-${output.audience}.pptx`, mime: PPTX, summary: `${describeDeck(deck)} - ${run.n} completes${quotes.length ? ` - ${quotes.reduce((n, q) => n + q.quotes.length, 0)} quotes from the qualitative phase` : ""}`, narrative: gate };
   }
   const buf = await buildFindingsDocx(def, run, { ...opts, ...styled, structure: look.structure });
   return docx(buf, `${base}-findings-report.docx`, `Findings report: ${run.verdicts.length} hypotheses, ${run.findings.filter((f) => f.significant).length} significant findings - ${run.n} completes${run.since ? ` - since the last wave (${run.since.previous.computedAt.slice(0, 10)})` : ""}`, { "x-rescript-narrative": ascii(gate) });

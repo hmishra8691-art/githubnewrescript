@@ -121,6 +121,8 @@ const body = (text: string) => new Paragraph({ children: [new TextRun({ text, co
 const lead = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.accent, size: S.themed ? S.bodySize + 3 : 24, bold: true })], spacing: spacing(120) });
 /* evidence and notes: quiet italics, or — "clear statistical annotations" — upright, darker and full size */
 const muted = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.clearAnnotations ? S.ink : S.subtle, size: S.clearAnnotations ? S.bodySize - 1 : S.themed ? S.bodySize - 2 : 19, italics: !S.clearAnnotations })], spacing: spacing(60) });
+/** a verbatim: indented, italic, the study's ink */
+const quoteBlock = (text: string) => new Paragraph({ children: [new TextRun({ text: `“${text}”`, italics: true, color: S.ink, size: S.bodySize })], indent: { left: 540 }, spacing: spacing(40) });
 const bullet = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.ink, size: S.bodySize })], numbering: { reference: "rs-bullets", level: 0 }, spacing: spacing(50) });
 const numbered = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.ink, size: S.bodySize })], numbering: { reference: "rs-numbers", level: 0 }, spacing: spacing(50) });
 const divider = () => new Paragraph({ text: "", spacing: { after: 120 }, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: S.rule, space: 6 } } });
@@ -783,6 +785,19 @@ async function findingsDocx(def: SurveyDefinition, run: RunForDocx, opts: Findin
   if (segs.length) {
     out.push(h1("Who differs"));
     for (const s of segs) { out.push(h2(s.title)); out.push(body(s.differs)); out.push(gridTable(["Group", s.measure, "n"], s.groups.map((g) => [g.label, g.value, String(g.n)]), [4000, 3000, 2000])); }
+  }
+  /* platform audit 2026-11-05: the qualitative phase's reviewed quotes, one subsection per theme */
+  const quoteSlides = deck.slides.filter((s): s is Extract<DeckSlide, { type: "quotes" }> => s.type === "quotes");
+  if (quoteSlides.length) {
+    out.push(h1("In their own words"));
+    out.push(muted("Verbatim excerpts from the qualitative phase, reviewed by a person and quoted exactly as said; names are redacted as the study's settings require."));
+    for (const q of quoteSlides) {
+      out.push(h2(q.theme));
+      for (const x of q.quotes) {
+        out.push(quoteBlock(x.quote));
+        out.push(muted(`— ${[x.speaker, x.source, x.time].filter(Boolean).join(" · ")}${x.negativeCase ? " · a contrasting view" : ""}`));
+      }
+    }
   }
   const d = run.discoveries;
   if (d && (d.segments.length || d.trends.length || d.anomalies.length)) {

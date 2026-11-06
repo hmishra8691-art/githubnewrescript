@@ -91,7 +91,9 @@ export const ResearchConstruct = z.object({
    * HOW IT CAME TO BE (2026-11-02): "hypothesis" when the engine created it from a hypothesis's reading
    * (researchLinks.ts) rather than a person or a design proposal. Absent on every construct made before.
    */
-  origin: z.enum(["hypothesis"]).optional(),
+  origin: z.enum(["hypothesis", "qualitative"]).optional(),
+  /** the facets of a construct handed over from the qualitative phase: its subthemes and codes (2026-11-05) */
+  facets: z.array(z.string()).optional(),
   /**
    * Questions that MAY measure it but were not linked because the match was not certain — a person decides
    * (link, or dismiss). Never counted as measuring the construct. Rebuilt on every linking pass.

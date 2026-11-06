@@ -36,7 +36,14 @@ export type DeckSlide =
   | { type: "method"; title: string; items: { label: string; value: string }[] }
   | { type: "caveats"; title: string; bullets: string[] }
   /** what moved since the previous run (Phase 8): the KPIs with their deltas and whether each move is significant, the findings that changed, the verdicts that changed */
-  | { type: "wave_change"; title: string; since: string; kpis: { name: string; from: string; to: string; delta: string; verdict: "better" | "worse" | "flat" | "unknown"; significant?: boolean }[]; changes: string[]; verdicts: string[] };
+  | { type: "wave_change"; title: string; since: string; kpis: { name: string; from: string; to: string; delta: string; verdict: "better" | "worse" | "flat" | "unknown"; significant?: boolean }[]; changes: string[]; verdicts: string[] }
+  /** reviewed verbatim excerpts from the qualitative phase, one slide per theme (platform audit 2026-11-05; capability qualitative:quotes) */
+  | { type: "quotes"; title: string; theme: string; quotes: DeckQuote[] };
+
+/** one verbatim, as the qualitative report carries it: the words, who said them, where and when */
+export interface DeckQuote { quote: string; source: string; speaker?: string; time?: string; negativeCase?: boolean }
+/** a theme's reviewed quotes, in the order they are to be shown (the Studio selects and redacts them) */
+export interface DeckQuoteSet { theme: string; quotes: DeckQuote[]; /** how many sources the theme was found in, in words */ coverage?: string }
 
 export interface DeckDefinition { title: string; subtitle: string; audience: Audience; slides: DeckSlide[]; /** the analysis ids the slides draw */ analysisIds: string[] }
 
@@ -55,6 +62,8 @@ export interface DeckOptions {
   narrative?: NarrativeSections;
   /** the results by analysis id, so the chart can be chosen for the audience (the run's own results when it has them) */
   results?: Record<string, AnalysisResult>;
+  /** reviewed quotes from the qualitative phase, by theme — "In their own words" after the key findings (platform audit 2026-11-05) */
+  quotes?: DeckQuoteSet[];
 }
 
 type RunForDeck = Pick<AnalysisRun, "computedAt" | "trigger" | "environment" | "n" | "findings" | "verdicts" | "warnings"> & { items: (Pick<RunItem, "definition" | "hypotheses" | "chart" | "findings"> & { result?: AnalysisResult; adaptedFrom?: string })[]; corrections?: AnalysisRun["corrections"]; advice?: AnalysisRun["advice"]; discoveries?: AnalysisRun["discoveries"]; kpis?: AnalysisRun["kpis"]; since?: AnalysisRun["since"] };
@@ -157,6 +166,13 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
     const groups = groupsOf(f);
     const hi = groups[0], lo = groups[groups.length - 1];
     slides.push({ type: "segment_comparison", title: strip(f.headline), measure: f.variables[0], ...(id ? { analysisId: id, chart: chartFor(it, id, it?.definition.name ?? f.analysis.name) } : {}), groups, differs: f.significant ? `${hi.label} (${hi.value}) vs ${lo.label} (${lo.value}) — ${STRENGTH_WORD[f.strength]}${f.evidence.pairwise ? `. ${f.evidence.pairwise.summary}` : ""}` : "the groups do not differ significantly" });
+  }
+
+  /* in their own words (platform audit 2026-11-05): the qualitative phase's reviewed quotes, one slide per theme, four at most each */
+  const quoteSets = (opts.quotes ?? []).filter((q) => q.quotes.length).slice(0, 6);
+  if (quoteSets.length) {
+    slides.push({ type: "section", title: "In their own words", subtitle: `${quoteSets.length} theme${quoteSets.length === 1 ? "" : "s"} from the qualitative phase, in participants' words` });
+    for (const q of quoteSets) slides.push({ type: "quotes", title: q.theme, theme: q.theme, quotes: q.quotes.slice(0, 4) });
   }
 
   /* statistical highlight: the strongest effects */

@@ -248,6 +248,7 @@ export const DOCUMENT_SECTIONS: Record<DocumentFamily, { id: string; title: stri
     { id: "key-findings", title: "Key findings" },
     { id: "advanced-models", title: "Advanced models", when: "advanced analyses were run" },
     { id: "who-differs", title: "Who differs", when: "segment differences were found" },
+    { id: "in-their-own-words", title: "In their own words", when: "the qualitative phase has reviewed quotes" },
     { id: "beyond-the-plan", title: "Beyond the plan", when: "findings outside the plan" },
     { id: "what-the-data-says-about-the-methods", title: "What the data says about the methods", when: "method checks apply" },
     { id: "what-it-means", title: "What it means" },
