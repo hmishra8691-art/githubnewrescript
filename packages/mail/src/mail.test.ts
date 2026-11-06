@@ -1,3 +1,7 @@
+/* the expiry dates below are midnight UTC and are asserted in words ("1 April 2026"): in a timezone west of
+   Greenwich they format as the day before. Pinned, as operatorCompat.test.ts is (platform audit 2026-11-05). */
+process.env.TZ = "UTC";
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
