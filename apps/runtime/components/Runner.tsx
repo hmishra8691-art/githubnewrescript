@@ -2691,7 +2691,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!pageStep || ended) return { ok: false, reason: "the survey is not on a page" };
     const t = script.target;
     const scope = t.questionId ? { kind: "question" as const, questionId: t.questionId } : t.pageId ? { kind: "page" as const, pageId: t.pageId } : t.blockId ? { kind: "block" as const, blockId: t.blockId } : { kind: "survey" as const };
-    const r = applyScriptWrite(def, state, write, { scriptId: script.id, scope, shown: shownQuestions.map((q) => q.id), loop: pageStep.loop ?? null, pageQuestions: questions, quotaCounts: counts });
+    const r = applyScriptWrite(def, state, write, { scriptId: script.id, scope, shown: shownQuestions.map((q) => q.id), loop: pageStep.loop ?? null, pageQuestions: questions, quotaCounts: counts, page: pageStep.pageId });
     if (!r.ok) return r;
     if (write.kind === "answer") {
       pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
@@ -2707,7 +2707,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * screen; it does not run on_change scripts (a logic script's set never did). The caller re-renders.
    */
   const applyLogicWrite = (write: ScriptWrite, script: PreparedLogicScript): ScriptWriteResult => {
-    const r = applyScriptWrite(def, state, write, { scriptId: script.id, scope: logicScriptScope(script), shown: pageStep ? shownQuestions.map((q) => q.id) : [], loop: pageStep?.loop ?? null, pageQuestions: questions, quotaCounts: counts });
+    /* the page the write is made from, so Back can take it back (backClear.ts); the survey-level on_load has none */
+    const r = applyScriptWrite(def, state, write, { scriptId: script.id, scope: logicScriptScope(script), shown: pageStep ? shownQuestions.map((q) => q.id) : [], loop: pageStep?.loop ?? null, pageQuestions: questions, quotaCounts: counts, page: pageStep?.pageId ?? null });
     if (r.ok && write.kind === "answer" && pageStep) pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
     return r;
   };

@@ -238,6 +238,7 @@ export * from "./methodRepair.js";
 export * from "./scriptAst.js";
 export * from "./codeGate.js";
 export * from "./scriptWrites.js";
+export * from "./backClear.js";
 export * from "./logicSandbox.js";
 export * from "./scriptVerify.js";
 export * from "./savePayload.js";

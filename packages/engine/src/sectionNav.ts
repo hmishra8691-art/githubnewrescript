@@ -1,4 +1,5 @@
 import type { FlowNode, SurveyDefinition, Question } from "@rescript/schema";
+import { clearDerivedOnBack } from "./backClear.js";
 import type { ResponseState } from "./state.js";
 import { getQuestion, lookupAnswer } from "./state.js";
 import { isEmptyAnswer } from "./answers.js";
@@ -354,6 +355,8 @@ export function goToPage(
     else kept = trail.filter((p) => { const j = steps.findIndex((s) => isPage(s) && s.pageId === p); return j >= 0 && j < idx; });
     setVisitedPages(state, kept);
     markSeen(state, here.pageId);
+    /* a backward jump takes back what Back takes back (backClear.ts) */
+    clearDerivedOnBack(def, state, steps, idx, here.pageId);
     state.stepIndex = idx;
     return { steps, stepIndex: idx, done: false, triggeredSkips: [], quotaFull: [], ok: true, via: "back" };
   }

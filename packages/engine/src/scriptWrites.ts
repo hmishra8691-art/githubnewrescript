@@ -82,12 +82,14 @@ export interface ScriptWriteContext {
   quotaCounts?: Record<string, Record<string, number>>;
   /** the time to record (tests); default now */
   at?: string;
+  /** the page the write is made from (its compiled id, `page@iteration` for a loop body) — Back clears the writes of the pages it puts ahead again (backClear.ts) */
+  page?: string | null;
 }
 
 export interface ScriptWriteResult { ok: boolean; reason?: string; /** the answer key / name written */ target?: string }
 
 /** one accepted write, as paradata — never the value */
-export interface ScriptWriteRecord { script: string; kind: ScriptWrite["kind"]; target: string; at: string }
+export interface ScriptWriteRecord { script: string; kind: ScriptWrite["kind"]; target: string; at: string; /** the page it was written from; absent for the survey-level on_load */ page?: string }
 
 export const SCRIPT_WRITE_LIMITS = {
   /** characters of one text value */
@@ -287,7 +289,7 @@ function ownQuestions(def: SurveyDefinition, scope: ScriptWriteScope): Set<strin
 
 function record(state: ResponseState, ctx: ScriptWriteContext, kind: ScriptWrite["kind"], target: string) {
   const list = (state.scriptWrites ??= []);
-  list.push({ script: String(ctx.scriptId).slice(0, 120), kind, target, at: ctx.at ?? new Date().toISOString() });
+  list.push({ script: String(ctx.scriptId).slice(0, 120), kind, target, at: ctx.at ?? new Date().toISOString(), ...(ctx.page ? { page: String(ctx.page).slice(0, 200) } : {}) });
   if (list.length > SCRIPT_WRITE_LIMITS.records) {
     const drop = list.length - SCRIPT_WRITE_LIMITS.records;
     list.splice(0, drop);
@@ -434,7 +436,7 @@ export function sanitizeScriptWrites(raw: unknown): ScriptWriteRecord[] {
     const kind = r.kind;
     if (kind !== "answer" && kind !== "embedded" && kind !== "calculated" && kind !== "flag") continue;
     if (typeof r.target !== "string" || !r.target || r.target.length > 200) continue;
-    out.push({ script: typeof r.script === "string" ? r.script.slice(0, 120) : "", kind, target: r.target, at: typeof r.at === "string" ? r.at.slice(0, 40) : "" });
+    out.push({ script: typeof r.script === "string" ? r.script.slice(0, 120) : "", kind, target: r.target, at: typeof r.at === "string" ? r.at.slice(0, 40) : "", ...(typeof r.page === "string" && r.page ? { page: r.page.slice(0, 200) } : {}) });
   }
   return out;
 }

@@ -18,6 +18,7 @@ import { type EmbeddedField } from "./embedded.js";
 import { applyEmbeddedFieldInFlow } from "./embeddedPiping.js";
 import { prefillQuestions, maskingVariablesFor, applyPunches } from "./setExpression.js";
 import { questionDependencies } from "./dependencies.js";
+import { clearDerivedOnBack } from "./backClear.js";
 import { applyDefaultValues } from "./defaultValue.js";
 import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
@@ -844,23 +845,28 @@ export function goBack(
    */
   const stack = visitedStack(state);
   const here = steps[state.stepIndex];
+  const leavingPageId = here?.kind === "page" ? here.pageId : null;
+  /*
+   * WHAT BACK TAKES BACK (backClear.ts, 2026-11-05): once the landing page is known, everything derived on or
+   * after it — punched hidden answers whose rules read the pages ahead, and every value a script wrote from
+   * those pages — is cleared, so the way forward derives it again from whatever the respondent now answers.
+   */
+  const land = (at: number): NavigationResult => {
+    clearDerivedOnBack(def, state, steps, at, leavingPageId);
+    state.stepIndex = at;
+    return { steps, stepIndex: at, done: false, triggeredSkips: [], quotaFull: [] };
+  };
   while (stack.length > 0) {
     const pageId = stack.pop()!;
     if (here?.kind === "page" && here.pageId === pageId) continue;
     const at = steps.findIndex((s) => s.kind === "page" && s.pageId === pageId);
     const s = at >= 0 ? steps[at] : undefined;
-    if (s?.kind === "page" && visibleQuestions(def, s, state, quotaCounts, view).length > 0) {
-      state.stepIndex = at;
-      return { steps, stepIndex: at, done: false, triggeredSkips: [], quotaFull: [] };
-    }
+    if (s?.kind === "page" && visibleQuestions(def, s, state, quotaCounts, view).length > 0) return land(at);
   }
   let idx = Math.min(state.stepIndex, steps.length - 1) - 1;
   while (idx >= 0) {
     const s = steps[idx];
-    if (s.kind === "page" && visibleQuestions(def, s, state, quotaCounts, view).length > 0) {
-      state.stepIndex = idx;
-      return { steps, stepIndex: idx, done: false, triggeredSkips: [], quotaFull: [] };
-    }
+    if (s.kind === "page" && visibleQuestions(def, s, state, quotaCounts, view).length > 0) return land(idx);
     idx--;
   }
   /*

@@ -200,7 +200,7 @@ export interface ResponseState {
    * target, time; never the value. Posted with each save so the replay and the analyst can tell script-made
    * values from the respondent's.
    */
-  scriptWrites?: { script: string; kind: "answer" | "embedded" | "calculated" | "flag"; target: string; at: string }[];
+  scriptWrites?: { script: string; kind: "answer" | "embedded" | "calculated" | "flag"; target: string; at: string; page?: string }[];
   /** how many of the oldest `scriptWrites` were dropped past the cap */
   scriptWritesDropped?: number;
 }
