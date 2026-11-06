@@ -75,7 +75,7 @@ test("structural: the copilot's cache and single-flight keys carry the connectio
   assert.match(src, /flights\(`[^`]*\$\{aiIdentity\(\)\}/, "the in-flight share key carries the connection");
   assert.match(src, /ai_connection[\s\S]{0,120}describeFailure\("connection"/, "a connection refusal is shown as its own card, not as a wallet failure");
   assert.match(src, /own: ownProvider/, "failures on the user's provider are told as theirs");
-  for (const f of ["app/api/copilot/output/route.ts", "lib/analyticsBuilder.ts"]) assert.match(read(f), /\.\.\.\(conn \? \{ conn \} : \{\}\)/, `${f}: stored AI replies are keyed by connection`);
+  for (const f of ["lib/analyticsNarrative.ts", "lib/analyticsBuilder.ts"]) assert.match(read(f), /\.\.\.\(conn \? \{ conn \} : \{\}\)/, `${f}: stored AI replies are keyed by connection`);
 });
 
 test("structural: nothing in the Studio reserves a wallet for a model call by hand any more — every path walks one door", () => {
@@ -92,7 +92,7 @@ test("structural: nothing in the Studio reserves a wallet for a model call by ha
 });
 
 test("the routes that asked 'is a model configured?' now ask 'is there an AI for this person?'", () => {
-  for (const f of ["app/api/copilot/turn/route.ts", "app/api/copilot/output/route.ts", "app/api/copilot/documents/route.ts", "app/api/copilot/workflow/route.ts", "app/api/import/analyze/route.ts", "lib/analyticsAsk.ts", "lib/analyticsBuilder.ts", "lib/aiGate.ts"]) {
+  for (const f of ["app/api/copilot/turn/route.ts", "lib/analyticsNarrative.ts", "app/api/copilot/documents/route.ts", "app/api/copilot/workflow/route.ts", "app/api/import/analyze/route.ts", "lib/analyticsAsk.ts", "lib/analyticsBuilder.ts", "lib/aiGate.ts"]) {
     const src = read(f);
     assert.equal(/\baiConfigured\(\)/.test(src.replace(/aiReadyFor[\s\S]*?\n/g, "")) && !/aiReadyFor\(/.test(src), false, f);
     assert.match(src, /aiReadyFor\(/, f);

@@ -19,7 +19,8 @@ import { FindingsView } from "./FindingsView";
 import { PLACES, DEFAULT_VIEW, placeOf, type PlaceKey, type WsTab } from "./navigation";
 import { CHART_PAGE, analysisIdsFor, hiddenCount, visibleCharts } from "./chartPaging";
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
-import { ArchitectAnalytics } from "./architect/ArchitectAnalytics";
+import { ArchitectAnalytics, type FocusRequest } from "./architect/ArchitectAnalytics";
+import { OverviewDashboard } from "./OverviewDashboard";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
@@ -47,6 +48,9 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
   /* ARCHITECT is a mode over the same engine, analyses and permissions (components/analytics/architect); the catalogue is read again whenever the lists refresh */
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [archFocus, setArchFocus] = React.useState<{ key: string; label: string; analysisId: string | null } | null>(null);
+  /* a drill-down from Overview: open this analysis in Architect's Focus once the catalogue is there */
+  const [archRequest, setArchRequest] = React.useState<FocusRequest | null>(null);
+  const openInArchitect = (analysisId: string, planned: string | null) => { setArchRequest({ analysisId: analysisId || null, planned, nonce: Date.now() }); setTab("architect"); };
   const [askMounted, setAskMounted] = React.useState(p.initialTab === "ask");
   const [lastView, setLastView] = React.useState<Partial<Record<PlaceKey, Exclude<WsTab, "ask">>>>({});
   const place = placeOf(tab);
@@ -159,8 +163,8 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
       )}
       {error && <div className="ax-error" style={{ margin: "6px 0" }}>{error}</div>}
       {notice && <div className="ax-notice" style={{ margin: "6px 0" }} data-testid="ax-notice" onClick={() => setNotice(null)}>{notice}</div>}
-      {tab === "home" && <Kpis env={env} counts={counts} vars={vars.length} analyses={analyses.length} charts={charts.length} reports={reports} shares={shares.length} />}
       <div className="ax-ws-body">
+        {tab === "home" && <OverviewDashboard api={api} dataset={dataset} analyses={analyses} refreshKey={refreshKey} onOpenAnalysis={openInArchitect} onPlan={() => setTab("plan")} onArchitect={() => setTab("architect")} onFindings={() => setTab("findings")} />}
         {tab === "home" && <Home home={home} analyses={analyses} onOpen={(a) => openBuilder({ analysis: a })} onNew={(kind) => openBuilder(kind ? { kind } : undefined)} onTab={setTab} canEdit={p.canEdit} api={api} refresh={refresh} plan={planBrief} surveyId={p.surveyId} />}
         {tab === "plan" && <PlanWorkspace api={api} surveyId={p.surveyId} surveyTitle={p.surveyTitle} dataset={dataset} variables={vars} counts={counts} analyses={analyses} canEdit={p.canEdit} canEditPlan={!!p.canEditPlan} canExport={p.canExport}
           onOpenAnalysis={(a) => openBuilder({ analysis: a })} onTab={(t) => setTab(t)} onApplied={() => { void refresh(); void loadPlanBrief(); }} />}
@@ -183,7 +187,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         {tab === "exports" && <ExportsPanel api={api} reports={reports} analyses={analyses} themes={themes} />}
         {tab === "sharing" && <SharingPanel api={api} shares={shares} reports={reports} onChange={() => void refresh()} />}
         {tab === "architect" && <ArchitectAnalytics api={api} dataset={dataset} analyses={analyses} charts={charts} themes={themeList} canEdit={p.canEdit} canExport={p.canExport} refreshKey={refreshKey}
-          onOpenInBuilder={(a) => openBuilder({ analysis: a })} onFocusChange={setArchFocus} />}
+          onOpenInBuilder={(a) => openBuilder({ analysis: a })} onFocusChange={setArchFocus} focusRequest={archRequest} />}
       </div>
       {askMounted && (
         <aside ref={drawerRef} id="ax-ask-drawer" className="ax-ask-drawer" role="complementary" aria-label="Ask" hidden={!askOpen} data-testid="ax-ask-drawer" onKeyDown={(e) => { if (e.key === "Escape") setAskOpen(false); }}>
@@ -192,49 +196,6 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
             focus={tab === "architect" ? (archFocus?.analysisId ? { analysisId: archFocus.analysisId, name: archFocus.label } : null) : place === "explore" && currentAnalysisId ? { analysisId: currentAnalysisId, name: String(analyses.find((a) => a.id === currentAnalysisId)?.name ?? builder.initial?.analysis?.name ?? "this analysis") } : null} />
         </aside>
       )}
-    </div>
-  );
-}
-
-/**
- * THE METRIC BAND.
- *
- * Every figure here is already in the workspace's state: `counts` comes back
- * with the variable dictionary, and the rest are the lengths of the lists the
- * tabs are rendered from. So the band adds no request, no calculation and
- * nothing the product does not already know — which is the whole constraint.
- * Numbers a research platform would like to show here and this one does not
- * yet compute (completion rate, median duration, a period-over-period trend)
- * are deliberately absent rather than invented.
- */
-function Kpis({ env, counts, vars, analyses, charts, reports, shares }: {
-  env: DatasetSpec["environment"]; counts: Record<string, number>; vars: number;
-  analyses: number; charts: number; reports: Row[]; shares: number;
-}) {
-  const loading = !Object.keys(counts).length;
-  /* ALL is the two environments together — the same sum the dataset selector
-     describes, not a third stored number */
-  const responses = env === "ALL" ? (counts.LIVE ?? 0) + (counts.TEST ?? 0) : counts[env] ?? 0;
-  const envLabel = env === "ALL" ? "all responses" : env === "LIVE" ? "production" : "test";
-  const published = reports.filter((r) => r.published_version).length;
-  const n = (v: number) => v.toLocaleString(DEFAULT_NUMBER_LOCALE);
-  const tiles: { label: string; value: string; sub?: string; testid: string }[] = [
-    { label: "Responses", value: loading ? "—" : n(responses), sub: `${envLabel} · complete`, testid: "ax-kpi-responses" },
-    { label: "Variables", value: loading ? "—" : n(vars), sub: "in the dictionary", testid: "ax-kpi-variables" },
-    { label: "Analyses", value: n(analyses), sub: "saved definitions", testid: "ax-kpi-analyses" },
-    { label: "Charts", value: n(charts), sub: "saved styling", testid: "ax-kpi-charts" },
-    { label: "Reports", value: n(reports.length), sub: published ? `${published} published` : "none published", testid: "ax-kpi-reports" },
-    { label: "Shares", value: n(shares), sub: shares ? "live links" : "nothing shared", testid: "ax-kpi-shares" },
-  ];
-  return (
-    <div className="ax-kpis" data-testid="ax-kpis">
-      {tiles.map((t) => (
-        <div key={t.label} className="metric" data-testid={t.testid}>
-          <span className="metric-v">{t.value}</span>
-          <span className="metric-l">{t.label}</span>
-          {t.sub && <span className="ax-kpi-sub">{t.sub}</span>}
-        </div>
-      ))}
     </div>
   );
 }

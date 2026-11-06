@@ -16,6 +16,7 @@ import { applyOps, askContext, datasetFrom, propose as proposeAsk, undoRecords }
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
 import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
 import { cataloguePayload } from "@/lib/analyticsCatalogue";
+import { overviewPayload } from "@/lib/analyticsOverview";
 import { modelJobsGET, modelJobsPOST } from "@/lib/modelJobs";
 import { advancedGET, advancedInterpretationsFor, advancedPOST } from "@/lib/advancedModels";
 
@@ -115,6 +116,14 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     return json(await variablesPayload(db, surveyId, loaded));
+  }
+  /* THE EXECUTIVE OVERVIEW (Analytics upgrade M2): the run read for a non-statistician, who answered, data quality, the gated summary */
+  if (head === "overview" && !itemId) {
+    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const env = req.nextUrl.searchParams.get("environment");
+    const dataset: DatasetSpec = { environment: env === "TEST" || env === "ALL" ? env : "LIVE", dataset: req.nextUrl.searchParams.get("dataset") === "clean" ? "clean" : "all" };
+    return json(await overviewPayload(db, surveyId, loaded, dataset, ctx.user, { narrative: req.nextUrl.searchParams.get("narrative") === "1" }));
   }
   /* THE ARCHITECT'S EXPLORER (Analytics Architect Mode): every analysis, chart, hypothesis, theme, report and dashboard, with research labels */
   if (head === "catalogue" && !itemId) {

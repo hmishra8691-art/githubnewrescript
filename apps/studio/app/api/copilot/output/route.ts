@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { aiConfigured, aiModelName, aiProviderName, completeJson } from "@rescript/ai";
-import { aiAllowed } from "@/lib/aiPolicy";
-import { keepReply, recordAiRefused, recordAiText, replyFromCache, replyKey } from "@/lib/aiText";
+import { aiProviderName } from "@rescript/ai";
+import { gatedNarrativeFor } from "@/lib/analyticsNarrative";
 import { SurveyDefinition } from "@rescript/schema";
 import type { OutputRequest } from "@rescript/engine";
-import { briefText, buildDataset, compareRuns, deckFromRun, describeDeck, gateNarrative, claimsBrief, claimsFromRun, claimsHash, promptVersion, redactPrompt, redactRunForModel, hash64, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
+import { buildDataset, compareRuns, deckFromRun, describeDeck, runPlan, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
 import { buildDeckPptx, buildFindingsDocx, buildProposalDocx, buildResearchPlanDocx, buildSapDocx, checkDocx, checkPptx, logoFromBytes } from "@rescript/analytics/export";
 import { readThemeSpec, findReportTheme, themeToReportTheme, sectionOrderFor } from "@rescript/analytics";
 import { artifactFingerprint, definitionHash, editionOf, GENERATOR_VERSION, type ArtifactType } from "@/lib/artifacts/core";
@@ -13,9 +12,6 @@ import { artifactDeps, documentLook, fingerprintInputs, type DocumentLook } from
 import { readStructure, themeStamp } from "@/lib/reportThemesStore";
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
-import { billingProjectFor, meteredAi } from "@/lib/metering";
-import { aiReadyFor, connectionTag } from "@/lib/byok/connect";
-import { outputBudget } from "@/lib/copilot/budget";
 import { buildFor, loadDefinition, previousRun } from "@/lib/analytics";
 import { deckQuotesFor } from "@rescript/analytics";
 import { synthesisContext } from "@/lib/qual/synthesisContext";
@@ -187,46 +183,12 @@ export async function POST(req: NextRequest) {
    */
   let narrative: NarrativeSections | undefined;
   let gate = "none";
-  if (body.narrative !== false && await aiReadyFor(user, surveyId, "copilot_narrative")) {
+  if (body.narrative !== false) {
     const fake = fakeProvider && body.fake && typeof body.fake === "object" ? body.fake : null;
-    const red = redactRunForModel(run);
-    const claims = claimsFromRun(red.run);
-    const pv = promptVersion(NARRATIVE_INSTRUCTIONS);
-    const model = aiModelName("large");
-    let raw: unknown = fake;
-    let aiOff: string | null = null;
-    let cached = false;
-    let failure: string | null = null;
-    let charge = 0;
-    /* the project's AI switch comes first, whatever supplies the reply */
-    const allowed = await aiAllowed(surveyId, "copilot_narrative");
-    if (!allowed.allowed) { raw = null; aiOff = allowed.message ?? "AI is off for this project."; void recordAiRefused({ userId: user?.userId ?? null, surveyId }, "copilot_narrative", allowed.reason ?? "project_internal"); }
-    else if (!raw) {
-        const brief = briefText(red.run, { maxFindings: 25 });
-        const prompt = redactPrompt(`${NARRATIVE_INSTRUCTIONS}\n\nAUDIENCE: ${output.audience}.\n\nRUN BRIEF:\n${brief}\n\nCLAIMS (cite these ids):\n${claimsBrief(claims)}`).text;
-        /* an answer is only reused under the connection that wrote it: the platform's keep their keys; a user's own provider adds its identity (no secret) */
-        const conn = await connectionTag({ userId: user?.userId, customerId: user?.customerId, surveyId, operation: "copilot_narrative" });
-        const key = replyKey({ op: "narrative", pv, model, audience: output.audience, claims: claimsHash(claims), brief: hash64(brief), ...(conn ? { conn } : {}) });
-        const hit = await replyFromCache<unknown>(db ?? undefined, surveyId, key);
-        if (hit) { raw = hit; cached = true; }
-        else {
-          const billing = await billingProjectFor(user, surveyId);
-          if (!("response" in billing)) {
-            const nb = outputBudget("narrative");
-            const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: nb.expectedTokens, operation: "copilot_narrative" }, () => completeJson("You write research findings for clients. Answer with JSON only.", prompt, nb.maxTokens, { timeoutMs: nb.timeoutMs, continuations: nb.continuations })).catch((e: unknown) => { failure = e instanceof Error ? e.message : "the model call failed"; return null; });
-            if (m && !m.ok) { if (m.reason === "ai_off") aiOff = m.message; else failure = m.message; }
-            if (m && m.ok) { raw = m.value; charge = m.event?.customerCharge ?? 0; await keepReply(db ?? undefined, surveyId, key, raw); }
-          }
-        }
-    }
-    const g = raw && typeof raw === "object" ? gateNarrative(red.run, raw as Record<string, unknown>, { claims }) : null;
-    if (g && g.offered) {
-      narrative = g.accepted;
-      gate = `${g.kept} of ${g.offered} sentences kept${g.replaced ? `; ${g.replaced} replaced by the engine's wording` : ""}${g.rejected.length ? `; dropped: ${g.rejected.map((r) => `${r.section}: ${r.reason}`).join(" | ")}` : ""}${red.withheld.length ? `; ${red.withheld.length} small-group finding${red.withheld.length === 1 ? "" : "s"} not sent to the model` : ""}`;
-      if (!fake) void recordAiText({ userId: user?.userId ?? null, surveyId }, { operation: "copilot_narrative", model, promptVersion: pv, claimsHash: claimsHash(claims), claims: [...new Set(g.sentences.flatMap((x) => x.claims))], offered: g.offered, kept: g.kept, replaced: g.replaced, rejected: g.rejected.map((r) => ({ reason: r.reason })), withheld: red.withheld, cached, charge });
-    } else gate = aiOff ? `${aiOff} The engine's words stand.` : failure ? `the model could not be used (${failure}) - the engine's words stand` : "the model gave nothing - the engine's words stand";
-  } else if (body.narrative === false) gate = "not asked";
-  else gate = "no model configured - the engine's words stand";
+    const g = await gatedNarrativeFor(user, db, surveyId, run, { audience: output.audience, fake, operation: "copilot_narrative" });
+    narrative = g.narrative ?? undefined;
+    gate = g.gate;
+  } else gate = "not asked";
 
   /*
    * IN THEIR OWN WORDS (platform audit 2026-11-05; capability qualitative:quotes). The qualitative phase's

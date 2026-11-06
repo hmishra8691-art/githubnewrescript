@@ -33,6 +33,7 @@ export * from "./claims.js";
 export * from "./redact.js";
 export * from "./planWorkspace.js";
 export * from "./catalogue.js";
+export * from "./overview.js";
 export * from "./chartPictures.js";
 export * from "./planTrace.js";
 export * from "./blockRefs.js";

@@ -24,6 +24,8 @@ import { DEFAULT_PANES, EMPTY_SELECTION, PANES_KEY, clampPane, explorerEntries, 
  * resize by their dividers; widths are remembered per browser (the Programming Studio's Architect does the
  * same).
  */
+export interface FocusRequest { analysisId: string | null; planned: string | null; nonce: number }
+
 export function ArchitectAnalytics(p: {
   api: AxApi; dataset: DatasetSpec; analyses: Row[]; charts: Row[]; themes: { id: string; name: string; theme: ReportTheme }[];
   canEdit: boolean; canExport: boolean; onOpenInBuilder: (analysis: Row) => void;
@@ -31,6 +33,8 @@ export function ArchitectAnalytics(p: {
   refreshKey: number;
   /** the entry in focus, for Ask */
   onFocusChange?: (focus: { key: string; label: string; analysisId: string | null } | null) => void;
+  /** a drill-down from elsewhere (Overview): open this analysis in Focus once the catalogue is loaded */
+  focusRequest?: FocusRequest | null;
 }) {
   const [payload, setPayload] = React.useState<CataloguePayload | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -70,6 +74,14 @@ export function ArchitectAnalytics(p: {
   /* the focused entry's spec follows its result once it arrives (the recommendation is only known then) */
   const focusedResult = focused?.analysisId ? results.results[focused.analysisId] : undefined;
   React.useEffect(() => { if (focused && focusedResult && !spec) setSpec(specFor(focused, p.charts, focusedResult)); }, [focused, focusedResult, spec, p.charts]);
+
+  const served = React.useRef(0);
+  React.useEffect(() => {
+    const r = p.focusRequest; if (!r || !catalogue || served.current === r.nonce) return;
+    const e = catalogue.all.find((x) => (r.analysisId && x.analysisId === r.analysisId && x.category !== "charts") || (!r.analysisId && r.planned && x.planned === r.planned));
+    served.current = r.nonce;
+    if (e) focus(e.key);
+  }, [p.focusRequest, catalogue]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const savePanes = (n: Panes) => { setPanes(n); try { window.localStorage.setItem(PANES_KEY, JSON.stringify(n)); } catch { /* fine */ } };
   const startDrag = (which: keyof Panes) => (e: React.PointerEvent) => {
