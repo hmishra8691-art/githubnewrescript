@@ -1259,6 +1259,48 @@ const longBrief: Recogniser = (r) => {
   return { kind: "model", category: /\bcreate\s+(?:an?\s+)?(?:survey|questionnaire)\b/i.test(r.text) ? "survey_creation" : "research_design", reason: "a research brief: the design, the questions or the framework it asks for are written by the language model, then applied as actions through the same gate", detected: namedObjects(r) };
 };
 
+/* ---------------------------------------------------------- requests that contradict themselves (IM1) */
+
+/*
+ * Two halves of one sentence that cannot both hold are asked about, naming
+ * both — never read as a question named "the survey anonymous but…". The
+ * pairs are properties of a survey (anonymity, going back), not research types.
+ */
+const IDENTIFIER = String.raw`(?:e-?mails?(?:\s+address(?:es)?)?|names?|full\s+names?|phone(?:\s+numbers?)?|mobile(?:\s+numbers?)?|(?:home\s+|postal\s+)?address(?:es)?|ip(?:\s+address(?:es)?)?|employee\s+(?:ids?|numbers?)|national\s+ids?|contact\s+details)`;
+const conflicts: Recogniser = (r) => {
+  const t = r.text;
+  const anon = /\banonymous(?:ly)?\b|\banonymi[sz]e\b|\banonymity\b/i.test(t);
+  const ident = new RegExp(String.raw`\b(?:record|collect|capture|store|ask\s+(?:for|about)|keep|log|save|require|get|track)\s+(?:every\s+|each\s+|all\s+|the\s+)?(?:respondents?['’]?s?\s+|participants?['’]?s?\s+|their\s+|people['’]s\s+)?(${IDENTIFIER})\b`, "i").exec(t);
+  if (anon && ident && !/\bnot\s+anonymous\b/i.test(t)) {
+    const what = ident[1].toLowerCase();
+    return {
+      kind: "clarify", category: "survey_editing",
+      understood: `Two things that cannot both hold: an anonymous survey, and recording each respondent's ${what}.`,
+      question: `A survey that records each respondent's ${what} is not anonymous — the ${what} identifies the person beside every answer. Which do you want?`,
+      choices: [
+        { label: `Keep it anonymous — don't collect the ${what}`, text: "Make the survey anonymous" },
+        { label: `Collect the ${what} — the survey becomes confidential, not anonymous`, text: `Add an open text question asking for the respondent's ${what}` },
+        { label: `Collect the ${what} at the end, kept apart from the answers`, text: `Add an open text question at the end asking for the respondent's ${what}, stored separately from the answers` },
+      ],
+      detected: [det("conflict", "anonymous ↔ " + what)],
+    };
+  }
+  const noBack = /\b(?:no|without|remove|hide|disable)\s+(?:the\s+)?back\s+button\b|\b(?:can(?:no|')t|cannot|must\s+not)\s+go\s+back\b/i.test(t);
+  const back = /\b(?:go\s+back\s+(?:and|to)\s+(?:change|edit|review|correct)|change\s+(?:their|earlier|previous)\s+answers|review\s+(?:their|earlier|previous)\s+answers)\b/i.test(t) && !/\b(?:can(?:no|')t|cannot|must\s+not|never)\s+(?:go\s+back|change)/i.test(t);
+  if (noBack && back) return {
+    kind: "clarify", category: "survey_editing",
+    understood: "Two things that cannot both hold: no back button, and respondents going back to change earlier answers.",
+    question: "Without a back button respondents cannot return to earlier pages to change their answers. Which do you want?",
+    choices: [
+      { label: "No back button — answers are final once a page is left", text: "Hide the back button" },
+      { label: "Show the back button — respondents can change earlier answers", text: "Show the back button" },
+      { label: "A review page at the end, before submitting", text: "Add a page at the end summarising the answers before submitting" },
+    ],
+    detected: [det("conflict", "no back button ↔ changing earlier answers")],
+  };
+  return null;
+};
+
 /* ---------------------------------------------------------- survey settings */
 
 const surveySettings: Recogniser = (r) => {
@@ -1274,6 +1316,15 @@ const surveySettings: Recogniser = (r) => {
   const d = /^(?:set|change|update)\s+(?:the\s+)?(?:survey(?:['’]s)?\s+|study(?:['’]s)?\s+)?description\s+(?:to|as)\s+(.+)$/i.exec(t);
   if (d) { const description = unquote(d[1]); return act(r, "survey_editing", `Set the survey description to “${plain(description, 60)}”.`, [{ op: "set_survey_settings", description }], [det("survey description", plain(description, 60))]); }
   if (/^(?:remove|clear|delete)\s+(?:the\s+)?(?:survey(?:['’]s)?\s+)?description$/i.test(t)) return act(r, "survey_editing", "Remove the survey description.", [{ op: "set_survey_settings", description: null }], []);
+  /* the back button (IM1): a theme setting the runtime reads (branding.buttons.showBack) */
+  const hideBack = /^(?:hide|remove|disable|turn\s+off|drop)\s+(?:the\s+)?back\s+button(?:\s+(?:from|on|in)\s+(?:the\s+|this\s+|every\s+|all\s+)?(?:survey|pages?))?$/i.test(t) || /^(?:don['’]t|do\s+not)\s+(?:let|allow)\s+(?:respondents|participants|people|them)\s+(?:to\s+)?go\s+back$/i.test(t) || /^no\s+back\s+button$/i.test(t);
+  const showBack = /^(?:show|add|enable|turn\s+on|restore)\s+(?:the\s+|a\s+)?back\s+button(?:\s+(?:to|on|in)\s+(?:the\s+|this\s+|every\s+|all\s+)?(?:survey|pages?))?$/i.test(t) || /^(?:let|allow)\s+(?:respondents|participants|people|them)\s+(?:to\s+)?go\s+back$/i.test(t);
+  if (hideBack || showBack) {
+    const on = showBack;
+    const now = r.def.branding?.buttons?.showBack !== false;
+    if (now === on) return alreadySo("survey_editing", `${on ? "Show" : "Hide"} the back button.`, `The back button is already ${on ? "shown" : "hidden"} — nothing to change.`, []);
+    return act(r, "survey_editing", on ? "Show the back button: respondents can return to earlier pages and change their answers." : "Hide the back button: respondents cannot return to earlier pages, so answers are final once a page is left.", [{ op: "set_theme", patch: { buttons: { showBack: on } }, label: on ? "Back button shown" : "Back button hidden" } as SurveyAction], [det("back button", on ? "shown" : "hidden")]);
+  }
   const c = /^(?:set|change)\s+(?:the\s+)?survey(?:['’]s)?\s+code\s+to\s+(\S+)$/i.exec(t);
   if (c) return act(r, "survey_editing", `Set the survey code to ${c[1]}.`, [{ op: "set_survey_settings", code: c[1] }], [det("survey code", c[1])]);
   return null;
@@ -1781,7 +1832,8 @@ const required: Recogniser = (r) => {
   const WORD = String.raw`(required|mandatory|compulsory|optional|not\s+required|non-?mandatory|not\s+mandatory)`;
   const m = new RegExp(String.raw`^(?:make|set|mark|turn)\s+(.+?)\s+(?:as\s+|to\s+)?(?:be\s+)?${WORD}$`, "i").exec(t)
     ?? new RegExp(String.raw`^(.+?)\s+(?:is|are|should\s+be|must\s+be|has\s+to\s+be|have\s+to\s+be|needs\s+to\s+be|need\s+to\s+be|becomes?)\s+(?:now\s+)?${WORD}$`, "i").exec(t);
-  const verb = m ? null : /^(?:require|mandate)\s+(?!(?:at\s+least|at\s+most|a\s+minimum|a\s+maximum|min|max|no\s+more|up\s+to|exactly|\d))(?:an?\s+answers?\s+(?:to|for|on)\s+)?(.+)$/i.exec(t);
+  /* "Require a number between 1 and 100 in Q6" is a validation rule, not a question named "a number between…" (IM1) */
+  const verb = m || parseValidation(t) ? null : /^(?:require|mandate)\s+(?!(?:at\s+least|at\s+most|a\s+minimum|a\s+maximum|min|max|no\s+more|up\s+to|exactly|\d))(?:an?\s+answers?\s+(?:to|for|on)\s+)?(.+)$/i.exec(t);
   if (!m && !verb) return null;
   const ref = m ? m[1] : verb![1];
   const on = m ? !/optional|not|non/i.test(m[2]) : true;
@@ -2045,6 +2097,8 @@ function parseValidation(text: string): ValAsk | null {
     const k = /char|letter/.test(unit) ? ["min_length", "max_length"] : /select|option|answer|item/.test(unit) ? ["min_selections", "max_selections"] : ["min_value", "max_value"];
     return rule(m[1], [{ kind: k[0], value: Number(m[2]) }, { kind: k[1], value: Number(m[3]) }]);
   }
+  /* "Require a number between 1 and 100 in Q6", "only accept values from 0 to 10 on Q3" — the rule first, the question last (IM1) */
+  if ((m = new RegExp(String.raw`^(?:require|allow|accept|only\s+(?:allow|accept))\s+(?:only\s+)?(?:an?\s+)?(?:numbers?|values?|answers?|numeric\s+answers?|whole\s+numbers?)\s+(?:between|from)\s+${NUM}\s+(?:and|to|-)\s+${NUM}\s+(?:in|on|for|at)\s+${T}$`, "i").exec(text))) return rule(m[3], [{ kind: "min_value", value: Number(m[1]) }, { kind: "max_value", value: Number(m[2]) }]);
   const exact = (target: string, n: string) => rule(target, [{ kind: "min_selections", value: Number(n) }, { kind: "max_selections", value: Number(n) }]);
   if ((m = new RegExp(String.raw`^(?:require\s+|allow\s+)?exactly\s+${NUM}\s+${SEL}\s+(?:on|for|at|in)\s+${T}$`, "i").exec(text))) return exact(m[2], m[1]);
   if ((m = new RegExp(String.raw`^${T}\s+(?:must\s+have\s+|should\s+have\s+|needs?\s+|requires?\s+|allows?\s+|has\s+)?exactly\s+${NUM}\s+${SEL}(?:\s+selected)?$`, "i").exec(text))) return exact(m[1], m[2]);
@@ -3153,7 +3207,7 @@ const advancedModels: Recogniser = (r) => {
 const ADVANCED_ANALYSIS = /\b(?:hb|hierarchical\s+bayes(?:ian)?|individual[\s-]level\s+(?:utilit(?:y|ies)|estimation|scores)|latent[\s-]class|gabor[\s\-–]granger)\b/i;
 
 const RECOGNISERS: Recogniser[] = [
-  advancedModels,
+  conflicts, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
   surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
@@ -3162,7 +3216,7 @@ const RECOGNISERS: Recogniser[] = [
 ];
 
 /** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
-const WHOLE_FIRST: Recogniser[] = [audience, shorten, reportTheme, ownerIntents];
+const WHOLE_FIRST: Recogniser[] = [conflicts, audience, shorten, reportTheme, ownerIntents];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };

@@ -259,3 +259,5 @@ export * from "./taskEstimate.js";
 export * from "./deliverableValidation.js";
 export * from "./generationPlan.js";
 export * from "./recruitmentActions.js";
+/* the research brief, read deterministically (Intelligent Mode IM1, 2026-11-06) */
+export * from "./researchBrief.js";

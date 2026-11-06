@@ -23,6 +23,7 @@
  * survey, a small proposal — stays on the single-turn path, unchanged. Pure; no I/O; cheap.
  */
 import { isLongBrief, scopeCategories } from "./requestScope.js";
+import { describeBrief, readResearchBrief } from "./researchBrief.js";
 
 export type TaskEstimateKind = "generate" | "translate" | "per_question" | "rework_all" | "brief" | "multi" | "single";
 
@@ -161,8 +162,9 @@ export function estimateTaskSize(input: TaskEstimateInput): TaskEstimate {
 
   if (!message) return out({ task: false, kind: "single", reason: "empty", units: 0, outputTokens: 0, steps: 0 });
 
-  /* 1. translation of the survey (or a range of it) */
-  if (TRANSLATE.test(t) && (language || /\blanguages?\b|भाषा|زبان/i.test(t))) {
+  /* 1. translation of the survey (or a range of it) — not a brief that also asks for translations of the survey it designs */
+  const designing = n < 3 && readResearchBrief(message);
+  if (TRANSLATE.test(t) && (language || /\blanguages?\b|भाषा|زبان/i.test(t)) && !(designing && designing.isBrief && designing.survey)) {
     const named = /\bq\d+\b/i.test(t) && !range && !WHOLE.test(t);
     const scoped = range ? Math.max(0, Math.min(n || range.to, range.to) - range.from + 1) : named ? (t.match(/\bq\d+\b/gi) ?? []).length : n;
     const chars = (range ? questions.slice(range.from - 1, range.to) : named ? [] : questions).reduce<number>((s, q) => s + questionChars(q), 0) || scoped * 140;
@@ -211,6 +213,20 @@ export function estimateTaskSize(input: TaskEstimateInput): TaskEstimate {
     const outputTokens = units * 150 + heavy.length * 1500;
     reasons.push(`several deliverables: ${heavy.join(", ")}`);
     return out({ task: true, kind: "multi", reason: input.force ? "forced" : "multi_deliverable", units, outputTokens, steps: heavy.length + Math.ceil(units / 12) + 1, ...(input.force ? { forced: true } : {}) });
+  }
+
+  /*
+   * 6. A RESEARCH BRIEF on a survey not yet built (IM1, 2026-11-06): "healthcare research among doctors in India,
+   * 1,000 completes, age/specialty/region quotas" is a request to design a study — a task, however short the text.
+   * A qualitative guide on its own is not a questionnaire and stays a single turn (the qual guide builds it).
+   */
+  const brief = n < 3 ? readResearchBrief(message) : null;
+  if (brief?.isBrief && brief.survey) {
+    const units = requested ?? (brief.loiMinutes ? Math.max(12, Math.round(brief.loiMinutes * 1.6)) : 25);
+    const extra = (brief.quotas.length ? 1 : 0) + (brief.languages.length > 1 ? 1 : 0) + (brief.methods.some((m) => m === "maxdiff" || m === "conjoint") ? 1 : 0);
+    const outputTokens = units * 200 + 1500 + extra * 1200;
+    reasons.push(`a research brief to design from: ${describeBrief(brief)}`);
+    return out({ task: true, kind: "brief", reason: input.force ? "forced" : "research_brief", units, outputTokens, steps: Math.ceil(units / 10) + 3 + extra, ...(input.force ? { forced: true } : {}) });
   }
 
   if (input.force) {

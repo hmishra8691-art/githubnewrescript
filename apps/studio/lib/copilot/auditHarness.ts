@@ -11,7 +11,7 @@
  * Re-run it after a roadmap item lands; a sentence that moves from "model" to "actions" is the measure.
  */
 import { interpretRequest, estimateTaskSize, researchWorkflow } from "@rescript/engine";
-import type { SurveyDefinition } from "@rescript/schema";
+import { SurveyDefinition } from "@rescript/schema";
 import { classifyRequest, quotaIntent, analysisIntent, translationIntent, findingsIntent, reportingIntent, uxIntent } from "./prompt.ts";
 import { researchPlanIntent as researchIntent, qualIntent as qualStudyIntent } from "./researchGuide.ts";
 import { audienceIntent } from "./audienceGuide.ts";
@@ -22,7 +22,7 @@ import { methodsIntent } from "./methodsGuide.ts";
 function pricingStudy(): SurveyDefinition {
   const opt = (labels: string[]) => labels.map((label, i) => ({ code: i + 1, label, flags: [] }));
   const q = (code: string, variableName: string, type: string, text: string, extra: Record<string, unknown> = {}) => ({ id: `q_${code.toLowerCase()}`, code, variableName, type, text, options: [], rows: [], columns: [], validation: [], required: false, settings: {}, ...extra });
-  return {
+  return SurveyDefinition.parse({
     meta: { id: "audit", code: "AUD", title: "Pricing study", version: "1.0", schemaVersion: 1, status: "draft" },
     questions: [
       q("Q1", "GENDER", "single_select", "Gender", { options: opt(["Male", "Female"]) }),
@@ -40,7 +40,7 @@ function pricingStudy(): SurveyDefinition {
     research: { objective: "What drives repeat purchase", hypotheses: ["Satisfaction raises repeat purchase intent", "Region affects satisfaction"], hypothesisDetails: [], researchQuestions: [], kpis: [], assumptions: [], sources: [], analysis: [],
       constructs: [{ name: "Satisfaction", role: "independent", questionIds: ["q_q5"] }, { name: "Purchase intent", role: "dependent", questionIds: ["q_q7"] }, { name: "Region", role: "independent", questionIds: ["q_q8"] }],
       analysisPlan: { crosstabs: [{ id: "x1", rows: ["INTENT"], columns: ["SAT"], priority: 1, hypotheses: ["H1"] }], tests: [{ id: "t1", method: "anova", outcome: "SAT", variables: [], groupBy: "REGION", priority: 1, hypotheses: ["H2"] }], derived: [], segments: [] } },
-  } as unknown as SurveyDefinition;
+  });
 }
 
 function sentences() {

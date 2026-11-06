@@ -1053,10 +1053,10 @@
     "long brief",
     "#9 clarify"
    ],
-   "note": "TRUNCATED: the stored prompt is the first 4,000 of ~25,000 characters; this is its first 1,500. The full brief is planned first (long-brief path, 10-17); the corpus checks only the routing of this excerpt",
+   "note": "TRUNCATED: the stored prompt is the first 4,000 of ~25,000 characters; this is its first 1,500. The full brief is planned first (long-brief path, 10-17); the corpus checks only the routing of this excerpt · IM1 (2026-11-06): a research brief on an empty survey is now read as a generation by classifyRequest itself (readResearchBrief), not only by the route's long-brief upgrade.",
    "expect": {
     "scope": "supported",
-    "mode": "question",
+    "mode": "generate",
     "ux": true,
     "uxOnly": false,
     "lookOnlySaid": false,

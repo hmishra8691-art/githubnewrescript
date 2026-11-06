@@ -40,6 +40,10 @@
     {
       "path": "/api/cron/qual-jobs",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/quality-assess",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

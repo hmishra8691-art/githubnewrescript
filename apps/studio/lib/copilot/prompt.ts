@@ -1,6 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import { variantGuideFor } from "./variantGuide.ts";
-import { coerceSurveyActions, isLongBrief, listBlocks, type SurveyAction } from "@rescript/engine";
+import { coerceSurveyActions, isLongBrief, listBlocks, readResearchBrief, type SurveyAction } from "@rescript/engine";
 import { COPILOT_LIST_FILL_GUIDE } from "./listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE } from "./methodsGuide.ts";
 import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent, researchPlanIntent } from "./researchGuide.ts";
@@ -411,7 +411,9 @@ export function classifyRequest(message: string, surveyQuestions: number, docume
    * whole survey ("… and create a survey to test it") is still a generation.
    */
   const localized = surveyQuestions >= 3 && /^(?:please\s+|now\s+|also\s+|and\s+|then\s+)*(?:add|insert|include|put|create|write|draft|make|record|update|change|edit|remove|delete|rephrase|reword|link)\b/.test(t) && !/\b(?:survey|questionnaire|study|screener|from scratch)\b/.test(t) && t.length < 400;
-  const generate = !localized && (/\b(?:create|build|design|generate|draft|make|write|prepare|develop|banana|bana do|banao)\b.{0,60}\b(?:survey|questionnaire|study|screener)\b|\b(?:survey|questionnaire|screener)\b.{0,30}\b(?:banana|banao|bana do|banani|chahiye|tayyar)\b|\bhypothes[ie]s\b|\bresearch (?:objective|question|design)\b|\btest (?:this|it|the hypothesis)\b/.test(t) || SURVEY_CREATE.test(t)) && (surveyQuestions < 3 || /\b(?:new|another|from scratch|whole|complete|full)\b/.test(t) || /\bhypothes/.test(t));
+  /* IM1 (2026-11-06): a research brief on a survey not yet built — a study described, however short — is a generation */
+  const brief = surveyQuestions < 3 && !localized ? readResearchBrief(message) : null;
+  const generate = !!(brief?.isBrief && brief.survey) || !localized && (/\b(?:create|build|design|generate|draft|make|write|prepare|develop|banana|bana do|banao)\b.{0,60}\b(?:survey|questionnaire|study|screener)\b|\b(?:survey|questionnaire|screener)\b.{0,30}\b(?:banana|banao|bana do|banani|chahiye|tayyar)\b|\bhypothes[ie]s\b|\bresearch (?:objective|question|design)\b|\btest (?:this|it|the hypothesis)\b/.test(t) || SURVEY_CREATE.test(t)) && (surveyQuestions < 3 || /\b(?:new|another|from scratch|whole|complete|full)\b/.test(t) || /\bhypothes/.test(t));
   /* create / compute / derive a calculation, a variable, a score — and the same in Hindi / Hinglish — are edits (E4's eval, 2026-10-18: "Create a calculation SUPPORT_SCORE as the average of the Q5 rows" read as a question) */
   const edit = /\b(?:add|remove|delete|change|make|move|rename|randomi[sz]e|shuffle|show|hide|skip|require|mandatory|optional|split|merge|shorten|shorter|reduce|replace|convert|turn|set|insert|put|page break|scale|option|karo|kar do|hatao|jodo|create|build|define|compute|calculate|derive|recode|banao|bana do|banaiye|nikalo|nikal do|lagao|laga do|calculate kar\w*|compute kar\w*)\b/.test(t)
     || /बनाओ|बना\s*दो|बनाइए|बनाएं|बनाएँ|जोड़ो|जोड़\s*दो|जोडो|जोड\s*दो|कैलकुलेट|कैलक्युलेट|कैल्कुलेट|गणना\s*कर|निकालो|निकाल\s*दो|लगाओ|लगा\s*दो|डिराइव|कॅल्क्युलेट|तयार\s*करा|जोडा|काढा|بناؤ|بنا\s*دو|شامل\s*کرو|کیلکولیٹ|نکالو/.test(t);

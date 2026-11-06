@@ -124,6 +124,12 @@ const PUBLIC = {
     + "`timingSafeEqual` in each handler's first statement and again in run(), refusing everything when it is "
     + "unset. Each job is advanced only under `backgroundContextFor` — the author's standing on the project, the "
     + "platform's own key, the wallet's room — exactly as a durable Intelligent Mode task is",
+  "cron/quality-assess/route.ts":
+    "the five-minute quality sweep (Intelligent Mode IM1, 2026-11-06): finished responses the save route could not "
+    + "assess. The same bearer-token credential as the media job, checked against CRON_SECRET by `timingSafeEqual` "
+    + "in each handler's first statement, refusing everything when it is unset. It writes only the `quality` "
+    + "assessment columns, with the definition the session ran and only where that definition has quality checks on; "
+    + "no model is called and no review decision is made",
 };
 
 /**
