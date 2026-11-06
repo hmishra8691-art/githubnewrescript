@@ -42,6 +42,10 @@ export interface WorkflowResponse {
   /** each model step priced before any call; the total of what the cloud steps would cost from here */
   cost: { steps: { id: string; tier: string; model: string; charge: number }[]; total: number; currency: "credits" };
   runAvailable: boolean;
+  /** IM7: the lifecycle the planner reads — the survey live, its respondent links, flagged responses without a decision */
+  live?: boolean;
+  links?: number | null;
+  awaitingReview?: number;
 }
 
 export async function POST(req: NextRequest) {
@@ -60,6 +64,9 @@ export async function POST(req: NextRequest) {
   let def: SurveyDefinition;
   let projectMode: ExecutionMode = "cloud";
   let runAvailable = false;
+  let live = false;
+  let links: number | null = null;
+  let awaitingReview = 0;
   if (sandbox) {
     const parsed = SurveyDefinition.safeParse(body.definition);
     if (!parsed.success) return json({ error: "send the survey as it is open in the editor (definition)" }, 400);
@@ -74,10 +81,15 @@ export async function POST(req: NextRequest) {
     const loaded = await loadDefinition(db, surveyId);
     if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
     def = loaded.def as SurveyDefinition;
-    const [proj, completes] = await Promise.all([
-      db.from("surveys").select("settings").eq("id", surveyId).maybeSingle(),
+    const [proj, completes, flagged, linkCount] = await Promise.all([
+      db.from("surveys").select("settings, status").eq("id", surveyId).maybeSingle(),
       db.from("responses").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).is("deleted_at", null).eq("status", "complete").eq("is_test", false),
+      db.from("responses").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).is("deleted_at", null).eq("is_test", false).is("review_status", null).eq("quality->>verdict", "FLAGGED"),
+      def.deployment.access.mode === "unique_links" || def.deployment.access.mode === "invitation" ? db.from("respondents").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).eq("is_test", false) : Promise.resolve({ count: null }),
     ]);
+    live = (proj.data as { status?: string } | null)?.status === "live";
+    awaitingReview = flagged.count ?? 0;
+    links = (linkCount as { count: number | null }).count ?? null;
     const settings = (proj.data?.settings && typeof proj.data.settings === "object" ? proj.data.settings : {}) as Record<string, unknown>;
     const ai = (settings.ai && typeof settings.ai === "object" ? settings.ai : {}) as Record<string, unknown>;
     projectMode = modeOf(ai.mode) ?? "cloud";
@@ -91,7 +103,7 @@ export async function POST(req: NextRequest) {
   }
   const effective = override ?? projectMode;
   const configured = await aiReadyFor(user, surveyId, "copilot_plan");
-  const wf = researchWorkflow(def, { mode: configured ? effective : "internal", runAvailable, ...(typeof body.objective === "string" && body.objective.trim() ? { objective: body.objective.trim().slice(0, 500) } : {}), ...(Array.isArray(body.produced) ? { produced: body.produced.filter((x): x is "design_document" | "deck" => x === "design_document" || x === "deck") } : {}) });
+  const wf = researchWorkflow(def, { mode: configured ? effective : "internal", runAvailable, live, links, awaitingReview, ...(typeof body.objective === "string" && body.objective.trim() ? { objective: body.objective.trim().slice(0, 500) } : {}), ...(Array.isArray(body.produced) ? { produced: body.produced.filter((x): x is "design_document" | "deck" | "production_test" => x === "design_document" || x === "deck" || x === "production_test") } : {}) });
 
   /* the cost of every model step, priced and never reserved */
   const steps: WorkflowResponse["cost"]["steps"] = [];
@@ -114,7 +126,7 @@ export async function POST(req: NextRequest) {
     mode: { project: projectMode, effective: configured ? effective : "internal", override: !!override && override !== projectMode, sandbox },
     model: { configured, provider: aiProviderName(), small: aiModelName("small"), large: aiModelName("large") },
     cost: { steps, total: Math.round(total * 10000) / 10000, currency: "credits" },
-    runAvailable,
+    runAvailable, live, links, awaitingReview,
   };
   return json(out);
 }

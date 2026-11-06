@@ -173,6 +173,10 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
         {/* a report theme read from words (2026-10-18): the preview, then Apply / Save as */}
         {entry.theme && <ThemeTurnCard entry={entry} actions={documents} />}
         {/* a qualitative synthesis request (2026-10-22): the preview, then Run */}
+        {/* a study brief's launch plan (IM7): what follows the questionnaire, in order — nothing applied */}
+        {entry.launchPlan && entry.launchPlan.length > 0 && (
+          <div className="cp-data" data-testid="cp-launch-plan"><p className="iqi-dim" style={{ margin: "2px 0" }}><b>Launch plan</b></p><ol className="iqi-dim" style={{ margin: "4px 0 0 16px", listStyle: "none", padding: 0 }}>{entry.launchPlan.map((l, i) => <li key={i}>{l}</li>)}</ol></div>
+        )}
         {/* a cleaning request (IM6): the proposal, then Apply / Undo */}
         {entry.cleaning && <CleaningTurnCard card={entry.cleaning} onAction={documents?.cleaning ? (a) => documents.cleaning!(entry.id, a) : undefined} />}
         {entry.qual && <QualTurnCard card={entry.qual} onRun={documents?.qual ? () => documents.qual!(entry.id) : undefined} />}

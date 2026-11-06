@@ -18,7 +18,7 @@ import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/
 import { JsonTextExtractor, type FakeStreamScript } from "@rescript/ai";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, isLongBrief, capabilityReadiness, capabilityRefusal, availabilityNote, type CoverageReport } from "@rescript/engine";
 /* engine items 11–14 (2026-10-22, docs/ENGINE-11-14-2026-10-22.md): per-item guides, the readiness rule at action time, refused designs corrected or explained */
-import { scriptQuestion, sanitizeScriptHealthLite, readResearchBrief, adviseSettings, describeSettingsAdvice } from "@rescript/engine";
+import { scriptQuestion, sanitizeScriptHealthLite, readResearchBrief, adviseSettings, describeSettingsAdvice, launchPlan } from "@rescript/engine";
 import { autoFixMethodAction, coerceSurveyActions, explainMethodRefusal, isAnalysisOp, isMethodOp, isQualOp, type SurveyAction } from "@rescript/engine";
 import { GUIDE_TEXT, flagsOf, guideMisses, guideTexts, guidesOf, itemGuideSelection, itemGuidesEnabled, type GuideFlags, type GuideId, type ItemGuideSelection } from "@/lib/copilot/guideSelect";
 import { aiInterviewIntent } from "@/lib/copilot/aiInterviewGuide";
@@ -310,7 +310,15 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     console.warn("[rescript:copilot]", JSON.stringify({ event: "plan-first task failed; single-turn path", surveyId, error: ((e as Error)?.message ?? "").slice(0, 200) }));
     return null;
   });
-  if (asTask) return asTask;
+  if (asTask) {
+    /* IM7: a study brief planned as a task carries its launch plan — the lifecycle after the questionnaire, read from the brief, nothing applied */
+    const read = !isLongBrief(message) ? readResearchBrief(message) : null;
+    if (read?.isBrief && read.survey && asTask.headers.get("content-type")?.includes("application/json")) {
+      const j = await asTask.clone().json().catch(() => null) as Record<string, unknown> | null;
+      if (j && j.stage === "task") return NextResponse.json({ ...j, launchPlan: launchPlan(def, read) }, { status: asTask.status });
+    }
+    return asTask;
+  }
   // quotas: the guide, every cell with its condition and where the check sits, the review, and the live counts the Studio sent
   const quotaTurn = quotaIntent(message);
   const listFillTurn = listFillIntent(message);

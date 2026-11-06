@@ -1,3 +1,6 @@
+import { adviseSettings, briefOfSurvey } from "./settingsAdvice.js";
+import { fieldworkPlan } from "./fieldworkPlan.js";
+import { launchReadiness } from "./lifecycle.js";
 import type { SurveyDefinition, Question, ResearchConstruct } from "@rescript/schema";
 import { constructName, groupingName } from "./researchLinks.js";
 import { buildAnalysisFramework, hypothesisCoverage, inferRole, measurementOf, methodologyAdvice, prioritizeCrosstabs } from "./analysisFramework.js";
@@ -27,7 +30,9 @@ import { wordFamily } from "./nlSemantics.js";
  * researcher — never a silent skip.
  */
 
-export type WorkflowStepId = "objective" | "assumptions" | "hypotheses" | "framework" | "questionnaire" | "variables" | "analysis_plan" | "recommendations" | "reporting_framework" | "design_document" | "survey_structure" | "deck";
+export type WorkflowStepId = "objective" | "assumptions" | "hypotheses" | "framework" | "questionnaire" | "variables" | "analysis_plan" | "recommendations" | "reporting_framework" | "design_document" | "survey_structure"
+  /* IM7 (2026-11-06): the lifecycle after the design — settings, quotas, fieldwork, the production-like test, launch, cleaning */
+  | "settings" | "quotas" | "fieldwork_plan" | "production_test" | "launch" | "cleaning" | "deck";
 /** done: nothing to do · ready: the engine has the next action · needs_input: only the researcher can say · model: a language model would do it · blocked: an earlier step first */
 export type WorkflowStatus = "done" | "ready" | "needs_input" | "model" | "blocked";
 export type WorkflowExecutor = "engine" | "model" | "researcher" | "output";
@@ -74,16 +79,26 @@ export interface WorkflowOptions {
   /** fieldwork data exists: the deck can be produced */
   runAvailable?: boolean;
   /** the outputs already produced in this session (the engine cannot see a file) */
-  produced?: ("design_document" | "deck")[];
+  produced?: ("design_document" | "deck" | "production_test")[];
   /** internal: no model is called — the engine's own alternative or the researcher's answer; cloud: model steps go to the model */
   mode?: ExecutionMode;
+  /** IM7: a production-like test was run on this version (the Studio knows; the definition does not) */
+  tested?: boolean;
+  /** IM7: the survey is live (published and taking responses) */
+  live?: boolean;
+  /** IM7: how many respondent links exist, for unique-link / invitation access */
+  links?: number | null;
+  /** IM7: responses waiting for a cleaning decision (flagged, undecided) */
+  awaitingReview?: number;
+  now?: number;
 }
 
 const TITLES: Record<WorkflowStepId, string> = {
   objective: "Objective", assumptions: "Assumptions", hypotheses: "Structured hypotheses", framework: "Research framework", questionnaire: "Questionnaire", variables: "Variables",
-  analysis_plan: "Analysis plan", recommendations: "Crosstab and test recommendations", reporting_framework: "Reporting framework", design_document: "Design document", survey_structure: "Survey structure", deck: "Findings deck",
+  analysis_plan: "Analysis plan", recommendations: "Crosstab and test recommendations", reporting_framework: "Reporting framework", design_document: "Design document", survey_structure: "Survey structure",
+  settings: "Survey settings", quotas: "Quotas", fieldwork_plan: "Fieldwork plan", production_test: "Production-like test", launch: "Launch", cleaning: "Data cleaning", deck: "Findings deck",
 };
-const ORDER: WorkflowStepId[] = ["objective", "assumptions", "hypotheses", "framework", "questionnaire", "variables", "analysis_plan", "recommendations", "reporting_framework", "design_document", "survey_structure", "deck"];
+const ORDER: WorkflowStepId[] = ["objective", "assumptions", "hypotheses", "framework", "questionnaire", "variables", "analysis_plan", "recommendations", "reporting_framework", "design_document", "survey_structure", "settings", "quotas", "fieldwork_plan", "production_test", "launch", "cleaning", "deck"];
 
 const plain = (s: string | undefined, n = 70): string => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const quote = (s: string) => `"${s.replace(/"/g, "'")}"`;
@@ -387,15 +402,64 @@ const surveyStructureStep: Build = (def) => {
   return step("survey_structure", { status: "ready", executor: "engine", why: `${list(why)}.`, sentence: actions.length === 1 && actions[0].op === "move_question" ? `Move ${actions[0].target} to ${quote(actions[0].block!)}` : "Arrange the survey: screener first, demographics last", actions });
 };
 
+/* ------------------------------------------------------------ IM7: the lifecycle after the design */
+
+const settingsStep: Build = (def, _o, prior) => {
+  if (!asked(def).length || !isDone(prior, "questionnaire")) return blocked("settings", "questionnaire", "Settings follow from what the questions ask and who answers them.");
+  const advice = adviseSettings(def, null, Date.now());
+  const conflicts = advice.filter((a) => a.status === "conflict");
+  const changes = advice.filter((a) => a.status === "change" && a.actions.length);
+  if (conflicts.length) return step("settings", { status: "needs_input", executor: "researcher", why: conflicts.map((c) => c.because).join(" "), questions: conflicts.map((c) => ({ ask: `${c.setting}: which do you want?`, example: c.id === "anonymous" ? "Make the survey anonymous" : `Recommend the settings for this study` })) });
+  if (!changes.length) return step("settings", { status: "done", executor: "engine", why: advice.length ? `As the study calls for: ${advice.map((a) => `${a.setting.toLowerCase()} ${a.current}`).join(", ")}.` : "Nothing in the questions, the sample or the brief calls for a setting other than the defaults." });
+  return step("settings", { status: "ready", executor: "engine", why: changes.map((c) => `${c.setting}: ${c.current} → ${c.recommended}, because ${c.because}`).join(" · "), sentence: "Recommend the settings for this study", actions: changes.flatMap((c) => c.actions) });
+};
+const quotasStep: Build = (def, _o, prior) => {
+  if (!isDone(prior, "questionnaire")) return blocked("quotas", "questionnaire", "Quotas read the questions that define the groups.");
+  const brief = briefOfSurvey(def);
+  if (def.quotas.length) return step("quotas", { status: "done", executor: "engine", why: `${plural(def.quotas.length, "quota")}: ${def.quotas.map((q) => `${q.name} (${plural(q.cells.length, "cell")}, ${q.mode})`).join(", ")}.` });
+  if (!brief.quotas.length) return step("quotas", { status: "done", executor: "engine", why: "No quotas asked for — the sample falls as the panel delivers it." });
+  const n = brief.sampleSize ?? def.research?.sampleSize;
+  return step("quotas", { status: "needs_input", executor: "researcher", why: `The study asks for ${list(brief.quotas)} quotas and the survey has none.`, questions: [{ ask: `How should ${n ? `the ${n.toLocaleString("en")} completes` : "the completes"} split by ${brief.quotas[0]}?`, example: `${n ?? 500} completes split equally by ${brief.quotas[0]}` }] });
+};
+const fieldworkStep: Build = (def, o, prior) => {
+  if (!isDone(prior, "questionnaire")) return blocked("fieldwork_plan", "questionnaire", "The fieldwork plan reads the questionnaire's length and the quotas.");
+  if (def.research?.fieldwork) { const f = def.research.fieldwork; return step("fieldwork_plan", { status: "done", executor: "engine", why: `${f.completes.toLocaleString("en")} completes, ${f.startDate} → ${f.endDate}, about ${f.dailyTarget} a day${f.risks.length ? `; ${plural(f.risks.length, "risk")} named` : ""}.` }); }
+  const p = fieldworkPlan(def, { brief: briefOfSurvey(def), now: o.now ?? Date.now() });
+  if ("error" in p) return step("fieldwork_plan", { status: "needs_input", executor: "researcher", why: p.error, questions: [{ ask: "How many completes, and by when?", example: "Plan the fieldwork: 1,000 completes, finish in three weeks" }] });
+  const { cellPacing: _c, lines, ...record } = p;
+  return step("fieldwork_plan", { status: "ready", executor: "engine", why: lines.slice(0, 2).join(" "), sentence: "Plan the fieldwork", actions: [{ op: "set_fieldwork_plan", plan: record } as SurveyAction, ...(def.deployment.activeUntil ? [] : [{ op: "set_deployment", activeUntil: `${p.endDate}T23:59:59Z` } as SurveyAction])] });
+};
+const productionTestStep: Build = (def, o, prior) => {
+  if (!asked(def).length || !isDone(prior, "questionnaire")) return blocked("production_test", "questionnaire", "There is nothing to test yet.");
+  if (o.tested || o.produced?.includes("production_test")) return step("production_test", { status: "done", executor: "engine", why: "A production-like test was run on this version." });
+  const unsettled = prior.filter((s) => ["settings", "quotas"].includes(s.id) && s.status !== "done").map((s) => s.title.toLowerCase());
+  return step("production_test", { status: "ready", executor: "engine", why: `Simulated respondents against the live quota counts and gates — nothing written.${unsettled.length ? ` Run it again after ${list(unsettled)}.` : ""}`, sentence: "Run a production-like test" });
+};
+const launchStep: Build = (def, o, prior) => {
+  if (o.live) return step("launch", { status: "done", executor: "researcher", why: "The survey is live." });
+  if (!isDone(prior, "questionnaire")) return blocked("launch", "questionnaire", "Launch comes after the questionnaire, the settings and a test.");
+  if (o.live) return step("launch", { status: "done", executor: "researcher", why: "The survey is live." });
+  const r = launchReadiness(def, { tested: o.tested || o.produced?.includes("production_test"), links: o.links, now: o.now });
+  const blockers = r.checks.filter((c) => !c.ok && c.level === "blocker");
+  if (blockers.length) return step("launch", { status: "needs_input", executor: "researcher", why: `${r.summary} ${blockers.map((b) => b.message).join(" ")}`, questions: blockers.filter((b) => b.fix).map((b) => ({ ask: b.message, example: b.fix! })) });
+  const warn = r.checks.filter((c) => !c.ok && c.level === "warning");
+  return step("launch", { status: "needs_input", executor: "researcher", why: `${r.summary}${warn.length ? ` ${warn.map((w) => w.message).join(" ")}` : ""} Publish from Versions & Deploy.`, ...(warn.some((w) => w.fix) ? { questions: warn.filter((w) => w.fix).map((w) => ({ ask: w.message, example: w.fix! })) } : {}) });
+};
+const cleaningStep: Build = (_def, o) => {
+  if (!o.runAvailable) return step("cleaning", { status: "blocked", executor: "engine", why: "After fieldwork: cleaning reads the responses' quality evidence.", blockedBy: "launch" });
+  if (!o.awaitingReview) return step("cleaning", { status: "done", executor: "engine", why: "No flagged response is waiting for a decision." });
+  return step("cleaning", { status: "ready", executor: "engine", why: `${plural(o.awaitingReview, "flagged response")} without a decision — review them as one batch, each with its reasons.`, sentence: "Mark the flagged responses for review" });
+};
+
 const deckStep: Build = (def, o, prior) => {
   const output: OutputRequest = { type: "findings_pptx", audience: "client", words: "the findings presentation (PowerPoint, client edition)" };
   if (!isDone(prior, "analysis_plan")) return blocked("deck", "analysis_plan", "The deck reports the plan's findings.");
   if (o.produced?.includes("deck")) return step("deck", { status: "done", executor: "output", why: "The findings deck was produced this session.", sentence: "Create the final findings presentation", output });
-  if (!o.runAvailable) return step("deck", { status: "blocked", executor: "output", why: "After fieldwork: the deck needs respondents.", blockedBy: "analysis_plan", sentence: "Create the final findings presentation", output });
+  if (!o.runAvailable) return step("deck", { status: "blocked", executor: "output", why: "After fieldwork: the deck needs respondents.", blockedBy: "launch", sentence: "Create the final findings presentation", output });
   return step("deck", { status: "ready", executor: "output", why: "Fieldwork data exists — the deck is built from a fresh run of the plan.", sentence: "Create the final findings presentation", output });
 };
 
-const BUILDERS: Record<WorkflowStepId, Build> = { objective: objectiveStep, assumptions: assumptionsStep, hypotheses: hypothesesStep, framework: frameworkStep, questionnaire: questionnaireStep, variables: variablesStep, analysis_plan: analysisPlanStep, recommendations: recommendationsStep, reporting_framework: reportingStep, design_document: designDocumentStep, survey_structure: surveyStructureStep, deck: deckStep };
+const BUILDERS: Record<WorkflowStepId, Build> = { objective: objectiveStep, assumptions: assumptionsStep, hypotheses: hypothesesStep, framework: frameworkStep, questionnaire: questionnaireStep, variables: variablesStep, analysis_plan: analysisPlanStep, recommendations: recommendationsStep, reporting_framework: reportingStep, design_document: designDocumentStep, survey_structure: surveyStructureStep, settings: settingsStep, quotas: quotasStep, fieldwork_plan: fieldworkStep, production_test: productionTestStep, launch: launchStep, cleaning: cleaningStep, deck: deckStep };
 
 /** the workflow as it stands: every step with its status, and what comes next */
 export function researchWorkflow(def: SurveyDefinition, opts: WorkflowOptions = {}): ResearchWorkflow {

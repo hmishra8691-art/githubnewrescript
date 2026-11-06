@@ -43,13 +43,13 @@ test("the workflow from one objective: every step done, ready, asked or the mode
   const before = JSON.stringify(def);
   let wf = researchWorkflow(def, { objective: OBJECTIVE });
   assert.equal(JSON.stringify(def), before, "the planner writes nothing");
-  assert.equal(wf.total, 12);
+  assert.equal(wf.total, 18, "IM7: twelve design steps and six lifecycle steps");
   assert.equal(wf.done, 0);
   assert.equal(wf.next?.id, "objective");
   assert.equal(wf.next?.status, "ready");
   assert.deepEqual(wf.next?.actions, [{ op: "set_research", objective: OBJECTIVE }]);
   assert.equal(wf.next?.sentence, `Set the research objective to "${OBJECTIVE}"`);
-  assert.match(wf.summary, /^0 of 12 steps done — next: Objective \(the engine has 1 action ready\)$/);
+  assert.match(wf.summary, /^0 of 18 steps done — next: Objective \(the engine has 1 action ready\)$/);
   // downstream steps wait on it, with the step they wait on named
   assert.equal(stepOf(def, "assumptions").status, "blocked");
   assert.equal(stepOf(def, "assumptions").blockedBy, "objective");
@@ -178,12 +178,31 @@ test("the workflow from one objective: every step done, ready, asked or the mode
   assert.equal(s.status, "ready");
   assert.equal(s.output?.type, "findings_pptx");
   assert.equal(interpretRequest(def, s.sentence!).kind, "output");
-  wf = researchWorkflow(def, { runAvailable: true, produced: ["design_document", "deck"] });
-  assert.equal(wf.done, 12);
+  // 12–17 (IM7). the lifecycle: settings with their reasons, quotas, the fieldwork plan, the test, launch, cleaning
+  s = stepOf(def, "settings");
+  if (s.status === "ready") { assert.match(s.why, /because/); def = apply(def, s.actions); }
+  assert.equal(stepOf(def, "settings").status, "done");
+  assert.equal(stepOf(def, "quotas").status, "done", "the design asks for no quotas");
+  s = stepOf(def, "fieldwork_plan");
+  assert.equal(s.status, "ready");
+  assert.equal(s.actions?.[0].op, "set_fieldwork_plan");
+  def = apply(def, s.actions);
+  assert.equal(stepOf(def, "fieldwork_plan").status, "done");
+  assert.equal(def.research?.fieldwork?.completes, 400);
+  s = stepOf(def, "production_test");
+  assert.equal(s.status, "ready"); assert.equal(interpretRequest(def, s.sentence!).kind, "test");
+  assert.equal(stepOf(def, "production_test", { tested: true }).status, "done");
+  s = stepOf(def, "launch", { tested: true });
+  assert.equal(s.status, "needs_input"); assert.match(s.why, /Ready to launch|Not ready/);
+  assert.equal(stepOf(def, "launch", { live: true }).status, "done");
+  assert.equal(stepOf(def, "cleaning", { runAvailable: true, awaitingReview: 3 }).status, "ready");
+  assert.equal(interpretRequest(def, stepOf(def, "cleaning", { runAvailable: true, awaitingReview: 3 }).sentence!).kind, "cleaning");
+  wf = researchWorkflow(def, { runAvailable: true, produced: ["design_document", "deck"], tested: true, live: true, awaitingReview: 0 });
+  assert.equal(wf.done, 18, describeWorkflow(wf));
   assert.equal(wf.next, null);
-  assert.equal(wf.summary, "All 12 steps done.");
+  assert.equal(wf.summary, "All 18 steps done.");
   const lines = describeWorkflow(wf).split("\n");
-  assert.equal(lines.length, 13);
+  assert.equal(lines.length, 19);
   assert.ok(lines.slice(1).every((l) => l.startsWith("✓ ")), describeWorkflow(wf));
 });
 

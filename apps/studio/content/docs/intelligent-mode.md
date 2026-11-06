@@ -136,6 +136,7 @@ The catalogue below is checked by a test against the engine on every build: each
 | Create a report showing the key findings. | output |
 | start the research workflow for understanding brand switching | workflow |
 | what's next? | workflow |
+| I changed the target audience to Gen Z; what else needs to change? | actions |
 | Run a production-like test | test |
 | Simulate 500 respondents | test |
 | Let me test the survey exactly as a live respondent will see it, with the live quotas | test |
@@ -217,6 +218,9 @@ A long request can be planned first (*Plan first*): the model proposes a change 
 ## The research workflow
 
 "Start the research workflow for <objective>" opens the Workflow tab: twelve steps from objective to deck (assumptions, structured hypotheses, research framework, questionnaire, variables, analysis plan, crosstab and test recommendations, reporting framework, design document, survey structure, the deck after fieldwork). Each step is done, ready (the engine's own actions — one click opens them in Changes), yours to answer (with an example sentence that records it), the model's (priced before it is called), or waiting on an earlier step. See [The Research Engine](research-engine).
+
+
+**The lifecycle (2026-11-06).** After the twelve design steps the workflow carries the study to its data: **Survey settings** (the changes its questions and respondents call for, each with its reason), **Quotas** (the ones the brief asks for), **Fieldwork plan**, **Production-like test**, **Launch** (the readiness checks — blockers such as a password that is not set or consent the study requires; warnings such as missing quotas, languages, a fieldwork plan or a test — each with the sentence that fixes it) and **Data cleaning** (flagged responses waiting for a decision), then the findings deck. A change to who is asked or how — the audience, the population, the method, the sample size, a language — is proposed with what it leaves to update elsewhere ("Downstream (quotas): …"), never changing those itself. A study brief planned as a task carries its **launch plan**: the same lifecycle, read from the brief.
 
 ## Internal and cloud execution, tiers, cost
 

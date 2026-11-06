@@ -1,6 +1,7 @@
 import { sampleAvailability } from "./sampleAvailability.js";
 import { fieldworkPlan } from "./fieldworkPlan.js";
 import { readResearchBrief } from "./researchBrief.js";
+import { downstreamOf } from "./lifecycle.js";
 import { adviseSettings, briefOfSurvey, describeSettingsAdvice, type SettingAdvice } from "./settingsAdvice.js";
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { dontKnowEligible } from "./dontKnow.js";
@@ -1589,6 +1590,25 @@ const availabilityCheck: Recogniser = (r) => {
     sections: [{ title: "Each cell", items: rep.cells.map((c) => ({ label: `${c.status === "short" ? "✗" : c.status === "tight" ? "!" : c.status === "ok" ? "✓" : "?"} ${c.quota} / ${c.cell}: need ${c.need}`, detail: c.because })) }],
     detected: [det("available", String(a.available)), ...(a.incidence !== undefined ? [det("incidence", `${a.incidence} %`)] : []), ...Object.entries(a.shares).map(([k, v]) => det("share", `${k} ${v} %`))],
   };
+};
+
+/* ---------------------------------------------------------- "I changed the audience to X; what else needs to change?" (IM7) */
+
+const downstreamAsk: Recogniser = (r) => {
+  const t = r.text.replace(/[.!?]+$/, "");
+  const m = /^(?:i(?:['’]ve|\s+have)?\s+|we(?:['’]ve|\s+have)?\s+)?(?:changed|switched|moved|set|updated)\s+the\s+(target\s+audience|audience|population|target\s+group|methodology|method|sample\s+size)\s+(?:to|into)\s+(.+?)(?:\s*[;,.—-]+\s*|\s+and\s+|\s+so\s+)(?:what\s+else|what|which\s+(?:other\s+)?(?:things|parts|settings))\s+(?:needs?|has|have|should|do\s+i\s+need|must)\s+(?:to\s+)?(?:change|be\s+changed|update|be\s+updated)\b/i.exec(t)
+    ?? /^(?:if\s+i\s+change|changing)\s+the\s+(target\s+audience|audience|population|methodology|method|sample\s+size)\s+to\s+(.+?),?\s+what\s+(?:else\s+)?(?:needs?\s+to\s+change|changes|is\s+affected|breaks)\b/i.exec(t);
+  if (!m) return null;
+  const what = m[1].toLowerCase();
+  const value = unquote(m[2]).trim();
+  const patch: Record<string, unknown> = /method/.test(what) ? { methodology: value } : /sample/.test(what) ? { sampleSize: Number(value.replace(/[^\d]/g, "")) || undefined } : { population: value };
+  if (Object.values(patch).some((v) => v === undefined)) return null;
+  const action = { op: "set_research", ...patch } as SurveyAction;
+  const after = applySurveyActions(r.def, [action]);
+  if (!after.valid) return null;
+  const d = downstreamOf(r.def, after.def);
+  const lines = d.length ? d.map((x) => `${x.area}: ${x.what}${x.sentence ? ` — say “${x.sentence}”` : ""}`) : ["nothing else in the survey reads it — no quotas, screeners, settings or plans depend on it"];
+  return act(r, "research_design", `Record the ${/method/.test(what) ? "methodology" : /sample/.test(what) ? "sample size" : "population"} as “${value}”. What else it touches: ${lines.join("; ")}. Nothing else is changed by this — each is its own request.`, [action], [det(what, value), ...d.map((x) => det("downstream", x.area))]);
 };
 
 /* ---------------------------------------------------------- data cleaning (IM6) */
@@ -3601,7 +3621,7 @@ const advancedModels: Recogniser = (r) => {
 const ADVANCED_ANALYSIS = /\b(?:hb|hierarchical\s+bayes(?:ian)?|individual[\s-]level\s+(?:utilit(?:y|ies)|estimation|scores)|latent[\s-]class|gabor[\s\-–]granger)\b/i;
 
 const RECOGNISERS: Recogniser[] = [
-  conflicts, cleaningRequest, advancedModels,
+  conflicts, downstreamAsk, cleaningRequest, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
   fieldworkRequest, availabilityCheck, quotaSentences, productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
@@ -3610,7 +3630,7 @@ const RECOGNISERS: Recogniser[] = [
 ];
 
 /** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
-const WHOLE_FIRST: Recogniser[] = [conflicts, cleaningRequest, fieldworkRequest, availabilityCheck, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
+const WHOLE_FIRST: Recogniser[] = [conflicts, downstreamAsk, cleaningRequest, fieldworkRequest, availabilityCheck, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };

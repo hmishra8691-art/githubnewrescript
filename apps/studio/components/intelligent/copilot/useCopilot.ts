@@ -104,6 +104,8 @@ export interface CopilotEntry {
   theme?: ThemeCard;
   /** a qualitative synthesis request (F2 2026-10-22): the preview card, then the result once Run was pressed */
   qual?: QualCard;
+  /** IM7: a study brief's launch plan — the lifecycle after the questionnaire, read from the brief */
+  launchPlan?: string[];
   /** a cleaning request (IM6): the batch proposal, then Apply / Undo */
   cleaning?: CleaningCard;
   /** a data question's answer, read on the respondent data (Phase 4): the base, the test behind it, the caveats */
@@ -538,7 +540,7 @@ export function useCopilot(opts: {
   const [workflowObjective, setWorkflowObjective] = React.useState<string | null>(null);
   const [workflowLoading, setWorkflowLoading] = React.useState(false);
   /** the outputs produced this session — the engine cannot see a file, so the workflow is told */
-  const producedRef = React.useRef<("design_document" | "deck")[]>([]);
+  const producedRef = React.useRef<("design_document" | "deck" | "production_test")[]>([]);
   /** one request let through to the cloud while the project runs internally — reset by the call that used it */
   const cloudOnceRef = React.useRef(false);
   const [cloudOnce, setCloudOnceState] = React.useState(false);
@@ -722,7 +724,7 @@ export function useCopilot(opts: {
         const tv = d.task as TaskClientView;
         forget();
         const reply = d.reply as CopilotReply | undefined;
-        opts.patch(id, { status: "task", task: tv, ...(reply ? { reply } : {}), progress: undefined, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { ...read, mode: "task", kind: "task" }, statusDetail: `Planned as a task (${tv.id}, ${tv.progress.total} steps)`, apiCalls: [call(d)] }) });
+        opts.patch(id, { status: "task", task: tv, ...(reply ? { reply } : {}), ...(Array.isArray(d.launchPlan) ? { launchPlan: (d.launchPlan as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 12) } : {}), progress: undefined, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { ...read, mode: "task", kind: "task" }, statusDetail: `Planned as a task (${tv.id}, ${tv.progress.total} steps)`, apiCalls: [call(d)] }) });
         setTaskDurable(d.durable === true);
         void driveTaskRef.current?.(id, tv.id);
         return "handled";
@@ -1165,6 +1167,7 @@ export function useCopilot(opts: {
         ...(rep.quotas.length ? [{ title: "Quota cells — start → end of the simulation", items: rep.quotas.map((c) => ({ label: `${c.quota} / ${c.cell}: ${c.start} → ${c.end} of ${c.limit}${c.full ? " · full" : ""}`, ...(c.filledAt === 0 ? { detail: "full before the test started" } : c.filledAt ? { detail: `filled after ${c.filledAt} simulated respondents` } : {}) })) }] : []),
         ...(rep.issues.length ? [{ title: "Issues the walk met", items: rep.issues.slice(0, 12).map((x) => ({ label: `${x.kind.replace(/_/g, " ")} (${x.count}×)`, detail: x.message })) }] : []),
       ];
+      if (!producedRef.current.includes("production_test")) { producedRef.current = [...producedRef.current, "production_test"]; setWorkflowInfo((x) => (x ? { ...x } : x)); }
       const answer = [...rep.lines, d.testLink ? `To take it yourself under the same conditions (live counters${it.request.fill?.length ? ", the simulated full cells" : ""}; your complete counts as a TEST): ${d.testLink}` : "Deploy a test build (Versions & Deploy) to take it yourself under the same conditions."].join("\n");
       opts.patch(id, { status: "ready", reply: reply(answer), engine: { ...engine, kind: "answer", sections }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "test", engine: "test" }, detected: it.detected, statusDetail: answer.slice(0, 2000), apiCalls: [{ route: "/api/surveys/[id]/production-test", mode: "simulation", charge: 0 }] }) });
     } catch (e) {
@@ -1391,7 +1394,7 @@ export function useCopilot(opts: {
     else setWorkflowInfo((x) => (x ? { ...x, mode: { ...x.mode, project: mode, effective: x.model.configured ? mode : "internal", override: false } } : x));
   }, [s.surveyDbId, refreshWorkflow]);
   /** the workflow on the survey as it stands here, in the effective mode */
-  const workflow: ResearchWorkflow = React.useMemo(() => researchWorkflow(working, { mode: workflowInfo ? workflowInfo.mode.effective : available === false ? "internal" : executionMode, runAvailable: workflowInfo?.runAvailable ?? (s.surveyDbId === "sandbox" ? !!rowsRef.current?.length : !!analysisRun), produced: producedRef.current, ...(workflowObjective ? { objective: workflowObjective } : {}) }), [working, workflowInfo, executionMode, available, workflowObjective, analysisRun, s.surveyDbId]);
+  const workflow: ResearchWorkflow = React.useMemo(() => researchWorkflow(working, { mode: workflowInfo ? workflowInfo.mode.effective : available === false ? "internal" : executionMode, runAvailable: workflowInfo?.runAvailable ?? (s.surveyDbId === "sandbox" ? !!rowsRef.current?.length : !!analysisRun), produced: producedRef.current, ...(workflowInfo?.live !== undefined ? { live: workflowInfo.live, links: workflowInfo.links ?? null, awaitingReview: workflowInfo.awaitingReview ?? 0 } : {}), ...(workflowObjective ? { objective: workflowObjective } : {}) }), [working, workflowInfo, executionMode, available, workflowObjective, analysisRun, s.surveyDbId]);
   /** "start the research workflow for …": the card says where the study stands, the tab opens on the steps */
   const showWorkflow = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "workflow" }>, heard?: HeardTranscript): Promise<void> => {
     const id = uid("copilot");
@@ -1401,7 +1404,7 @@ export function useCopilot(opts: {
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
     setSession((x) => ({ ...x, tab: "workflow" }));
     const info = await refreshWorkflow(it.objective ? { objective: it.objective } : {});
-    const wf = researchWorkflow(working, { mode: info ? info.mode.effective : executionMode, runAvailable: info?.runAvailable ?? false, produced: producedRef.current, ...(it.objective ? { objective: it.objective } : {}) });
+    const wf = researchWorkflow(working, { mode: info ? info.mode.effective : executionMode, runAvailable: info?.runAvailable ?? false, produced: producedRef.current, ...(info?.live !== undefined ? { live: info.live, links: info.links ?? null, awaitingReview: info.awaitingReview ?? 0 } : {}), ...(it.objective ? { objective: it.objective } : {}) });
     const said = `${describeWorkflow(wf)}${info ? `\nExecution: ${info.mode.effective}${info.cost.steps.length ? ` · model steps from here: ${info.cost.steps.map((c) => `${c.id} (${c.tier}, ${c.model}, ${c.charge} credits)`).join(", ")}` : ""}` : ""}`;
     opts.patch(id, { status: "ready", reply: reply(said), opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "workflow", engine: "workflow", ...(it.objective ? { objective: it.objective.slice(0, 200) } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000) }) });
   }, [opts, setSession, refreshWorkflow, working, executionMode, recordOp]);

@@ -1,3 +1,4 @@
+import { downstreamOf } from "./lifecycle.js";
 import type { AnalysisPlan, Condition, FlowNode, OptionMask, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema, effectiveResponseModel, questionSettingField } from "@rescript/schema";
 import { forEachRule, isConditionNode } from "./conditionWalk.js";
@@ -694,7 +695,10 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
       for (const i of reviewAnalysisPlan(after)) if (!had.has(i.message)) planWarnings.push(`Analysis plan: ${i.message}${i.suggestion ? ` ${i.suggestion}` : ""}`);
     } catch { /* a half-formed plan must not take the batch down */ }
   }
-  return { def: after, results, errors, warnings: [...new Set([...warnings, ...validationWarnings, ...planWarnings, ...ctx.uxWarnings])].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly, structureUnchanged };
+  /* IM7: what a change to who is asked or how leaves to update elsewhere — said with the change, never applied by it */
+  let downstream: string[] = [];
+  try { downstream = downstreamOf(before, after).map((d) => `Downstream (${d.area}): ${d.what}${d.sentence ? ` — say “${d.sentence}”` : ""}.`); } catch { /* never takes the batch down */ }
+  return { def: after, results, errors, warnings: [...new Set([...warnings, ...validationWarnings, ...planWarnings, ...downstream, ...ctx.uxWarnings])].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly, structureUnchanged };
 }
 
 class ActionError extends Error {}
