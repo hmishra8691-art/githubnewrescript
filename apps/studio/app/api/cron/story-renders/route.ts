@@ -8,7 +8,8 @@ import { pendingRenders, stepRender } from "@/lib/storyEngine";
 /**
  * STORY VIDEOS KEEP RENDERING WITHOUT THE PANEL OPEN.
  *
- * Every minute: queued exports, and running ones whose lease has lapsed (a
+ * Hourly (it ran every minute against a queue that has held 0 rows since
+ * deployment — platform audit 2026-11-05): queued exports, and running ones whose lease has lapsed (a
  * closed tab, a timed-out function), are advanced — scenes rendered and
  * stored by content hash, so nothing done is done twice — until they are
  * checked and completed, or have failed three times. Authorised by

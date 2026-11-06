@@ -339,6 +339,7 @@ interface RecruitmentData {
   audience?: Record<string, unknown> | null;
   plan?: ResearcherPlanView;
   quotas?: QuotaRow[];
+  quotaCrossCheck?: { notes: { kind: "agree" | "disagree"; statement: string }[]; conflicts: number; statement: string | null } | null;
   /*
    * OPTIONAL, and that is the point. These arrive only for platform administrators; for everybody else they
    * are absent, not empty. Typing them as required is what let the panel read `data.comparison.source` on a
@@ -851,6 +852,14 @@ function Recruitment({ surveyId }: { surveyId: string }) {
         </div>
       )}
 
+      {data.quotaCrossCheck?.statement && (
+        <div className={`auth-note ${data.quotaCrossCheck.conflicts ? "err" : "ok"}`} data-testid="quota-cross-check" data-conflicts={data.quotaCrossCheck.conflicts} style={{ marginTop: 10 }}>
+          <b>{data.quotaCrossCheck.statement}</b>
+          <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 13 }}>
+            {data.quotaCrossCheck.notes.map((n, i) => <li key={i} data-kind={n.kind}>{n.statement}</li>)}
+          </ul>
+        </div>
+      )}
       {data.project && data.plan && <DashboardCard plan={data.plan} quotas={data.quotas ?? []} />}
 
       {data.canSeeVendors && data.project && (

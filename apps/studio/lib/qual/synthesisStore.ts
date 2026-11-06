@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { aiProviderName, completeJson, fenceNonceFor } from "@rescript/ai";
 import { supabaseGroupStore, type GroupStore, type GroupRow, type GroupSession, type CodingAssignment, type CoderSet, type HighlightReel, type QualJob } from "@rescript/analytics";
 import type { AuthedUser } from "@/lib/guard";
+import type { Meter, MeterContext } from "@rescript/billing";
 import { aiReadyFor } from "@/lib/byok/connect";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
 import { checkRow, json, QualStoreError } from "./qualStore";
@@ -34,13 +35,23 @@ export async function modelRunner(user: AuthedUser | null, surveyId: string, ope
   if (!(await aiReadyFor(user, surveyId, operation))) return { response: json({ error: "No AI provider is configured for this project, so this cannot be written by AI. The coded data, counts and quotes are all still available.", code: "ai_unconfigured" }, 503) };
   const billing = await billingProjectFor(user, surveyId, capability);
   if ("response" in billing) return { response: billing.response };
+  return modelRunnerFor(billing, user?.userId ?? null, surveyId, operation, scripted);
+}
+
+/**
+ * The runner over a billing context already decided — a request's (`billingProjectFor`, above) or a background
+ * job's (`backgroundContextFor`, which has checked the author's standing, the project, the platform key and the
+ * wallet without a session). The cron that advances qualitative jobs while nobody has the page open
+ * (/api/cron/qual-jobs, platform audit 2026-11-05) is the second caller.
+ */
+export function modelRunnerFor(billing: { ctx: MeterContext; meter: Meter }, userId: string | null, surveyId: string, operation: string, scripted?: unknown[] | null): ModelRunner {
   const fake = aiProviderName() === "fake";
   const started = Date.now();
   let i = 0;
   const runner: ModelRunner = {
     fake, calls: 0,
     async run(c) {
-      const nonce = fenceNonceFor(`${surveyId}\u0000${user?.userId ?? "sandbox"}\u0000${operation}\u0000${c.seed}`);
+      const nonce = fenceNonceFor(`${surveyId}\u0000${userId ?? "sandbox"}\u0000${operation}\u0000${c.seed}`);
       const prompt = c.prompt(nonce);
       const k = i++;
       const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: c.system + prompt, maxTokens: c.maxTokens, operation }, async () =>

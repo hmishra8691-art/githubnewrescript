@@ -118,6 +118,12 @@ const PUBLIC = {
     + "everything when it is unset. It sweeps every organisation that has identity data, so there is no project "
     + "to gate on and no session. It OPENS cases and never resolves, refuses or voids anything — every finding "
     + "waits for a human in the Fraud Intelligence Centre",
+  "cron/qual-jobs/route.ts":
+    "the five-minute qualitative-jobs continuation (platform audit 2026-11-05): auto-coding jobs that no open page "
+    + "is driving. The same bearer-token credential as the media job, checked against CRON_SECRET by "
+    + "`timingSafeEqual` in each handler's first statement and again in run(), refusing everything when it is "
+    + "unset. Each job is advanced only under `backgroundContextFor` — the author's standing on the project, the "
+    + "platform's own key, the wallet's room — exactly as a durable Intelligent Mode task is",
 };
 
 /**

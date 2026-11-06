@@ -9,7 +9,8 @@ import {
 import type { AuthedUser } from "@/lib/guard";
 import { codingState } from "./qualWorkspace";
 import { checkRow, saveCoding } from "./qualStore";
-import { claimJob, ensureJob, listJobs, modelRunner, saveJob } from "./synthesisStore";
+import { claimJob, ensureJob, listJobs, modelRunner, modelRunnerFor, saveJob, type ModelRunner } from "./synthesisStore";
+import type { Meter, MeterContext } from "@rescript/billing";
 import { synthesisContext } from "./synthesisContext";
 import { storeNext, writeThemes } from "./synthesisRun";
 
@@ -63,7 +64,14 @@ export async function enqueuePending(db: SupabaseClient, surveyId: string, actor
 }
 
 /** run a job forward; the job as it stands afterwards, or the refusal (no provider, wallet) */
-export async function advanceJob(db: SupabaseClient, user: AuthedUser, surveyId: string, jobId: string, budgetMs = 200_000): Promise<{ job: QualJob | null; response?: NextResponse }> {
+/**
+ * Who is advancing the job: the signed-in researcher whose page is open, or — from /api/cron/qual-jobs (platform
+ * audit 2026-11-05) — the job's author acting in the background, with the billing context `backgroundContextFor`
+ * decided for them. The author's id is still what the coding is saved under, so the audit trail reads the same.
+ */
+export type QualJobActor = AuthedUser | { userId: string; background: { ctx: MeterContext; meter: Meter } };
+
+export async function advanceJob(db: SupabaseClient, user: QualJobActor, surveyId: string, jobId: string, budgetMs = 200_000): Promise<{ job: QualJob | null; response?: NextResponse }> {
   const job = await claimJob(db, surveyId, jobId);
   if (!job) return { job: (await listJobs(db, surveyId, 200)).find((j) => j.id === jobId) ?? null };
   const started = Date.now();
@@ -85,7 +93,9 @@ export async function advanceJob(db: SupabaseClient, user: AuthedUser, surveyId:
     const { batches, skipped } = autoCodeBatches(t.segments, settings, { names: ctx.names });
     progress.batchesTotal = batches.length; progress.skippedSegments = skipped; progress.mode = mode;
     let cursor = { batch: Number((job.cursor as { batch?: number }).batch ?? 0) };
-    const runner = await modelRunner(user, surveyId, "qual_coding");
+    const runner: ModelRunner | { response: NextResponse } = "background" in user
+      ? modelRunnerFor(user.background, user.userId, surveyId, "qual_coding")
+      : await modelRunner(user, surveyId, "qual_coding");
     if ("response" in runner) { await release({ progress, error: "no AI provider, or the wallet refused — the job waits" }); return { job, response: runner.response }; }
     const touched = new Set<string>();
     while (true) {

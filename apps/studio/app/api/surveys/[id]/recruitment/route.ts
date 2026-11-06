@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
   allocate, blendedCpi, budgetState, canCommit, compareVendors, comparisonSource, costPerValidComplete,
-  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, planQuotas, proposeReallocation, recommend, assumedRejectionOfAllocation,
+  selectPricing, totalCost, LIVE_ADAPTER_SLUGS, planRecruitment, planQuotas, proposeReallocation, recommend, assumedRejectionOfAllocation, crossCheckQuotas,
   type AllocationCandidate, type FeasibilityInput, type ObservedVendor,
 } from "@rescript/recruitment";
 import { parseQuotaMapping } from "@rescript/identity";
@@ -222,6 +222,25 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .order("cell_id", { ascending: true })).data ?? []
     : [];
 
+  /*
+   * TWO QUOTA SYSTEMS, ONE WARNING (platform audit 2026-11-05). The survey's own quotas (the Quotas panel: caps on
+   * answers, enforced mid-interview) and the recruitment cells (the composition being bought, enforced at the
+   * door) are compared by label: a target set in both places is named, and a disagreement said out loud. Read
+   * from the draft definition, which is the quotas as currently authored.
+   */
+  let quotaCrossCheck: ReturnType<typeof crossCheckQuotas> | null = null;
+  if (project) {
+    try {
+      const { data: s } = await db.from("surveys").select("draft_definition").eq("id", params.id).maybeSingle();
+      const defQuotas = ((s as { draft_definition?: { quotas?: unknown } } | null)?.draft_definition?.quotas ?? []) as Parameters<typeof crossCheckQuotas>[0];
+      const specCells = Array.isArray((audienceFor?.audience as { quotas?: unknown[] } | null)?.quotas) ? (audienceFor!.audience as { quotas: never[] }).quotas : [];
+      const planned = planQuotas(specCells, required);
+      if (Array.isArray(defQuotas) && defQuotas.length && planned.cells.length) {
+        quotaCrossCheck = crossCheckQuotas(defQuotas, planned.cells, required > 0 ? required : null);
+      }
+    } catch { /* an unreadable definition or specification: no cross-check, not a failure */ }
+  }
+
   const plan = researcherPlan({
     currency: String(project?.budget_currency ?? "USD"),
     requiredCompletes: required,
@@ -259,6 +278,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     /** one plan, in markets — never a per-source breakdown */
     plan,
     quotas,
+    /** the same target set in the Quotas panel and in the recruitment cells — named, and a disagreement said (2026-11-05) */
+    quotaCrossCheck,
     canSeeVendors: actor.canSeeVendors,
     ...supplyChain,
     events,
