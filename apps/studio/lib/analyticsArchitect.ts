@@ -4,27 +4,17 @@ import { searchCatalogue } from "@rescript/analytics";
 /**
  * ANALYTICS ARCHITECT MODE — the state the shell keeps, kept free of React so it is tested on its own.
  *
- *   view        Classic (the five places) or Architect (Explorer · Workspace · Properties); `?view=architect`
- *               on the URL wins, then what this browser last used
  *   explorer    which category is open ("all" is the flat view), the filter text
  *   selection   the entries ticked in the Explorer — what the Combined view shows and what bulk export takes;
  *               `focus` is the one entry the Focus view opens, which is also always selected
  *   panes       the Explorer's and the Properties panel's widths, remembered per browser
  */
 
-export type AnalyticsView = "classic" | "architect";
-export const VIEW_KEY = "rescript.analytics.view";
 export const PANES_KEY = "rescript.analytics.architect.panes";
 
 export interface Panes { explorer: number; properties: number }
 export const DEFAULT_PANES: Panes = { explorer: 300, properties: 380 };
 export const PANE_MIN = 220, PANE_MAX = 640;
-
-/** the view to open: the URL's `view` first, then the remembered one, then Classic */
-export function resolveView(urlView: string | null | undefined, remembered: string | null | undefined): AnalyticsView {
-  const pick = (v: string | null | undefined): AnalyticsView | null => (v === "architect" || v === "classic" ? v : null);
-  return pick(urlView?.trim().toLowerCase()) ?? pick(remembered) ?? "classic";
-}
 
 export function readPanes(raw: string | null | undefined): Panes {
   try {

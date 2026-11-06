@@ -1,31 +1,43 @@
 /**
- * THE FIVE PLACES (Phase 5). The workspace used to be twelve tabs that mixed
- * places to work, things applied to analyses and ways to deliver. They are now
- * five places, ordered the way a researcher works, each holding the views that
- * used to be tabs — nothing removed, nothing renamed in the data. Ask is not a
- * place: it is a panel that opens from every one of them.
+ * THE FOUR MODES (Analytics upgrade 2026-11-06). The workspace was twelve tabs,
+ * then five places; it is now four modes in the order a researcher works —
+ * one continuous workflow over one engine:
  *
- * Kept free of React and of `@/` aliases so it is tested on its own and so a
- * link written for any earlier tab (`?tab=reports`, `?tab=analysis`) still
- * lands where it always did.
+ *   OVERVIEW   the executive summary of the study, and the findings behind it
+ *   EXPLORE    interactive exploration: analyses, tables, charts, segments, filters
+ *   ARCHITECT  the three-pane research environment, and the analysis plan it runs
+ *   PRESENT    reports, report themes, exports, sharing
+ *
+ * Nothing is removed and nothing is renamed in the data: every earlier view is
+ * a view of exactly one mode, so a link written for any earlier tab or place
+ * (`?tab=reports`, `?tab=deliver`, `?tab=plan`, `?tab=findings`) still lands
+ * where it always did. Ask is not a mode: it is a panel that opens from every
+ * one of them.
+ *
+ * Kept free of React and of `@/` aliases so it is tested on its own.
  */
-export type WsTab = "home" | "plan" | "analysis" | "charts" | "tables" | "segments" | "filters" | "findings" | "reports" | "ask" | "themes" | "exports" | "sharing";
-export type PlaceKey = "overview" | "plan" | "explore" | "findings" | "deliver";
+export type WsTab = "home" | "findings" | "plan" | "architect" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "ask" | "themes" | "exports" | "sharing";
+export type PlaceKey = "overview" | "explore" | "architect" | "present";
 
 export interface View { key: Exclude<WsTab, "ask">; label: string }
-export interface Place { key: PlaceKey; label: string; /** the question the place answers — shown as its tooltip */ question: string; views: View[] }
+export interface Place { key: PlaceKey; label: string; /** the question the mode answers — shown as its tooltip */ question: string; views: View[] }
 
 export const PLACES: Place[] = [
-  { key: "overview", label: "Overview", question: "Where does this study stand?", views: [{ key: "home", label: "Overview" }] },
-  { key: "plan", label: "Plan", question: "What are we trying to learn, and what will we run?", views: [{ key: "plan", label: "Analysis plan" }] },
+  { key: "overview", label: "Overview", question: "What did the study find?", views: [{ key: "home", label: "Overview" }, { key: "findings", label: "Findings" }] },
   { key: "explore", label: "Explore", question: "What does the data show?", views: [{ key: "analysis", label: "Analysis" }, { key: "tables", label: "Tables" }, { key: "charts", label: "Charts" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" }] },
-  { key: "findings", label: "Findings", question: "What matters, and is it reliable?", views: [{ key: "findings", label: "Findings" }, { key: "themes", label: "Themes" }] },
-  { key: "deliver", label: "Deliver", question: "How do we get this to people?", views: [{ key: "reports", label: "Reports" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" }] },
+  { key: "architect", label: "Architect", question: "Every analysis, in research terms, under full control", views: [{ key: "architect", label: "Workspace" }, { key: "plan", label: "Analysis plan" }] },
+  { key: "present", label: "Present", question: "How do we get this to people?", views: [{ key: "reports", label: "Reports" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" }] },
 ];
 
-export const DEFAULT_VIEW: Record<PlaceKey, View["key"]> = { overview: "home", plan: "plan", explore: "analysis", findings: "findings", deliver: "reports" };
+/** the modes, as the workspace lists them — PLACES under its historical name */
+export const MODES = PLACES;
 
-/** the place a view lives in — every view of every earlier tab has one */
+export const DEFAULT_VIEW: Record<PlaceKey, View["key"]> = { overview: "home", explore: "analysis", architect: "architect", present: "reports" };
+
+/** the earlier five places, read into the mode that holds what they held */
+const LEGACY_PLACES: Record<string, View["key"]> = { plan: "plan", findings: "findings", deliver: "reports" };
+
+/** the mode a view lives in — every view of every earlier tab has one */
 export function placeOf(tab: WsTab): PlaceKey {
   if (tab === "ask") return "overview";
   return PLACES.find((p) => p.views.some((v) => v.key === tab))!.key;
@@ -33,9 +45,9 @@ export function placeOf(tab: WsTab): PlaceKey {
 
 /**
  * What a link or a saved value means. An earlier tab name opens that view; a
- * place name opens the place's first view; `ask` opens the Ask panel (it is a
- * panel now, so the place stays Overview). Anything else is nothing, and the
- * workspace opens where it always opens.
+ * mode (or an earlier place) name opens its first view; `ask` opens the Ask
+ * panel (it is a panel now, so the mode stays Overview). Anything else is
+ * nothing, and the workspace opens where it always opens.
  */
 export function resolveTab(raw: string | null | undefined): WsTab | undefined {
   if (!raw) return undefined;
@@ -43,5 +55,6 @@ export function resolveTab(raw: string | null | undefined): WsTab | undefined {
   if (k === "ask") return "ask";
   for (const p of PLACES) for (const v of p.views) if (v.key === k) return v.key;
   const place = PLACES.find((p) => p.key === k);
-  return place ? DEFAULT_VIEW[place.key] : undefined;
+  if (place) return DEFAULT_VIEW[place.key];
+  return LEGACY_PLACES[k];
 }

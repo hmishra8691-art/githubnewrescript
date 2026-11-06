@@ -5,7 +5,6 @@ import { analyticsPermissions } from "@/lib/analyticsAccess";
 import { useSession } from "@/lib/useSession";
 import { AnalyticsWorkspace, type WsTab } from "@/components/analytics/AnalyticsWorkspace";
 import { resolveTab } from "@/components/analytics/navigation";
-import { resolveView, type AnalyticsView } from "@/lib/analyticsArchitect";
 import { AppHeader } from "@/components/ui/AppHeader";
 
 /**
@@ -22,13 +21,13 @@ export default function AnalyticsPage() {
   const [error, setError] = React.useState<string | null>(null);
   const [surveyId, setSurveyId] = React.useState<string>("");
   const [initialTab, setInitialTab] = React.useState<WsTab | undefined>(undefined);
-  const [initialView, setInitialView] = React.useState<AnalyticsView | undefined>(undefined);
 
   React.useEffect(() => {
     const u = new URL(window.location.href);
     setSurveyId(u.searchParams.get("survey") ?? "");
     const t = resolveTab(u.searchParams.get("tab")); if (t) setInitialTab(t);
-    const v = u.searchParams.get("view"); if (v) setInitialView(resolveView(v, null));
+    /* `?view=architect` (the mode switch of 2026-11-06, before Architect became a mode) opens the Architect mode */
+    if (!t && u.searchParams.get("view")?.toLowerCase() === "architect") setInitialTab("architect");
     fetch("/api/surveys", { cache: "no-store" }).then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? "Could not load surveys"); setSurveys(j.surveys ?? []); }).catch((e) => setError(e.message));
   }, []);
   React.useEffect(() => {
@@ -96,7 +95,7 @@ export default function AnalyticsPage() {
       {surveys && !surveys.length && <div className="card">You have no surveys yet. Create one from the <a href="/">dashboard</a>, collect responses, and come back to analyse them.</div>}
       {survey && waiting && <div className="card muted" data-testid="ax-access-loading">Checking your access to this project…</div>}
       {survey && !waiting && !canRead && <div className="card" data-testid="ax-no-access">Your role on “{survey.title}” ({survey.myRole}) does not include analytics access. Ask the project owner for a Viewer role or higher, or for Data Analytics access.</div>}
-      {survey && !waiting && canRead && <AnalyticsWorkspace key={survey.id} surveyId={survey.id} surveyTitle={survey.title} canEdit={perms.canEdit} canEditPlan={perms.canEditPlan} canPublish={perms.canPublish} canExport={perms.canExport} initialTab={initialTab} initialView={initialView} />}
+      {survey && !waiting && canRead && <AnalyticsWorkspace key={survey.id} surveyId={survey.id} surveyTitle={survey.title} canEdit={perms.canEdit} canEditPlan={perms.canEditPlan} canPublish={perms.canPublish} canExport={perms.canExport} initialTab={initialTab} />}
     </div>
   );
 }

@@ -1,19 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { AnalysisCatalogue, CatalogueEntry } from "@rescript/analytics";
-import { clearSelection, explorerEntries, focusKey, pruneSelection, readPanes, renderable, resolveView, selectAll, selectionSummary, toggleKey, EMPTY_SELECTION, DEFAULT_PANES } from "./analyticsArchitect.ts";
+import { clearSelection, explorerEntries, focusKey, pruneSelection, readPanes, renderable, selectAll, selectionSummary, toggleKey, EMPTY_SELECTION, DEFAULT_PANES } from "./analyticsArchitect.ts";
 
 const entry = (key: string, category: CatalogueEntry["category"], label: string, analysisId: string | null = "a"): CatalogueEntry =>
   ({ key, category, id: key.split(":").pop()!, label, description: "", hypotheses: [], status: "ready", analysisId, technical: { variables: [] } });
 const cat = (entries: CatalogueEntry[]): AnalysisCatalogue => ({ all: entries, sections: [], counts: {} as never, objective: null });
-
-test("the view: the URL wins, then what the browser remembers, then Classic", () => {
-  assert.equal(resolveView(null, null), "classic");
-  assert.equal(resolveView(null, "architect"), "architect");
-  assert.equal(resolveView("classic", "architect"), "classic");
-  assert.equal(resolveView("ARCHITECT", null), "architect");
-  assert.equal(resolveView("nonsense", "nonsense"), "classic");
-});
 
 test("pane widths are read back clamped, or fall to the defaults", () => {
   assert.deepEqual(readPanes(null), DEFAULT_PANES);

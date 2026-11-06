@@ -20,7 +20,6 @@ import { PLACES, DEFAULT_VIEW, placeOf, type PlaceKey, type WsTab } from "./navi
 import { CHART_PAGE, analysisIdsFor, hiddenCount, visibleCharts } from "./chartPaging";
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 import { ArchitectAnalytics } from "./architect/ArchitectAnalytics";
-import { VIEW_KEY, resolveView, type AnalyticsView } from "@/lib/analyticsArchitect";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
@@ -38,24 +37,14 @@ import { VIEW_KEY, resolveView, type AnalyticsView } from "@/lib/analyticsArchit
 
 export type { WsTab } from "./navigation";
 
-export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; /** may change the survey definition — the plan lives there */ canEditPlan?: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab; /** Classic (the five places) or Architect (Explorer · Workspace · Properties); `?view=architect` */ initialView?: AnalyticsView }
+export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; /** may change the survey definition — the plan lives there */ canEditPlan?: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab }
 
 export function AnalyticsWorkspace(p: WorkspaceProps) {
   const api = React.useMemo(() => new AxApi(p.surveyId), [p.surveyId]);
   /* the view on show. "ask" is not a view: it opens the Ask panel over whichever place you are in */
   const [tab, setTabRaw] = React.useState<Exclude<WsTab, "ask">>(p.initialTab && p.initialTab !== "ask" ? p.initialTab : "home");
   const [askOpen, setAskOpen] = React.useState(p.initialTab === "ask");
-  /*
-   * ARCHITECT MODE is a view over the same engine, analyses and permissions — a mode switch like the Programming
-   * Studio's: `?view=architect` on the URL wins, then what this browser last used. Switching writes both.
-   */
-  const [view, setViewRaw] = React.useState<AnalyticsView>(p.initialView ?? "classic");
-  React.useEffect(() => { if (!p.initialView) { try { setViewRaw(resolveView(null, window.localStorage.getItem(VIEW_KEY))); } catch { /* fine */ } } }, [p.initialView]);
-  const setView = (v: AnalyticsView) => {
-    setViewRaw(v);
-    try { window.localStorage.setItem(VIEW_KEY, v); } catch { /* fine */ }
-    try { const u = new URL(window.location.href); if (v === "architect") u.searchParams.set("view", v); else u.searchParams.delete("view"); window.history.replaceState(null, "", u.toString()); } catch { /* fine */ }
-  };
+  /* ARCHITECT is a mode over the same engine, analyses and permissions (components/analytics/architect); the catalogue is read again whenever the lists refresh */
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [archFocus, setArchFocus] = React.useState<{ key: string; label: string; analysisId: string | null } | null>(null);
   const [askMounted, setAskMounted] = React.useState(p.initialTab === "ask");
@@ -153,29 +142,17 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         <label className="ax-field" style={{ minWidth: 220 }}><span>Dataset</span><select className="select" value={env} onChange={(e) => setEnv(e.target.value as DatasetSpec["environment"])} data-testid="ax-dataset"><option value="LIVE">Production responses ({counts.LIVE ?? "…"})</option><option value="TEST">Test responses ({counts.TEST ?? "…"})</option><option value="ALL">All responses</option></select></label>
         <label className="ax-field"><span>Quality</span><select className="select" value={quality} onChange={(e) => setQuality(e.target.value as DatasetSpec["dataset"])}><option value="all">All complete responses</option><option value="clean">Clean only (quality engine)</option></select></label>
         <span className="grow" />
-        <div className="axa-mode" role="tablist" aria-label="Analytics view" data-testid="ax-view-switch">
-          <button role="tab" aria-selected={view === "classic"} className={`axa-mode-btn ${view === "classic" ? "on" : ""}`} onClick={() => setView("classic")} data-testid="ax-view-classic" title="The five places: Overview · Plan · Explore · Findings · Deliver">Classic</button>
-          <button role="tab" aria-selected={view === "architect"} className={`axa-mode-btn ${view === "architect" ? "on" : ""}`} onClick={() => { if (tab === "analysis" && !guard()) return; setView("architect"); }} data-testid="ax-view-architect" title="Explorer · Workspace · Properties — every analysis in research terms">Architect</button>
-        </div>
-        {view === "architect" && <button ref={askButtonRef} className={`btn small ax-ask-open ${askOpen ? "on" : ""}`} onClick={() => { setAskMounted(true); setAskOpen((o) => !o); }} aria-expanded={askOpen} aria-controls="ax-ask-drawer" title="Ask in words — it proposes, you review" data-testid="ax-ask-open">Ask</button>}
         <div className="muted" style={{ fontSize: 12.5, textAlign: "right" }}>Analyses run server-side on stored responses.<br />Only results reach this page.</div>
       </div>
-      {view === "architect" && (
-        <>
-          {error && <div className="ax-error" style={{ margin: "6px 0" }}>{error}</div>}
-          <ArchitectAnalytics api={api} dataset={dataset} analyses={analyses} charts={charts} themes={themeList} canEdit={p.canEdit} canExport={p.canExport} refreshKey={refreshKey}
-            onOpenInBuilder={(a) => { setView("classic"); openBuilder({ analysis: a }); }} onFocusChange={setArchFocus} />
-        </>
-      )}
-      {view === "classic" && <>
-      <div className="ax-places" role="navigation" aria-label="Places">
-        {PLACES.map((pl, i) => (
-          <button key={pl.key} className={`ax-place ${place === pl.key ? "on" : ""}`} aria-current={place === pl.key ? "page" : undefined} title={pl.question} data-testid={`ax-place-${pl.key}`}
+      <div className="ax-places" role="navigation" aria-label="Modes">
+        {PLACES.map((pl, i) => (<React.Fragment key={pl.key}>
+          {i > 0 && <span className="ax-place-arrow" aria-hidden>→</span>}
+          <button className={`ax-place ${place === pl.key ? "on" : ""}`} aria-current={place === pl.key ? "page" : undefined} title={pl.question} data-testid={`ax-place-${pl.key}`}
             onClick={() => { if (place === pl.key) return; if (tab === "analysis" && !guard()) return; setTab(lastView[pl.key] ?? DEFAULT_VIEW[pl.key]); }}>
             <span className="ax-place-n">{i + 1}</span>{pl.label}{pl.key === "explore" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}
-          </button>))}
+          </button></React.Fragment>))}
         <span className="grow" />
-        <button ref={view === "classic" ? askButtonRef : undefined} className={`btn small ax-ask-open ${askOpen ? "on" : ""}`} onClick={() => { setAskMounted(true); setAskOpen((o) => !o); }} aria-expanded={askOpen} aria-controls="ax-ask-drawer" title="Ask in words — it proposes, you review" data-testid="ax-ask-open">Ask</button>
+        <button ref={askButtonRef} className={`btn small ax-ask-open ${askOpen ? "on" : ""}`} onClick={() => { setAskMounted(true); setAskOpen((o) => !o); }} aria-expanded={askOpen} aria-controls="ax-ask-drawer" title="Ask in words — it proposes, you review" data-testid="ax-ask-open">Ask</button>
       </div>
       {(PLACES.find((x) => x.key === place)?.views.length ?? 0) > 1 && (
         <div className="ax-ws-tabs" role="tablist" aria-label={`${PLACES.find((x) => x.key === place)?.label} views`}>{PLACES.find((x) => x.key === place)!.views.map((t) => <button key={t.key} role="tab" aria-selected={tab === t.key} className={`ax-wstab ${tab === t.key ? "on" : ""}`} onClick={() => { if (t.key === tab) return; if (tab === "analysis" && !guard()) return; setTab(t.key); }} data-testid={`ax-tab-${t.key}`}>{t.label}{t.key === "analysis" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}</button>)}</div>
@@ -205,13 +182,14 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         {tab === "themes" && <ThemesPanel api={api} items={themes} onChange={() => void refresh()} />}
         {tab === "exports" && <ExportsPanel api={api} reports={reports} analyses={analyses} themes={themes} />}
         {tab === "sharing" && <SharingPanel api={api} shares={shares} reports={reports} onChange={() => void refresh()} />}
+        {tab === "architect" && <ArchitectAnalytics api={api} dataset={dataset} analyses={analyses} charts={charts} themes={themeList} canEdit={p.canEdit} canExport={p.canExport} refreshKey={refreshKey}
+          onOpenInBuilder={(a) => openBuilder({ analysis: a })} onFocusChange={setArchFocus} />}
       </div>
-      </>}
       {askMounted && (
         <aside ref={drawerRef} id="ax-ask-drawer" className="ax-ask-drawer" role="complementary" aria-label="Ask" hidden={!askOpen} data-testid="ax-ask-drawer" onKeyDown={(e) => { if (e.key === "Escape") setAskOpen(false); }}>
-          <div className="ax-ask-drawer-head"><b>Ask</b><span className="muted" style={{ fontSize: 12.5 }}>on {view === "architect" ? (archFocus ? archFocus.label : "Architect") : PLACES.find((x) => x.key === place)?.label}</span><span className="grow" /><button className="btn small" onClick={() => setAskOpen(false)} data-testid="ax-ask-close" aria-label="Close Ask">Close</button></div>
+          <div className="ax-ask-drawer-head"><b>Ask</b><span className="muted" style={{ fontSize: 12.5 }}>on {tab === "architect" && archFocus ? archFocus.label : PLACES.find((x) => x.key === place)?.label}</span><span className="grow" /><button className="btn small" onClick={() => setAskOpen(false)} data-testid="ax-ask-close" aria-label="Close Ask">Close</button></div>
           <AskPanel api={api} dataset={dataset} analyses={analyses} canEdit={p.canEdit} onChanged={refresh} embedded
-            focus={view === "architect" ? (archFocus?.analysisId ? { analysisId: archFocus.analysisId, name: archFocus.label } : null) : place === "explore" && currentAnalysisId ? { analysisId: currentAnalysisId, name: String(analyses.find((a) => a.id === currentAnalysisId)?.name ?? builder.initial?.analysis?.name ?? "this analysis") } : null} />
+            focus={tab === "architect" ? (archFocus?.analysisId ? { analysisId: archFocus.analysisId, name: archFocus.label } : null) : place === "explore" && currentAnalysisId ? { analysisId: currentAnalysisId, name: String(analyses.find((a) => a.id === currentAnalysisId)?.name ?? builder.initial?.analysis?.name ?? "this analysis") } : null} />
         </aside>
       )}
     </div>
@@ -276,13 +254,13 @@ interface PlanBrief { items: number; crosstabs: number; tests: number; hypothese
  * it points at Intelligent mode. "Create analysis" stays beside it either
  * way: a hand-built analysis is still the other way to start.
  */
-function PlanCard({ plan, onTab, surveyId }: { plan: PlanBrief | null | undefined; onTab: (t: WsTab) => void; surveyId: string }) {
+function PlanCard({ plan, onTab }: { plan: PlanBrief | null | undefined; onTab: (t: WsTab) => void }) {
   if (plan === undefined) return <div className="card ax-plan-card" data-testid="ax-plan-card" data-state="loading"><div className="card-title">Analysis plan</div><div className="muted" style={{ fontSize: 13 }}>Loading…</div></div>;
   if (plan === null) return (
     <div className="card ax-plan-card" data-testid="ax-plan-card" data-state="none">
       <div className="card-title">Analysis plan <span className="badge neutral">none yet</span></div>
-      <div className="muted" style={{ fontSize: 13 }}>No analysis plan for this survey. Plan it in Intelligent mode — the crosstabs and tests the research design implies — and apply it here; or start an analysis by hand below.</div>
-      <div className="card-actions" style={{ marginTop: 8 }}><a className="btn small primary" href={`/studio/${surveyId}?mode=intelligent`} data-testid="ax-plan-intelligent">Plan it in Intelligent mode</a><button className="btn small" onClick={() => onTab("plan")} data-testid="ax-plan-open">Open the plan workspace</button></div>
+      <div className="muted" style={{ fontSize: 13 }}>No analysis plan for this survey. Open the plan workspace and let the engine propose the crosstabs and tests the research design implies, then apply it; or start an analysis by hand below.</div>
+      <div className="card-actions" style={{ marginTop: 8 }}><button className="btn small primary" onClick={() => onTab("plan")} data-testid="ax-plan-open">Open the plan workspace</button></div>
     </div>
   );
   const a = plan.apply;
@@ -299,7 +277,7 @@ function PlanCard({ plan, onTab, surveyId }: { plan: PlanBrief | null | undefine
       <div className="muted" style={{ fontSize: 13 }}>{state.text}</div>
       <div className="card-actions" style={{ marginTop: 8, flexWrap: "wrap" }}>
         <button className="btn small primary" onClick={() => onTab("plan")} data-testid="ax-plan-open">Open the plan</button>
-        <a className="btn small" href={`/studio/${surveyId}?mode=intelligent`} data-testid="ax-plan-intelligent">Intelligent mode</a>
+        <button className="btn small" onClick={() => onTab("architect")} data-testid="ax-plan-architect">Open in Architect</button>
       </div>
     </div>
   );
@@ -308,7 +286,7 @@ function PlanCard({ plan, onTab, surveyId }: { plan: PlanBrief | null | undefine
 function Home({ home, analyses, onOpen, onNew, onTab, canEdit, api, refresh, plan, surveyId }: { home: { analyses: Row[]; charts: Row[]; reports: Row[]; shares: Row[] } | null; analyses: Row[]; onOpen: (a: Row) => void; onNew: (kind?: AnalysisDefinition["kind"]) => void; onTab: (t: WsTab) => void; canEdit: boolean; api: AxApi; refresh: () => Promise<void>; plan: PlanBrief | null | undefined; surveyId: string }) {
   return (
     <div className="ax-home" data-testid="ax-home">
-      <PlanCard plan={plan} onTab={onTab} surveyId={surveyId} />
+      <PlanCard plan={plan} onTab={onTab} />
       {/* ASSESSMENT RESULTS (K4, ported 2026-10-29): renders nothing unless the survey is a scored paper */}
       <AssessmentCard surveyId={surveyId} />
       {/* the two ways to start work, side by side — neither is wide enough to

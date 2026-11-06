@@ -138,11 +138,11 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
         <div className="ax-empty" style={{ textAlign: "left" }}>
           <div className="ax-empty-t">No analysis plan yet</div>
           <div className="ax-empty-d">
-            {plan ? "The plan is saved but empty." : "This survey has no analysis plan."} Plan it in Intelligent mode — the engine proposes the crosstabs and tests the research design implies, and the copilot refines it in words — or add the first crosstab or test here.
+            {plan ? "The plan is saved but empty." : "This survey has no analysis plan."} Propose it — the engine proposes the crosstabs and tests the research design implies, and Ask refines it in words — or add the first crosstab or test here.
             {data.survey.hypotheses.length ? ` The research design has ${data.survey.hypotheses.length} hypothes${data.survey.hypotheses.length === 1 ? "is" : "es"} to plan for.` : " Record the objective and hypotheses first, so the plan can serve them."}
           </div>
           <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
-            <a className="btn primary" href={`/studio/${p.surveyId}?mode=intelligent`} data-testid="ap-open-intelligent"><Icon name="sparkle" size={14} /> Plan it in Intelligent mode</a>
+            {p.canEditPlan && <button className="btn primary" disabled={saving} onClick={() => void edit([{ op: "propose_analysis_plan" }], "The engine's analysis plan proposed")} data-testid="ap-propose-plan" title="The engine proposes the crosstabs and tests the research design implies — nothing leaves Analytics"><Icon name="sparkle" size={14} /> Propose the plan</button>}
             {p.canEditPlan && <button className="btn" onClick={() => { setEditor({ kind: "crosstab" }); }} data-testid="ap-add-first-crosstab">Add a crosstab</button>}
             {p.canEditPlan && <button className="btn" onClick={() => { setEditor({ kind: "test" }); }} data-testid="ap-add-first-test">Add a test</button>}
             <button className="btn" onClick={() => p.onTab("analysis")} data-testid="ap-create-analysis">Create an analysis by hand</button>
@@ -181,7 +181,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
         <div className="ap-head-actions">
           {p.canEdit && <button className={`btn primary${applying ? " loading" : ""}`} disabled={applying || saving} onClick={() => void apply()} data-testid="ap-apply" title="Validate the plan, create or update its saved analyses, run them on the responses, and refresh the charts, the dashboard and the findings report">Apply analysis plan</button>}
           <button className="btn" onClick={() => void load()} disabled={loading} data-testid="ap-refresh">Refresh</button>
-          <a className="btn" href={`/studio/${p.surveyId}?mode=intelligent`} data-testid="ap-intelligent"><Icon name="sparkle" size={14} /> Intelligent mode</a>
+          {p.canEditPlan && <button className="btn" disabled={saving} onClick={() => { if (window.confirm("Add the engine's proposed crosstabs and tests to this plan? Nothing already planned is removed.")) void edit([{ op: "propose_analysis_plan", merge: true }], "The engine's proposals added"); }} data-testid="ap-propose-more" title="Add the crosstabs and tests the research design implies that are not planned yet"><Icon name="sparkle" size={14} /> Propose more</button>}
         </div>
       </div>
 
@@ -635,7 +635,7 @@ function InsightsSection({ data, items, onItem, surveyId }: { data: PlanPayload;
   const disc = run.discoveries;
   return (
     <div className="ap-insights" data-testid="ap-insights">
-      <p className="muted" style={{ fontSize: 13 }} data-testid="ap-insights-note"><Icon name="info" size={12} /> Observed patterns, computed by the engine from the run of {new Date(run.computedAt).toLocaleString()} on {run.n} {run.environment.toLowerCase()} completes. Nothing here is written by a language model; the copilot's narrative (headline, implications, recommendations) is in <a href={`/studio/${surveyId}?mode=intelligent`}>Intelligent mode → Findings</a> and is gated against these numbers.</p>
+      <p className="muted" style={{ fontSize: 13 }} data-testid="ap-insights-note"><Icon name="info" size={12} /> Observed patterns, computed by the engine from the run of {new Date(run.computedAt).toLocaleString()} on {run.n} {run.environment.toLowerCase()} completes. Nothing here is written by a language model; the narrative (headline, implications, recommendations) is in Overview and in each analysis's interpretation, and is gated against these numbers.</p>
       {run.n < 30 && <p className="iq-warning"><Icon name="warning" size={12} /> Only {run.n} completes — read every finding with caution; nothing here is conclusive yet.</p>}
       <div className="ap-two">
         <div className="card">
