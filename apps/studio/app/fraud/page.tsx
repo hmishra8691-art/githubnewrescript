@@ -90,6 +90,11 @@ interface Evaluation {
   note?: string;
 }
 
+interface Admission {
+  id: string; survey_id: string; trust_id: string | null; integration_id: string | null;
+  decision: string; risk_score: number; risk_band: string; reasons: string[]; evidence: Record<string, unknown>;
+  resolution: string | null; decided_in_ms: number | null; occurred_at: string; project: string | null; vendorName: string | null;
+}
 interface Payload {
   cases: FraudCase[];
   clusters: Cluster[];
@@ -97,7 +102,16 @@ interface Payload {
   evaluation: Evaluation;
   counts: Record<string, number>;
   calibration: string | null;
+  admissions?: {
+    recent: Admission[];
+    sevenDays: { decisions: Record<string, number>; bands: Record<string, number>; identity: Record<string, number>; shadowBlocks: number; available: boolean };
+  };
 }
+
+const DECISION_WORDS: Record<string, string> = {
+  admitted: "admitted", admitted_flagged: "admitted, case opened", duplicate: "refused as a duplicate",
+  observed: "would have been refused (shadow)", not_eligible: "not eligible",
+};
 
 const when = (iso: string | null | undefined): string => {
   if (!iso) return "—";
@@ -390,6 +404,63 @@ export default function FraudPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* ------------------------------------------------------------ the door's own record (audit 2026-11-05) */}
+      {data?.admissions && (
+        <>
+          <div className="row" style={{ margin: "18px 0 6px" }}>
+            <strong className="grow">At the door — the last seven days</strong>
+          </div>
+          <p className="muted" style={{ fontSize: 12.5, maxWidth: 760, lineHeight: 1.55, marginTop: 0 }}>
+            What the admission gateway decided for each arrival, and the evidence it rested on. Nobody is ever refused
+            on a risk score alone; a duplicate refusal is an identity decision. In shadow mode a &ldquo;would have blocked&rdquo;
+            count is the false-positive exposure, measurable before anyone is turned away.
+          </p>
+          <div className="row" style={{ gap: 14, flexWrap: "wrap", marginBottom: 8 }} data-testid="admissions-tally">
+            {Object.entries(data.admissions.sevenDays.decisions).map(([k, v]) => (
+              <span key={k} className="chip">{v.toLocaleString()} {DECISION_WORDS[k] ?? k}</span>
+            ))}
+            {Object.keys(data.admissions.sevenDays.decisions).length === 0 && <span className="muted" style={{ fontSize: 13 }}>No arrivals have passed through the gateway in the last seven days{data.admissions.sevenDays.available ? "" : " (or the gateway's tables are not yet applied)"}.</span>}
+            {data.admissions.sevenDays.shadowBlocks > 0 && (
+              <span className="chip warn" title="identity matches that would have refused the arrival, had shadow mode been off">{data.admissions.sevenDays.shadowBlocks.toLocaleString()} would have been blocked in shadow mode</span>
+            )}
+            {Object.entries(data.admissions.sevenDays.identity).map(([k, v]) => (
+              <span key={`id-${k}`} className="muted" style={{ fontSize: 12.5 }}>{v.toLocaleString()} identity {k}</span>
+            ))}
+          </div>
+          {!!data.admissions.recent.length && (
+            <div className="table-wrap">
+              <table className="grid" data-testid="admissions-recent">
+                <thead>
+                  <tr><th>When</th><th>Project</th><th>Vendor</th><th>Decision</th><th>Risk</th><th>Linked by</th><th>Reasons</th><th>Took</th></tr>
+                </thead>
+                <tbody>
+                  {data.admissions.recent.map((a) => (
+                    <tr key={a.id} data-testid="admission-row" data-decision={a.decision}>
+                      <td style={{ whiteSpace: "nowrap", fontSize: 12.5 }}>{when(a.occurred_at)}</td>
+                      <td style={{ fontSize: 12.5, whiteSpace: "normal" }}><a href={`/studio/${a.survey_id}`}>{a.project ?? a.survey_id.slice(0, 8)}</a></td>
+                      <td style={{ fontSize: 12.5 }}>{a.vendorName ?? (a.integration_id ? a.integration_id.slice(0, 8) : "direct")}</td>
+                      <td style={{ fontSize: 12.5 }}>{DECISION_WORDS[a.decision] ?? a.decision}</td>
+                      <td><span style={{ color: band(Number(a.risk_score)).tone }}>{Number(a.risk_score).toFixed(0)}</span> <span className="muted" style={{ fontSize: 12 }}>{a.risk_band}</span></td>
+                      <td style={{ fontSize: 12.5 }}>{a.resolution ?? "—"}</td>
+                      <td style={{ fontSize: 12.5, whiteSpace: "normal" }}>
+                        {a.reasons?.length ? a.reasons.join(", ") : <span className="muted">none</span>}
+                        {a.evidence && Object.keys(a.evidence).length > 0 && (
+                          <details style={{ marginTop: 2 }}>
+                            <summary className="muted" style={{ cursor: "pointer", fontSize: 12 }}>evidence</summary>
+                            <pre className="mono" style={{ fontSize: 11.5, whiteSpace: "pre-wrap", margin: "4px 0 0" }}>{JSON.stringify(a.evidence, null, 1)}</pre>
+                          </details>
+                        )}
+                      </td>
+                      <td className="mono" style={{ fontSize: 12.5 }}>{a.decided_in_ms === null ? "—" : `${a.decided_in_ms} ms`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
       {/* ------------------------------------------------------------ vendor quality */}

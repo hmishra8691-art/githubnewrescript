@@ -4,6 +4,8 @@ import { AccountHeader } from "@/components/AccountHeader";
 import { AccessPolicyPanel } from "@/components/AccessPolicyPanel";
 import { AiConnectionPanel } from "@/components/AiConnectionPanel";
 import { AiWorkspacePolicyPanel } from "@/components/AiWorkspacePolicyPanel";
+import { MarginRulesPanel } from "@/components/admin/MarginRulesPanel";
+import { SettlementPanel } from "@/components/admin/SettlementPanel";
 import { api, useSession } from "@/lib/useSession";
 
 /**
@@ -84,7 +86,7 @@ function whenLabel(iso: string | null | undefined): string {
 
 export default function AdminPage() {
   const { state, signOut } = useSession({ redirectOnSignOut: true });
-  const [tab, setTab] = React.useState<"sessions" | "accounts" | "access" | "ai">("sessions");
+  const [tab, setTab] = React.useState<"sessions" | "accounts" | "access" | "ai" | "margins" | "settlements">("sessions");
 
   const [sessions, setSessions] = React.useState<AdminSessionsPayload | null>(null);
   const [accounts, setAccounts] = React.useState<AccountsPayload | null>(null);
@@ -252,6 +254,23 @@ export default function AdminPage() {
         >
           AI connection
         </button>
+        {/* platform audit 2026-11-05: two complete admin APIs (0086 settlements, 0087 margins) had no screen */}
+        <button
+          type="button"
+          data-testid="admin-tab-margins"
+          className={tab === "margins" ? "active" : undefined}
+          onClick={() => { setTab("margins"); setNote(null); }}
+        >
+          Recruitment margins
+        </button>
+        <button
+          type="button"
+          data-testid="admin-tab-settlements"
+          className={tab === "settlements" ? "active" : undefined}
+          onClick={() => { setTab("settlements"); setNote(null); }}
+        >
+          Vendor settlement
+        </button>
       </div>
 
       {error && <div className="auth-note err">{error}</div>}
@@ -259,6 +278,8 @@ export default function AdminPage() {
 
       {tab === "access" && <AccessPolicyPanel />}
       {tab === "ai" && <><AiConnectionPanel /><AiWorkspacePolicyPanel /></>}
+      {tab === "margins" && <MarginRulesPanel />}
+      {tab === "settlements" && <SettlementPanel />}
 
       {tab === "sessions" && (
         <>

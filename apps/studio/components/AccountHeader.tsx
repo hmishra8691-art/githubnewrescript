@@ -17,13 +17,14 @@ import { AppHeader } from "@/components/ui/AppHeader";
  */
 
 export interface AccountHeaderProps {
-  active: "profile" | "security" | "ai" | "admin" | "billing" | "admin-billing" | "fraud";
+  active: "profile" | "notifications" | "security" | "ai" | "admin" | "billing" | "admin-billing" | "fraud";
   user: SessionUser | null;
   onSignOut: () => void;
 }
 
 const TITLES: Record<AccountHeaderProps["active"], string> = {
   profile: "Your profile",
+  notifications: "Notifications",
   security: "Sign-in & sessions",
   ai: "AI & Integrations",
   admin: "Administration",
@@ -88,6 +89,7 @@ export function AccountHeader({ active, user, onSignOut }: AccountHeaderProps) {
 
       <nav className="acct-nav">
         <a href="/profile" className={active === "profile" ? "active" : undefined}>Profile</a>
+        <a href="/notifications" className={active === "notifications" ? "active" : undefined} data-testid="nav-notifications">Notifications</a>
         <a href="/security" className={active === "security" ? "active" : undefined}>Security</a>
         <a href="/settings/ai" className={active === "ai" ? "active" : undefined} data-testid="nav-ai">AI &amp; Integrations</a>
         <a href="/billing" className={active === "billing" ? "active" : undefined} data-testid="nav-billing">My usage</a>

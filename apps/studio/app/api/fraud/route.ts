@@ -84,10 +84,43 @@ export async function GET(req: NextRequest) {
   }
 
   /*
+   * THE DOOR'S OWN RECORD (platform audit 2026-11-05, piping defects 4 and 5). `admission_decisions` holds, per
+   * arrival, the evidence the gateway's decision rested on, and `identity_match_events` how each arrival was
+   * linked to an identity — both written since 0083/0084 and read by nothing. A fraud reviewer or a vendor
+   * dispute needs exactly this. The last hundred decisions with their evidence, and seven-day tallies of both,
+   * so shadow mode's false-positive exposure (`would_block` events with `shadow = true`) is a number on a screen
+   * rather than a query somebody has to know to run.
+   */
+  const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const [decisions, decisionTally, identityTally] = await Promise.all([
+    db.from("admission_decisions")
+      .select("id, survey_id, trust_id, integration_id, decision, risk_score, risk_band, reasons, evidence, resolution, decided_in_ms, occurred_at")
+      .eq("customer_id", actor.customerId)
+      .order("occurred_at", { ascending: false })
+      .limit(100),
+    db.from("admission_decisions").select("decision, risk_band").eq("customer_id", actor.customerId).gte("occurred_at", since).limit(5000),
+    db.from("identity_match_events").select("kind, shadow, would_block").eq("customer_id", actor.customerId).gte("occurred_at", since).limit(5000),
+  ]);
+  const byDecision: Record<string, number> = {};
+  const byBand: Record<string, number> = {};
+  for (const r of (decisionTally.data ?? []) as { decision: string; risk_band: string }[]) {
+    byDecision[r.decision] = (byDecision[r.decision] ?? 0) + 1;
+    byBand[r.risk_band] = (byBand[r.risk_band] ?? 0) + 1;
+  }
+  const byKind: Record<string, number> = {};
+  let shadowBlocks = 0;
+  for (const r of (identityTally.data ?? []) as { kind: string; shadow: boolean; would_block: boolean }[]) {
+    byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
+    if (r.would_block && r.shadow) shadowBlocks++;
+  }
+  /*
    * The vendor names, resolved in one query rather than per row. An integration with no name is shown by its id
    * rather than hidden: a quality row the reviewer cannot attribute is worse than an ugly one.
    */
-  const integrationIds = [...new Set((quality.data ?? []).map((r) => String((r as { integration_id: string }).integration_id)))];
+  const integrationIds = [...new Set([
+    ...(quality.data ?? []).map((r) => String((r as { integration_id: string }).integration_id)),
+    ...((decisions.data ?? []) as { integration_id: string | null }[]).map((d) => d.integration_id).filter((x): x is string => !!x),
+  ])];
   const names = new Map<string, string>();
   if (integrationIds.length) {
     const { data } = await db.from("vendor_integrations")
@@ -100,6 +133,13 @@ export async function GET(req: NextRequest) {
   }
 
   const evalRow = evaluation.data as { status?: string; resolved_cases?: number; note?: string } | null;
+
+  const decisionSurveys = [...new Set(((decisions.data ?? []) as { survey_id: string }[]).map((d) => d.survey_id))];
+  const surveyTitle = new Map<string, string>();
+  if (decisionSurveys.length) {
+    const { data } = await db.from("surveys").select("id, code, title").in("id", decisionSurveys);
+    for (const s of (data ?? []) as { id: string; code: string; title: string }[]) surveyTitle.set(s.id, `${s.code} — ${s.title}`);
+  }
 
   return noStore({
     cases: cases.data ?? [],
@@ -114,6 +154,10 @@ export async function GET(req: NextRequest) {
       note: "No evaluation has been computed yet. Precision and the false-positive rate are measured over resolved cases, and there are none.",
     },
     counts: tally,
+    admissions: {
+      recent: ((decisions.data ?? []) as Record<string, unknown>[]).map((d) => ({ ...d, project: surveyTitle.get(String(d.survey_id)) ?? null, vendorName: d.integration_id ? names.get(String(d.integration_id)) ?? null : null })),
+      sevenDays: { decisions: byDecision, bands: byBand, identity: byKind, shadowBlocks, available: !decisions.error },
+    },
     /*
      * Said in the payload rather than only in the UI, so an integrator reading this API is told the same thing
      * a reviewer is: these scores have never been checked against outcomes.

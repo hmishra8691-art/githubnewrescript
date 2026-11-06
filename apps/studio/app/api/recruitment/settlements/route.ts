@@ -153,9 +153,53 @@ export async function GET(req: NextRequest) {
   if (!actor.canSeeVendors) return refuseVendorVisibility();
 
   const orderId = req.nextUrl.searchParams.get("order") ?? "";
-  if (!orderId) return noStore({ error: "An order id is required." }, 400);
-
   const db = supabaseService();
+
+  /*
+   * No order named: the organisation's orders that could have an invoice against them, with what has been
+   * reconciled so far — the list the administrator's settlement screen starts from (platform audit
+   * 2026-11-05: this endpoint was complete and had no screen; the screen needs somewhere to begin).
+   */
+  if (!orderId) {
+    const { data: orders, error: oerr } = await db
+      .from("recruitment_orders")
+      .select("id, recruitment_project_id, integration_id, status, ordered_completes, delivered_completes, accepted_completes, rejected_completes, agreed_cpi, currency, spend_amount, vendor_order_ref, placed_at, recruitment_projects!inner(customer_id, survey_id)")
+      .eq("recruitment_projects.customer_id", actor.customerId)
+      .in("status", ["placed", "live", "paused", "complete"])
+      .order("placed_at", { ascending: false })
+      .limit(200);
+    if (oerr) return noStore({ ok: true, orders: [], note: "No orders are available yet." });
+    const rows = (orders ?? []) as unknown as Array<Record<string, unknown> & { recruitment_projects: { survey_id: string } | { survey_id: string }[] }>;
+    const surveyIds = [...new Set(rows.map((r) => (Array.isArray(r.recruitment_projects) ? r.recruitment_projects[0] : r.recruitment_projects)?.survey_id).filter(Boolean))] as string[];
+    const integrationIds = [...new Set(rows.map((r) => String(r.integration_id)))];
+    const [surveys, integrations, recons] = await Promise.all([
+      surveyIds.length ? db.from("surveys").select("id, code, title").in("id", surveyIds) : Promise.resolve({ data: [] as { id: string; code: string; title: string }[] }),
+      integrationIds.length ? db.from("vendor_integrations").select("id, panel_vendors(name)").in("id", integrationIds) : Promise.resolve({ data: [] as unknown[] }),
+      rows.length ? db.from("settlement_reconciliations").select("order_id, computed_at, settled_at, clean").eq("customer_id", actor.customerId).in("order_id", rows.map((r) => String(r.id))).order("computed_at", { ascending: false }) : Promise.resolve({ data: [] as unknown[] }),
+    ]);
+    const title = new Map(((surveys.data ?? []) as { id: string; code: string; title: string }[]).map((s) => [s.id, `${s.code} — ${s.title}`]));
+    const vendor = new Map(((integrations.data ?? []) as { id: string; panel_vendors: { name: string } | { name: string }[] | null }[]).map((i) => [i.id, (Array.isArray(i.panel_vendors) ? i.panel_vendors[0] : i.panel_vendors)?.name ?? "vendor"]));
+    const latest = new Map<string, { computedAt: string; settledAt: string | null; clean: boolean }>();
+    for (const r of (recons.data ?? []) as { order_id: string; computed_at: string; settled_at: string | null; clean: boolean }[]) {
+      if (!latest.has(r.order_id)) latest.set(r.order_id, { computedAt: r.computed_at, settledAt: r.settled_at, clean: r.clean });
+    }
+    return noStore({
+      ok: true,
+      orders: rows.map((r) => {
+        const rp = Array.isArray(r.recruitment_projects) ? r.recruitment_projects[0] : r.recruitment_projects;
+        return {
+          id: String(r.id), status: String(r.status),
+          project: title.get(rp?.survey_id ?? "") ?? null, surveyId: rp?.survey_id ?? null,
+          vendor: vendor.get(String(r.integration_id)) ?? "vendor", vendorOrderRef: r.vendor_order_ref ?? null,
+          ordered: Number(r.ordered_completes ?? 0), delivered: Number(r.delivered_completes ?? 0),
+          accepted: Number(r.accepted_completes ?? 0), rejected: Number(r.rejected_completes ?? 0),
+          cpi: Number(r.agreed_cpi ?? 0), currency: String(r.currency ?? "USD"), spend: Number(r.spend_amount ?? 0),
+          placedAt: r.placed_at ?? null,
+          reconciliation: latest.get(String(r.id)) ?? null,
+        };
+      }),
+    });
+  }
   const { data: recon, error } = await db
     .from("settlement_reconciliations")
     .select("id, order_id, currency, claimed_count, claimed_amount, agreed_count, agreed_amount, payable_count, payable_amount, held_count, held_amount, clean, statement, computed_at, settled_at, settled_by")

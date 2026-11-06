@@ -49,7 +49,8 @@ export function AppHeader({ active, user, onSignOut, crumbs, onAddFunds }: {
           <AlertBell />
           {active !== "account" && (
             <>
-              {!!user.unread && <a className="btn small" href="/profile" title="You have unread notifications"><Icon name="bell" size={14} /> {user.unread} new</a>}
+              {/* audit 2026-11-05: this linked to /profile, which never mentioned notifications — the count had nowhere to go */}
+              {!!user.unread && <a className="btn small" href="/notifications" title="You have unread notifications" data-testid="header-unread"><Icon name="bell" size={14} /> {user.unread} new</a>}
               <a className="btn small" href="/profile">Profile</a>
               <a className="btn small" href="/security">Security</a>
               {user.isPlatformAdmin && <a className="btn small" href="/admin">Administration</a>}
