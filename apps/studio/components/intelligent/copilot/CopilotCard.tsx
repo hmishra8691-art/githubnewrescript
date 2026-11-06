@@ -1,4 +1,5 @@
 "use client";
+import { CleaningTurnCard } from "./CleaningTurnCard";
 import { VerifyCard } from "./VerifyCard";
 import type { VerifyView } from "./useCopilot";
 import React from "react";
@@ -172,6 +173,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
         {/* a report theme read from words (2026-10-18): the preview, then Apply / Save as */}
         {entry.theme && <ThemeTurnCard entry={entry} actions={documents} />}
         {/* a qualitative synthesis request (2026-10-22): the preview, then Run */}
+        {/* a cleaning request (IM6): the proposal, then Apply / Undo */}
+        {entry.cleaning && <CleaningTurnCard card={entry.cleaning} onAction={documents?.cleaning ? (a) => documents.cleaning!(entry.id, a) : undefined} />}
         {entry.qual && <QualTurnCard card={entry.qual} onRun={documents?.qual ? () => documents.qual!(entry.id) : undefined} />}
         {entry.data && (
           /* a data question's answer (Phase 4): read on the respondent data — the base, the test, the caveats, and the planned finding on the same pair */

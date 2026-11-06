@@ -265,7 +265,7 @@ export function IntelligentView() {
     patchAll: (fn) => setTurns((ts) => ts.map((x) => { if (!("kind" in x) || x.kind !== "copilot") return x; const p = fn(x); return p ? { ...x, ...p } : x; })),
   });
   /* kept documents and report themes on the copilot's cards (2026-10-18) */
-  const documentActions = React.useMemo(() => ({ download: copilot.downloadOutput, regenerate: copilot.regenerateOutput, theme: copilot.themeCardAction, qual: copilot.qualCardAction }), [copilot.downloadOutput, copilot.regenerateOutput, copilot.themeCardAction, copilot.qualCardAction]);
+  const documentActions = React.useMemo(() => ({ download: copilot.downloadOutput, regenerate: copilot.regenerateOutput, theme: copilot.themeCardAction, qual: copilot.qualCardAction, cleaning: copilot.cleaningCardAction }), [copilot.downloadOutput, copilot.regenerateOutput, copilot.themeCardAction, copilot.qualCardAction, copilot.cleaningCardAction]);
   const [applyNote, setApplyNote] = React.useState<string | null>(null);
   const applyCopilot = React.useCallback(async () => {
     // what the change is about — the first question it adds, else the first it modifies — becomes the selection once applied, as a grammar Apply always did
@@ -357,6 +357,11 @@ export function IntelligentView() {
     // a report theme (2026-10-18): the look of the documents and decks, read into a preview — applied only on approval
     if (interp.kind === "theme") {
       await copilot.themeRequest(t, interp, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
+    // a cleaning request (IM6): the batch proposal from the stored quality evidence — applied only on Apply
+    if (interp.kind === "cleaning") {
+      await copilot.cleaningRequest(t, interp, heard);
       setBusy(false); inputRef.current?.focus(); return;
     }
     // a production-like test (IM3): simulated respondents against the live counts and gates — nothing written

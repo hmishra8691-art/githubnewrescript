@@ -20,6 +20,8 @@ export interface DocumentActions {
   theme(entryId: string, action: { kind: "apply" } | { kind: "save"; name: string; scope: "user" | "org" } | { kind: "model" }): Promise<void>;
   /** run a qualitative request's previewed action (F2 2026-10-22) */
   qual?(entryId: string): Promise<void>;
+  /** apply or undo a cleaning batch (IM6) */
+  cleaning?(entryId: string, action: "apply" | "undo"): Promise<void>;
 }
 
 export function DocumentOutput({ entry, actions }: { entry: CopilotEntry; actions?: DocumentActions }) {

@@ -1,4 +1,5 @@
 "use client";
+import { applyCleaning, cleaningTurn, undoCleaning, type CleaningCard } from "./cleaningTurn";
 import React from "react";
 import type { AnalysisRun } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
@@ -103,6 +104,8 @@ export interface CopilotEntry {
   theme?: ThemeCard;
   /** a qualitative synthesis request (F2 2026-10-22): the preview card, then the result once Run was pressed */
   qual?: QualCard;
+  /** a cleaning request (IM6): the batch proposal, then Apply / Undo */
+  cleaning?: CleaningCard;
   /** a data question's answer, read on the respondent data (Phase 4): the base, the test behind it, the caveats */
   data?: { n: number; environment: string; dataset: string; source: "data" | "sandbox"; evidence?: { test: string; p: number | null; significant: boolean; effect?: { name: string; value: number } }; caveats: string[]; fromRun?: string };
   error?: string;
@@ -1117,6 +1120,27 @@ export function useCopilot(opts: {
       fail(`The data could not be read: ${(e as Error).message || "the network request failed"}.`);
     } finally { setBusy(false); }
   }, [opts, s.surveyDbId, s.def, recordOp, analysisRun]);
+  /* ------------------------------------------------------------ data cleaning (IM6, 2026-11-06): a proposal, then Apply / Undo */
+  const cleaningRequest = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "cleaning" }>, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    const engine: EngineTurn = { kind: "answer", category: it.category, understood: it.understood, detected: it.detected };
+    const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
+    setBusy(true);
+    try {
+      const t = await cleaningTurn(s.surveyDbId, it.request);
+      opts.patch(id, { status: "ready", cleaning: t.card, reply: reply(t.said), engine, opKey: recordOp({ prompt: text, source: "engine", status: t.card.status === "failed" ? "refused" : "answered", intent: { category: it.category, kind: "cleaning", engine: "cleaning" }, detected: it.detected, statusDetail: t.said.slice(0, 2000) }) });
+    } catch (e) {
+      opts.patch(id, { status: "ready", reply: reply(`The cleaning request could not run: ${(e as Error).message || "the network request failed"}.`), engine });
+    } finally { setBusy(false); }
+  }, [opts, s.surveyDbId, recordOp]);
+  const cleaningCardAction = React.useCallback(async (entryId: string, action: "apply" | "undo"): Promise<void> => {
+    const e = copilotTurns.find((t) => t.id === entryId);
+    if (!e?.cleaning) return;
+    opts.patch(entryId, { cleaning: { ...e.cleaning, status: action === "apply" ? "applying" : e.cleaning.status } });
+    const next = action === "apply" ? await applyCleaning(s.surveyDbId, e.cleaning) : await undoCleaning(s.surveyDbId, e.cleaning);
+    opts.patch(entryId, { cleaning: next });
+  }, [copilotTurns, opts, s.surveyDbId]);
   /*
    * A PRODUCTION-LIKE TEST (IM3, 2026-11-06). The engine read the sentence into a test request; the route walks
    * simulated respondents through the draft against the LIVE quota counts (plus any simulated fullness) and the live
@@ -1626,7 +1650,7 @@ export function useCopilot(opts: {
     downloadOutput, regenerateOutput, themeRequest, themeCardAction, qualRequest, qualCardAction,
     planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,
     taskAction, openTaskResult, activeTask, taskDurable,
-    executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep, runProductionTest,
+    executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep, runProductionTest, cleaningRequest, cleaningCardAction,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,

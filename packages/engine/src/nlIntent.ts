@@ -121,6 +121,8 @@ export type Interpretation =
   | { kind: "output"; category: IntentCategory; understood: string; output: OutputRequest; detected: Detected[] }
   /** a REPORT THEME request (2026-10-18): the look of the documents and decks, or (asked for in words) their section order — the Studio reads the words into a theme, previews it and applies it on approval */
   | { kind: "theme"; category: IntentCategory; understood: string; request: ThemeRequest; detected: Detected[] }
+  /** DATA CLEANING (IM6, 2026-11-06): a batch over the stored quality assessments, or one response explained — the Studio previews, a person applies */
+  | { kind: "cleaning"; category: IntentCategory; understood: string; request: CleaningRequest; detected: Detected[] }
   /** a PRODUCTION-LIKE TEST (IM3, 2026-11-06): the Studio simulates respondents against the live counts and gates — nothing is written */
   | { kind: "test"; category: IntentCategory; understood: string; request: ProductionTestRequest; detected: Detected[] }
   /** the research agent's workflow (Phase 6): the Studio runs the planner on the survey and shows the steps — with the objective when the sentence gave one */
@@ -150,6 +152,13 @@ export interface InterpretContext {
   /** IM2: "today" for relative dates ("close on 1 December"), ISO; the clock when absent */
   now?: string | null;
 }
+
+/**
+ * A cleaning request as a sentence asked for it (IM6): which evidence selects (the words, mapped to rule families by
+ * `rulesNamed` in @rescript/quality — the engine has no quality vocabulary of its own), the verdicts, the decision;
+ * `judge` asks for the model's reading of the open ends first; `explain` is one response's evidence.
+ */
+export interface CleaningRequest { decision?: "REMOVE" | "REVIEW_LATER" | "KEEP"; words?: string; verdicts?: string[]; recommendation?: string[]; judge?: boolean; explain?: string; environment?: "LIVE" | "TEST" }
 
 /** a production-like test as a sentence asked for it (IM3): how many simulated respondents, and which cells to simulate as filled */
 export interface ProductionTestRequest { count?: number; fill?: { quota: string; cell?: string; share: number }[] }
@@ -1579,6 +1588,31 @@ const availabilityCheck: Recogniser = (r) => {
     answer: rep.lines.join("\n"),
     sections: [{ title: "Each cell", items: rep.cells.map((c) => ({ label: `${c.status === "short" ? "✗" : c.status === "tight" ? "!" : c.status === "ok" ? "✓" : "?"} ${c.quota} / ${c.cell}: need ${c.need}`, detail: c.because })) }],
     detected: [det("available", String(a.available)), ...(a.incidence !== undefined ? [det("incidence", `${a.incidence} %`)] : []), ...Object.entries(a.shares).map(([k, v]) => det("share", `${k} ${v} %`))],
+  };
+};
+
+/* ---------------------------------------------------------- data cleaning (IM6) */
+
+const CLEAN_OBJECTS = /\b(?:speed(?:ers?|ing|sters?)|straight[-\s]?lin(?:ers?|ing|ed)|flat[-\s]?lin(?:ers?|ing)|duplicates?|dupes?|bots?|gibberish|nonsense|copy[-\s]?past\w*|pasted|(?:ai|chatgpt)[-\s](?:written|generated|like)|(?:short|one[-\s]word|empty|lazy|off[-\s]topic|irrelevant)\s+(?:open[-\s]?ends?|answers?|responses?|comments?)|attention\s+checks?|inattentive|inconsisten\w*|flagged\s+(?:responses|respondents|completes|interviews)|suspicious\s+(?:responses|respondents|completes)|likely\s+exclud\w*|low[-\s]quality\s+(?:responses|respondents|completes|data))\b/i;
+const cleaningRequest: Recogniser = (r) => {
+  const t = r.text.replace(/[.!]+$/, "");
+  const why = /^(?:why\s+(?:was|is|did)|explain\s+why|what\s+flagged)\s+(?:respondent|response|session|interview|participant)\s+#?([A-Za-z0-9-]{2,40})\b/i.exec(t)
+    ?? /^(?:why\s+(?:was|is))\s+#?([A-Za-z0-9-]{2,40})\s+flagged\b/i.exec(t);
+  if (why) return { kind: "cleaning", category: "data_cleaning", understood: `Why response ${why[1]} was flagged: its evidence, flag by flag.`, request: { explain: why[1] }, detected: [det("response", why[1])] };
+  const judge = /\b(?:use\s+(?:ai|the\s+model|a\s+model)|ask\s+(?:the\s+)?(?:ai|model)|with\s+(?:ai|the\s+model)|ai\s+(?:review|check|reading))\b/i.test(t) && /\bopen[-\s]?(?:ends?|ended|text)\b|\bcomments\b|\bverbatims?\b/i.test(t)
+    || /^(?:read|judge|check|review|assess|score)\s+(?:the\s+|all\s+)?(?:open[-\s]?ends?|open[-\s]?ended\s+(?:answers|responses)|verbatims|comments)\s+(?:with|using)\s+(?:ai|the\s+model|a\s+model)\b/i.test(t);
+  if (!CLEAN_OBJECTS.test(t) && !judge) return null;
+  if (!/^(?:remove|exclude|drop|delete|clean\s+out|filter\s+out|throw\s+out|flag|mark|review|keep|include|restore|find|show|list|which|how\s+many|use|ask|read|judge|check|assess|score)\b/i.test(t) && !/\b(?:and|then)\s+(?:remove|exclude|drop|flag)\b/i.test(t)) return null;
+  const decision: CleaningRequest["decision"] = /\b(?:remove|exclude|drop|delete|clean\s+out|filter\s+out|throw\s+out)\b/i.test(t) ? "REMOVE" : /\b(?:keep|include|restore)\b/i.test(t) ? "KEEP" : "REVIEW_LATER";
+  const verdicts = /\bflagged\s+(?:responses|respondents|completes|interviews)|suspicious/i.test(t) ? ["FLAGGED"] : undefined;
+  const recommendation = /\blikely\s+exclud/i.test(t) ? ["LIKELY EXCLUDE"] : /\blow[-\s]quality\b/i.test(t) ? ["LIKELY EXCLUDE", "REVIEW BEFORE INCLUSION"] : undefined;
+  const environment = /\btest\s+(?:responses|data|completes)\b/i.test(t) ? "TEST" as const : undefined;
+  const verb = decision === "REMOVE" ? "excluded" : decision === "KEEP" ? "kept" : "marked for review";
+  return {
+    kind: "cleaning", category: "data_cleaning",
+    understood: `${judge ? "The model reads the open-ended answers first (as evidence, gated by verbatim quotes); then " : ""}a batch: the responses whose stored quality evidence matches “${plain(t, 80)}” would be ${verb}. You see each match with its reasons before anything is applied; an applied batch is undone as one. Decisions a person already made are left alone.`,
+    request: { decision, words: t, ...(verdicts ? { verdicts } : {}), ...(recommendation ? { recommendation } : {}), ...(judge ? { judge: true } : {}), ...(environment ? { environment } : {}) },
+    detected: [det("cleaning", decision), ...(judge ? [det("model reading", "open ends")] : [])],
   };
 };
 
@@ -3567,7 +3601,7 @@ const advancedModels: Recogniser = (r) => {
 const ADVANCED_ANALYSIS = /\b(?:hb|hierarchical\s+bayes(?:ian)?|individual[\s-]level\s+(?:utilit(?:y|ies)|estimation|scores)|latent[\s-]class|gabor[\s\-–]granger)\b/i;
 
 const RECOGNISERS: Recogniser[] = [
-  conflicts, advancedModels,
+  conflicts, cleaningRequest, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
   fieldworkRequest, availabilityCheck, quotaSentences, productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
@@ -3576,7 +3610,7 @@ const RECOGNISERS: Recogniser[] = [
 ];
 
 /** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
-const WHOLE_FIRST: Recogniser[] = [conflicts, fieldworkRequest, availabilityCheck, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
+const WHOLE_FIRST: Recogniser[] = [conflicts, cleaningRequest, fieldworkRequest, availabilityCheck, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
@@ -3735,7 +3769,7 @@ function compound(def: SurveyDefinition, text: string, parts: string[], ctx: Int
     if (it.kind === "refused" && it.noop) { noops.push(it); category ??= it.category; continue; }
     if (it.kind === "clarify") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, choices: it.choices.map((c) => ({ label: c.label, text: text.replace(part, c.text) })) }; continue; }
     if (it.kind === "refused") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, reason: `${it.reason} Nothing else in the request was applied.`, ...(it.suggestion ? { suggestion: { text: text.replace(part, it.suggestion.text) } } : {}) }; continue; }
-    if (it.kind === "answer" || it.kind === "query" || it.kind === "output" || it.kind === "workflow" || it.kind === "theme" || it.kind === "test") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
+    if (it.kind === "answer" || it.kind === "query" || it.kind === "output" || it.kind === "workflow" || it.kind === "theme" || it.kind === "test" || it.kind === "cleaning") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
     category ??= it.category;
     actions.push(...it.actions);
     detected.push(...it.detected);
