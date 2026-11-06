@@ -17,6 +17,7 @@ import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPa
 import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
 import { cataloguePayload } from "@/lib/analyticsCatalogue";
 import { overviewPayload } from "@/lib/analyticsOverview";
+import { interpretPayload } from "@/lib/analyticsInterpret";
 import { modelJobsGET, modelJobsPOST } from "@/lib/modelJobs";
 import { advancedGET, advancedInterpretationsFor, advancedPOST } from "@/lib/advancedModels";
 
@@ -468,6 +469,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       return json({ undone });
     }
     return bad("Unknown intelligent endpoint.", 404);
+  }
+  /* DUAL-LAYER INTERPRETATION (M5): the engine's statistical and plain readings of one result; the model's implications through the gate when asked */
+  if (head === "interpret") {
+    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const out = await interpretPayload(db, surveyId, loaded, ctx.user, { analysisId: typeof body.analysisId === "string" ? body.analysisId : undefined, definition: body.definition as AnalysisDefinition | undefined, model: body.model === true, fake: body.fake });
+    if ("error" in out) return bad(out.error, out.status);
+    return json(out);
   }
   if (head === "run") {
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;

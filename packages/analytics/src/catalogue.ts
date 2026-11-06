@@ -23,6 +23,7 @@ import type { VariableMeta } from "./dataset.js";
 import type { Finding, HypothesisVerdict, Verdict } from "./findings.js";
 import type { PlanItemView, SavedAnalysisRow, SavedChartRow } from "./planWorkspace.js";
 import type { QualTheme } from "./qual/types.js";
+import { evidenceLine } from "./evidence.js";
 
 export type CatalogueCategory = "hypotheses" | "crosstabs" | "tests" | "models" | "correlations" | "charts" | "themes" | "reports" | "dashboards";
 
@@ -73,6 +74,10 @@ export interface CatalogueEntry {
   planned?: string | null;
   /** significant findings the latest run made of it */
   findings?: number;
+  /** for a hypothesis: every finding the verdict rests on, with its evidence line */
+  evidence?: { id: string; headline: string; evidence: string; holds: boolean; analysisId: string | null; planned: string | null }[];
+  /** for a hypothesis: why it cannot be tested, when it cannot (a construct without a question, no planned test) */
+  untestable?: string | null;
   updatedAt?: string | null;
   technical: {
     kind?: string;
@@ -296,10 +301,13 @@ export function buildCatalogue(input: CatalogueInput): AnalysisCatalogue {
       ? v.reason.trim()
       : items.length ? `Tested by ${items.length} planned analys${items.length === 1 ? "is" : "es"}; not run yet.`
       : h.status === "unmeasured" ? "No question in the survey measures this yet." : h.status === "unlinked" ? "No construct is linked to this hypothesis yet." : "Nothing in the plan tests this yet.";
+    const untestable = h.status === "unmeasured" ? "A construct of this hypothesis has no question that measures it." : h.status === "unlinked" ? "No construct is linked to this hypothesis, so no analysis can be planned for it." : !items.length ? "Nothing in the plan tests it." : null;
     push({
       key: `hypotheses:${h.label}`, category: "hypotheses", id: h.label, label: `${h.label} — ${stripMarkup(h.text).replace(/^(.{90}).+/, "$1…")}`,
       description: descr, hypotheses: [h.label], status: verdict === "untested" ? (items.length ? "planned" : "blocked") : "ready", verdict,
       findings: v?.findings.filter((f) => f.significant).length ?? 0,
+      evidence: (v?.findings ?? []).map((f) => ({ id: f.id, headline: f.headline, evidence: evidenceLine(f), holds: f.significant && (f.evidence.adjusted ? f.evidence.adjusted.significant : true), analysisId: f.analysis.id ?? null, planned: f.analysis.planned ?? null })),
+      untestable,
       technical: { kind: "hypothesis", name: h.text, variables: [], method: h.status },
     });
   }

@@ -133,7 +133,7 @@ export function ArchitectAnalytics(p: {
         </div>
         {error && <div className="ax-error" style={{ margin: 8 }}>{error}</div>}
         <div className="ar-work-body">
-          <Workspace catalogue={catalogue} charts={p.charts} selection={selection} view={view} focusView={focusView} shown={entries} results={results} retry={results.retry} themes={p.themes}
+          <Workspace api={p.api} nonce={`${p.dataset.environment}:${p.dataset.dataset}:${p.refreshKey}`} catalogue={catalogue} charts={p.charts} selection={selection} view={view} focusView={focusView} shown={entries} results={results} retry={results.retry} themes={p.themes}
             onFocus={focus} onOpenInBuilder={openInBuilder} canEdit={p.canEdit} spec={spec} onSpec={setSpec} onVisible={onVisible} />
         </div>
       </main>
@@ -141,7 +141,7 @@ export function ArchitectAnalytics(p: {
       <aside className="ar-inspector axa-pane">
         <div className="ar-pane-head"><span className="ar-pane-title">Properties</span></div>
         <div className="ar-inspector-body">
-          <Properties entry={focused} result={focusedResult} analysis={focused?.analysisId ? p.analyses.find((a) => a.id === focused.analysisId) : undefined} spec={spec} onSpec={setSpec} canEdit={p.canEdit} onOpenInBuilder={openInBuilder} variables={p.variables} onSaveDefinition={saveDefinition} />
+          <Properties entry={focused} result={focusedResult} analysis={focused?.analysisId ? p.analyses.find((a) => a.id === focused.analysisId) : undefined} spec={spec} onSpec={setSpec} canEdit={p.canEdit} onOpenInBuilder={openInBuilder} variables={p.variables} onSaveDefinition={saveDefinition} api={p.api} nonce={`${p.dataset.environment}:${p.dataset.dataset}:${p.refreshKey}`} />
         </div>
       </aside>
     </div>

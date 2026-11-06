@@ -5,6 +5,7 @@ import type { AxApi, Row, RunResult } from "./api";
 import { Chart, ResultTableView } from "./charts/Chart";
 import { MAX_PICK, chartChoices, combinedFilter, crossFilter, exploreDefinition, exploreRole, type CrossFilterState } from "@/lib/analyticsExplore";
 import { conditionText } from "./FilterBuilder";
+import { InterpretationPanel } from "./InterpretationPanel";
 
 /**
  * EXPLORE — the interactive board (Analytics upgrade M3).
@@ -15,7 +16,7 @@ import { conditionText } from "./FilterBuilder";
  * filtered to that group (cross-filtering); the clicked panel keeps its selection highlighted; the filter chips
  * clear one by one or all at once. Nothing is computed in the browser.
  */
-interface Panel { id: string; definition: AnalysisDefinition; because: string; spec: ChartSpec; result: RunResult | null; error: string | null; loading: boolean; table: boolean; savedId: string | null; /** the variable a click on a category means */ clickVariable: string | null }
+interface Panel { id: string; definition: AnalysisDefinition; because: string; spec: ChartSpec; result: RunResult | null; error: string | null; loading: boolean; table: boolean; explain: boolean; savedId: string | null; /** the variable a click on a category means */ clickVariable: string | null }
 
 const ROLE_WORD: Record<string, string> = { category: "category", quantity: "quantity", text: "text", other: "" };
 
@@ -48,7 +49,7 @@ export function ExploreBoard(p: { api: AxApi; dataset: DatasetSpec; variables: V
 
   const addPanel = () => {
     if (!choice) return;
-    const panel: Panel = { id: `p${++seq.current}`, definition: choice.definition, because: choice.because, spec: { type: "bar_vertical", options: { title: choice.definition.name } }, result: null, error: null, loading: true, table: false, savedId: null, clickVariable: clickVariableFor(choice.definition) };
+    const panel: Panel = { id: `p${++seq.current}`, definition: choice.definition, because: choice.because, spec: { type: "bar_vertical", options: { title: choice.definition.name } }, result: null, error: null, loading: true, table: false, explain: false, savedId: null, clickVariable: clickVariableFor(choice.definition) };
     setPanels((ps) => [panel, ...ps]);
     void run(panel, filterFor(panel.id));
   };
@@ -145,6 +146,7 @@ export function ExploreBoard(p: { api: AxApi; dataset: DatasetSpec; variables: V
                   <span className="grow" />
                   {r && choices.length > 1 && <select className="select small" value={panel.spec.type} onChange={(e) => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, spec: { ...x.spec, type: e.target.value as ChartType } } : x)))} aria-label="Chart type" data-testid="ax-explore-chart-type">{choices.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select>}
                   <button className={`btn small ghost ${panel.table ? "on" : ""}`} onClick={() => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, table: !x.table } : x)))} data-testid="ax-explore-table">{panel.table ? "Chart" : "Table"}</button>
+                  {r && <button className={`btn small ghost ${panel.explain ? "on" : ""}`} onClick={() => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, explain: !x.explain } : x)))} data-testid="ax-explore-explain">Explain</button>}
                   {p.canEdit && !panel.savedId && <button className="btn small" onClick={() => void save(panel)} data-testid="ax-explore-save">Save</button>}
                   {panel.savedId && <button className="btn small" onClick={() => p.onOpenInBuilder({ id: panel.savedId, name: panel.definition.name, kind: panel.definition.kind, definition: panel.definition })}>Open in builder</button>}
                   <button className="btn small ghost" aria-label="Remove panel" onClick={() => { setPanels((ps) => ps.filter((x) => x.id !== panel.id)); setCross((cs) => cs.filter((c) => c.panelId !== panel.id)); }}>×</button>
@@ -154,7 +156,8 @@ export function ExploreBoard(p: { api: AxApi; dataset: DatasetSpec; variables: V
                 {panel.error && <div className="ax-error">{panel.error}</div>}
                 {r && !panel.table && <div className={`ax-explore-chart ${panel.loading ? "stale" : ""}`}><Chart result={r} spec={panel.spec} theme={theme(panel.spec.themeId)} height={300} onSelect={panel.clickVariable ? (c) => select(panel, c) : undefined} selected={sel} /></div>}
                 {r && panel.table && <div className="ax-explore-table"><ResultTableView table={r.tables[0]} dense /></div>}
-                {r && (r.insights[0] || r.warnings[0]) && <div className="ax-explore-insight">{r.insights[0] ?? r.warnings[0]}</div>}
+                {r && (r.insights[0] || r.warnings[0]) && !panel.explain && <div className="ax-explore-insight">{r.insights[0] ?? r.warnings[0]}</div>}
+                {r && panel.explain && <InterpretationPanel api={p.api} definition={{ ...panel.definition, ...(filterFor(panel.id) ? { filter: filterFor(panel.id) } : {}) }} compact />}
                 {r && panel.clickVariable && !panel.table && <div className="muted" style={{ fontSize: 11.5 }}>Click a {panel.definition.kind === "crosstab" ? "row" : "bar"} to filter the other panels · n = {r.base.n.toLocaleString("en-US")}</div>}
               </section>
             );

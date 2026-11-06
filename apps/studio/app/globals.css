@@ -2980,3 +2980,13 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .axa-config-pick-row { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 3px 4px; font-size: 12.5px; cursor: pointer; color: var(--text); border-radius: 4px; }
 .axa-config-pick-row:hover { background: var(--panel); }
 @media (max-width: 1100px) { .axa-combined, .axa-combined.compact { grid-template-columns: 1fr; } .axa-combined-side { position: static; } }
+
+/* ------------------------------------------------------------ INTERPRETATION (M5) */
+.ax-interp { font-size: 13px; }
+.ax-interp.compact { font-size: 12.5px; }
+.ax-interp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.ax-interp-stats { background: var(--panel2); border-radius: 6px; padding: 6px 8px; font-size: 11.5px; margin: 4px 0 6px; display: flex; flex-direction: column; gap: 2px; }
+.ax-interp-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 4px 0; }
+.ax-interp-dl dt { color: var(--subtle); font-size: 12px; } .ax-interp-dl dd { margin: 0; line-height: 1.45; }
+.ax-interp-model { margin-top: 6px; } .ax-interp-model p { margin: 3px 0; }
+.axa-hyp-verdict { margin: 4px 0 8px; }

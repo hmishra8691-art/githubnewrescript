@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { def as base, synthDataset } from "./analyses/fixture.js";
 import { runPlan, type Finding } from "./findings.js";
-import { buildOverview, evidenceLine, plainReading } from "./overview.js";
+import { buildOverview, plainReading } from "./overview.js";
+import { evidenceLine } from "./evidence.js";
 
 /*
  * THE EXECUTIVE OVERVIEW (M2): key findings are the ones that hold, in research terms, with plain readings that never

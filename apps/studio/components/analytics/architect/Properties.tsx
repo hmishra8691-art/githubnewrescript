@@ -2,6 +2,8 @@
 import React from "react";
 import type { AnalysisDefinition, CatalogueEntry, ChartSpec, VariableMeta } from "@rescript/analytics";
 import { ConfigEditor } from "./ConfigEditor";
+import { InterpretationPanel } from "../InterpretationPanel";
+import type { AxApi } from "../api";
 import type { Row, RunResult } from "../api";
 import { STATUS_WORD } from "./Explorer";
 
@@ -15,7 +17,7 @@ import { STATUS_WORD } from "./Explorer";
  *   Technical         the ids: question codes, variable names, the saved name, kind, method, analysis id, hash —
  *                     kept, never used as the label
  */
-export function Properties(p: { entry: CatalogueEntry | null; result: RunResult | undefined; analysis: Row | undefined; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; canEdit: boolean; onOpenInBuilder: (id: string) => void; variables: VariableMeta[]; onSaveDefinition: (analysisId: string, d: AnalysisDefinition) => Promise<void> }) {
+export function Properties(p: { entry: CatalogueEntry | null; result: RunResult | undefined; analysis: Row | undefined; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; canEdit: boolean; onOpenInBuilder: (id: string) => void; variables: VariableMeta[]; onSaveDefinition: (analysisId: string, d: AnalysisDefinition) => Promise<void>; api: AxApi; /** bumps when the analysis was saved or the dataset changed */ nonce: string }) {
   const [tech, setTech] = React.useState(false);
   const [editing, setEditing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -38,6 +40,12 @@ export function Properties(p: { entry: CatalogueEntry | null; result: RunResult 
           {e.updatedAt && <><dt>Updated</dt><dd>{new Date(e.updatedAt).toLocaleString()}</dd></>}
         </dl>
       </section>
+      {e.analysisId && p.result && (
+        <section className="axa-prop-sec" data-testid="axa-interpretation">
+          <div className="eyebrow">Interpretation</div>
+          <InterpretationPanel api={p.api} analysisId={e.analysisId} nonce={p.nonce} compact />
+        </section>
+      )}
       {p.result && p.result.recommendations.length > 0 && (
         <section className="axa-prop-sec" data-testid="axa-recommended">
           <div className="eyebrow">Recommended charts</div>

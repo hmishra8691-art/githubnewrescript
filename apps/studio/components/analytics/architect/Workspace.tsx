@@ -1,7 +1,8 @@
 "use client";
 import React from "react";
 import type { AnalysisCatalogue, CatalogueEntry, ChartSpec, ReportTheme } from "@rescript/analytics";
-import type { Row, RunResult } from "../api";
+import type { AxApi, Row, RunResult } from "../api";
+import { InterpretationPanel } from "../InterpretationPanel";
 import { Chart } from "../charts/Chart";
 import { ResultView } from "../ResultView";
 import { ProTable } from "../ProTable";
@@ -43,6 +44,7 @@ export function specFor(entry: CatalogueEntry, charts: Row[], result: RunResult 
 const HEAT: Record<string, ChartSpec["type"]> = { crosstab: "heatmap_crosstab", correlation: "heatmap_correlation" };
 
 export function Workspace(p: {
+  api: AxApi; nonce: string;
   catalogue: AnalysisCatalogue | null; charts: Row[]; selection: Selection; view: WorkspaceView; focusView: FocusView;
   /** the entries the Explorer shows — the All view's page when nothing is ticked */
   shown: CatalogueEntry[];
@@ -75,7 +77,7 @@ export function Workspace(p: {
   return (
     <div className="axa-work" data-testid="axa-focus">
       {!focused && <div className="axa-empty"><b>Nothing in focus.</b><p className="muted">Click an entry in the Explorer to open it here — its chart and table together, or one of them, or the details behind it.</p></div>}
-      {focused && <FocusBody entry={focused} focusView={p.focusView} charts={p.charts} results={p.results} retry={p.retry} themes={p.themes} theme={theme} spec={p.spec} onSpec={p.onSpec} onOpenInBuilder={p.onOpenInBuilder} canEdit={p.canEdit} catalogue={c!} onFocus={p.onFocus} />}
+      {focused && <FocusBody api={p.api} nonce={p.nonce} entry={focused} focusView={p.focusView} charts={p.charts} results={p.results} retry={p.retry} themes={p.themes} theme={theme} spec={p.spec} onSpec={p.onSpec} onOpenInBuilder={p.onOpenInBuilder} canEdit={p.canEdit} catalogue={c!} onFocus={p.onFocus} />}
     </div>
   );
 }
@@ -152,7 +154,7 @@ function Combined(p: { entry: CatalogueEntry; result: RunResult; spec: ChartSpec
 
 /* ------------------------------------------------------------ Focus */
 
-function FocusBody(p: { entry: CatalogueEntry; focusView: FocusView; charts: Row[]; results: ResultsState; retry: (id: string) => void; themes: { id: string; name: string; theme: ReportTheme }[]; theme: (id: string | null | undefined) => ReportTheme | null; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; onOpenInBuilder: (id: string) => void; canEdit: boolean; catalogue: AnalysisCatalogue; onFocus: (key: string) => void }) {
+function FocusBody(p: { api: AxApi; nonce: string; entry: CatalogueEntry; focusView: FocusView; charts: Row[]; results: ResultsState; retry: (id: string) => void; themes: { id: string; name: string; theme: ReportTheme }[]; theme: (id: string | null | undefined) => ReportTheme | null; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; onOpenInBuilder: (id: string) => void; canEdit: boolean; catalogue: AnalysisCatalogue; onFocus: (key: string) => void }) {
   const e = p.entry;
   if (e.analysisId && isRenderable(e)) {
     const r = p.results.results[e.analysisId];
@@ -178,7 +180,7 @@ function FocusBody(p: { entry: CatalogueEntry; focusView: FocusView; charts: Row
         )}
         {p.focusView === "table" && <TablesOnly result={r} />}
         {p.focusView === "chart" && <ResultView result={r} recommendations={r.recommendations} advice={r.advice} spec={spec} onSpec={p.onSpec} theme={p.theme(spec.themeId)} themes={p.themes} view="chart" />}
-        {p.focusView === "details" && <Details entry={e} result={r} />}
+        {p.focusView === "details" && <Details entry={e} result={r} api={p.api} nonce={p.nonce} />}
       </div>
     );
   }
@@ -212,9 +214,13 @@ function TablesOnly({ result: r }: { result: RunResult }) {
 }
 
 /** methodology, the tests, the engine's insights, the configuration and provenance */
-function Details({ entry: e, result: r }: { entry: CatalogueEntry; result: RunResult }) {
+function Details({ entry: e, result: r, api, nonce }: { entry: CatalogueEntry; result: RunResult; api: AxApi; nonce: string }) {
   return (
     <div className="axa-details" data-testid="axa-details">
+      <section className="card">
+        <div className="card-title">Interpretation</div>
+        <InterpretationPanel api={api} analysisId={e.analysisId} nonce={nonce} statsOpen />
+      </section>
       <section className="card">
         <div className="card-title">Methodology</div>
         <p style={{ margin: "4px 0" }}>{e.description}</p>
@@ -243,13 +249,40 @@ function Details({ entry: e, result: r }: { entry: CatalogueEntry; result: RunRe
   );
 }
 
+/**
+ * THE HYPOTHESIS, DRIVEN BY ITS EVIDENCE (M5): supported / partially supported (mixed) / not supported /
+ * inconclusive / not testable — and why: the analyses that test it, the findings the verdict rests on with their
+ * evidence lines, the variables that are missing when it cannot be tested. Never a manufactured verdict: an
+ * untested hypothesis says what it is waiting for.
+ */
 function HypothesisDetail({ entry: e, catalogue, onFocus }: { entry: CatalogueEntry; catalogue: AnalysisCatalogue; onFocus: (key: string) => void }) {
   const related = catalogue.all.filter((x) => x.category !== "hypotheses" && x.hypotheses.includes(e.id));
+  const blocked = related.filter((x) => x.technical.missing?.length);
+  const word = e.verdict === "supported" ? "Supported" : e.verdict === "not_supported" ? "Not supported" : e.verdict === "mixed" ? "Partially supported" : e.verdict === "inconclusive" ? "Inconclusive" : e.untestable ? "Not testable with the available data" : related.length ? "Not yet tested — the plan has not been run" : "Not testable yet";
   return (
-    <div className="axa-related">
-      <div className="eyebrow">Tested by</div>
-      {!related.length && <p className="muted">Nothing in the plan tests this hypothesis yet.</p>}
-      {related.map((x) => <button key={x.key} className="axa-related-row" onClick={() => onFocus(x.key)}><span className={`axa-dot ${x.status}`} /> {x.label} <span className="muted">· {x.category}</span>{x.findings ? <span className="axa-sig">★{x.findings}</span> : null}</button>)}
+    <div className="axa-hyp" data-testid="axa-hypothesis" data-verdict={e.verdict ?? "untested"}>
+      <div className="axa-hyp-verdict"><span className={`axa-verdict big ${e.verdict ?? "untested"}`}>{word}</span></div>
+      {e.untestable && <p className="axa-warning" data-testid="axa-hyp-untestable">{e.untestable}{e.untestable.includes("no question") ? " Add a question that measures it (Research design → constructs), and the plan can test it." : e.untestable.includes("No construct") ? " Name the constructs on each side of the hypothesis in the research design." : " Add a crosstab or a test for it in the analysis plan, or let the engine propose the plan."}</p>}
+      {blocked.length > 0 && <p className="axa-warning">{blocked.length === 1 ? "One planned analysis" : `${blocked.length} planned analyses`} cannot run: {[...new Set(blocked.flatMap((x) => x.technical.missing ?? []))].join(", ")} {blocked.flatMap((x) => x.technical.missing ?? []).length === 1 ? "is" : "are"} not in the survey.</p>}
+      {e.evidence && e.evidence.length > 0 && (
+        <div className="axa-related">
+          <div className="eyebrow">Evidence</div>
+          {e.evidence.map((f) => {
+            const target = catalogue.all.find((x) => (f.analysisId && x.analysisId === f.analysisId && x.category !== "charts") || (!f.analysisId && f.planned && x.planned === f.planned));
+            return (
+              <button key={f.id} className="axa-related-row" onClick={() => target && onFocus(target.key)} disabled={!target} data-testid="axa-hyp-evidence" data-holds={f.holds}>
+                <span className={`axa-dot ${f.holds ? "ready" : "planned"}`} title={f.holds ? "holds after correction" : "does not hold"} />
+                <span style={{ flex: "1 1 auto", minWidth: 0 }}>{f.headline}<div className="mono muted" style={{ fontSize: 11 }}>{f.evidence}</div></span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div className="axa-related">
+        <div className="eyebrow">Tested by</div>
+        {!related.length && <p className="muted">Nothing in the plan tests this hypothesis yet.</p>}
+        {related.map((x) => <button key={x.key} className="axa-related-row" onClick={() => onFocus(x.key)}><span className={`axa-dot ${x.status}`} /> {x.label} <span className="muted">· {x.category}</span>{x.findings ? <span className="axa-sig">★{x.findings}</span> : null}</button>)}
+      </div>
     </div>
   );
 }
