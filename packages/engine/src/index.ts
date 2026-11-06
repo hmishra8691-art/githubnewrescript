@@ -261,3 +261,5 @@ export * from "./generationPlan.js";
 export * from "./recruitmentActions.js";
 /* the research brief, read deterministically (Intelligent Mode IM1, 2026-11-06) */
 export * from "./researchBrief.js";
+export * from "./deploymentActions.js";
+export * from "./settingsAdvice.js";

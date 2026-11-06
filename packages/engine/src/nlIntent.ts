@@ -1,3 +1,4 @@
+import { adviseSettings, briefOfSurvey, describeSettingsAdvice, type SettingAdvice } from "./settingsAdvice.js";
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { dontKnowEligible } from "./dontKnow.js";
 import { scriptQuestion, explainScripts, findScripts, SCRIPT_QUESTION_REASON, type ScriptHealthLite } from "./scriptExplain.js";
@@ -139,6 +140,8 @@ export interface InterpretContext {
    * passes `console.error` here when its own env flag is set.
    */
   debug?: ((line: string) => void) | null;
+  /** IM2: "today" for relative dates ("close on 1 December"), ISO; the clock when absent */
+  now?: string | null;
 }
 
 /** what the Studio produces for an output request (Phase 5) */
@@ -1300,6 +1303,144 @@ const conflicts: Recogniser = (r) => {
   };
   return null;
 };
+
+/* ---------------------------------------------------------- deployment settings (IM2) */
+
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+/** "2026-12-01", "1 December 2026", "December 1, 2026", "1 Dec" (this year, or next when it has passed) → YYYY-MM-DD */
+export function dateWords(text: string, now = new Date()): string | null {
+  const t = text.trim().replace(/(\d)(?:st|nd|rd|th)\b/gi, "$1").replace(/,/g, "");
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const mon = (w: string) => MONTHS.findIndex((x) => x.startsWith(w.toLowerCase().slice(0, 3)));
+  let d: number | null = null, mo = -1, y: number | null = null;
+  if ((m = /^(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?$/i.exec(t))) { d = Number(m[1]); mo = mon(m[2]); y = m[3] ? Number(m[3]) : null; }
+  else if ((m = /^([a-z]+)\s+(\d{1,2})(?:\s+(\d{4}))?$/i.exec(t))) { d = Number(m[2]); mo = mon(m[1]); y = m[3] ? Number(m[3]) : null; }
+  if (d == null || mo < 0 || d < 1 || d > 31) return null;
+  if (y == null) { y = now.getUTCFullYear(); if (Date.UTC(y, mo, d) < Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) y++; }
+  const dt = new Date(Date.UTC(y, mo, d));
+  if (dt.getUTCMonth() !== mo) return null;
+  return dt.toISOString().slice(0, 10);
+}
+
+const deploymentSettings: Recogniser = (r) => {
+  const t = r.text.replace(/[.!]+$/, "");
+  const dep = r.def.deployment;
+  const say = (understood: string, a: Record<string, unknown>, detected: Detected[]) => act(r, "survey_editing", understood, [{ op: "set_deployment", ...a } as SurveyAction], detected);
+  const anonNow = r.def.quality?.telemetry?.network === false && r.def.quality?.telemetry?.device === false;
+  /* anonymity */
+  if (/^(?:make|keep|set)\s+(?:the\s+|this\s+|it\s+)?(?:survey\s+|study\s+|responses?\s+|it\s+)?(?:fully\s+|completely\s+|truly\s+)?anonymous$/i.test(t) || /^(?:make|keep)\s+(?:the\s+)?(?:survey|responses|answers)\s+anonymous$/i.test(t) || /^(?:don['’]t|do\s+not)\s+(?:record|collect|store|capture)\s+(?:the\s+)?(?:respondents['’]?\s+)?(?:ip(?:\s+address(?:es)?)?|device(?:\s+ids?)?)(?:\s+or\s+(?:ip|device)\S*)?$/i.test(t)) {
+    if (anonNow) return alreadySo("survey_editing", "Make the survey anonymous.", "The survey is already anonymous — no IP or device hash is recorded.", [det("anonymous", "yes")]);
+    return say("Make the survey anonymous: no IP hash and no device hash are recorded, and responses are not linked across studies. The duplicate-device and shared-network checks stop running.", { anonymous: true }, [det("anonymous", "yes")]);
+  }
+  if (/^(?:stop\s+making|don['’]t\s+make|make)\s+(?:the\s+)?survey\s+(?:not\s+anonymous|identifiable)$/i.test(t) || /^(?:record|collect|capture)\s+(?:the\s+)?(?:respondents['’]?\s+)?ip(?:\s+address(?:es)?)?(?:\s+and\s+device)?$/i.test(t)) {
+    if (!anonNow) return alreadySo("survey_editing", "Record IP and device hashes.", "IP and device hashes are already recorded (salted hashes, never the raw address).", []);
+    return say("Record the IP and device hashes again (salted hashes, never the raw address), so the duplicate checks run.", { anonymous: false }, [det("anonymous", "no")]);
+  }
+  /* the password */
+  let m = /^(?:password[-\s]?protect|protect)\s+(?:the\s+|this\s+)?survey(?:\s+with\s+(?:the\s+)?(?:password\s+)?(.+))?$/i.exec(t)
+    ?? /^(?:set|change)\s+(?:the\s+)?(?:survey(?:['’]s)?\s+)?password\s+(?:to|as)\s+(.+)$/i.exec(t)
+    ?? /^(?:require|add)\s+(?:a\s+|the\s+)?password(?:\s+(.+))?$/i.exec(t);
+  if (m) {
+    const pw = m[1] ? unquote(m[1]).trim() : "";
+    if (!pw) return { kind: "clarify", category: "survey_editing", understood: "Protect the live link with a password.", question: "What should the password be? Respondents type it once before the first page.", choices: [], detected: [det("access", "password")] };
+    if (pw.length < 4) return refused("survey_editing", "Protect the survey with a password.", "A survey password is at least 4 characters.", [det("password", "too short")]);
+    return say(`Protect the live link with the password “${pw}”: respondents type it before the first page (test links keep working without it).`, { access: "password", password: pw }, [det("access", "password")]);
+  }
+  if (/^(?:remove|drop|turn\s+off|disable)\s+(?:the\s+)?(?:survey(?:['’]s)?\s+)?password(?:\s+protection)?$/i.test(t)) {
+    if (dep.access.mode !== "password") return alreadySo("survey_editing", "Remove the password.", "The survey has no password — nothing to change.", []);
+    return say("Remove the password: the live link is open to anyone who has it.", { access: "open", password: null }, [det("access", "open")]);
+  }
+  /* who can take part */
+  if (/^(?:only\s+(?:allow|let)\s+invited\s+(?:respondents|people|participants)(?:\s+(?:take\s+part|answer|in))?|(?:make\s+(?:the\s+survey\s+|it\s+)?)?invitation[-\s]only|(?:make\s+(?:the\s+survey\s+|it\s+)?)?invite[-\s]only)$/i.test(t))
+    return dep.access.mode === "invitation" ? alreadySo("survey_editing", "Invitations only.", "The survey already admits invited respondents only.", []) : say("Admit invited respondents only: each one needs their own invitation link; the open link stops working.", { access: "invitation" }, [det("access", "invitation")]);
+  if (/^(?:use|send|switch\s+to)\s+(?:a\s+)?unique\s+(?:links?|urls?)(?:\s+(?:for|per)\s+(?:each|every)\s+(?:respondent|participant|person))?$|^one\s+(?:link|url)\s+per\s+(?:respondent|person|participant)$/i.test(t))
+    return dep.access.mode === "unique_links" ? alreadySo("survey_editing", "Unique links.", "The survey already uses unique links.", []) : say("Use unique links: one link per respondent, each usable for one response; the open link stops working.", { access: "unique_links" }, [det("access", "unique links")]);
+  if (/^(?:make\s+(?:the\s+)?(?:survey|link)\s+open(?:\s+to\s+anyone)?|(?:let|allow)\s+anyone\s+with\s+the\s+link(?:\s+(?:to\s+)?(?:take|answer)\s+(?:it|the\s+survey))?|use\s+an?\s+open\s+link)$/i.test(t))
+    return dep.access.mode === "open" ? alreadySo("survey_editing", "An open link.", "The survey is already open to anyone with the link.", []) : say("Open the survey to anyone with the link.", { access: "open" }, [det("access", "open")]);
+  /* retakes */
+  if (/^(?:allow|permit|enable)\s+(?:retakes?|multiple\s+(?:responses|submissions|completes)|respondents\s+to\s+(?:retake|take\s+it\s+again|answer\s+again))(?:\s+(?:per|from\s+the\s+same)\s+(?:person|respondent|link))?$|^(?:let|allow)\s+(?:respondents|people|participants)\s+(?:to\s+)?(?:retake|take\s+(?:it|the\s+survey)\s+(?:again|more\s+than\s+once))$/i.test(t))
+    return dep.access.allowRetake ? alreadySo("survey_editing", "Allow retakes.", "Retakes are already allowed.", []) : say("Allow retakes: the same respondent can answer more than once, and each response is counted separately.", { allowRetake: true }, [det("retakes", "allowed")]);
+  if (/^(?:prevent|block|disallow|no)\s+(?:retakes?|multiple\s+(?:responses|submissions))$|^one\s+response\s+per\s+(?:person|respondent|link|participant)$|^(?:don['’]t|do\s+not)\s+(?:allow|let)\s+(?:respondents|people|anyone)\s+(?:to\s+)?(?:retake|answer\s+(?:twice|more\s+than\s+once)|take\s+(?:it|the\s+survey)\s+(?:twice|again))$/i.test(t))
+    return !dep.access.allowRetake ? alreadySo("survey_editing", "One response per respondent.", "One response per respondent is already the rule — a finished respondent cannot start again.", []) : say("One response per respondent: a finished respondent cannot start again.", { allowRetake: false }, [det("retakes", "not allowed")]);
+  /* fieldwork dates */
+  m = /^(?:close|end|stop)\s+(?:the\s+)?(?:survey|fieldwork|link|study|data\s+collection)\s+(?:on|at|after)\s+(.+)$/i.exec(t) ?? /^(?:set\s+|make\s+)?(?:the\s+)?(?:survey|link|study)\s+(?:to\s+)?(?:expire|close|end)s?\s+(?:on|at|after)\s+(.+)$/i.exec(t) ?? /^(?:set\s+)?(?:the\s+)?(?:closing|end)\s+date\s+(?:to|is|=)?\s*(.+)$/i.exec(t);
+  if (m) {
+    const d = dateWords(m[1], new Date(r.ctx.now ?? Date.now()));
+    if (!d) return null;
+    return say(`Close the live link at the end of ${d} (UTC): respondents arriving after it are refused; test links keep working.`, { activeUntil: `${d}T23:59:59Z` }, [det("closes", d)]);
+  }
+  m = /^(?:open|start|launch)\s+(?:the\s+)?(?:survey|fieldwork|link|study|data\s+collection)\s+(?:on|at|from)\s+(.+)$/i.exec(t) ?? /^(?:set\s+)?(?:the\s+)?(?:opening|start)\s+date\s+(?:to|is|=)?\s*(.+)$/i.exec(t);
+  if (m) {
+    const d = dateWords(m[1], new Date(r.ctx.now ?? Date.now()));
+    if (!d) return null;
+    return say(`Open the live link on ${d} (UTC): respondents arriving before it are told it has not opened; test links keep working.`, { activeFrom: d }, [det("opens", d)]);
+  }
+  if (/^(?:remove|clear)\s+(?:the\s+)?(?:closing|end|fieldwork)\s+dates?$/i.test(t)) return dep.activeUntil || dep.activeFrom ? say("Remove the fieldwork dates: the live link is open whenever the survey is live.", { activeFrom: null, activeUntil: null }, []) : alreadySo("survey_editing", "Remove the dates.", "The survey has no opening or closing date.", []);
+  /* dictation */
+  if (/^(?:turn\s+off|disable|remove|hide)\s+(?:the\s+)?(?:dictation|microphone|mic|voice\s+input|speech\s+input)(?:\s+(?:on|in|from)\s+(?:open\s+(?:text\s+)?(?:questions|answers|ends)|the\s+survey))?$/i.test(t))
+    return dep.speechInput === false ? alreadySo("survey_editing", "Turn off dictation.", "Dictation is already off.", []) : say("Turn off dictation: no microphone on open text fields.", { speechInput: false }, [det("dictation", "off")]);
+  if (/^(?:turn\s+on|enable|add|show)\s+(?:the\s+)?(?:dictation|microphone|mic|voice\s+input|speech\s+input)(?:\s+(?:on|in|to)\s+(?:open\s+(?:text\s+)?(?:questions|answers|ends)|the\s+survey))?$/i.test(t))
+    return dep.speechInput !== false ? alreadySo("survey_editing", "Turn on dictation.", "Dictation is already on — a microphone appears on open text fields where the browser can recognise speech.", []) : say("Turn on dictation: a microphone on open text fields where the browser can recognise speech (no audio leaves the device).", { speechInput: true }, [det("dictation", "on")]);
+  /* a consent screen: a required Yes / No first, alone on its page, ending the survey on No (IM2) */
+  if (/^(?:add|insert|create|include|put)\s+(?:an?\s+|the\s+)?(?:informed\s+)?consent\s+(?:screen|question|page|form|step)?(?:\s+(?:at|to)\s+the\s+(?:start|beginning|top)(?:\s+of\s+the\s+survey)?|\s+first)?(?:\s+that\s+ends\s+the\s+survey\s+(?:when|if)\s+(?:the\s+answer\s+is\s+|they\s+say\s+|someone\s+says\s+)?no)?$|^(?:ask\s+for|require|get)\s+(?:informed\s+)?consent(?:\s+(?:first|at\s+the\s+start|before\s+the\s+first\s+question))?$/i.test(t)) {
+    if (r.def.questions.some((q) => /\b(?:consent|agree\s+to\s+(?:take\s+part|participate))\b/i.test(q.text ?? ""))) {
+      const q = r.def.questions.find((x) => /\b(?:consent|agree\s+to\s+(?:take\s+part|participate))\b/i.test(x.text ?? ""))!;
+      return alreadySo("survey_editing", "Add a consent screen.", `${code(q)} already asks for consent — nothing to add.`, qDetected([q]));
+    }
+    const first = r.def.questions.find((q) => q.type !== "hidden" && q.type !== "calculated" && q.type !== "embedded_data");
+    const variable = r.def.questions.some((q) => q.variableName === "CONSENT") ? "CONSENT_1" : "CONSENT";
+    const actions: SurveyAction[] = [
+      { op: "create_question", ref: "consent", ...(first ? { before: code(first) } : {}), type: "single_select", text: "This study is voluntary and your answers are used for research only. You can stop at any time. Do you agree to take part?", variable, options: [{ code: 1, label: "Yes, I agree to take part" }, { code: 2, label: "No, I do not agree" }], required: true } as SurveyAction,
+      ...(first ? [{ op: "page_break", after: "consent" } as SurveyAction] : []),
+      { op: "add_skip", from: "consent", when: `${variable} = 2`, to: "terminated" } as SurveyAction,
+    ];
+    return act(r, "survey_editing", `Add a consent question first, alone on its page and required: Yes continues; No ends the survey (terminated) before any other question is shown. Edit the wording to your ethics approval's text.`, actions, [det("consent", variable)]);
+  }
+  /* bots and duplicates: the quality rules that detect them, switched on — they flag and explain, a person decides (no CAPTCHA is claimed) */
+  if (/^(?:add|enable|turn\s+on|use|switch\s+on)\s+(?:the\s+)?(?:bot|fraud)\s+(?:protection|detection|checks?|filtering)$|^(?:protect|guard)\s+(?:the\s+survey\s+)?against\s+bots$|^(?:block|stop|catch|detect)\s+bots$/i.test(t)) {
+    const rules = { "bot.machine_timing": { enabled: true }, "bot.no_interaction": { enabled: true }, "bot.impossible_sequence": { enabled: true }, "device.webdriver": { enabled: true } };
+    return act(r, "survey_editing", "Bot detection: the quality checks on, with the automation rules (machine-like timing, no interaction, impossible answer sequences, an automated browser) switched on. They flag a response and explain why; a person decides what to remove. No CAPTCHA is added.", [{ op: "set_quality_settings", enabled: true, rules } as SurveyAction], [det("bot detection", "on")]);
+  }
+  if (/^(?:prevent|block|stop|catch|detect|flag)\s+(?:the\s+)?duplicate(?:s|\s+(?:responses|respondents|submissions|completes|entries))?$/i.test(t)) {
+    const rules = { "duplicate.answers": { enabled: true }, "duplicate.multi_signal": { enabled: true }, "device.duplicate": { enabled: true }, "network.duplicate_ip": { enabled: true } };
+    const actions: SurveyAction[] = [{ op: "set_quality_settings", enabled: true, rules } as SurveyAction];
+    if (dep.access.allowRetake) actions.unshift({ op: "set_deployment", allowRetake: false } as SurveyAction);
+    return act(r, "survey_editing", `Prevent duplicates: ${dep.access.allowRetake ? "one response per respondent (retakes off), and " : "a finished respondent already cannot start again; "}the duplicate checks on (identical answer patterns, the same device, the same network, several signals together) — they flag, a person decides.${anonNow ? " The survey is anonymous, so the device and network checks have no hashes to compare — only the answer-pattern checks run." : ""}`, actions, [det("duplicates", "prevented")]);
+  }
+  /* save and resume: always on — said, not pretended at */
+  if (/^(?:(?:let|allow)\s+(?:respondents|people|participants)\s+(?:to\s+)?)?(?:save\s+and\s+(?:resume|continue|come\s+back)|resume\s+later|continue\s+later)(?:\s+later)?$|^(?:respondents|people|participants)\s+should\s+be\s+able\s+to\s+(?:save\s+and\s+)?(?:resume|continue|come\s+back)(?:\s+later)?$|^(?:enable|turn\s+on|add)\s+save\s+(?:and|&)\s+resume$/i.test(t))
+    return alreadySo("survey_editing", "Save and resume.", "Save and resume is always on: every answer is saved as the respondent goes, the same browser returns to the same page, and the resume link (?r=) continues on another device. Partial responses expire after the survey's partial-expiry period.", [det("save and resume", "on")]);
+  /* the progress bar */
+  m = /^(?:show|add|display|put)\s+(?:a\s+|the\s+)?progress\s+(?:bar|indicator)(?:\s+(?:at|on)\s+the\s+(top|bottom))?$/i.exec(t);
+  if (m || /^(?:hide|remove)\s+(?:the\s+)?progress\s+(?:bar|indicator)$/i.test(t)) {
+    const want = m ? ((m[1]?.toLowerCase() as "top" | "bottom" | undefined) ?? "top") : "none";
+    const now = r.def.branding?.layout?.progressBar ?? "top";
+    if (now === want) return alreadySo("survey_editing", want === "none" ? "Hide the progress bar." : "Show a progress bar.", want === "none" ? "The progress bar is already hidden." : `The progress bar is already shown at the ${want}.`, []);
+    return act(r, "survey_editing", want === "none" ? "Hide the progress bar." : `Show the progress bar at the ${want} of every page.`, [{ op: "set_theme", patch: { layout: { progressBar: want } }, label: want === "none" ? "Progress bar hidden" : `Progress bar ${want}` } as SurveyAction], [det("progress bar", want)]);
+  }
+  return null;
+};
+
+/* "recommend the settings for this study" (IM2): the advice from the research context, every change proposed with its because */
+const settingsAdvice: Recogniser = (r) => {
+  const t = r.text.replace(/[.?!]+$/, "");
+  /* "This is pharmaceutical research among physicians; configure the survey settings" — the context in the sentence, then the ask */
+  const ctxAsk = /^(.{12,400}?)[;:,.—-]+\s*(?:please\s+)?(?:configure|set\s+up|recommend|suggest|choose)\s+(?:the\s+|its\s+)?(?:survey\s+|right\s+)?settings(?:\s+(?:for\s+it|for\s+this\s+study|accordingly|appropriately|to\s+match))?$/i.exec(t);
+  if (ctxAsk) {
+    const advice = adviseSettings(r.def, briefOfSurvey(r.def, ctxAsk[1]), r.ctx.now ? Date.parse(r.ctx.now) : Date.now());
+    return adviceOut(r, advice, ctxAsk[1]);
+  }
+  if (!/^(?:(?:please\s+)?(?:recommend|suggest|propose|advise\s+on|review|check)\s+(?:the\s+)?(?:survey\s+|deployment\s+)?settings(?:\s+for\s+(?:this|the)\s+(?:study|survey|research))?|what\s+settings\s+should\s+(?:this|the)\s+(?:survey|study)\s+(?:have|use)|(?:set\s+up|configure)\s+(?:the\s+)?(?:survey\s+)?settings\s+for\s+(?:this|the)\s+(?:study|research|survey)|(?:apply|use)\s+the\s+recommended\s+settings)$/i.test(t)) return null;
+  return adviceOut(r, adviseSettings(r.def, null, r.ctx.now ? Date.parse(r.ctx.now) : Date.now()));
+};
+function adviceOut(r: Run, advice: SettingAdvice[], context?: string): Interpretation {
+  const changes = advice.filter((a) => a.status === "change" && a.actions.length);
+  const sections: AnswerSection[] = [{ title: "Settings for this study", items: advice.map((a) => ({ label: `${a.status === "change" ? "Change" : a.status === "conflict" ? "Conflict" : "Keep"} · ${a.setting}: ${a.status === "keep" ? a.current : `${a.current} → ${a.recommended}`}`, detail: `Because ${a.because}${a.sentence ? ` — say “${a.sentence}”.` : ""}` })) }];
+  if (!changes.length) return { kind: "answer", category: "survey_editing", understood: "Recommend the settings for this study.", answer: advice.length ? describeSettingsAdvice(advice) : "Nothing in this study's questions, sample or brief calls for a setting other than what it has.", sections, detected: [] };
+  const out = act(r, "survey_editing", `Settings for this study${context ? ` (${plain(context, 80)})` : ""} — ${changes.map((a) => `${a.setting.toLowerCase()}: ${a.recommended}, because ${a.because}`).join(" · ")}${advice.some((a) => a.status === "conflict") ? ` · Also: ${advice.filter((a) => a.status === "conflict").map((a) => a.because).join(" ")}` : ""}`, changes.flatMap((a) => a.actions), changes.map((a) => det(a.setting.toLowerCase(), a.recommended)));
+  return out;
+}
 
 /* ---------------------------------------------------------- survey settings */
 
@@ -3210,7 +3351,7 @@ const RECOGNISERS: Recogniser[] = [
   conflicts, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
-  surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
+  settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];

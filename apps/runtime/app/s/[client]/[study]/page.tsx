@@ -1,3 +1,4 @@
+import { fieldworkWindow } from "@rescript/engine";
 import { loadDeployment, BLOCKING_STATUSES } from "@/lib/deployment";
 import { loadQuotaCounts } from "@/lib/session";
 import { RunnerLive } from "@/components/RunnerLive";
@@ -26,6 +27,16 @@ export default async function SurveyPage({
     return (
       <div className="rs-shell"><div className="rs-card rs-end">
         <h2>{blocked.title}</h2><p>{blocked.body}</p>
+      </div></div>
+    );
+  }
+
+  /* IM2: before the opening date or after the closing date, the live link says so and mints nothing */
+  const window = fieldworkWindow(dep.definition.deployment);
+  if (!window.open) {
+    return (
+      <div className="rs-shell"><div className="rs-card rs-end">
+        <h2>{window.title}</h2><p>{window.body}</p>
       </div></div>
     );
   }

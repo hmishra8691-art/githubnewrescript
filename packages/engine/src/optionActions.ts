@@ -25,6 +25,7 @@ import { applyOptionGroupAction, coerceOptionGroupAction, describeOptionGroupAct
 import { applyTimerAction, coerceTimerAction, describeTimerAction, TIMER_ACTION_OPS, type TimerAction } from "./timerActions.js";
 import { applyReviewAction, coerceReviewAction, describeReviewAction, REVIEW_ACTION_OPS, type ReviewAction } from "./reviewActions.js";
 import { applyGamificationAction, coerceGamificationAction, describeGamificationAction, GAMIFICATION_ACTION_OPS, type GamificationAction } from "./gamificationActions.js";
+import { applyDeploymentAction, coerceDeploymentAction, describeDeploymentAction, DEPLOYMENT_ACTION_OPS, type DeploymentAction } from "./deploymentActions.js";
 import { applyQualityAction, coerceQualityAction, describeQualityAction, QUALITY_ACTION_OPS, type QualitySettingsAction } from "./qualityActions.js";
 import { applyMethodTemplateAction, coerceMethodTemplateAction, describeMethodTemplateAction, METHOD_TEMPLATE_ACTION_OPS, type MethodTemplateAction } from "./methodTemplates.js";
 
@@ -95,6 +96,8 @@ export type OptionAction =
   | ReviewAction
   /* S5b TE-13: response-quality settings (telemetry switches, strictness, rule thresholds) — see qualityActions.ts */
   | QualitySettingsAction
+  /* IM2: how the survey is reached and what it records about who answers — see deploymentActions.ts */
+  | DeploymentAction
   /* S5c: a programmed research-method block (pricing, ladder, sequential monadic, shelf, funnel, ad test) — see methodTemplates.ts */
   | MethodTemplateAction;
 
@@ -102,7 +105,7 @@ export const OPTION_ACTION_OPS = [
   "update_option", "reorder_options", "set_option_randomization", "set_mask", "clear_mask", "duplicate_question",
   "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_hypothesis", "set_custom_code",
   ...MEDIA_ACTION_OPS, ...LOGIC_SCRIPT_ACTION_OPS, ...OPTION_GROUP_ACTION_OPS, ...TIMER_ACTION_OPS, ...GAMIFICATION_ACTION_OPS, ...REVIEW_ACTION_OPS,
-  ...QUALITY_ACTION_OPS, ...METHOD_TEMPLATE_ACTION_OPS,
+  ...QUALITY_ACTION_OPS, ...DEPLOYMENT_ACTION_OPS, ...METHOD_TEMPLATE_ACTION_OPS,
 ] as const;
 const OPS = new Set<string>(OPTION_ACTION_OPS);
 export const isOptionOp = (op: string): boolean => OPS.has(op);
@@ -143,6 +146,7 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
   if ((GAMIFICATION_ACTION_OPS as readonly string[]).includes(op)) return coerceGamificationAction(o);
   if ((REVIEW_ACTION_OPS as readonly string[]).includes(op)) return coerceReviewAction(o);
   if ((QUALITY_ACTION_OPS as readonly string[]).includes(op)) return coerceQualityAction(o);
+  if ((DEPLOYMENT_ACTION_OPS as readonly string[]).includes(op)) return coerceDeploymentAction(o);
   if ((METHOD_TEMPLATE_ACTION_OPS as readonly string[]).includes(op)) return coerceMethodTemplateAction(o);
   switch (op) {
     case "update_option": {
@@ -223,7 +227,9 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
       const title = str(o.title ?? o.name, 300); if (title) a.title = title;
       if (o.description === null || (typeof o.description === "string" && !o.description.trim())) a.description = null; else if (str(o.description, 4000)) a.description = str(o.description, 4000);
       const sc = str(o.code ?? o.surveyCode, 60); if (sc) a.code = sc;
-      if (Object.keys(a).length <= 1) return "set_survey_settings changes nothing (title, description, code)";
+      /* IM2: a model that writes the access, dates, retakes or anonymity into set_survey_settings means set_deployment */
+      if (Object.keys(a).length <= 1 && ["access", "accessMode", "password", "allowRetake", "activeFrom", "activeUntil", "speechInput", "speechServer", "anonymous"].some((k) => k in o)) return coerceDeploymentAction(o);
+      if (Object.keys(a).length <= 1) return "set_survey_settings changes nothing (title, description, code; access, dates, retakes and anonymity are set_deployment)";
       return a;
     }
     case "update_embedded": {
@@ -561,6 +567,7 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
     case "set_gamification": return applyGamificationAction(def, a);
     case "set_review_page": return applyReviewAction(def, a, { question: env.question, ids: env.ids });
     case "set_quality_settings": return applyQualityAction(def, a);
+    case "set_deployment": return applyDeploymentAction(def, a);
     case "add_method_template": return applyMethodTemplateAction(def, a, { ids: env.ids });
     case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return applyLogicScriptAction(def, a, { question: env.question, ids: env.ids });
     case "update_option": {
@@ -949,6 +956,7 @@ export function describeOptionAction(a: OptionAction): string {
     case "set_gamification": return describeGamificationAction(a);
     case "set_review_page": return describeReviewAction(a);
     case "set_quality_settings": return describeQualityAction(a);
+    case "set_deployment": return describeDeploymentAction(a);
     case "add_method_template": return describeMethodTemplateAction(a);
     case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return describeLogicScriptAction(a);
     case "update_option": return `Change option ${a.option} of ${a.target}`;

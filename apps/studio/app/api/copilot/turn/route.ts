@@ -18,7 +18,7 @@ import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/
 import { JsonTextExtractor, type FakeStreamScript } from "@rescript/ai";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, isLongBrief, capabilityReadiness, capabilityRefusal, availabilityNote, type CoverageReport } from "@rescript/engine";
 /* engine items 11–14 (2026-10-22, docs/ENGINE-11-14-2026-10-22.md): per-item guides, the readiness rule at action time, refused designs corrected or explained */
-import { scriptQuestion, sanitizeScriptHealthLite } from "@rescript/engine";
+import { scriptQuestion, sanitizeScriptHealthLite, readResearchBrief, adviseSettings, describeSettingsAdvice } from "@rescript/engine";
 import { autoFixMethodAction, coerceSurveyActions, explainMethodRefusal, isAnalysisOp, isMethodOp, isQualOp, type SurveyAction } from "@rescript/engine";
 import { GUIDE_TEXT, flagsOf, guideMisses, guideTexts, guidesOf, itemGuideSelection, itemGuidesEnabled, type GuideFlags, type GuideId, type ItemGuideSelection } from "@/lib/copilot/guideSelect";
 import { aiInterviewIntent } from "@/lib/copilot/aiInterviewGuide";
@@ -382,7 +382,16 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   /* an ordinary turn that names something in the stored brief (its quota table, a definition) gets that passage verbatim */
   const turnPassages = !useBriefLayers && briefSections.length ? retrieveBriefPassages(briefSections, message, { k: 2, maxChars: 3000, minScore: 6 }) : [];
   /** the blocks after the guides that are the same on every call of this request: the research context, the availability note */
-  const stableExtra = [researchContextText, availability];
+  /*
+   * IM2 (2026-11-06): a research brief being built gets the settings its study calls for — each with the property of
+   * the study it follows from — so the plan carries set_deployment / set_theme actions with a because, not defaults.
+   */
+  const briefRead = mode === "generate" && !longBrief ? readResearchBrief(message) : null;
+  const settingsAdviceText = briefRead?.isBrief && briefRead.survey ? (() => {
+    const advice = adviseSettings(def, briefRead).filter((a) => a.status !== "keep");
+    return advice.length ? `SETTINGS THIS STUDY CALLS FOR (deterministic, from the brief and the survey; include the actions of each "→" line in your proposal and say its because in one clause; a "!" line is a conflict to state, not to resolve silently):\n${describeSettingsAdvice(advice)}\nActions: ${JSON.stringify(advice.flatMap((a) => a.actions))}${advice.some((a) => a.sentence) ? `\nAlso: ${advice.filter((a) => a.sentence).map((a) => a.sentence).join("; ")}.` : ""}` : undefined;
+  })() : undefined;
+  const stableExtra = [researchContextText, availability, settingsAdviceText];
   let research = "";
   let passageIds: string[] = [];
   let charge = 0;

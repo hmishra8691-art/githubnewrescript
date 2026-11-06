@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { BLOCKING_STATUSES, loadDeployment, loadTestBuild, type LoadedDeployment } from "@/lib/deployment";
 import { createSession } from "@/lib/session";
 import { clientIp } from "@rescript/quality/server";
-import { resolveSampleSource } from "@rescript/engine";
+import { fieldworkWindow, resolveSampleSource } from "@rescript/engine";
 import type { PanelConfig } from "@rescript/schema";
 import { panelParams, runtimePanels } from "@/lib/panels";
 import { admitArrival, attachParticipation } from "@/lib/identity";
@@ -99,6 +99,9 @@ export async function POST(req: NextRequest) {
   if (!isTest) {
     const blocked = BLOCKING_STATUSES[d.surveyStatus];
     if (blocked) return NextResponse.json({ error: blocked.title, blocked: true }, { status: 403 });
+    /* IM2: the fieldwork window (deployment.activeFrom / activeUntil) — live links only, like the status gate */
+    const window = fieldworkWindow(d.definition.deployment);
+    if (!window.open) return NextResponse.json({ error: window.title, blocked: true, reason: window.reason, at: window.at }, { status: 403 });
     const access = d.definition.deployment.access;
     if (access.mode === "password") {
       const urlPw = body?.urlParams && typeof body.urlParams === "object" ? body.urlParams.pw : undefined;

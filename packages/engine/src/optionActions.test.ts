@@ -68,7 +68,7 @@ test("the vocabulary: every op is one of ours, nothing else is, and the gate rea
   assert.equal(coerceOptionAction("reorder_options", { target: "Q7", sort: "random" }), "“random” is not an order the options can take (alphabetical, alphabetical_desc, numeric, reverse)");
   assert.equal(coerceOptionAction("set_mask", { target: "Q8" }), "set_mask needs target and expression (a SET expression such as “Q5.Selected” or “Q5.Selected EXCEPT Q6.Selected”)");
   assert.equal(coerceOptionAction("set_survey_settings", { title: "   " }), "the survey title cannot be empty");
-  assert.equal(coerceOptionAction("set_survey_settings", {}), "set_survey_settings changes nothing (title, description, code)");
+  assert.equal(coerceOptionAction("set_survey_settings", {}), "set_survey_settings changes nothing (title, description, code; access, dates, retakes and anonymity are set_deployment)");
   assert.equal(coerceOptionAction("set_custom_code", { target: "Q8" }), "set_custom_code needs js or css (null removes it)");
   assert.equal(coerceOptionAction("remove_hypothesis", {}), "remove_hypothesis needs the hypothesis (its text, its label such as H2, or its number)");
   const a = coerceOptionAction("update_option", { target: " Q7 ", option: "United States", label: " USA ", exclusive: true, bogus: 1, position: { after: 3 } }) as OptionAction;
