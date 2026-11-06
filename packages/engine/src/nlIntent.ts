@@ -1,4 +1,6 @@
 import { sampleAvailability } from "./sampleAvailability.js";
+import { fieldworkPlan } from "./fieldworkPlan.js";
+import { readResearchBrief } from "./researchBrief.js";
 import { adviseSettings, briefOfSurvey, describeSettingsAdvice, type SettingAdvice } from "./settingsAdvice.js";
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { dontKnowEligible } from "./dontKnow.js";
@@ -1578,6 +1580,39 @@ const availabilityCheck: Recogniser = (r) => {
     sections: [{ title: "Each cell", items: rep.cells.map((c) => ({ label: `${c.status === "short" ? "✗" : c.status === "tight" ? "!" : c.status === "ok" ? "✓" : "?"} ${c.quota} / ${c.cell}: need ${c.need}`, detail: c.because })) }],
     detected: [det("available", String(a.available)), ...(a.incidence !== undefined ? [det("incidence", `${a.incidence} %`)] : []), ...Object.entries(a.shares).map(([k, v]) => det("share", `${k} ${v} %`))],
   };
+};
+
+/* ---------------------------------------------------------- the fieldwork plan (IM5) */
+
+const fieldworkRequest: Recogniser = (r) => {
+  const t = r.text.replace(/[.!?]+$/, "");
+  const plan = /^(?:plan|schedule|lay\s+out|draw\s+up|build|create|make|write)\s+(?:the\s+|a\s+|our\s+)?(?:fieldwork|field\s+plan|fieldwork\s+plan|field\s+schedule|data\s+collection(?:\s+plan)?)\b/i.test(t) || /^(?:fieldwork|field)\s+plan\b/i.test(t);
+  const estimate = /^(?:estimate|calculate|work\s+out|what\s+(?:are|is|will\s+be))\s+(?:the\s+)?(?:cost|budget|daily\s+(?:completes|targets?)|completes\s+(?:a|per)\s+day|timeline|field\s+(?:time|days))\b/i.test(t) || /\bhow\s+many\s+completes\s+(?:a|per)\s+day\b/i.test(t);
+  if (!plan && !estimate) return null;
+  const rest = t.replace(/^[^:]*:\s*/, "");
+  const brief = readResearchBrief(rest.length > 10 ? rest : t);
+  const a = readAvailability(t);
+  const cpi = /\b(?:cpi|cost\s+per\s+(?:complete|interview))\s*(?:of|is|=|:|at)?\s*[$€£₹]?\s*(\d+(?:\.\d+)?)|[$€£₹]\s*(\d+(?:\.\d+)?)\s*(?:a|per)\s+(?:complete|interview)/i.exec(t);
+  const budget = /\bbudget\s*(?:of|is|=|:)?\s*[$€£₹]?\s*(\d[\d,]*(?:\.\d+)?k?)/i.exec(t);
+  const cur = /[$]|\busd\b/i.test(t) ? "USD" : /€|\beur\b/i.test(t) ? "EUR" : /£|\bgbp\b/i.test(t) ? "GBP" : /₹|\binr\b|\brupees?\b/i.test(t) ? "INR" : undefined;
+  const p = fieldworkPlan(r.def, {
+    brief, ...(a.incidence !== undefined ? { incidence: a.incidence } : {}), ...(a.responseRate !== undefined ? { responseRate: a.responseRate } : {}),
+    ...(cpi ? { cpi: Number(cpi[1] ?? cpi[2]) } : {}), ...(budget ? { budget: Number(budget[1].replace(/,/g, "").replace(/k$/i, "000")) } : {}), ...(cur ? { currency: cur } : {}),
+    now: r.ctx.now ? Date.parse(r.ctx.now) : Date.now(),
+  });
+  if ("error" in p) return { kind: "clarify", category: "research_design", understood: "Plan the fieldwork.", question: p.error, choices: [500, 1000, 2000].map((n) => ({ label: `${n.toLocaleString("en")} completes`, text: `${t}, ${n} completes` })), detected: [] };
+  const sections: AnswerSection[] = [
+    { title: "Milestones", items: p.milestones.map((m) => ({ label: `${m.date} — ${m.what}` })) },
+    ...(p.cellPacing.length ? [{ title: "Quota pacing (completes a day)", items: p.cellPacing.map((c) => ({ label: `${c.quota} / ${c.cell}: ${c.perDay} a day (limit ${c.limit})` })) }] : []),
+    ...(p.risks.length ? [{ title: "Risks", items: p.risks.map((x) => ({ label: x.risk, detail: `${x.because} — ${x.mitigation}` })) }] : []),
+    { title: "Where each number comes from", items: Object.entries(p.basis).map(([k, v]) => ({ label: k, detail: v })) },
+  ];
+  if (estimate) return { kind: "answer", category: "research_design", understood: "Estimate the fieldwork: pace, timeline and cost.", answer: p.lines.join("\n"), sections, detected: [det("completes", String(p.completes))] };
+  const { cellPacing: _c, lines: _l, ...record } = p;
+  const actions: SurveyAction[] = [{ op: "set_fieldwork_plan", plan: record } as SurveyAction];
+  if (!r.def.deployment.activeUntil) actions.push({ op: "set_deployment", activeUntil: `${p.endDate}T23:59:59Z` } as SurveyAction);
+  const out = act(r, "research_design", `Fieldwork plan — ${p.lines.join(" ")}${actions.length > 1 ? ` The live link closes at the end of ${p.endDate}.` : ""}`, actions, [det("completes", String(p.completes)), det("field days", String(p.fieldDays))]);
+  return out;
 };
 
 /* ---------------------------------------------------------- the production-like test (IM3) */
@@ -3535,13 +3570,13 @@ const RECOGNISERS: Recogniser[] = [
   conflicts, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
-  availabilityCheck, quotaSentences, productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
+  fieldworkRequest, availabilityCheck, quotaSentences, productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];
 
 /** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
-const WHOLE_FIRST: Recogniser[] = [conflicts, availabilityCheck, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
+const WHOLE_FIRST: Recogniser[] = [conflicts, fieldworkRequest, availabilityCheck, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };

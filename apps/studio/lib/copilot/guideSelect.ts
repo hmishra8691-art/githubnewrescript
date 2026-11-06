@@ -70,6 +70,7 @@ const OPS_OF: [GuideId, readonly string[]][] = [
   ["research", ["set_research", "add_hypothesis", "set_hypothesis", "remove_hypothesis", "link_constructs"]],
   ["integrations", ["connect_panel", "disconnect_panel", "configure_alerts"]],
   ["quality", ["set_quality_settings", "set_deployment"]],
+  ["audience", ["define_audience", "clear_audience", "set_fieldwork_plan"]],
   ["assessment", ASSESSMENT_ACTION_OPS],
 ];
 /** the guide whose shapes an action op is written from (null: the system prompt's own vocabulary — questions, blocks, logic) */

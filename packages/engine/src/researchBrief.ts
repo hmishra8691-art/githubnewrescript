@@ -96,7 +96,7 @@ const PROFESSIONAL = /\b(?:doctors|physicians|gps|oncologists|cardiologists|spec
 
 const SAMPLE_RE = new RegExp(String.raw`\b${NUM}\s*(?:\+\s*)?(?:completed\s+(?:responses|interviews|surveys)|completes?|complete\s+responses|responses|respondents|interviews|participants|people|n\b)`, "i");
 const SAMPLE_N_RE = /\bn\s*=\s*(\d{1,3}(?:,\d{3})+|\d+)/i;
-const BASIS_RE = /\b(per|each)\s+(cell|country|market|wave|month|segment|group|region)\b|\b(monthly|quarterly|weekly|per wave|each wave)\b/i;
+const BASIS_RE = /\b(per|each)\s+(cell|country|market|wave|month|segment|group|region)\b|\b(monthly|quarterly|weekly|per wave|each wave)\b|\b(?:completes|responses|interviews|respondents)\s+each\b/i;
 
 const COUNTRIES = ["India", "Germany", "France", "Spain", "Italy", "United Kingdom", "UK", "United States", "US", "USA", "Canada", "Brazil", "Mexico", "Argentina", "China", "Japan", "South Korea", "Korea", "Singapore", "Malaysia", "Indonesia", "Thailand", "Vietnam", "Philippines", "Australia", "New Zealand", "South Africa", "Nigeria", "Kenya", "Egypt", "Saudi Arabia", "UAE", "United Arab Emirates", "Turkey", "Russia", "Poland", "Netherlands", "Sweden", "Norway", "Denmark", "Belgium", "Switzerland", "Austria", "Ireland", "Portugal", "Pakistan", "Bangladesh", "Sri Lanka", "Nepal",
   "Maharashtra", "Delhi", "Mumbai", "Bangalore", "Bengaluru", "Chennai", "Kolkata", "Hyderabad", "Pune", "Gujarat", "Karnataka", "Tamil Nadu", "Kerala", "Uttar Pradesh", "West Bengal", "Rajasthan"];

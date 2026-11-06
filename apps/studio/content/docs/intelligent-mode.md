@@ -170,6 +170,14 @@ Settings are actions like any other — previewed, applied on approval, undone f
 
 A quota sentence names the question by code, variable or wording; shares map to its options in order, and an option that is not a substantive answer (“Prefer not to say”) is left out of the cells and said to be. *Interlocking quotas for age group and region with 1,000 completes* crosses the options into cells whose limits add up to the total; *separate quotas* keep one quota per question. *Make the age quota soft*, *stop when the gender quota is full*, *set the Male cell to 300* and *delete the age quota* change an existing quota. *Is there enough sample for the quotas? 2,000 panelists, 25 % incidence, women are 35 %* sets each cell's need against its expected supply (available × incidence × response × share), shows the arithmetic, and reports a cell whose population share was not given as unchecked — never as equal.
 
+### Fieldwork
+
+| Sentence | Read as |
+|---|---|
+| Plan the fieldwork: 1,000 completes, 15-minute survey, finish in three weeks | actions |
+
+*Plan the fieldwork* writes the plan of record (the study's `research.fieldwork`): the start and close dates (the live link's closing date is set with it), a soft launch of 10 % checked before the full launch, the completes needed a day overall, per market and per quota cell, the invitations the incidence implies, the cost when a CPI or a budget is given, the milestones, and the risks — a professional audience at a fast pace, low incidence, a long survey, cells too small to report, translations on the critical path, a short field period, a cost over budget, quotas the brief asks for that do not exist — each with its reason and what to do. Every number says where it came from; what was assumed is said. *Estimate the cost and the daily completes we need* answers the same plan without storing it. Vendor pricing stays with Recruitment → Plan, which has the rate cards.
+
 **A production-like test** walks simulated respondents through the draft as the live link would meet them: the quota counters start from the LIVE counts (and any cell you name as full — "with the Cardiology cell full", "18–24 at 90 %"), the fieldwork dates, the password and the unique links are checked, and the publish gate runs. Nothing is written — no response, no live or test counter. The report gives the outcomes, the length, each quota cell from start to end and when it fills, the issues the walk met and a verdict, and a test link that opens the survey for a person under the same conditions (`?counts=live&full=…`; their complete still counts as a test). The generator steers respondents past screeners, so the screen-out share is a lower bound, not an incidence forecast.
 
 ### What the model is asked

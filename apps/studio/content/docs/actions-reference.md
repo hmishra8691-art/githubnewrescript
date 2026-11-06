@@ -8,7 +8,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Survey** (33): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `set_randomizer`, `create_branch`, `create_loop`, `set_research`, `link_constructs`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `define_audience`, `clear_audience`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
-**Options and design** (25): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`, `set_option_groups`, `set_timer`, `set_gamification`, `set_review_page`, `set_quality_settings`, `set_deployment`, `add_method_template`
+**Options and design** (26): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`, `set_option_groups`, `set_timer`, `set_gamification`, `set_review_page`, `set_quality_settings`, `set_deployment`, `set_fieldwork_plan`, `add_method_template`
 
 **Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
@@ -142,6 +142,8 @@ export type OptionAction =
   | QualitySettingsAction
   /* IM2: how the survey is reached and what it records about who answers — see deploymentActions.ts */
   | DeploymentAction
+  /* IM5: the fieldwork plan of record — see fieldworkPlan.ts */
+  | FieldworkAction
   /* S5c: a programmed research-method block (pricing, ladder, sequential monadic, shelf, funnel, ad test) — see methodTemplates.ts */
   | MethodTemplateAction;
 ```

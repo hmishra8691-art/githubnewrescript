@@ -186,6 +186,34 @@ export const ResearchBrief = z.object({
 });
 export type ResearchBrief = z.infer<typeof ResearchBrief>;
 
+/**
+ * THE FIELDWORK PLAN (Intelligent Mode IM5, 2026-11-06): what the study will field, when, at what pace and with
+ * which risks — written from a brief by `fieldworkPlan` in @rescript/engine and stored as the plan of record, so
+ * the timeline, the daily targets and the quota pacing are the same wherever they are shown. Every number carries
+ * where it came from (`basis`): the brief, the survey, or an assumption that is said to be one.
+ */
+export const FieldworkPlanRecord = z.object({
+  completes: z.number().int().positive(),
+  startDate: z.string(),
+  endDate: z.string(),
+  fieldDays: z.number().int().positive(),
+  softLaunch: z.number().int().nonnegative(),
+  dailyTarget: z.number().nonnegative(),
+  loiMinutes: z.number().positive().optional(),
+  incidence: z.number().min(0).max(100).optional(),
+  invitations: z.number().int().nonnegative().optional(),
+  cpi: z.number().nonnegative().optional(),
+  budget: z.number().nonnegative().optional(),
+  currency: z.string().optional(),
+  cost: z.number().nonnegative().optional(),
+  markets: z.array(z.object({ market: z.string(), completes: z.number().int().nonnegative() })).default([]),
+  milestones: z.array(z.object({ date: z.string(), what: z.string() })).default([]),
+  risks: z.array(z.object({ risk: z.string(), because: z.string(), mitigation: z.string() })).default([]),
+  basis: z.record(z.string()).default({}),
+  plannedAt: z.string().optional(),
+});
+export type FieldworkPlanRecord = z.infer<typeof FieldworkPlanRecord>;
+
 export const ResearchDesign = z.object({
   /** the project brief — the client's question and decision behind the objective (Phase 8) */
   brief: ResearchBrief.optional(),
@@ -226,6 +254,8 @@ export const ResearchDesign = z.object({
    * default; the researcher asks for it ("enforce the research design").
    */
   strict: z.boolean().optional(),
+  /** the fieldwork plan of record (IM5) — see FieldworkPlanRecord */
+  fieldwork: FieldworkPlanRecord.optional(),
   updatedAt: z.string().optional(),
 });
 export type ResearchDesign = z.infer<typeof ResearchDesign>;

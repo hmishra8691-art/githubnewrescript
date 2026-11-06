@@ -25,6 +25,7 @@ import { applyOptionGroupAction, coerceOptionGroupAction, describeOptionGroupAct
 import { applyTimerAction, coerceTimerAction, describeTimerAction, TIMER_ACTION_OPS, type TimerAction } from "./timerActions.js";
 import { applyReviewAction, coerceReviewAction, describeReviewAction, REVIEW_ACTION_OPS, type ReviewAction } from "./reviewActions.js";
 import { applyGamificationAction, coerceGamificationAction, describeGamificationAction, GAMIFICATION_ACTION_OPS, type GamificationAction } from "./gamificationActions.js";
+import { applyFieldworkAction, coerceFieldworkAction, describeFieldworkAction, FIELDWORK_ACTION_OPS, type FieldworkAction } from "./fieldworkPlan.js";
 import { applyDeploymentAction, coerceDeploymentAction, describeDeploymentAction, DEPLOYMENT_ACTION_OPS, type DeploymentAction } from "./deploymentActions.js";
 import { applyQualityAction, coerceQualityAction, describeQualityAction, QUALITY_ACTION_OPS, type QualitySettingsAction } from "./qualityActions.js";
 import { applyMethodTemplateAction, coerceMethodTemplateAction, describeMethodTemplateAction, METHOD_TEMPLATE_ACTION_OPS, type MethodTemplateAction } from "./methodTemplates.js";
@@ -98,6 +99,8 @@ export type OptionAction =
   | QualitySettingsAction
   /* IM2: how the survey is reached and what it records about who answers — see deploymentActions.ts */
   | DeploymentAction
+  /* IM5: the fieldwork plan of record — see fieldworkPlan.ts */
+  | FieldworkAction
   /* S5c: a programmed research-method block (pricing, ladder, sequential monadic, shelf, funnel, ad test) — see methodTemplates.ts */
   | MethodTemplateAction;
 
@@ -105,7 +108,7 @@ export const OPTION_ACTION_OPS = [
   "update_option", "reorder_options", "set_option_randomization", "set_mask", "clear_mask", "duplicate_question",
   "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_hypothesis", "set_custom_code",
   ...MEDIA_ACTION_OPS, ...LOGIC_SCRIPT_ACTION_OPS, ...OPTION_GROUP_ACTION_OPS, ...TIMER_ACTION_OPS, ...GAMIFICATION_ACTION_OPS, ...REVIEW_ACTION_OPS,
-  ...QUALITY_ACTION_OPS, ...DEPLOYMENT_ACTION_OPS, ...METHOD_TEMPLATE_ACTION_OPS,
+  ...QUALITY_ACTION_OPS, ...DEPLOYMENT_ACTION_OPS, ...FIELDWORK_ACTION_OPS, ...METHOD_TEMPLATE_ACTION_OPS,
 ] as const;
 const OPS = new Set<string>(OPTION_ACTION_OPS);
 export const isOptionOp = (op: string): boolean => OPS.has(op);
@@ -147,6 +150,7 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
   if ((REVIEW_ACTION_OPS as readonly string[]).includes(op)) return coerceReviewAction(o);
   if ((QUALITY_ACTION_OPS as readonly string[]).includes(op)) return coerceQualityAction(o);
   if ((DEPLOYMENT_ACTION_OPS as readonly string[]).includes(op)) return coerceDeploymentAction(o);
+  if ((FIELDWORK_ACTION_OPS as readonly string[]).includes(op)) return coerceFieldworkAction(o);
   if ((METHOD_TEMPLATE_ACTION_OPS as readonly string[]).includes(op)) return coerceMethodTemplateAction(o);
   switch (op) {
     case "update_option": {
@@ -568,6 +572,7 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
     case "set_review_page": return applyReviewAction(def, a, { question: env.question, ids: env.ids });
     case "set_quality_settings": return applyQualityAction(def, a);
     case "set_deployment": return applyDeploymentAction(def, a);
+    case "set_fieldwork_plan": return applyFieldworkAction(def, a);
     case "add_method_template": return applyMethodTemplateAction(def, a, { ids: env.ids });
     case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return applyLogicScriptAction(def, a, { question: env.question, ids: env.ids });
     case "update_option": {
@@ -957,6 +962,7 @@ export function describeOptionAction(a: OptionAction): string {
     case "set_review_page": return describeReviewAction(a);
     case "set_quality_settings": return describeQualityAction(a);
     case "set_deployment": return describeDeploymentAction(a);
+    case "set_fieldwork_plan": return describeFieldworkAction(a);
     case "add_method_template": return describeMethodTemplateAction(a);
     case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return describeLogicScriptAction(a);
     case "update_option": return `Change option ${a.option} of ${a.target}`;

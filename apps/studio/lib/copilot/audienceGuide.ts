@@ -24,10 +24,13 @@ Several countries means several markets: say that a completes target per market 
 Never say sample was bought, a vendor was contacted or feasibility was checked — this writes a specification, nothing more.
 {"op":"define_audience","audience":{"demographics":{"countries":["US"],"ageMin":25,"ageMax":45}},"from":"US adults 25 to 45"}
 {"op":"define_audience","audience":{"demographics":{"countries":["US"],"genders":["female"]},"quotas":[{"id":"q1","label":"Women 25-34","target":50,"mode":"percent"}]}}
-{"op":"clear_audience"}`;
+{"op":"clear_audience"}
+THE FIELDWORK PLAN (IM5) — set_fieldwork_plan {plan: {completes, startDate, endDate (YYYY-MM-DD), fieldDays, softLaunch, dailyTarget, loiMinutes?, incidence?, invitations?, cpi?, budget?, currency?, cost?, markets [{market, completes}], milestones [{date, what}], risks [{risk, because, mitigation}], basis {field: where the number came from}}} | {plan: null}. Prefer the engine's own plan ("Plan the fieldwork: …" is read without you); never write a cost without a CPI or budget the researcher gave — the rate cards price it in Recruitment → Plan.
+{"op":"set_fieldwork_plan","plan":{"completes":600,"startDate":"2026-12-01","endDate":"2026-12-14","fieldDays":14,"softLaunch":60,"dailyTarget":45,"markets":[{"market":"GB","completes":600}],"milestones":[{"date":"2026-12-01","what":"Soft launch: 60 completes"}],"risks":[],"basis":{"completes":"the brief"}}}`;
 
 /** a request about who a study is recruiting */
 export function audienceIntent(text: string): boolean {
+  if (/\bfieldwork\s+plan\b|\bplan\s+the\s+fieldwork\b|\bset_fieldwork_plan\b|\bdaily\s+(?:completes|targets?)\b/i.test(text)) return true;
   return /\b(?:target |define |set |change |build |who is )?(?:the )?audience\b|\btarget(?:ing| group| market| respondents?)\b|\bwho (?:are we|should we|do we want to|we) (?:recruit|target|survey|interview)\b|\brecruit(?:ing)? (?:people|respondents?|adults?|consumers?|men|women)\b|\bsample (?:specification|spec|definition|criteria)\b|\bscreen(?:er|ing) (?:question|criteria)\b|\bincidence rate\b|\bquota cells?\b|\bnat(?:ional)?ly representative\b|\bdefine_audience\b|\bclear_audience\b/i.test(text)
     || /ऑडियंस|लक्षित/.test(text);
 }
