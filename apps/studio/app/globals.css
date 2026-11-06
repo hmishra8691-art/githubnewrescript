@@ -2822,3 +2822,67 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .code-editor.full .code-editor-host { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .code-editor.full .code-editor-host .cm-editor { flex: 1; min-height: 0; }
 .code-editor.full .code-editor-host .cm-scroller { max-height: none; }
+
+/* ------------------------------------------------------------ ANALYTICS ARCHITECT MODE (2026-11-06) */
+.axa-mode { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; align-self: flex-end; margin-bottom: 4px; }
+.axa-mode-btn { border: 0; background: transparent; padding: 6px 12px; font-size: 12.5px; font-weight: 600; color: var(--subtle); cursor: pointer; }
+.axa-mode-btn.on { background: var(--c-primary, #4f46e5); color: #fff; }
+.ax-ws .axa { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; min-height: 560px; height: calc(100vh - 230px); }
+.axa-pane { overflow: hidden; }
+.axa-explorer { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.axa-cats { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 8px 4px; border-bottom: 1px solid var(--border); }
+.axa-cat { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); background: transparent; border-radius: 999px; padding: 3px 9px; font-size: 12px; cursor: pointer; color: var(--text); }
+.axa-cat.on { background: var(--c-primary-100, #e0e7ff); border-color: var(--c-primary, #4f46e5); color: var(--c-primary, #4f46e5); font-weight: 600; }
+.axa-count { font-size: 11px; opacity: .7; }
+.axa-filter { padding: 8px 8px 4px; }
+.axa-filter .input { width: 100%; }
+.axa-select-row { display: flex; align-items: center; gap: 4px; padding: 0 8px 4px; }
+.axa-list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 4px 12px; }
+.axa-row { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 6px; }
+.axa-row:hover { background: var(--panel2); }
+.axa-row.focus { background: var(--c-primary-100, #e0e7ff); }
+.axa-row-main { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; border: 0; background: transparent; text-align: left; padding: 4px 2px; cursor: pointer; font-size: 13px; color: var(--text); }
+.axa-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.axa-row-cat { font-size: 11px; color: var(--subtle); }
+.axa-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: #94a3b8; display: inline-block; }
+.axa-dot.ready { background: #16a34a; } .axa-dot.planned { background: #f59e0b; } .axa-dot.stale { background: #eab308; } .axa-dot.blocked { background: #dc2626; }
+.axa-verdict { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: #e2e8f0; text-transform: capitalize; }
+.axa-verdict.supported { background: #dcfce7; color: #166534; } .axa-verdict.not_supported { background: #fee2e2; color: #991b1b; } .axa-verdict.mixed, .axa-verdict.inconclusive { background: #fef3c7; color: #92400e; }
+.axa-verdict.big { display: inline-block; font-size: 13px; padding: 3px 10px; margin: 4px 0 8px; }
+.axa-sig { font-size: 11px; color: #b45309; font-weight: 600; }
+.axa-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-left: 10px; }
+.axa-seg-btn { border: 0; background: transparent; padding: 3px 10px; font-size: 12px; cursor: pointer; color: var(--subtle); }
+.axa-seg-btn.on { background: var(--panel2); color: var(--text); font-weight: 600; }
+.axa-objective { font-size: 12px; color: var(--subtle); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.axa-work { padding: 12px; overflow: auto; height: 100%; }
+.axa-combined { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 12px; }
+.axa-card { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); min-width: 0; }
+.axa-card-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.axa-card-title { border: 0; background: transparent; font-weight: 600; font-size: 13.5px; cursor: pointer; text-align: left; color: var(--text); padding: 0; }
+.axa-chip { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--panel2); color: var(--subtle); }
+.axa-card-body { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px; padding: 8px; }
+.axa-card-chart { min-width: 0; overflow: hidden; }
+.axa-card-side { min-width: 0; overflow: auto; font-size: 12px; }
+.axa-insight { font-size: 12.5px; margin: 6px 0 0; }
+.axa-warning { font-size: 12px; color: #b45309; margin: 6px 0 0; }
+.axa-empty { padding: 40px 20px; text-align: center; max-width: 520px; margin: 0 auto; }
+.axa-focus-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.axa-focus-title { margin: 0; font-size: 18px; }
+.axa-focus-descr { font-size: 13px; margin: 0 0 10px; }
+.axa-detail { max-width: 760px; }
+.axa-related { margin-top: 12px; }
+.axa-related-row { display: flex; align-items: center; gap: 6px; width: 100%; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: 6px 8px; margin: 4px 0; cursor: pointer; text-align: left; font-size: 13px; color: var(--text); }
+.axa-props { padding: 10px 12px; font-size: 13px; }
+.axa-prop-sec { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.axa-prop-sec:last-child { border-bottom: 0; }
+.axa-prop-label { font-weight: 600; font-size: 14px; margin: 2px 0; }
+.axa-prop-descr { margin: 2px 0 8px; color: var(--subtle); }
+.axa-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 4px 0; font-size: 12.5px; }
+.axa-dl dt { color: var(--subtle); } .axa-dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.axa-dl.mono dd { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
+.axa-rec { display: block; width: 100%; text-align: left; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: 5px 8px; margin: 3px 0; cursor: pointer; color: var(--text); }
+.axa-rec.on { border-color: var(--c-primary, #4f46e5); background: var(--c-primary-100, #e0e7ff); }
+.axa-rec-type { font-weight: 600; font-size: 12.5px; text-transform: capitalize; display: block; }
+.axa-rec-why { font-size: 11.5px; color: var(--subtle); }
+.axa-tech-toggle { border: 0; background: transparent; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--subtle); padding: 0; }
+@media (max-width: 1100px) { .axa-combined { grid-template-columns: 1fr; } .axa-card-body { grid-template-columns: 1fr; } }

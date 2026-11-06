@@ -19,6 +19,8 @@ import { FindingsView } from "./FindingsView";
 import { PLACES, DEFAULT_VIEW, placeOf, type PlaceKey, type WsTab } from "./navigation";
 import { CHART_PAGE, analysisIdsFor, hiddenCount, visibleCharts } from "./chartPaging";
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
+import { ArchitectAnalytics } from "./architect/ArchitectAnalytics";
+import { VIEW_KEY, resolveView, type AnalyticsView } from "@/lib/analyticsArchitect";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
@@ -36,13 +38,26 @@ import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 export type { WsTab } from "./navigation";
 
-export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; /** may change the survey definition — the plan lives there */ canEditPlan?: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab }
+export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; /** may change the survey definition — the plan lives there */ canEditPlan?: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab; /** Classic (the five places) or Architect (Explorer · Workspace · Properties); `?view=architect` */ initialView?: AnalyticsView }
 
 export function AnalyticsWorkspace(p: WorkspaceProps) {
   const api = React.useMemo(() => new AxApi(p.surveyId), [p.surveyId]);
   /* the view on show. "ask" is not a view: it opens the Ask panel over whichever place you are in */
   const [tab, setTabRaw] = React.useState<Exclude<WsTab, "ask">>(p.initialTab && p.initialTab !== "ask" ? p.initialTab : "home");
   const [askOpen, setAskOpen] = React.useState(p.initialTab === "ask");
+  /*
+   * ARCHITECT MODE is a view over the same engine, analyses and permissions — a mode switch like the Programming
+   * Studio's: `?view=architect` on the URL wins, then what this browser last used. Switching writes both.
+   */
+  const [view, setViewRaw] = React.useState<AnalyticsView>(p.initialView ?? "classic");
+  React.useEffect(() => { if (!p.initialView) { try { setViewRaw(resolveView(null, window.localStorage.getItem(VIEW_KEY))); } catch { /* fine */ } } }, [p.initialView]);
+  const setView = (v: AnalyticsView) => {
+    setViewRaw(v);
+    try { window.localStorage.setItem(VIEW_KEY, v); } catch { /* fine */ }
+    try { const u = new URL(window.location.href); if (v === "architect") u.searchParams.set("view", v); else u.searchParams.delete("view"); window.history.replaceState(null, "", u.toString()); } catch { /* fine */ }
+  };
+  const [refreshKey, setRefreshKey] = React.useState(0);
+  const [archFocus, setArchFocus] = React.useState<{ key: string; label: string; analysisId: string | null } | null>(null);
   const [askMounted, setAskMounted] = React.useState(p.initialTab === "ask");
   const [lastView, setLastView] = React.useState<Partial<Record<PlaceKey, Exclude<WsTab, "ask">>>>({});
   const place = placeOf(tab);
@@ -93,7 +108,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
   const refresh = React.useCallback(async () => {
     try {
       const [h, a, c, s, t, r, sh] = await Promise.all([api.home(), api.list("analyses"), api.list("charts"), api.list("segments"), api.list("themes"), api.list("reports"), api.list("shares")]);
-      setHome(h); setAnalyses(a.items); setCharts(c.items); setSegments(s.items); setThemes(t.items); setReports(r.items); setShares(sh.items); setError(null);
+      setHome(h); setAnalyses(a.items); setCharts(c.items); setSegments(s.items); setThemes(t.items); setReports(r.items); setShares(sh.items); setError(null); setRefreshKey((k) => k + 1);
     } catch (e) { setError((e as Error).message); }
   }, [api]);
   React.useEffect(() => { void refresh(); api.variables().then((v) => { setVars(v.variables); setCounts(v.counts); setSurveyVersion(v.surveyVersion); }).catch((e) => setError((e as Error).message)); }, [api, refresh]);
@@ -138,8 +153,21 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         <label className="ax-field" style={{ minWidth: 220 }}><span>Dataset</span><select className="select" value={env} onChange={(e) => setEnv(e.target.value as DatasetSpec["environment"])} data-testid="ax-dataset"><option value="LIVE">Production responses ({counts.LIVE ?? "…"})</option><option value="TEST">Test responses ({counts.TEST ?? "…"})</option><option value="ALL">All responses</option></select></label>
         <label className="ax-field"><span>Quality</span><select className="select" value={quality} onChange={(e) => setQuality(e.target.value as DatasetSpec["dataset"])}><option value="all">All complete responses</option><option value="clean">Clean only (quality engine)</option></select></label>
         <span className="grow" />
+        <div className="axa-mode" role="tablist" aria-label="Analytics view" data-testid="ax-view-switch">
+          <button role="tab" aria-selected={view === "classic"} className={`axa-mode-btn ${view === "classic" ? "on" : ""}`} onClick={() => setView("classic")} data-testid="ax-view-classic" title="The five places: Overview · Plan · Explore · Findings · Deliver">Classic</button>
+          <button role="tab" aria-selected={view === "architect"} className={`axa-mode-btn ${view === "architect" ? "on" : ""}`} onClick={() => { if (tab === "analysis" && !guard()) return; setView("architect"); }} data-testid="ax-view-architect" title="Explorer · Workspace · Properties — every analysis in research terms">Architect</button>
+        </div>
+        {view === "architect" && <button ref={askButtonRef} className={`btn small ax-ask-open ${askOpen ? "on" : ""}`} onClick={() => { setAskMounted(true); setAskOpen((o) => !o); }} aria-expanded={askOpen} aria-controls="ax-ask-drawer" title="Ask in words — it proposes, you review" data-testid="ax-ask-open">Ask</button>}
         <div className="muted" style={{ fontSize: 12.5, textAlign: "right" }}>Analyses run server-side on stored responses.<br />Only results reach this page.</div>
       </div>
+      {view === "architect" && (
+        <>
+          {error && <div className="ax-error" style={{ margin: "6px 0" }}>{error}</div>}
+          <ArchitectAnalytics api={api} dataset={dataset} analyses={analyses} charts={charts} themes={themeList} canEdit={p.canEdit} canExport={p.canExport} refreshKey={refreshKey}
+            onOpenInBuilder={(a) => { setView("classic"); openBuilder({ analysis: a }); }} onFocusChange={setArchFocus} />
+        </>
+      )}
+      {view === "classic" && <>
       <div className="ax-places" role="navigation" aria-label="Places">
         {PLACES.map((pl, i) => (
           <button key={pl.key} className={`ax-place ${place === pl.key ? "on" : ""}`} aria-current={place === pl.key ? "page" : undefined} title={pl.question} data-testid={`ax-place-${pl.key}`}
@@ -147,7 +175,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
             <span className="ax-place-n">{i + 1}</span>{pl.label}{pl.key === "explore" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}
           </button>))}
         <span className="grow" />
-        <button ref={askButtonRef} className={`btn small ax-ask-open ${askOpen ? "on" : ""}`} onClick={() => { setAskMounted(true); setAskOpen((o) => !o); }} aria-expanded={askOpen} aria-controls="ax-ask-drawer" title="Ask in words — it proposes, you review" data-testid="ax-ask-open">Ask</button>
+        <button ref={view === "classic" ? askButtonRef : undefined} className={`btn small ax-ask-open ${askOpen ? "on" : ""}`} onClick={() => { setAskMounted(true); setAskOpen((o) => !o); }} aria-expanded={askOpen} aria-controls="ax-ask-drawer" title="Ask in words — it proposes, you review" data-testid="ax-ask-open">Ask</button>
       </div>
       {(PLACES.find((x) => x.key === place)?.views.length ?? 0) > 1 && (
         <div className="ax-ws-tabs" role="tablist" aria-label={`${PLACES.find((x) => x.key === place)?.label} views`}>{PLACES.find((x) => x.key === place)!.views.map((t) => <button key={t.key} role="tab" aria-selected={tab === t.key} className={`ax-wstab ${tab === t.key ? "on" : ""}`} onClick={() => { if (t.key === tab) return; if (tab === "analysis" && !guard()) return; setTab(t.key); }} data-testid={`ax-tab-${t.key}`}>{t.label}{t.key === "analysis" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}</button>)}</div>
@@ -178,11 +206,12 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         {tab === "exports" && <ExportsPanel api={api} reports={reports} analyses={analyses} themes={themes} />}
         {tab === "sharing" && <SharingPanel api={api} shares={shares} reports={reports} onChange={() => void refresh()} />}
       </div>
+      </>}
       {askMounted && (
         <aside ref={drawerRef} id="ax-ask-drawer" className="ax-ask-drawer" role="complementary" aria-label="Ask" hidden={!askOpen} data-testid="ax-ask-drawer" onKeyDown={(e) => { if (e.key === "Escape") setAskOpen(false); }}>
-          <div className="ax-ask-drawer-head"><b>Ask</b><span className="muted" style={{ fontSize: 12.5 }}>on {PLACES.find((x) => x.key === place)?.label}</span><span className="grow" /><button className="btn small" onClick={() => setAskOpen(false)} data-testid="ax-ask-close" aria-label="Close Ask">Close</button></div>
+          <div className="ax-ask-drawer-head"><b>Ask</b><span className="muted" style={{ fontSize: 12.5 }}>on {view === "architect" ? (archFocus ? archFocus.label : "Architect") : PLACES.find((x) => x.key === place)?.label}</span><span className="grow" /><button className="btn small" onClick={() => setAskOpen(false)} data-testid="ax-ask-close" aria-label="Close Ask">Close</button></div>
           <AskPanel api={api} dataset={dataset} analyses={analyses} canEdit={p.canEdit} onChanged={refresh} embedded
-            focus={place === "explore" && currentAnalysisId ? { analysisId: currentAnalysisId, name: String(analyses.find((a) => a.id === currentAnalysisId)?.name ?? builder.initial?.analysis?.name ?? "this analysis") } : null} />
+            focus={view === "architect" ? (archFocus?.analysisId ? { analysisId: archFocus.analysisId, name: archFocus.label } : null) : place === "explore" && currentAnalysisId ? { analysisId: currentAnalysisId, name: String(analyses.find((a) => a.id === currentAnalysisId)?.name ?? builder.initial?.analysis?.name ?? "this analysis") } : null} />
         </aside>
       )}
     </div>
