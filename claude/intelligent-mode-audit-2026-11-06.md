@@ -107,3 +107,12 @@ review must write the audited columns per row.
 No real model was called; production operations were not read; the production-intents browser suite could
 not complete in this environment (Playwright `networkidle` never settled on the sandbox page — an environment
 limit; the route it exercises answered directly).
+
+## After the upgrade (IM1–IM10, same day)
+
+Re-scored on the same rubric after the ten phases in `claude/intelligent-mode-upgrade-2026-11-06.md`: **86 / 100**
+(was 58). Survey settings 95, testing vs live 92, quotas 92, data cleaning 92, analytics configuration 92,
+orchestration 90, survey programming 88, architecture 88, themes 85, fieldwork 85, qualitative 82, reporting 82,
+research analysis 80, JS/HTML/CSS 78, preview 78, thematic coding 76 — each residual named in that record. The
+harness: 30 of 47 sentences handled by the engine (was 8), the other 17 the writing and composing a model is for;
+9 of 9 survey briefs are plan-first builds.

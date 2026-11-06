@@ -349,6 +349,17 @@ export function useCopilot(opts: {
     void auditChange(k, record);
     const ok = await flushing.catch(() => false);
     const save = await settleSave(k, ok);
+    /*
+     * IM10 (2026-11-06): A CHANGE TO LOGIC, QUOTAS OR SETTINGS RUNS THE SAVED TEST CASES. Once the draft is saved, the
+     * regression suite (Tests panel) runs against it in the background and the result is said — a skip that now sends
+     * path C to the end is caught at the change, not in the field. Nothing runs when there are no cases or no save.
+     */
+    if (ok && s.surveyDbId !== "sandbox" && x.engineOps.some((o) => /skip|display|logic|branch|terminat|quota|deployment|validation|randomi|mask|punch|calculation|loop|list_fill|set_navigation|set_theme/.test(o))) {
+      void fetch(`/api/surveys/${s.surveyDbId}/tests`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "run_all" }) })
+        .then((r) => r.json().catch(() => null))
+        .then((d: { summary?: { failed?: number; passed?: number; changed?: number } | null; note?: string } | null) => { if (d?.summary && d.note) s.toast(`Test cases after this change: ${d.note}`); })
+        .catch(() => { /* the suite is advisory here; the Tests panel runs it on demand */ });
+    }
     void recorder.settled(k).then(() => recorder.refresh());
     return { n, save };
   }, [recorder, s, setSession, auditChange, settleSave]);

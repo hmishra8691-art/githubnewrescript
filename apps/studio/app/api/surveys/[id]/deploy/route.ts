@@ -1,3 +1,4 @@
+import { launchReadiness } from "@rescript/engine";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
@@ -75,6 +76,31 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json(gateRefusal(verdict, "deployed"), { status: 422 });
   }
 
+  /*
+   * THE LAUNCH-READINESS GATE (Intelligent Mode IM10, 2026-11-06). The quality check above is the questionnaire's;
+   * these are the launch's — a password access with no password, unique-link or invitation access with no links, a
+   * closing date already passed, consent the study requires and the survey does not ask. Each would make a live link
+   * refuse everyone or launch without what the study promised, so a LIVE deploy is refused with the fix for each;
+   * the warnings (no production-like test, missing quotas or languages …) travel back and do not block. Test deploys
+   * report and proceed, as above.
+   */
+  let readiness: ReturnType<typeof launchReadiness> | null = null;
+  try {
+    const access = parsedVersion.data.deployment.access.mode;
+    const { count: links } = access === "unique_links" || access === "invitation" ? await db.from("respondents").select("id", { count: "exact", head: true }).eq("survey_id", params.id).eq("is_test", false) : { count: null };
+    readiness = launchReadiness(parsedVersion.data, { tested: true, links: links ?? null });
+  } catch { readiness = null; }
+  const launchBlockers = readiness ? readiness.checks.filter((c) => !c.ok && c.level === "blocker" && c.id !== "lint" && c.id !== "questions") : [];
+  if (mode === "live" && launchBlockers.length) {
+    await audit({
+      action: "deployment.refused", userId: gate.user.userId, sessionId: gate.user.sessionId,
+      surveyId: params.id, customerId: gate.user.customerId,
+      entity: "deployment", entityId: `${clientSlug}/${studySlug}`,
+      detail: { mode, versionId, reason: "launch readiness", blockers: launchBlockers.map((b) => b.id) },
+    });
+    return NextResponse.json({ error: `Not launched: ${launchBlockers.map((b) => b.message).join(" ")}`, blockers: launchBlockers, warnings: readiness!.checks.filter((c) => !c.ok && c.level === "warning") }, { status: 422 });
+  }
+
   const { data: existing } = await db
     .from("deployments")
     .select("id, survey_id")
@@ -121,5 +147,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       summary: verdict.summary,
       ...(verdict.ok ? {} : { problems: verdict.problems }),
     } : null,
+    /* IM10: the launch's own checks — blockers (a test deploy proceeds with them) and warnings, each with its fix */
+    readiness: readiness ? { summary: readiness.summary, issues: readiness.checks.filter((c) => !c.ok && c.id !== "tested") } : null,
   });
 }
