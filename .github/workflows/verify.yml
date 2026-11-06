@@ -13,8 +13,8 @@
 #   audit:code    the Studio authorisation audit, the Interviews + runtime guard audit, the piping sweep
 #                 (SQL functions nothing calls, tables nothing reads or writes, exports nothing imports,
 #                 environment variables nobody documented), the dependency boundaries
-#   migrations    the whole chain 0001→latest on a clean Postgres 16, each migration applied TWICE (every one
-#                 is written to be re-runnable), then two posture checks: nothing SECURITY DEFINER is
+#   migrations    the whole chain 0001→latest on a clean Postgres 16, each migration from 0002 applied TWICE
+#                 (every one since the original schema is written to be re-runnable), then two posture checks: nothing SECURITY DEFINER is
 #                 executable by anon but the share resolver, and every table has row-level security
 #   docs          the public reference pages are current
 name: verify
@@ -54,13 +54,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm -r typecheck
-
+      # the packages first: an app's typecheck resolves @rescript/* through each package's dist
       - name: Build the packages from clean
         run: |
           find packages -maxdepth 2 -name dist -type d -prune -exec rm -rf {} +
           pnpm -r --filter "./packages/*" build
+
+      - name: Typecheck
+        run: pnpm -r typecheck
 
       - name: Test
         run: pnpm -r test
@@ -110,16 +111,20 @@ jobs:
             if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
           end $$;
           SQL
-      - name: The chain, every migration applied twice
+      # 0001 is the original schema, written before the re-runnable convention (plain `create table`); every
+      # migration since is applied a second time and must succeed
+      - name: The chain, every migration from 0002 applied twice
         run: |
           set -e
           n=0
           for f in supabase/migrations/*.sql; do
             psql -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
-            psql -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null 2>&1 || { echo "::error::$f is not re-runnable"; exit 1; }
+            case "$(basename "$f")" in 0001_*) ;; *)
+              psql -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null 2>&1 || { echo "::error::$f is not re-runnable"; exit 1; } ;;
+            esac
             n=$((n+1))
           done
-          echo "$n migrations applied, each twice"
+          echo "$n migrations applied, 0002 onward each twice"
       - name: Nothing public is executable by anon
         run: |
           bad=$(psql -Atc "select string_agg(p.proname, ', ') from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prosecdef and has_function_privilege('anon', p.oid, 'execute') and p.proname <> 'rescript_resolve_share_variants'")
