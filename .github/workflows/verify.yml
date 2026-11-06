@@ -64,7 +64,17 @@ jobs:
         run: pnpm -r typecheck
 
       - name: Test
-        run: pnpm -r test
+        run: |
+          set -o pipefail
+          pnpm -r test 2>&1 | tee test.log
+      # the failures alone, so a red run names its test on the summary page rather than in 30,000 lines
+      - name: The failures, named
+        if: failure()
+        run: |
+          grep -nE '^(packages|apps)/[a-z]+ test: (not ok|# fail [1-9])|ERR_PNPM|Error \[' test.log | head -60 | while IFS= read -r l; do echo "::error::$l"; done
+          echo "--- context of the first failure ---"
+          n=$(grep -nE '^(packages|apps)/[a-z]+ test: not ok' test.log | head -1 | cut -d: -f1)
+          [ -n "$n" ] && sed -n "$((n-5)),$((n+30))p" test.log || true
 
       - name: Code audits — authorisation, app guards, the piping sweep, dependency boundaries
         run: pnpm audit:code
