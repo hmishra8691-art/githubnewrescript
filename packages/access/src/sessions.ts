@@ -163,14 +163,6 @@ export function sessionBlocksLogin(s: SessionRecord, policy: SessionPolicy, nowM
   return sessionAuthorizes(s, policy, nowMs);
 }
 
-export const SESSION_STATUS_LABEL: Record<SessionStatus, string> = {
-  active: "Active",
-  idle: "Idle",
-  expired: "Expired",
-  logged_out: "Logged out",
-  revoked: "Revoked",
-};
-
 /** How the security screen explains a status, in a sentence (§8). */
 export function sessionStatusHint(st: SessionStatus, policy: SessionPolicy): string {
   const mins = (s: number) => `${Math.round(s / 60)} minute${Math.round(s / 60) === 1 ? "" : "s"}`;

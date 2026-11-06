@@ -91,8 +91,6 @@ export function questionAi(def: SurveyDefinition, q: Question): AiConversation {
 }
 
 export const voiceOn = (c: AiConversation) => c.enabled && c.interaction !== "text";
-export const dictationOn = (c: AiConversation) => voiceOn(c);
-export const readAloudOn = (c: AiConversation) => voiceOn(c);
 
 /* ---------------------------------------------------------------- presets */
 

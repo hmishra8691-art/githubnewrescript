@@ -128,6 +128,5 @@ export class Registry<T extends { [k: string]: any }> {
 
 export const questionTypeRegistry = new Registry<QuestionTypePlugin>("type");
 export const designGeneratorRegistry = new Registry<DesignGeneratorPlugin>("kind");
-export const exportRegistry = new Registry<ExportPlugin>("key");
 
 export type { DesignReference };

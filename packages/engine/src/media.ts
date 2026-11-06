@@ -145,11 +145,6 @@ export function resolveMediaUrl(input: string | null | undefined): ResolvedMedia
   return { kind: "image", provider: "direct", url: original, original };
 }
 
-/** True when `resolveMediaUrl` would render something. */
-export function isRenderableMedia(input: string | null | undefined): boolean {
-  return resolveMediaUrl(input).kind !== "unsupported";
-}
-
 /** Whether the resolved embed is on a host we allow in an iframe. */
 export function isAllowedEmbed(url: string): boolean {
   try {

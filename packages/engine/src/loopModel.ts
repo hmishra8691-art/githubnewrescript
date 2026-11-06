@@ -39,12 +39,6 @@ export function loopNodes(def: SurveyDefinition): LoopNodeInfo[] {
   return out;
 }
 
-/** The loop node a page belongs to, innermost first, by node id path. */
-export function loopChainFor(def: SurveyDefinition, nodePath: string[]): LoopFlowNode[] {
-  const byId = new Map(loopNodes(def).map((l) => [l.node.id, l.node]));
-  return nodePath.map((id) => byId.get(id)).filter((n): n is LoopFlowNode => !!n);
-}
-
 /**
  * The question ids that sit inside a loop's body (at any depth), which is what
  * the variable dictionary needs to declare `Q7_1..Q7_N`.
@@ -61,7 +55,6 @@ export function questionIdsInLoop(node: LoopFlowNode): string[] {
   walk(node.children);
   return [...new Set(ids)];
 }
-
 
 /**
  * The question ids DIRECTLY in a loop's body — not those inside a nested

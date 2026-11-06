@@ -123,10 +123,6 @@ export const ENVIRONMENT_SIGNALS: readonly TelemetryKind[] = [
   "network_offline", "camera_lost", "microphone_lost",
 ];
 
-export const DELIVERY_SIGNALS: readonly TelemetryKind[] = [
-  "upload_part_failed", "upload_retried", "upload_failed",
-];
-
 export interface TelemetryEvent {
   kind: TelemetryKind;
   detail?: Record<string, unknown>;

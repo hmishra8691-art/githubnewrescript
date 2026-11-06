@@ -153,8 +153,3 @@ export function aiFetch(kind: ScopeKind, url: string, init: RequestInit): Promis
   return fetch(url, init);
 }
 
-/** a connection's secret-free summary: safe to log and to return */
-export function describeScope(kind: ScopeKind = "chat"): { source: ConnectionSource; provider: string; model: string; label?: string } | null {
-  const s = store.getStore()?.[kind];
-  return s ? { source: s.source, provider: s.provider, model: s.model, ...(s.label ? { label: s.label } : {}) } : null;
-}

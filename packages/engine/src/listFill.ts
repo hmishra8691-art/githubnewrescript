@@ -1589,16 +1589,6 @@ export function listFillLoopItems(
   return out;
 }
 
-/** The List Fills whose source is this question — what the question panel edits. */
-export function listFillsForQuestion(def: SurveyDefinition, questionId: string): ListFill[] {
-  return def.listFills.filter((lf) => lf.source.kind === "question" && lf.source.questionId === questionId);
-}
-
-/** Every List Fill that can run once this question has been answered. */
-export function listFillsReadyAfter(def: SurveyDefinition, answeredQuestionIds: string[]): ListFill[] {
-  return def.listFills.filter((lf) => lf.enabled && lf.source.kind === "question" && answeredQuestionIds.includes(lf.source.questionId));
-}
-
 /**
  * S4c (D21): the Scripts-panel (logic) script a custom List Fill names (`selection.scriptId`, by id or name; enabled
  * only), or null. The Runner runs it in the sandbox (S1) just before the List Fill decides.

@@ -397,34 +397,6 @@ function findQuestion(def: SurveyDefinition, tok: string): Question | undefined 
 
 /* ---------------------------------------------------------- list actions */
 
-/**
- * The option-list side of punching: which of `q`'s codes are to be hidden,
- * forced visible, disabled or re-enabled right now. Evaluated by the option
- * pipeline (carryforward.ts) after the mask, so it composes with everything
- * else that shapes the list. Answer-side actions are ignored here; the flow
- * interpreter owns those.
- */
-export function listPunches(q: Question, ctx: EvalContext): { hide: Set<string>; show: Set<string>; disable: Set<string>; enable: Set<string> } {
-  const out = { hide: new Set<string>(), show: new Set<string>(), disable: new Set<string>(), enable: new Set<string>() };
-  /*
-   * The same list-side chain the option pipeline walks (§8, §23). This
-   * function and `applyListPunches` in `carryforward.ts` are deliberate
-   * duplicates for different callers, so they have to agree about which rules
-   * ran — which is why both go through `activePunchRules` rather than each
-   * having its own idea of what a chain is.
-   */
-  const listRules = (q.punches ?? []).filter((r) => LIST_ACTIONS.has(r.action));
-  for (const rule of activePunchRules(listRules, (r) => evaluateCondition(r.when, ctx))) {
-    const codes = evaluateSetExpr(rule.source, ctx, { target: q });
-    const map = new Map(rule.mapping.map((m) => [String(m.from), m.to]));
-    for (const c of codes) {
-      const mapped = String(map.has(String(c)) ? map.get(String(c))! : c);
-      out[rule.action as "hide" | "show" | "disable" | "enable"].add(mapped);
-    }
-  }
-  return out;
-}
-
 /** Every option-level rule in the survey, with the question it lives on — for the survey-wide editor. */
 export function allPunchRules(def: SurveyDefinition): { target: Question; rule: PunchRule }[] {
   const out: { target: Question; rule: PunchRule }[] = [];

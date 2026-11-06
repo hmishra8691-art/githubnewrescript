@@ -89,11 +89,6 @@ interface Ctx {
 
 /* ------------------------------------------------------------ walkers (shared with the impact module) */
 
-/** Every root condition in a definition, with where it sits — `conditionWalk`'s structural walk, under the name the impact module reaches for. */
-export function forEachConditionIn(def: SurveyDefinition, cb: (c: Condition, loc: ConditionLocation) => void): void {
-  forEachConditionRoot(def, cb);
-}
-
 /** Every rule in a definition, count `where`s included. */
 export function forEachRuleIn(def: SurveyDefinition, cb: (rule: ConditionRule, loc: ConditionLocation, at: RuleVisit) => void): void {
   forEachRuleInSurvey(def, cb);

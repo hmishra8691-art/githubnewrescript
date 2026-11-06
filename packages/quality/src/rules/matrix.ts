@@ -1,6 +1,6 @@
 import type { Question } from "@rescript/schema";
 import type { FlagDraft, RuleContext } from "../types.js";
-import { fnv1a, isDiagonal, normalizedEntropy, pct, repeatingPeriod } from "../metrics.js";
+import { fnv1a, isDiagonal, longestRun, normalizedEntropy, pct, repeatingPeriod, transitionRate } from "../metrics.js";
 import { isMatrix, midpointIndex, optionIndex, rowPolarities } from "../survey.js";
 
 /** Row → column index for a grid answer, in row order; null where unanswered. */
@@ -29,6 +29,8 @@ export function matrixRules(ctx: RuleContext): FlagDraft[] {
   const reverse: string[] = [];
   const diagonal: string[] = [];
   const alternating: string[] = [];
+  const longRuns: { id: string; run: number }[] = [];
+  const flipFlops: { id: string; rate: number }[] = [];
   let midRows = 0, extremeRows = 0, scaleRows = 0;
   const allPositions: number[] = [];
   const allCats: number[] = [];
@@ -73,6 +75,17 @@ export function matrixRules(ctx: RuleContext): FlagDraft[] {
       if (!foldedFlat) alternating.push(q.id);
     }
 
+    /* a long run inside a grid that is not straight-lined as a whole (informational; audit 2026-11-05) */
+    if (ctx.enabled("matrix.long_run") && !straight.includes(q.id)) {
+      const run = longestRun(answered);
+      if (run >= ctx.param<number>("matrix.long_run", "minRun")) longRuns.push({ id: q.id, run });
+    }
+    /* every row differs from the one before, over three or more columns — a zig-zag with no period (informational) */
+    if (ctx.enabled("matrix.flip_flop") && answered.length >= ctx.param<number>("matrix.flip_flop", "minRows") && new Set(answered).size >= 3 && repeatingPeriod(answered) === null) {
+      const rate = transitionRate(answered);
+      if (rate >= ctx.param<number>("matrix.flip_flop", "minRate")) flipFlops.push({ id: q.id, rate });
+    }
+
     /* midpoint / extremes */
     const mid = midpointIndex(q);
     if (q.options.length >= 4) {
@@ -115,6 +128,25 @@ export function matrixRules(ctx: RuleContext): FlagDraft[] {
       observed: `${alternating.length} grid${alternating.length === 1 ? "" : "s"} with a short repeating cycle of columns`,
       explanation: "The rows were answered in a mechanical a-b-a-b (or a-b-c-a-b-c) cycle.",
       questionIds: alternating,
+    });
+  }
+
+  if (longRuns.length) {
+    out.push({
+      ruleId: "matrix.long_run",
+      observed: `${longRuns.length} grid${longRuns.length === 1 ? "" : "s"} with a run of ${Math.max(...longRuns.map((r) => r.run))} consecutive rows in one column`,
+      expected: `runs shorter than ${ctx.param<number>("matrix.long_run", "minRun")} rows`,
+      explanation: "A stretch of rows was answered in the same column, inside a grid that was otherwise varied.",
+      questionIds: longRuns.map((r) => r.id),
+    });
+  }
+  if (flipFlops.length) {
+    out.push({
+      ruleId: "matrix.flip_flop",
+      observed: `${flipFlops.length} grid${flipFlops.length === 1 ? "" : "s"} where ${pct(Math.min(...flipFlops.map((r) => r.rate)))} or more of consecutive rows differ`,
+      expected: `below ${pct(ctx.param<number>("matrix.flip_flop", "minRate"))}`,
+      explanation: "Nearly every row was answered in a different column from the one before it, with no repeating cycle.",
+      questionIds: flipFlops.map((r) => r.id),
     });
   }
 

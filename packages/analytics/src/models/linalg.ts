@@ -48,13 +48,6 @@ export function cholInverse(L: ArrayLike<number>, n: number): Float64Array {
 
 export const logDetFromChol = (L: ArrayLike<number>, n: number): number => { let s = 0; for (let i = 0; i < n; i++) s += Math.log(L[i * n + i]); return 2 * s; };
 
-/** C = A B for flat matrices (A: r×k, B: k×c) */
-export function matMul(A: ArrayLike<number>, B: ArrayLike<number>, r: number, k: number, c: number): Float64Array {
-  const C = new Float64Array(r * c);
-  for (let i = 0; i < r; i++) for (let t = 0; t < k; t++) { const a = A[i * k + t]; if (a === 0) continue; for (let j = 0; j < c; j++) C[i * c + j] += a * B[t * c + j]; }
-  return C;
-}
-
 /** general inverse by Gauss–Jordan with partial pivoting (flat n×n); null when singular */
 export function invert(a: ArrayLike<number>, n: number, tol = 1e-13): Float64Array | null {
   const m = new Float64Array(n * 2 * n);

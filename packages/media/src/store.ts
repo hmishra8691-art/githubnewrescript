@@ -120,16 +120,6 @@ export class MediaError extends Error {
 
 /* ------------------------------------------------------------ buckets */
 
-/**
- * What the PRIMARY store will accept for a bucket, given what this package
- * would like. The Supabase store answers with the project's own ceiling
- * (the history of why is in `objectStore.ts`); the provider store answers
- * with the wish. Kept under its old name for the callers that had it.
- */
-export async function ensureBucket(db: MediaDb, bucket: string, maxBytes: number): Promise<number> {
-  return db.stores.primary.ceiling(bucket, maxBytes);
-}
-
 /** Testing seam, kept for callers; the cache now lives inside the legacy store. */
 export function resetBucketCache(): void { /* nothing to forget here any more */ }
 

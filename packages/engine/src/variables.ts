@@ -1,3 +1,5 @@
+import { GAMIFICATION_VARIABLES } from "./gamification.js";
+import { IAT_VARIABLES } from "./iatScore.js";
 import { dontKnowEnabled } from "./dontKnow.js";
 import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescript/schema";
 import { questionZooms, zoomParadataKey } from "./mediaZoom.js";
@@ -1101,22 +1103,34 @@ function s5aVariables(def: SurveyDefinition): VariableDef[] {
   const out: VariableDef[] = [];
   const mk = (name: string, label: string, dataType: "numeric" | "text", responseType: "calculation" | "embedded_data", notes: string, valueLabels: Record<string, string> = {}): VariableDef =>
     ({ name, label, dataType, responseType, derived: true, hidden: true, valueCodes: Object.keys(valueLabels), valueLabels, notes } as VariableDef);
+  /*
+   * ONE LIST, NOT TWO (platform audit 2026-11-05). The names come from GAMIFICATION_VARIABLES and IAT_VARIABLES —
+   * the constants the scoring modules write — and each column's description is looked up by that name in a
+   * Record typed over the constant, so adding a variable to the scorer without a description here is a type
+   * error rather than a column missing from every export.
+   */
   const g = def.gamification;
   if (g && g.enabled !== false) {
     const levels = [...g.levels].sort((a, b) => a.minPoints - b.minPoints);
-    out.push(mk("POINTS", "Gamification — points", "numeric", "calculation", `${g.points.perAnswer} per answer + ${g.points.perCorrect} per correct answer${g.points.customVariable ? ` + ${g.points.customVariable}` : ""}`));
-    out.push(mk("POINTS_ANSWERED", "Gamification — questions answered", "numeric", "calculation", "answered respondent-facing questions"));
-    out.push(mk("POINTS_CORRECT", "Gamification — correct answers", "numeric", "calculation", "correct by the answer key"));
-    out.push(mk("LEVEL", "Gamification — level", "numeric", "calculation", "1-based index of the level reached (0 = none)", Object.fromEntries([["0", "none"], ...levels.map((l, i) => [String(i + 1), l.name])])));
-    out.push(mk("LEVEL_NAME", "Gamification — level name", "text", "calculation", "the level reached"));
-    out.push(mk("BADGES", "Gamification — badges earned", "text", "calculation", `badge ids, comma-separated (${g.badges.map((b) => b.id).join(", ") || "none defined"})`));
+    const columns: Record<(typeof GAMIFICATION_VARIABLES)[number], [label: string, dataType: "numeric" | "text", notes: string, valueLabels?: Record<string, string>]> = {
+      POINTS: ["Gamification — points", "numeric", `${g.points.perAnswer} per answer + ${g.points.perCorrect} per correct answer${g.points.customVariable ? ` + ${g.points.customVariable}` : ""}`],
+      POINTS_ANSWERED: ["Gamification — questions answered", "numeric", "answered respondent-facing questions"],
+      POINTS_CORRECT: ["Gamification — correct answers", "numeric", "correct by the answer key"],
+      LEVEL: ["Gamification — level", "numeric", "1-based index of the level reached (0 = none)", Object.fromEntries([["0", "none"], ...levels.map((l, i) => [String(i + 1), l.name])])],
+      LEVEL_NAME: ["Gamification — level name", "text", "the level reached"],
+      BADGES: ["Gamification — badges earned", "text", `badge ids, comma-separated (${g.badges.map((b) => b.id).join(", ") || "none defined"})`],
+    };
+    for (const name of GAMIFICATION_VARIABLES) { const [label, dataType, notes, labels] = columns[name]; out.push(mk(name, label, dataType, "calculation", notes, labels)); }
   }
   /* S5c (SM-18): the IAT D-score of the tagged reaction-time blocks */
   if (def.questions.some((q) => (q.settings as { iatBlock?: { role?: string } }).iatBlock?.role)) {
-    out.push(mk("IAT_D", "IAT D-score (Greenwald et al. 2003, D600)", "numeric", "calculation", "(incompatible − compatible) / inclusive SD, averaged over the practice and test pairs; positive = faster on the compatible pairing; empty when excluded"));
-    out.push(mk("IAT_TRIALS", "IAT — trials scored", "numeric", "calculation", "trials ≤ 10,000 ms in the four blocks"));
-    out.push(mk("IAT_FAST_SHARE", "IAT — share of trials under 300 ms", "numeric", "calculation", "above 0.10 the respondent is excluded"));
-    out.push(mk("IAT_EXCLUDED", "IAT — excluded (too many fast trials)", "numeric", "calculation", "1 = excluded, 0 = scored", { "0": "scored", "1": "excluded" }));
+    const columns: Record<(typeof IAT_VARIABLES)[number], [label: string, dataType: "numeric" | "text", notes: string, valueLabels?: Record<string, string>]> = {
+      IAT_D: ["IAT D-score (Greenwald et al. 2003, D600)", "numeric", "(incompatible − compatible) / inclusive SD, averaged over the practice and test pairs; positive = faster on the compatible pairing; empty when excluded"],
+      IAT_TRIALS: ["IAT — trials scored", "numeric", "trials ≤ 10,000 ms in the four blocks"],
+      IAT_FAST_SHARE: ["IAT — share of trials under 300 ms", "numeric", "above 0.10 the respondent is excluded"],
+      IAT_EXCLUDED: ["IAT — excluded (too many fast trials)", "numeric", "1 = excluded, 0 = scored", { "0": "scored", "1": "excluded" }],
+    };
+    for (const name of IAT_VARIABLES) { const [label, dataType, notes, labels] = columns[name]; out.push(mk(name, label, dataType, "calculation", notes, labels)); }
   }
   for (const q of def.questions) {
     if (questionZooms(q)) out.push(mk(zoomParadataKey(q.code || q.id), `${q.code} — image zoom opens`, "numeric", "embedded_data", "times the respondent opened the lightbox"));

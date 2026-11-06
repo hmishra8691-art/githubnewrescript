@@ -80,11 +80,6 @@ export function placeholdersIn(text: string, opts: { codes?: boolean } = {}): Pl
   return out;
 }
 
-/** The comparable keys of a text's tokens, sorted — the multiset two texts must share. */
-export function placeholderKeys(text: string, opts: { codes?: boolean } = {}): string[] {
-  return placeholdersIn(text, opts).map((p) => p.key).sort();
-}
-
 /**
  * What a translation lost or invented against its source: the pipes,
  * variables, loop references and parameters must be the SAME multiset; every

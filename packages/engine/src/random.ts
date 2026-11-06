@@ -36,6 +36,3 @@ export function seededShuffle<T>(items: T[], seed: number): T[] {
   return arr;
 }
 
-export function seededPick<T>(items: T[], n: number, seed: number): T[] {
-  return seededShuffle(items, seed).slice(0, n);
-}

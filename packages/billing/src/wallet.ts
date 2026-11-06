@@ -419,17 +419,6 @@ export function forecastUsage(balance: number, events: UsageEvent[], cfg: Billin
   };
 }
 
-/** Usage per project for the user-level page. */
-export function usageByProject(events: UsageEvent[]): { surveyId: string | null; charge: number; actualCost: number; events: number }[] {
-  const m = new Map<string | null, { surveyId: string | null; charge: number; actualCost: number; events: number }>();
-  for (const e of events) {
-    const c = m.get(e.surveyId) ?? { surveyId: e.surveyId, charge: 0, actualCost: 0, events: 0 };
-    c.charge = money6(c.charge + e.customerCharge); c.actualCost = money6(c.actualCost + e.providerCost + e.infraCost); c.events += 1;
-    m.set(e.surveyId, c);
-  }
-  return [...m.values()].sort((a, b) => b.charge - a.charge);
-}
-
 /* ------------------------------------------------- the project card's meter */
 
 /**

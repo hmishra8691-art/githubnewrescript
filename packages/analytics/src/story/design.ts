@@ -141,7 +141,6 @@ export const PRESETS: Record<PresetId, DesignConfig> = {
     video: { aspect: "16:9", height: 1080, fps: 30, narration: false, subtitles: false },
   },
 };
-export const PRESET_IDS = Object.keys(PRESETS) as PresetId[];
 export const defaultDesign = (preset: PresetId = "corporate_executive"): DesignConfig => structuredClone(PRESETS[preset]);
 
 /* ------------------------------------------------------------ contrast enforcement */

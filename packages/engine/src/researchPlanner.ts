@@ -420,5 +420,3 @@ export function modelSteps(wf: ResearchWorkflow): { id: WorkflowStepId; tier: Mo
   return wf.steps.filter((s) => s.model).map((s) => ({ id: s.id, tier: s.tier, ...s.model! }));
 }
 
-export const WORKFLOW_STEP_IDS = ORDER;
-export const WORKFLOW_TITLES = TITLES;

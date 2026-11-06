@@ -82,7 +82,6 @@ function setExprLabel(def: SurveyDefinition, expr: SetExpr, code: string): strin
  * input.
  */
 
-
 export interface LoopItem {
   code: string;
   label: string;
@@ -957,17 +956,6 @@ function aggregateVariables(
     }
   }
   return out;
-}
-
-/** The values for one loop, given the enclosing iteration (null at top level). */
-export function loopVariablesFor(
-  def: SurveyDefinition,
-  state: ResponseState,
-  node: LoopFlowNode,
-  parent: LoopContext | null,
-  quotaCounts?: QuotaCounts,
-): Record<string, LoopReferenceValue> {
-  return variablesFromItems(node, parent, resolveLoopItems(def, state, node, parent, quotaCounts));
 }
 
 /* ------------------------------------------------------------ simulator */

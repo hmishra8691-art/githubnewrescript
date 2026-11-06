@@ -80,7 +80,3 @@ export function intOpt(v: unknown, dflt: number, min: number, max: number): numb
   const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
   return typeof n === "number" && Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : dflt;
 }
-export function numOpt(v: unknown, dflt: number, min: number, max: number): number {
-  const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
-  return typeof n === "number" && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
-}

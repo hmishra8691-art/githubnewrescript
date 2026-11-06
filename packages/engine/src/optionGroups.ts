@@ -345,18 +345,6 @@ export function lintOptionGroups(q: Question): string[] {
   return out;
 }
 
-/** A group's members, resolved against the current lists. For the editor. */
-export function groupMembership(
-  q: Question,
-  scope: "options" | "rows" | "columns",
-): { groupId: string; name: string; codes: string[] }[] {
-  return groupsFor(q, scope).map((g) => ({
-    groupId: g.id,
-    name: g.name,
-    codes: g.members.map(String),
-  }));
-}
-
 /** Which group a code belongs to, or null. First group wins. */
 export function groupOf(
   q: Question,
@@ -368,13 +356,6 @@ export function groupOf(
     if (g.members.some((m) => String(m) === k)) return g;
   }
   return null;
-}
-
-/** Group-level conditions, for the display-rule resolver and the linter. */
-export function groupConditions(q: Question): { groupId: string; when: Condition }[] {
-  return (q.optionGroups ?? [])
-    .filter((g) => !!g.visibleIf)
-    .map((g) => ({ groupId: g.id, when: g.visibleIf! }));
 }
 
 /* ------------------------------------------------- AQ-08: what the respondent sees */

@@ -28,7 +28,3 @@ export function fenceNonceFor(seed: string): string {
   return createHmac("sha256", PROCESS_SECRET).update(String(seed)).digest("hex").slice(0, 12);
 }
 
-/** fence `text` with the keyed nonce of `seed` */
-export function fenceFor(seed: string, text: string, opts: Omit<FenceOptions, "nonce">): string {
-  return fenceUntrusted(text, { ...opts, nonce: fenceNonceFor(seed) });
-}

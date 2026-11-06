@@ -154,6 +154,27 @@ export const RULES: RuleDef[] = [
     defaultSeverity: "high", riskPoints: 20, qualityPenalty: 20, enabledIn: STD_UP,
     params: [p("minRows", "Only grids with at least this many rows", lvl(6, 6, 5, 4), "rows")],
   },
+  /*
+   * Two straightlining signals the metrics module always computed and no rule read (platform audit
+   * 2026-11-05): a long run of one column inside a grid that is not straight-lined as a whole, and a grid whose
+   * every row differs from the one before it — the zig-zag that has no period. Both informational: the matrix
+   * rules above move the verdict; these say what they saw and cost quality.
+   */
+  {
+    id: "matrix.long_run", category: "matrix", title: "Long run of one column",
+    description: "A stretch of consecutive rows answered in the same column inside a grid that is not straight-lined as a whole.",
+    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 8, enabledIn: STD_UP, role: "informational",
+    params: [p("minRun", "Flag a run of at least this many consecutive rows", lvl(8, 7, 6, 5), "rows")],
+  },
+  {
+    id: "matrix.flip_flop", category: "matrix", title: "Every row differs from the last",
+    description: "Nearly every consecutive pair of rows was answered in a different column, across three or more columns — a zig-zag with no period.",
+    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 8, enabledIn: STD_UP, role: "informational",
+    params: [
+      p("minRows", "Only grids with at least this many rows", lvl(8, 7, 6, 6), "rows"),
+      p("minRate", "Share of consecutive rows that differ, at or above which the grid is flagged", lvl(1, 0.95, 0.9, 0.85)),
+    ],
+  },
   {
     id: "matrix.low_variance", category: "matrix", title: "Low response variance",
     description: "Answers across grids barely vary — not a straight line, but nearly.",

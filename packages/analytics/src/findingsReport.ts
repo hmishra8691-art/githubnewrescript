@@ -121,5 +121,3 @@ export function reportFromRun(def: SurveyDefinition, run: RunLike, opts: ReportO
   return { title, subtitle: `Findings as of ${date(run.computedAt)}`, mode: "live", blocks };
 }
 
-/** a finding's own line for a slide or a caption */
-export const findingLine = (f: Finding): string => `${f.headline}${f.hypotheses.length ? ` (${f.hypotheses.join(", ")})` : ""}`;

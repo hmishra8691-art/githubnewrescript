@@ -254,6 +254,8 @@ export const QUALITY_RULE_PARAMS: Readonly<Record<string, readonly string[]>> = 
   "matrix.reverse_straightline": [],
   "matrix.diagonal": ["minRows"],
   "matrix.alternating": ["minRows"],
+  "matrix.long_run": ["minRun"],
+  "matrix.flip_flop": ["minRows", "minRate"],
   "matrix.low_variance": ["maxEntropy"],
   "matrix.midpoint": ["share"],
   "matrix.extremes": ["share"],

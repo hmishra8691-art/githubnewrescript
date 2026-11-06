@@ -342,7 +342,6 @@ export function applyMethodTemplateAction(def: SurveyDefinition, a: MethodTempla
   }
   return { description: `${frag.title}: ${frag.questions.length} question${frag.questions.length === 1 ? "" : "s"} (${frag.questions.map((x) => x.code).join(", ")})${a.plan !== false && frag.tests.length ? ` and ${frag.tests.length} analysis-plan item${frag.tests.length === 1 ? "" : "s"}` : ""}`, warnings, touched: frag.questions.map((x) => String(x.id)) };
 }
-export function isMethodTemplateError(e: unknown): e is Error { return e instanceof TemplateError; }
 
 export function describeMethodTemplateAction(a: MethodTemplateAction): string {
   return `Add a ${a.template.replace(/_/g, " ")} template${a.product ? ` for ${a.product}` : ""}`;

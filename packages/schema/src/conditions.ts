@@ -112,14 +112,6 @@ export const LIST_VALUE_OPERATORS: ComparisonOperator[] = [
   "containsExactly",
 ];
 
-/** Operators that compare whole list ITEMS (see `containsItem` above). */
-export const LIST_ITEM_OPERATORS: ComparisonOperator[] = [
-  "containsItem",
-  "notContainsItem",
-  "containsAllItems",
-  "containsExactly",
-];
-
 /**
  * Operators that read a comma-separated OPEN-ENDED answer value by value
  * (2026-10-24, client items A46/A48). When a text or numeric question's

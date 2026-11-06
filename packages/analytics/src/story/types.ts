@@ -24,7 +24,6 @@ export const STORY_SCHEMA = 1 as const;
 
 export type AspectRatio = "16:9" | "9:16" | "1:1";
 export type FontFamilyId = "Inter" | "Source Serif 4" | "Montserrat";
-export const FONT_FAMILIES: FontFamilyId[] = ["Inter", "Source Serif 4", "Montserrat"];
 export type PresetId = "corporate_executive" | "modern_analytics" | "premium_editorial" | "minimal_research" | "cinematic_data_story" | "custom_brand";
 export type MotionStyle = "none" | "subtle" | "standard" | "expressive";
 export type Transition = "cut" | "fade" | "slide";

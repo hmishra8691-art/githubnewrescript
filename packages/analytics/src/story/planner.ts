@@ -288,4 +288,3 @@ export function describeStory(r: StoryReport): string {
   return `${main.length} scenes: ${[...counts].map(([k, v]) => (v > 1 ? `${v} ${k.replace(/_/g, " ")}s` : k.replace(/_/g, " "))).join(", ")}${app ? `; ${app} appendix table${app === 1 ? "" : "s"}` : ""}`;
 }
 
-export const verdictWord = (v: keyof typeof VERDICT_WORDS) => VERDICT_WORDS[v];

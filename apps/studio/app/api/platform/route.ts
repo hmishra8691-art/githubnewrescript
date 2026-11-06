@@ -131,6 +131,7 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   { migration: "0088", what: "quota monitoring (recruitment quota cells)", table: "quota_progress" },
   { migration: "0089", what: "quota holds and the vendor parameter mapping", table: "quota_holds" },
   { migration: "0091", what: "the security posture in the migration chain, and schema_marks", table: "schema_marks", column: "migration" },
+  /* 0092 dropped a table and added comments: nothing to probe; its schema_marks row is the record */
 ];
 
 /**

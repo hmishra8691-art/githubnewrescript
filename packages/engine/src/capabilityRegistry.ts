@@ -486,7 +486,3 @@ export function variantCatalogueText(opts: { families?: readonly string[]; max?:
   return out.join("\n");
 }
 
-/** the whole layer as one object (for tests, the docs and an explain card) */
-export function jsCapabilityRegistry() {
-  return { features: NATIVE_FEATURES, api: SANDBOX_API, logicHelpers: LOGIC_HELPER_DOCS, componentApi: COMPONENT_API, events: SANDBOX_EVENTS, limits: SANDBOX_LIMITS, routes: NATIVE_ROUTES, variants: variantCatalogue(), validationKinds: validationKinds() };
-}

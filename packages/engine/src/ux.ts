@@ -140,7 +140,6 @@ export function uxFullSelector(def: Pick<SurveyDefinition, "meta">, t: UxTarget,
  * model's "active" cannot collide with the renderer's own classes either.
  */
 export const uxToken = (name: string) => String(name).toLowerCase().replace(/^rs-ux-/, "").replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "on";
-export const uxClassName = (name: string) => `rs-ux-${uxToken(name)}`;
 export const uxTargetKey = (t: UxTarget) => [t.kind, t.questionId ?? "", t.blockId ?? "", t.pageId ?? "", t.code ?? "", t.button ?? "", t.part ?? "", t.selector ?? ""].join("|");
 
 /** what a target is, in words: "Q5 options", "every question in “Brand”", "the Next button" */
@@ -1023,10 +1022,7 @@ export function diffUx(before: SurveyDefinition, after: SurveyDefinition): UxDif
   cmp("style", b.styles, a.styles); cmp("animation", b.animations, a.animations); cmp("behaviour", b.behaviors, a.behaviors);
   return { added, changed, removed, empty: !added.length && !changed.length && !removed.length };
 }
-/** the survey with its UX taken out — what "the structure did not change" is checked against */
-export function withoutUx(def: SurveyDefinition): SurveyDefinition { const { ux: _ux, ...rest } = def; return rest as SurveyDefinition; }
 
-export const UX_VOCABULARY = { kinds: UX_TARGET_KINDS, parts: UX_PARTS, states: UX_STATES, media: UX_MEDIA, presets: UX_PRESETS, triggers: UX_ANIMATION_TRIGGERS, events: UX_EVENTS, effects: UX_EFFECTS, buttons: UX_BUTTONS, api: UX_SCRIPT_API, scriptEvents: UX_SCRIPT_EVENTS, popupPlacements: UX_POPUP_PLACEMENTS, popupDismiss: UX_POPUP_DISMISS };
 export type { UxConfig, UxRule, UxEffect };
 
 /* ------------------------------------------------------------ runtime triggers */

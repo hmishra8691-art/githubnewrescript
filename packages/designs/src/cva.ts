@@ -70,7 +70,6 @@ function normalize(c: CvaConfig) {
   } as const;
 }
 export type CvaNormalized = ReturnType<typeof normalize>;
-export const normalizeCva = normalize;
 
 const violates = (p: Record<string, string>, pro: ConjointProhibition[]) => pro.some((x) => conceptMatches(p, effectiveProhibition(x)));
 

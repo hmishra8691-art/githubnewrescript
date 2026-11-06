@@ -55,9 +55,6 @@ export interface DropVerdict {
 
 const rootContainer: FlowContainer = { ownerId: null, slot: "children" };
 
-export const sameContainer = (a: FlowContainer, b: FlowContainer): boolean =>
-  a.ownerId === b.ownerId && a.slot === b.slot;
-
 /**
  * Which lists a node type owns.
  *
@@ -77,8 +74,6 @@ export function containerSlots(node: FlowNode): string[] {
       return [];
   }
 }
-
-export const isContainerNode = (n: FlowNode): boolean => containerSlots(n).length > 0;
 
 /** Read the list a container addresses, or null when it does not exist. */
 export function readContainer(flow: FlowNode[], c: FlowContainer): FlowNode[] | null {

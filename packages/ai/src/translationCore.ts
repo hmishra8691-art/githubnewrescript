@@ -81,8 +81,6 @@ export interface TranslationAdapter {
  * or spaced them, and reports when one went missing so the caller can drop
  * that string rather than store a broken one. Every provider goes through this.
  */
-/** @deprecated the grammar is the engine's `placeholdersIn`; kept for callers that tested a string against it */
-export const PROTECT_RE = /\{\{[^}]+\}\}|\$\{[^}]+\}|\{\w+\}|\[\[[^\]]+\]\]/g;
 
 export type Marker = "span" | "x";
 const wrapToken = (marker: Marker, n: number) => (marker === "x" ? `<x>RSV${n}RSV</x>` : `<span translate="no" class="notranslate">RSV${n}RSV</span>`);

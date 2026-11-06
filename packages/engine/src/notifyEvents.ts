@@ -422,14 +422,7 @@ export function responseEventData(
   return boundResponseData({ ...base, answers, withheld });
 }
 
-
 /* ------------------------------------------------------------ settings helpers */
 
 export const parseAlertSettings = (v: unknown): AlertSettings | null => { const r = AlertSettingsSchema.safeParse(v ?? {}); return r.success ? r.data : null; };
-/** the channel kinds a settings object uses (the setup screen marks unconfigured ones) */
-export function channelRefsOf(s: AlertSettings | null | undefined): AlertChannelRef[] {
-  const seen = new Map<string, AlertChannelRef>();
-  for (const r of s?.rules ?? []) for (const c of r.channels) seen.set(`${c.kind}:${c.to.toLowerCase()}`, c);
-  return [...seen.values()];
-}
 export const CHANNEL_KIND_LABELS: Record<AlertChannelKind, string> = { email: "E-mail", in_app: "In-app", slack: "Slack", teams: "Microsoft Teams", webhook: "Webhook" };

@@ -75,25 +75,6 @@ export function createMeasurer(faces: { family: FontFamilyId; weight: number; da
   };
 }
 
-/**
- * An approximate measurer (average glyph widths) for when the fonts have not
- * loaded yet — the preview shows a draft with it; nothing is rendered, checked
- * or exported with it.
- */
-export function approximateMeasurer(): Measurer {
-  const wide = /[MWmw@%]/, narrow = /[iljtfrI.,:;'!|() ]/;
-  return {
-    exact: false,
-    width(text, _family, weight, size, tracking = 0) {
-      let u = 0;
-      for (const ch of text) u += wide.test(ch) ? 0.85 : narrow.test(ch) ? 0.3 : /[A-Z0-9]/.test(ch) ? 0.64 : 0.54;
-      return u * size * (weight >= 600 ? 1.05 : 1) + Math.max(0, [...text].length - 1) * tracking;
-    },
-    metrics() { return { ascent: 0.93, descent: -0.24 }; },
-    missing() { return []; },
-  };
-}
-
 /* ------------------------------------------------------------ wrapping */
 
 export interface WrapResult { lines: string[]; widths: number[]; fits: boolean; brokeWord: boolean }

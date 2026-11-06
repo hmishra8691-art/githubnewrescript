@@ -2874,11 +2874,6 @@ export function pickerTypesOf(family: string): {
   return { types, crossPresets };
 }
 
-/** Presets registered in a family whose parent lives in another — what that family offers beyond its own types. */
-export function crossPresetsOf(family: string): QuestionVariantDef[] {
-  return variantsOf(family).filter((v) => isSelectableVariant(v) && v.presetOf && variantRegistry.get(v.presetOf)?.family !== family);
-}
-
 /**
  * WHAT A QUESTION MAY BE CONFIGURED WITH, given the variant it stores.
  *

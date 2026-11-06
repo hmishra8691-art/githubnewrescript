@@ -163,9 +163,6 @@ export function parseLocalDateTime(stored: unknown): { date: string; time: strin
   // compared as a naive wall-clock instant, the same footing a date-only bound ("2026-01-01" = UTC midnight) stands on
   return { date: `${m[1]}-${m[2]}-${m[3]}`, time: `${m[4]}:${m[5]}${m[6] ? `:${m[6]}` : ""}`, ms: Date.UTC(y, mo - 1, d, h, mi, s) };
 }
-export function isLocalDateTime(stored: unknown): boolean {
-  return parseLocalDateTime(stored) != null;
-}
 
 /** A stored date-time for display, in the question's date and time formats; "" when it is not one. */
 export function formatDateTimeAs(stored: unknown, fmt: DateFormat | undefined, opts: { hour12?: boolean; seconds?: boolean } = {}): string {

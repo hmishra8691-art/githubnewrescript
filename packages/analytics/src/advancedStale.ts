@@ -8,8 +8,6 @@
  * stated number of new completes is in. Pure: the server counts, this decides.
  */
 
-export const ADVANCED_ANALYSIS_KINDS: ReadonlySet<string> = new Set(["hb", "lca", "sem"]);
-
 export type StaleState = "never_run" | "running" | "fresh" | "stale";
 export interface StalenessInput {
   /** when the latest valid result was computed (a finished job, a cached run); null = never */

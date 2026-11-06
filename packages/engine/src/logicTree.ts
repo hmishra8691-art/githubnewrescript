@@ -102,9 +102,6 @@ export function getAt(root: Condition, path: LogicPath): Condition | null {
 export const parentPath = (path: LogicPath): LogicPath => path.slice(0, -1);
 export const indexIn = (path: LogicPath): number => path[path.length - 1] ?? -1;
 
-export const samePath = (a: LogicPath, b: LogicPath): boolean =>
-  a.length === b.length && a.every((x, i) => x === b[i]);
-
 export const pathKey = (path: LogicPath): string => path.join(".");
 
 /** True when `inner` is `outer` or sits underneath it. */

@@ -361,22 +361,6 @@ export function responsesToSasSyntax(
 }
 
 /**
- * The rendered matrix behind the text formats — CSV, Excel and JSON all take
- * their cells from here, so "Labels only" means the same thing in all three.
- */
-export function renderMatrix(
-  matrix: ResponseMatrix,
-  valueMode: ValueMode = "code",
-  headerMode: HeaderMode = "name",
-): { headers: string[]; rows: unknown[][] } {
-  const headers = matrix.names.map((n) => renderHeader(matrix.defs.get(n), n, headerMode));
-  const rows = matrix.rows.map((r) =>
-    matrix.names.map((n) => renderValue(r[n], matrix.defs.get(n), valueMode)),
-  );
-  return { headers, rows };
-}
-
-/**
  * The SAS deliverable: a transport file, a CSV, and the syntax that labels
  * the CSV — bundled, because they are only useful together.
  *

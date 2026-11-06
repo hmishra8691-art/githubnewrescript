@@ -211,19 +211,6 @@ export const RESPONDENT_RETENTION_DAYS = 7;
 /** A practice recording is the person's own; it is kept a day so they can download it. */
 export const MOCK_RETENTION_HOURS = 24;
 
-export const DEFAULT_RETENTION_SCOPE: RetentionScope = {
-  /* the recording is the expensive, sensitive thing and the usual reason a
-     retention policy exists at all */
-  media: true,
-  /* a transcript is small, is what the company actually works from, and
-     deleting it by default would surprise somebody who set "90 days" meaning
-     "do not keep video for ever" */
-  transcripts: false,
-  analysis: false,
-};
-
-export const RETENTION_PRESETS = [7, 30, 90] as const;
-
 export function retentionDue(completedAt: Date | null, retentionDays: number | null, now: Date): boolean {
   if (!completedAt || retentionDays == null || retentionDays <= 0) return false;
   return now.getTime() - completedAt.getTime() > retentionDays * 24 * 60 * 60 * 1000;

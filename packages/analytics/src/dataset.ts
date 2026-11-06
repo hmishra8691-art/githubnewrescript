@@ -519,7 +519,3 @@ export function battery(ds: Dataset, questionId: string): VariableMeta[] {
   return ds.variables.filter((v) => v.questionId === questionId && !v.derived && v.role !== "multi" && v.role !== "complex");
 }
 
-/** Variables suitable for an analysis kind, for the variable picker. */
-export function variablesForRoles(ds: Dataset, roles: VariableRole[]): VariableMeta[] {
-  return ds.variables.filter((v) => roles.includes(v.role) && !v.hidden);
-}

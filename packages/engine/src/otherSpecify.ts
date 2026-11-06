@@ -194,11 +194,6 @@ export function legacyOtherKey(questionId: string, loop?: LoopContext | null): s
   return `${answerKey(questionId, loop ?? null)}__other`;
 }
 
-/** True for any key that holds an other-specify text, new shape or old. */
-export function isOtherAnswerKey(key: string): boolean {
-  return key.includes("__other");
-}
-
 /**
  * The text in one option's box.
  *

@@ -191,19 +191,6 @@ export async function recomputeSurvey(db: any, def: SurveyDefinition, surveyId: 
   return { assessed: entries.length, total: rows.length, pages, byClass };
 }
 
-/**
- * Parse a survey definition row defensively.
- *
- * Element ids are filled in here too (§31–49), deterministically, so a
- * definition read out of a frozen published version presents the same ids the
- * editor and the runtime see. Every read path has to agree, or an id in a
- * saved analysis resolves in one place and not another.
- */
-export function parseDefinition(json: unknown): SurveyDefinition | null {
-  const p = SurveyDefinition.safeParse(json);
-  return p.success ? ensureElementIds(p.data).def : null;
-}
-
 /* --------------------------------------------------- the immutable version cache */
 
 /**

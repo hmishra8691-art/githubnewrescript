@@ -843,3 +843,20 @@ test("S5b: schema QUALITY_RULE_PARAMS is exactly the catalogue (ids and threshol
   const fromCatalogue = Object.fromEntries(RULES.map((r) => [r.id, r.params.map((p) => p.key)]));
   assert.deepEqual({ ...QUALITY_RULE_PARAMS }, fromCatalogue, "a rule added to the catalogue must be added to QUALITY_RULE_PARAMS (packages/schema/src/quality.ts)");
 });
+
+test("a long run inside an otherwise varied grid, and a zig-zag with no period — informational (audit 2026-11-05)", () => {
+  const strict = def({ enabled: true, strictness: "very_strict" });
+  // five of six rows in one column: 83% is under very_strict's 85% straight-line share, but a run of 5 ≥ minRun 5
+  const run = response({ answers: { ...GOOD_ANSWERS, grid: { r1: "3", r2: "3", r3: "3", r4: "3", r5: "3", r6: "1" } } });
+  const a = assess({ def: strict, response: run, peers: [] });
+  assert.ok(!has(a, "matrix.straightline"), ruleIds(a).join());
+  assert.ok(has(a, "matrix.long_run"), ruleIds(a).join());
+  // every row differs from the last across three or more columns, with no a-b-a-b cycle
+  const zig = response({ answers: { ...GOOD_ANSWERS, grid: { r1: "1", r2: "4", r3: "2", r4: "5", r5: "3", r6: "1" } } });
+  const b = assess({ def: strict, response: zig, peers: [] });
+  assert.ok(has(b, "matrix.flip_flop"), ruleIds(b).join());
+  assert.ok(!has(b, "matrix.alternating"));
+  // neither moves the verdict on its own
+  const fl = b.flags.find((f) => f.ruleId === "matrix.flip_flop");
+  assert.equal(fl?.role, "informational");
+});
