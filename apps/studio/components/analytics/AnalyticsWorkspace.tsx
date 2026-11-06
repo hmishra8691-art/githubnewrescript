@@ -188,7 +188,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         {tab === "themes" && <ThemesPanel api={api} items={themes} onChange={() => void refresh()} />}
         {tab === "exports" && <ExportsPanel api={api} reports={reports} analyses={analyses} themes={themes} />}
         {tab === "sharing" && <SharingPanel api={api} shares={shares} reports={reports} onChange={() => void refresh()} />}
-        {tab === "architect" && <ArchitectAnalytics api={api} dataset={dataset} analyses={analyses} charts={charts} themes={themeList} canEdit={p.canEdit} canExport={p.canExport} refreshKey={refreshKey}
+        {tab === "architect" && <ArchitectAnalytics api={api} dataset={dataset} analyses={analyses} charts={charts} variables={vars} themes={themeList} onChanged={() => void refresh()} canEdit={p.canEdit} canExport={p.canExport} refreshKey={refreshKey}
           onOpenInBuilder={(a) => openBuilder({ analysis: a })} onFocusChange={setArchFocus} focusRequest={archRequest} />}
       </div>
       {askMounted && (

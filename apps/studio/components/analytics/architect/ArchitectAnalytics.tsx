@@ -1,12 +1,12 @@
 "use client";
 import React from "react";
-import type { ChartSpec, DatasetSpec, ReportTheme } from "@rescript/analytics";
+import type { AnalysisDefinition, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
 import type { AxApi, CataloguePayload, Row } from "../api";
 import { Explorer } from "./Explorer";
-import { Workspace, specFor, type WorkspaceView } from "./Workspace";
+import { Workspace, specFor, type FocusView, type WorkspaceView } from "./Workspace";
 import { Properties } from "./Properties";
 import { useResults } from "./useResults";
-import { DEFAULT_PANES, EMPTY_SELECTION, PANES_KEY, clampPane, explorerEntries, focusKey, pruneSelection, readPanes, renderable, selectAll, selectionSummary, toggleKey, type ExplorerCategory, type Panes, type Selection } from "@/lib/analyticsArchitect";
+import { DEFAULT_PANES, EMPTY_SELECTION, PANES_KEY, clampPane, explorerEntries, focusKey, pruneSelection, readPanes, selectAll, selectionSummary, toggleKey, type ExplorerCategory, type Panes, type Selection } from "@/lib/analyticsArchitect";
 
 /**
  * ANALYTICS ARCHITECT MODE (2026-11-06) — a research environment over the analytics engine.
@@ -27,7 +27,9 @@ import { DEFAULT_PANES, EMPTY_SELECTION, PANES_KEY, clampPane, explorerEntries, 
 export interface FocusRequest { analysisId: string | null; planned: string | null; nonce: number }
 
 export function ArchitectAnalytics(p: {
-  api: AxApi; dataset: DatasetSpec; analyses: Row[]; charts: Row[]; themes: { id: string; name: string; theme: ReportTheme }[];
+  api: AxApi; dataset: DatasetSpec; analyses: Row[]; charts: Row[]; variables: VariableMeta[]; themes: { id: string; name: string; theme: ReportTheme }[];
+  /** the Classic lists are read again after a save here */
+  onChanged: () => void;
   canEdit: boolean; canExport: boolean; onOpenInBuilder: (analysis: Row) => void;
   /** bumps when the Classic side changed something (a save, a delete) so the catalogue is read again */
   refreshKey: number;
@@ -41,7 +43,11 @@ export function ArchitectAnalytics(p: {
   const [category, setCategory] = React.useState<ExplorerCategory>("all");
   const [filter, setFilter] = React.useState("");
   const [selection, setSelection] = React.useState<Selection>(EMPTY_SELECTION);
-  const [view, setView] = React.useState<WorkspaceView>("combined");
+  const [view, setView] = React.useState<WorkspaceView>("focus");
+  const [focusView, setFocusView] = React.useState<FocusView>("combined");
+  /* the All view's sections that are on screen — what gets computed */
+  const [visible, setVisible] = React.useState<Set<string>>(() => new Set());
+  const onVisible = React.useCallback((id: string, on: boolean) => setVisible((v) => { if (v.has(id) === on) return v; const n = new Set(v); if (on) n.add(id); else n.delete(id); return n; }), []);
   const [spec, setSpec] = React.useState<ChartSpec | null>(null);
   const [panes, setPanes] = React.useState<Panes>(DEFAULT_PANES);
   React.useEffect(() => { try { setPanes(readPanes(window.localStorage.getItem(PANES_KEY))); } catch { /* fine */ } }, []);
@@ -56,13 +62,12 @@ export function ArchitectAnalytics(p: {
   const entries = React.useMemo(() => (catalogue ? explorerEntries(catalogue, category, filter) : []), [catalogue, category, filter]);
   const focused = catalogue && selection.focus ? catalogue.all.find((e) => e.key === selection.focus) ?? null : null;
 
-  /* what to compute: the Combined page's entries plus the one in focus */
+  /* what to compute: the entry in focus, and the All view's sections on screen */
   const wanted = React.useMemo(() => {
-    const ids = new Set<string>();
-    if (catalogue) for (const e of renderable(catalogue, selection)) if (e.analysisId) ids.add(e.analysisId);
+    const ids = new Set<string>(view === "all" ? visible : []);
     if (focused?.analysisId) ids.add(focused.analysisId);
     return [...ids];
-  }, [catalogue, selection, focused]);
+  }, [visible, focused, view]);
   const results = useResults(p.api, p.analyses, wanted);
   React.useEffect(() => { results.invalidate(); }, [p.dataset.environment, p.dataset.dataset]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -93,6 +98,13 @@ export function ArchitectAnalytics(p: {
   };
 
   const openInBuilder = (analysisId: string) => { const a = p.analyses.find((x) => x.id === analysisId); if (a) p.onOpenInBuilder(a); };
+  /* a configuration saved from Properties: the builder's route, then the result again and the catalogue again */
+  const saveDefinition = async (analysisId: string, d: AnalysisDefinition) => {
+    await p.api.update("analyses", analysisId, { name: d.name, definition: d });
+    results.invalidate(analysisId);
+    setSpec(null);
+    p.onChanged();
+  };
 
   return (
     <div className="ar axa" data-testid="axa-view" style={{ gridTemplateColumns: `${panes.explorer}px 6px minmax(0, 1fr) 6px ${panes.properties}px` }}>
@@ -107,24 +119,29 @@ export function ArchitectAnalytics(p: {
         <div className="ar-pane-head">
           <span className="ar-pane-title">Workspace</span>
           <div className="axa-seg" role="tablist" aria-label="Workspace view">
-            <button role="tab" aria-selected={view === "combined"} className={`axa-seg-btn ${view === "combined" ? "on" : ""}`} onClick={() => setView("combined")} data-testid="axa-view-combined">Combined</button>
             <button role="tab" aria-selected={view === "focus"} className={`axa-seg-btn ${view === "focus" ? "on" : ""}`} onClick={() => setView("focus")} data-testid="axa-view-focus">Focus</button>
+            <button role="tab" aria-selected={view === "all"} className={`axa-seg-btn ${view === "all" ? "on" : ""}`} onClick={() => setView("all")} data-testid="axa-view-all">All</button>
           </div>
+          {view === "focus" && (
+            <div className="axa-seg" role="tablist" aria-label="Focus view">
+              {(["combined", "table", "chart", "details"] as const).map((v) => <button key={v} role="tab" aria-selected={focusView === v} className={`axa-seg-btn ${focusView === v ? "on" : ""}`} onClick={() => setFocusView(v)} data-testid={`axa-focus-${v}`}>{v[0].toUpperCase() + v.slice(1)}</button>)}
+            </div>
+          )}
           <span className="muted" style={{ fontSize: 12.5 }} data-testid="axa-summary">{catalogue ? selectionSummary(catalogue, selection) : ""}</span>
           <span className="grow" />
           {catalogue?.objective && <span className="axa-objective" title={catalogue.objective}>Objective: {catalogue.objective}</span>}
         </div>
         {error && <div className="ax-error" style={{ margin: 8 }}>{error}</div>}
         <div className="ar-work-body">
-          <Workspace catalogue={catalogue} charts={p.charts} selection={selection} view={view} onView={setView} results={results} retry={results.retry} themes={p.themes}
-            onFocus={focus} onOpenInBuilder={openInBuilder} canEdit={p.canEdit} spec={spec} onSpec={setSpec} />
+          <Workspace catalogue={catalogue} charts={p.charts} selection={selection} view={view} focusView={focusView} shown={entries} results={results} retry={results.retry} themes={p.themes}
+            onFocus={focus} onOpenInBuilder={openInBuilder} canEdit={p.canEdit} spec={spec} onSpec={setSpec} onVisible={onVisible} />
         </div>
       </main>
       <div className="ar-divider" onPointerDown={startDrag("properties")} role="separator" aria-orientation="vertical" data-testid="axa-divider-properties" />
       <aside className="ar-inspector axa-pane">
         <div className="ar-pane-head"><span className="ar-pane-title">Properties</span></div>
         <div className="ar-inspector-body">
-          <Properties entry={focused} result={focusedResult} analysis={focused?.analysisId ? p.analyses.find((a) => a.id === focused.analysisId) : undefined} spec={spec} onSpec={setSpec} canEdit={p.canEdit} onOpenInBuilder={openInBuilder} />
+          <Properties entry={focused} result={focusedResult} analysis={focused?.analysisId ? p.analyses.find((a) => a.id === focused.analysisId) : undefined} spec={spec} onSpec={setSpec} canEdit={p.canEdit} onOpenInBuilder={openInBuilder} variables={p.variables} onSaveDefinition={saveDefinition} />
         </div>
       </aside>
     </div>

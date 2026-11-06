@@ -60,10 +60,13 @@ export function explorerEntries(c: AnalysisCatalogue, category: ExplorerCategory
   return category === "all" ? hits : hits.filter((e) => e.category === category);
 }
 
-/** the selected entries, in Explorer order, that a chart/table can be drawn for — what the Combined view and a bulk export take */
+/** an entry a chart/table can be drawn for: a saved analysis, or a chart of one */
+export const isRenderable = (e: CatalogueEntry): boolean => !!e.analysisId && (e.category === "crosstabs" || e.category === "tests" || e.category === "models" || e.category === "correlations" || e.category === "charts");
+
+/** the selected entries, in Explorer order, that a chart/table can be drawn for — what the All view and a bulk export take */
 export function renderable(c: AnalysisCatalogue, s: Selection): CatalogueEntry[] {
   const set = new Set(s.keys);
-  return c.all.filter((e) => set.has(e.key) && !!e.analysisId && (e.category === "crosstabs" || e.category === "tests" || e.category === "models" || e.category === "correlations" || e.category === "charts"));
+  return c.all.filter((e) => set.has(e.key) && isRenderable(e));
 }
 
 /** one line for the Workspace head: "4 selected · 3 can be shown" */

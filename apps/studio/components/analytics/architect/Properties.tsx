@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import type { CatalogueEntry, ChartSpec } from "@rescript/analytics";
+import type { AnalysisDefinition, CatalogueEntry, ChartSpec, VariableMeta } from "@rescript/analytics";
+import { ConfigEditor } from "./ConfigEditor";
 import type { Row, RunResult } from "../api";
 import { STATUS_WORD } from "./Explorer";
 
@@ -9,12 +10,16 @@ import { STATUS_WORD } from "./Explorer";
  *
  *   What it is        the research label, what it answers and why, the hypotheses it serves, its state
  *   Recommended       the charts the engine recommends for this result, with its reason, one click to switch
- *   Configuration     the definition as the builder holds it (rows, columns, measure, options), read-only here
+ *   Configuration     the definition as the builder holds it — edited here (ConfigEditor) and saved through the
+ *                     builder's own route, so a change recomputes the result in place
  *   Technical         the ids: question codes, variable names, the saved name, kind, method, analysis id, hash —
  *                     kept, never used as the label
  */
-export function Properties(p: { entry: CatalogueEntry | null; result: RunResult | undefined; analysis: Row | undefined; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; canEdit: boolean; onOpenInBuilder: (id: string) => void }) {
+export function Properties(p: { entry: CatalogueEntry | null; result: RunResult | undefined; analysis: Row | undefined; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; canEdit: boolean; onOpenInBuilder: (id: string) => void; variables: VariableMeta[]; onSaveDefinition: (analysisId: string, d: AnalysisDefinition) => Promise<void> }) {
   const [tech, setTech] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  React.useEffect(() => { setEditing(false); }, [p.entry?.key]);
   const e = p.entry;
   if (!e) return <div className="axa-props muted" data-testid="axa-properties" style={{ padding: 12, fontSize: 13 }}>Select an entry to see what it answers, why it exists and how it is configured.</div>;
   const def = p.analysis?.definition as { rows?: string[]; columns?: string[]; layers?: string[]; measure?: string; options?: Record<string, unknown>; filter?: unknown; weighting?: unknown } | undefined;
@@ -46,7 +51,12 @@ export function Properties(p: { entry: CatalogueEntry | null; result: RunResult 
       )}
       {def && (
         <section className="axa-prop-sec" data-testid="axa-config">
-          <div className="eyebrow">Configuration</div>
+          <div className="eyebrow" style={{ display: "flex", alignItems: "center", gap: 8 }}>Configuration<span className="grow" />{p.canEdit && e.analysisId && !editing && <button className="btn small ghost" onClick={() => setEditing(true)} data-testid="axa-config-edit">Edit</button>}</div>
+          {editing && p.analysis && (
+            <ConfigEditor definition={p.analysis.definition as AnalysisDefinition} variables={p.variables} labelOf={varLabel} saving={saving}
+              onSave={async (d) => { setSaving(true); try { await p.onSaveDefinition(e.analysisId!, d); setEditing(false); } finally { setSaving(false); } }} onCancel={() => setEditing(false)} />
+          )}
+          {!editing && <>
           <dl className="axa-dl">
             {def.rows?.length ? <><dt>Rows</dt><dd>{def.rows.map(varLabel).join(", ")}</dd></> : null}
             {def.columns?.length ? <><dt>Columns</dt><dd>{def.columns.map(varLabel).join(", ")}</dd></> : null}
@@ -57,7 +67,8 @@ export function Properties(p: { entry: CatalogueEntry | null; result: RunResult 
             {def.weighting ? <><dt>Weighting</dt><dd>applied</dd></> : null}
             {def.options && Object.keys(def.options).filter((k) => k !== "planned").map((k) => <React.Fragment key={k}><dt>{k}</dt><dd>{String(def.options![k])}</dd></React.Fragment>)}
           </dl>
-          {p.canEdit && e.analysisId && <button className="btn small" onClick={() => p.onOpenInBuilder(e.analysisId!)}>Edit in builder</button>}
+          {p.canEdit && e.analysisId && <button className="btn small ghost" onClick={() => p.onOpenInBuilder(e.analysisId!)}>Everything else, in the builder</button>}
+          </>}
         </section>
       )}
       <section className="axa-prop-sec">
