@@ -67,6 +67,8 @@ export class AxApi {
   askUndo(records: UndoRecord[]) { return this.req<{ undone: { name: string; status: "undone" | "skipped"; message: string }[] }>("intelligent/undo", { method: "POST", body: JSON.stringify({ records }) }); }
   access(shareId: string) { return this.req<{ events: Row[] }>(`shares/${shareId}/access`); }
   /* the analysis plan (Data Analytics → Analysis plan): read, edit with analysis actions, apply */
+  /** the Architect's Explorer: every analysis, chart, hypothesis, theme, report and dashboard, with research labels, and the plan payload beside it */
+  catalogue(dataset: { environment: string; dataset: string }) { return this.req<CataloguePayload>(`catalogue?environment=${encodeURIComponent(dataset.environment)}&dataset=${encodeURIComponent(dataset.dataset)}`); }
   plan(dataset: { environment: string; dataset: string }) { return this.req<PlanPayload>(`plan?environment=${encodeURIComponent(dataset.environment)}&dataset=${encodeURIComponent(dataset.dataset)}`); }
   editPlan(body: { actions: unknown[]; baseRevision: number | null }) { return this.req<{ ok: true; plan: unknown; revision: number | null; results: { op: string; ok: boolean; description: string; error?: string }[]; warnings: string[]; savedAt: string }>("plan", { method: "PUT", body: JSON.stringify(body) }); }
   applyPlan(body: { environment: string; dataset: string; replaceReport?: boolean }) { return this.req<ApplyResponse>("plan/apply", { method: "POST", body: JSON.stringify(body) }); }
@@ -94,6 +96,7 @@ export class AxApi {
 }
 
 export type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+export type CataloguePayload = Awaited<ReturnType<typeof import("@/lib/analyticsCatalogue").cataloguePayload>>;
 /** what `GET plan` and `POST plan/apply` answer — the server's own types, imported as types only (the module itself is server-only) */
 export type PlanPayload = Awaited<ReturnType<typeof planPayload>>;
 export type ApplyResponse = ApplyPlanOutcome;

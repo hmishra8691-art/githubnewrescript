@@ -15,6 +15,7 @@ import { builderItems, modelInterpretation, narrateStory, parseBrief } from "@/l
 import { applyOps, askContext, datasetFrom, propose as proposeAsk, undoRecords } from "@/lib/analyticsAsk";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
 import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
+import { cataloguePayload } from "@/lib/analyticsCatalogue";
 import { modelJobsGET, modelJobsPOST } from "@/lib/modelJobs";
 import { advancedGET, advancedInterpretationsFor, advancedPOST } from "@/lib/advancedModels";
 
@@ -114,6 +115,14 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     return json(await variablesPayload(db, surveyId, loaded));
+  }
+  /* THE ARCHITECT'S EXPLORER (Analytics Architect Mode): every analysis, chart, hypothesis, theme, report and dashboard, with research labels */
+  if (head === "catalogue" && !itemId) {
+    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const env = req.nextUrl.searchParams.get("environment");
+    const dataset: DatasetSpec = { environment: env === "TEST" || env === "ALL" ? env : "LIVE", dataset: req.nextUrl.searchParams.get("dataset") === "clean" ? "clean" : "all" };
+    return json(await cataloguePayload(db, surveyId, loaded, dataset));
   }
   /* THE ANALYSIS PLAN in Data Analytics: everything the workspace shows, from stored data */
   if (head === "plan" && !itemId) {
