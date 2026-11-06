@@ -25,6 +25,9 @@ export type QualRequest =
   | { op: "ask"; text: string; question: string }
   | { op: "auto_code"; text: string; enabled: boolean }
   | { op: "group_session"; text: string; mode: "moderated" | "autonomous"; title?: string }
+  /* IM9 2026-11-06: themes new / rising / fading since a date; a model's reading of a theme's emotion (gated) */
+  | { op: "emerging"; text: string; since: string }
+  | { op: "emotion"; text: string; theme: string }
   /* G2 2026-10-22: live human-moderated sessions (focus groups / IDIs) scheduled in words — liveSchedule.ts */
   | LiveScheduleRequest;
 
@@ -47,6 +50,27 @@ export function interpretQualRequest(raw: string): QualRequest | null {
   if (live) return live;
   if (SURVEY_EDIT.test(text)) return null;
   let m: RegExpExecArray | null;
+
+  /* emerging themes — "what themes are emerging since 1 November?", "which themes are new in the last two weeks?" */
+  if (/\b(?:emerging|new|rising|growing|fading|declining)\s+themes?\b|\bthemes?\s+(?:are\s+)?(?:emerging|new|rising|growing|fading)\b|\bwhat(?:['’]s|\s+is)\s+new\s+in\s+the\s+(?:interviews|transcripts|focus\s+groups)\b/i.test(text)) {
+    const now = Date.now();
+    const iso = /\b(\d{4}-\d{2}-\d{2})\b/.exec(text)?.[1];
+    const rel = /\b(?:in\s+the\s+)?(?:last|past)\s+(\d+|one|two|three|four)\s+(day|week|month)s?\b|\b(?:since\s+)?(last|this)\s+(week|month)\b|\byesterday\b/i.exec(text);
+    const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    const dm = /\bsince\s+(\d{1,2})\s+([a-z]{3,9})(?:\s+(\d{4}))?\b|\bsince\s+([a-z]{3,9})\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i.exec(text);
+    let since: string | null = iso ?? null;
+    if (!since && dm) { const d = Number(dm[1] ?? dm[5]); const mi = months.indexOf((dm[2] ?? dm[4]).toLowerCase().slice(0, 3)); const y = Number(dm[3] ?? dm[6]) || new Date(now).getUTCFullYear(); if (mi >= 0 && d >= 1 && d <= 31) since = new Date(Date.UTC(y, mi, d)).toISOString().slice(0, 10); }
+    if (!since && rel) {
+      const n = rel[1] ? (Number(rel[1]) || WORD_NUM[rel[1].toLowerCase()] || 1) : 1;
+      const unit = (rel[2] ?? rel[4] ?? "day").toLowerCase();
+      const days = /yesterday/i.test(rel[0]) ? 1 : unit === "week" ? 7 * n : unit === "month" ? 30 * n : n;
+      since = new Date(now - days * 86_400_000).toISOString().slice(0, 10);
+    }
+    return { op: "emerging", text, since: since ?? new Date(now - 7 * 86_400_000).toISOString().slice(0, 10) };
+  }
+  /* emotion — "what emotions come through in the price theme?", "read the sentiment of the service theme with AI" */
+  if ((m = /\b(?:emotions?|feelings?|sentiment|tone|mood)\b.*?\b(?:in|of|behind|for|around)\s+(?:the\s+)?[“"']?([^“"']{2,40}?)[”"']?\s+theme\b/i.exec(text))) return { op: "emotion", text, theme: m[1].trim() };
+  if ((m = /\bhow\s+do\s+(?:participants|people|interviewees)\s+feel\s+(?:in|about)\s+(?:the\s+)?[“"']?([^“"']{2,40}?)[”"']?\s+theme\b/i.exec(text))) return { op: "emotion", text, theme: m[1].trim() };
 
   /* double-coding — "set up double coding with 20% overlap", "blind double-code 15 % of the transcripts with the AI" */
   if (/\b(?:double[\s-]?cod(?:e|ing)|second\s+coder|inter[\s-]?coder\s+(?:check|reliability)|intercoder\s+(?:check|reliability)|blind\s+cod(?:e|ing))\b/i.test(text)) {
@@ -116,5 +140,7 @@ export function describeQualRequest(r: QualRequest): string {
     case "auto_code": return r.enabled ? "Code new transcripts and interviews automatically (as AI suggestions for review)." : "Stop coding new transcripts automatically.";
     case "group_session": return `Set up a ${r.mode} text group session from the guide${r.title ? ` called “${r.title}”` : ""}.`;
     case "schedule_live": return describeLiveSchedule(r);
+    case "emerging": return `Which themes are new, rising or fading in the transcripts added since ${r.since}, against the earlier ones.`;
+    case "emotion": return `A language model's reading of the emotion in the “${r.theme}” theme's excerpts, each tied to the words that carry it.`;
   }
 }

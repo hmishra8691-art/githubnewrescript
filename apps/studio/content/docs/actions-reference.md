@@ -12,7 +12,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
-**Analysis** (12): `set_question_analysis`, `propose_analysis_plan`, `set_analysis_plan`, `add_crosstab`, `remove_crosstab`, `add_analysis_test`, `remove_analysis_test`, `add_derived_variable`, `remove_derived_variable`, `update_crosstab`, `update_analysis_test`, `reorder_analysis_plan`
+**Analysis** (13): `set_question_analysis`, `propose_analysis_plan`, `set_analysis_plan`, `add_crosstab`, `remove_crosstab`, `add_analysis_test`, `remove_analysis_test`, `add_derived_variable`, `remove_derived_variable`, `update_crosstab`, `update_analysis_test`, `reorder_analysis_plan`, `set_weighting`
 
 **Localization** (9): `add_language`, `remove_language`, `set_language_status`, `set_translations`, `approve_translations`, `confirm_translations`, `set_language_routing`, `set_glossary`, `replace_wording`
 
@@ -324,7 +324,9 @@ export type AnalysisAction =
   | { op: "update_crosstab"; id: string; rows?: string[]; columns?: string[]; measure?: PlannedCrosstab["measure"] | null; priority?: number; hypotheses?: string[]; reason?: string | null }
   | { op: "update_analysis_test"; id: string; method?: AnalysisMethod; outcome?: string | null; variables?: string[]; groupBy?: string | null; moderator?: string | null; mediator?: string | null; priority?: number; hypotheses?: string[]; reason?: string | null; /** merged into the item's options; a key set to null is removed */ options?: Record<string, unknown> | null }
   /** the ids in the order wanted; an id left out keeps its relative place after the ones named */
-  | { op: "reorder_analysis_plan"; crosstabs?: string[]; tests?: string[] };
+  | { op: "reorder_analysis_plan"; crosstabs?: string[]; tests?: string[] }
+  /** IM9: the plan's rim weighting — variable → {option code or label: share}; shares are normalised per variable; null clears */
+  | { op: "set_weighting"; rim: { variable: string; targets: Record<string, number> }[] | null; cap?: [number, number]; basis?: string };
 ```
 
 ## Localization actions

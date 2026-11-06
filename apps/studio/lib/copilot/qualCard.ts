@@ -79,6 +79,12 @@ export function qualPreview(req: QualRequest, data: { state: QualState; segments
     }
     case "auto_code": return { title, lines: [req.enabled ? "Each new transcript, AI interview or closed group session is coded as AI suggestions (deductive with the current codebook, or proposing codes when there are none), at most 6 model calls per source, metered. Turning it on needs Data: Edit." : "New sources will no longer be coded automatically; what was coded stays."], runnable: true, runLabel: req.enabled ? "Turn it on" : "Turn it off", calls: 0 };
     case "group_session": return { title, lines: ["A text-only live conversation: participants join by link, answer each prompt and rate a few of each other's answers; you (or, autonomous, the session's clock) move it on. For live video sessions use Research Tools → Qualitative → Live sessions.", "Set it up and start it in Research Tools → Qualitative → Group sessions."], runnable: true, runLabel: "Set it up", calls: 0 };
+    case "emerging": return { title, lines: [`The transcripts added since ${req.since} against the earlier ones: each theme's share of participant segments in both periods, and whether it is new, rising, fading or steady. No model call.`, ...(data.sandbox ? ["The sandbox has no dated transcripts — open a saved study."] : [])], runnable: !data.sandbox && themes.length > 0, runLabel: "Compare the periods", calls: 0 };
+    case "emotion": {
+      const t = themes.find((x) => x.name.toLowerCase() === req.theme.toLowerCase()) ?? themes.find((x) => x.name.toLowerCase().includes(req.theme.toLowerCase()));
+      if (!t) return { title, lines: [themes.length ? `No theme is called “${req.theme}”. The themes are: ${themes.map((x) => x.name).join(", ")}.` : "There are no themes yet."], runnable: false, calls: 0 };
+      return { title, lines: [`“${t.name}”: one model call over its excerpts (up to 40, redacted). Each reading must quote the words that carry the emotion or it is dropped; the result is the model's reading — indicative, never a measure.`, ...noModel], runnable: data.aiReady && !data.sandbox, runLabel: "Read the emotion", calls: 1, themeIds: [t.id] };
+    }
     case "schedule_live": {
       /* G2 2026-10-22: each session's local time, its instant, size and segment — computed here, created only on Run */
       const r = resolveLiveSchedule(req, { now: data.now ?? Date.now(), fallbackTimeZone: data.timeZone, baseTitle: data.guide?.title });

@@ -141,5 +141,7 @@ export function plannedAnalyses(def: SurveyDefinition, dataset: DatasetSpec, opt
       out.push({ definition: { name: `${q.code} — ${words(m)}`, kind, dataset, variables: [q.variableName], options: { planned: `primary:${q.id}`, ...(kind === "topbox" ? { primaryBox: 2 } : {}), ...(kind === "descriptive" && measurementOf(q) !== "nominal" ? { statistics: ["mean", "median"] } : {}) } }, source: { kind: "primary", questionId: q.id }, priority: a.role === "dependent" ? 1 : 2, hypotheses: a.hypotheses });
     }
   }
+  /* IM9: the plan's weighting runs with every planned analysis — a definition that already carries its own keeps it */
+  if (plan.weightingScheme) for (const p of out) if (!p.definition.weighting) p.definition.weighting = { rim: plan.weightingScheme.rim.map((r) => ({ variable: planVariableName(def, r.variable), targets: r.targets })), ...(plan.weightingScheme.cap ? { cap: plan.weightingScheme.cap } : {}) };
   return out.sort((a, b) => (b.hypotheses.length ? 1 : 0) - (a.hypotheses.length ? 1 : 0) || a.priority - b.priority);
 }

@@ -1190,6 +1190,19 @@ export function useCopilot(opts: {
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
     setBusy(true);
     const fail = (message: string) => opts.patch(id, { status: "ready", reply: reply(message), engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "output", engine: "output" }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
+    /* IM9: the infographic is a dashboard of the findings that hold — made by the analytics route, opened in Analytics */
+    if (it.output.type === "infographic") {
+      try {
+        if (s.surveyDbId === "sandbox") { fail("The sandbox has no stored analysis run. Open a survey with fieldwork, run the plan, and ask there."); return; }
+        const r = await fetch(`/api/surveys/${s.surveyDbId}/analytics/infographic`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+        const d = await r.json().catch(() => null) as { dashboardId?: string; used?: number; skipped?: number; error?: string } | null;
+        if (!r.ok || !d?.dashboardId) { fail(d?.error ?? `The infographic could not be made (HTTP ${r.status}).`); return; }
+        const said = `Made the infographic: ${d.used} finding${d.used === 1 ? "" : "s"} that hold${d.skipped ? ` (${d.skipped} that do not hold were left out)` : ""}. Open Analytics → Present → Dashboards to view, retitle or share it.`;
+        opts.patch(id, { status: "ready", reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output", engine: "output", ops: "infographic" }, detected: it.detected, statusDetail: said }) });
+      } catch (e) { fail(`The infographic could not be made: ${(e as Error).message || "the network request failed"}.`); }
+      finally { setBusy(false); }
+      return;
+    }
     try {
       const sandbox = s.surveyDbId === "sandbox";
       const rows = sandbox ? rowsRef.current : null;

@@ -93,6 +93,18 @@ export async function runQualCard(card: QualCard, c: Ctx): Promise<{ card: QualC
         const lines = r.rooms.map((x) => `${x.title}: scheduled, ${x.invites.length} participant link${x.invites.length === 1 ? "" : "s"}${x.problems.length ? ` — ${x.problems.join(" ")}` : ""}`);
         return { card: { ...card, status: "done", result: [...lines, "Copy the links (or e-mail them) and moderate from Research Tools → Qualitative → Live sessions."] }, said: `Scheduled ${r.rooms.length} live session${r.rooms.length === 1 ? "" : "s"}.` };
       }
+      case "emerging": case "emotion": {
+        const r = await fetch(`/api/surveys/${c.surveyId}/qual/depth`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(req.op === "emerging" ? { action: "emerging", since: req.since } : { action: "emotion", theme: card.themeIds?.[0] ?? req.theme }) });
+        const d = await r.json().catch(() => null) as any;
+        if (!r.ok || !d) return { card: { ...card, status: "failed", error: d?.error ?? `HTTP ${r.status}` }, said: `Not done: ${d?.error ?? `HTTP ${r.status}`}` };
+        if (req.op === "emerging") {
+          if (!d.emerging) return { card: { ...card, status: "done", result: [d.note] }, said: d.note };
+          const lines = d.emerging.themes.map((t: any) => `${t.status === "new" ? "NEW" : t.status === "rising" ? "↑" : t.status === "fading" ? "↓" : "·"} ${t.name}: ${t.because}`);
+          return { card: { ...card, status: "done", result: [`${d.recentSources} recent source(s) against ${d.earlierSources} earlier.`, ...lines, d.emerging.note] }, said: lines.slice(0, 3).join(" ") };
+        }
+        if (!d.emotion) return { card: { ...card, status: "done", result: [d.note] }, said: d.note };
+        return { card: { ...card, status: "done", result: [...d.emotion.lines, d.emotion.label], quotes: d.emotion.readings.slice(0, 5).map((x: any) => ({ id: x.excerptId, quote: x.quote, where: `${x.emotion} · cue “${x.cue}”` })) }, said: d.emotion.lines[0] };
+      }
       default: return { card: { ...card, status: "answered" }, said: card.title };
     }
   } catch (e) {

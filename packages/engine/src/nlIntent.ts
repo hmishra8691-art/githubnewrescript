@@ -168,7 +168,9 @@ export interface ProductionTestRequest { count?: number; fill?: { quota: string;
 /** what the Studio produces for an output request (Phase 5) */
 export interface OutputRequest {
   /** `research_plan_docx` (2026-10-17): the Word research plan — the proposal's design edition with the analysis plan, the traceability matrix and the QC requirements */
-  type: "proposal_docx" | "sap_docx" | "findings_docx" | "findings_pptx" | "research_plan_docx";
+  type: "proposal_docx" | "sap_docx" | "findings_docx" | "findings_pptx" | "research_plan_docx"
+    /** IM9: the findings that hold, as a one-screen infographic dashboard (pictograms and KPI tiles tied to their analyses) */
+    | "infographic";
   audience: "executive" | "client" | "researcher";
   client?: string;
   /** the words that named the document, for the card */
@@ -1612,6 +1614,79 @@ const downstreamAsk: Recogniser = (r) => {
   return act(r, "research_design", `Record the ${/method/.test(what) ? "methodology" : /sample/.test(what) ? "sample size" : "population"} as “${value}”. What else it touches: ${lines.join("; ")}. Nothing else is changed by this — each is its own request.`, [action], [det(what, value), ...d.map((x) => det("downstream", x.area))]);
 };
 
+/* ---------------------------------------------------------- banners, weighting, trackers (IM9) */
+
+const GROUP_SYNONYMS: [RegExp, RegExp][] = [[/^(?:women|woman|females?|ladies)$/i, /^(?:female|women|woman)$/i], [/^(?:men|man|males?)$/i, /^(?:male|men|man)$/i]];
+/** the option a group word names, across the survey's choice questions — "women" is the Female option */
+function optionNamed(def: SurveyDefinition, word: string): { q: Question; code: string | number } | null {
+  const w = word.trim().replace(/[–—]/g, "-").toLowerCase();
+  const hits: { q: Question; code: string | number }[] = [];
+  for (const q of def.questions) for (const o of q.options ?? []) {
+    const l = stripHtmlText(o.label).trim().replace(/[–—]/g, "-").toLowerCase();
+    if (l === w || GROUP_SYNONYMS.some(([a, b]) => a.test(w) && b.test(l)) || l.replace(/\s*(?:years?|yrs?)$/, "") === w.replace(/\s*(?:years?|yrs?)$/, "")) hits.push({ q, code: o.code });
+  }
+  const qs = [...new Set(hits.map((h) => h.q.id))];
+  return qs.length === 1 ? hits[0] : null;
+}
+const analyticsDepth: Recogniser = (r) => {
+  const t = r.text.replace(/[.!]+$/, "");
+  let m: RegExpExecArray | null;
+  /* weighting: "weight the data to the census: 48% male, 52% female", "weight by gender 50/50", "remove the weighting" */
+  if (/^(?:remove|clear|drop|turn\s+off)\s+(?:the\s+)?weight(?:ing|s)$|^(?:don['’]t|do\s+not)\s+weight(?:\s+the\s+data)?$/i.test(t)) return act(r, "analysis", "Remove the weighting: the analyses run unweighted.", [{ op: "set_weighting", rim: null } as SurveyAction], []);
+  if (/^(?:weight|rim[-\s]weight|re-?weight)\s+(?:the\s+)?(?:data|sample|responses|results|analys[ie]s)?\b/i.test(t) || /^(?:apply|add|set\s+up)\s+(?:rim\s+)?weight(?:ing|s)\b/i.test(t)) {
+    const basis = /\bto\s+(?:the\s+)?((?:\d{4}\s+)?(?:census|population|national\s+statistics|universe|known\s+profile|market\s+profile)[^:;,]*)/i.exec(t)?.[1]?.trim();
+    const pairs = [...t.matchAll(/(\d{1,3}(?:\.\d+)?)\s*%\s+([A-Za-z][\w+\-]*(?:\s+[\w+\-]+)?)|\b([A-Za-z][\w+\-]*(?:\s+[\w+\-]+)?)\s+(\d{1,3}(?:\.\d+)?)\s*%/g)].map((x) => ({ share: Number(x[1] ?? x[4]), word: (x[2] ?? x[3]).replace(/^(?:and|with|are|is)\s+/i, "").replace(/\s+(?:and|with)$/i, "") }));
+    const byQ = new Map<string, { q: Question; targets: Record<string, number> }>();
+    const unknown: string[] = [];
+    for (const p of pairs) {
+      const words = p.word.split(/\s+/);
+      const hit = optionNamed(r.def, p.word) ?? optionNamed(r.def, words[words.length - 1]) ?? optionNamed(r.def, words[0]);
+      if (!hit) { unknown.push(p.word); continue; }
+      const e = byQ.get(hit.q.id) ?? { q: hit.q, targets: {} };
+      e.targets[String(hit.code)] = p.share; byQ.set(hit.q.id, e);
+    }
+    /* "by gender 50/50" */
+    const split = /\bby\s+(.+?)\s+((?:\d{1,3}\s*\/\s*)+\d{1,3})\b/i.exec(t) ?? /((?:\d{1,3}\s*\/\s*)+\d{1,3})\s+(?:by\s+)?(.+)$/i.exec(t);
+    if (!byQ.size && split) {
+      const [phrase, sh] = /\//.test(split[1]) ? [split[2], split[1]] : [split[1], split[2]];
+      const q = conceptOrAsk(r, phrase.replace(/\s+(?:to\s+the\s+.+)$/i, ""), "analysis", "Weight the data.");
+      if (!q.ok) return q.out;
+      const shares = sh.split("/").map(Number);
+      const opts = (q.v.options ?? []).filter((o) => !NON_SUBSTANTIVE.test(stripHtmlText(o.label)));
+      if (shares.length !== opts.length) return refused("analysis", "Weight the data.", `${shares.length} shares for ${code(q.v)}, which has ${opts.length} answers (${opts.map((o) => stripHtmlText(o.label)).join(", ")}).`, qDetected([q.v]));
+      byQ.set(q.v.id, { q: q.v, targets: Object.fromEntries(opts.map((o, i) => [String(o.code), shares[i]])) });
+    }
+    if (!byQ.size) return { kind: "clarify", category: "analysis", understood: "Weight the data.", question: `To what targets? Give each group's share, e.g. “Weight the data to the census: 48% male, 52% female”.${unknown.length ? ` (No question has an answer called ${unknown.map((u) => `“${u}”`).join(", ")}.)` : ""}`, choices: [], detected: [] };
+    const rim = [...byQ.values()].map((e) => ({ variable: e.q.variableName, targets: e.targets }));
+    const off = [...byQ.values()].filter((e) => Math.abs(Object.values(e.targets).reduce((a, b) => a + b, 0) - 100) > 1);
+    if (off.length) return refused("analysis", "Weight the data.", `The targets for ${off.map((e) => `${code(e.q)} add up to ${Object.values(e.targets).reduce((a, b) => a + b, 0)} %`).join("; ")} — each question's shares must add up to 100 %.`, qDetected(off.map((e) => e.q)));
+    return act(r, "analysis", `Rim-weight every planned analysis${basis ? ` to ${basis}` : ""}: ${[...byQ.values()].map((e) => `${code(e.q)} ${Object.entries(e.targets).map(([k, v]) => `${stripHtmlText(e.q.options!.find((o) => String(o.code) === k)!.label)} ${v} %`).join(", ")}`).join("; ")}; weights capped 0.3–3, the efficiency and design effect reported with every table.${unknown.length ? ` Not matched to any answer: ${unknown.join(", ")}.` : ""}`, [{ op: "set_weighting", rim, ...(basis ? { basis } : {}) } as SurveyAction], [...qDetected([...byQ.values()].map((e) => e.q)), ...(basis ? [det("basis", basis)] : [])]);
+  }
+  /* a banner: "cross-tab satisfaction by age and gender with significance testing" */
+  m = /^(?:cross[-\s]?tab(?:ulate)?|crosstab|break\s+down|tabulate|run\s+a\s+banner\s+(?:of|for))\s+(.+?)\s+(?:by|across|against)\s+(.+?)(?:\s+with\s+(?:significance|sig\.?|stat(?:istical)?\s+significance)(?:\s+test(?:ing|s)?)?)?$/i.exec(t);
+  if (m && /\band\b|,/.test(m[2]) && !/\band\b|,/.test(m[1])) {
+    const cols = m[2].split(/\s*,\s*(?:and\s+)?|\s+and\s+/).map((x) => x.trim()).filter(Boolean);
+    const row = conceptOrAsk(r, m[1], "analysis", `A banner of ${m[1]} by ${cols.join(", ")}.`);
+    if (!row.ok) return row.out;
+    const colQs: Question[] = [];
+    for (const c of cols) { const q = conceptOrAsk(r, c, "analysis", `A banner of ${m[1]} by ${cols.join(", ")}.`); if (!q.ok) return q.out; colQs.push(q.v); }
+    return act(r, "analysis", `A banner table: ${code(row.v)} (${row.v.variableName}) by ${colQs.map((q) => `${code(q)} (${q.variableName})`).join(" and ")} side by side — column percentages, each column tested against the others at the plan's alpha with letters marking the significant differences.`, [{ op: "add_crosstab", rows: [row.v.variableName], columns: colQs.map((q) => q.variableName), priority: 1, reason: `${plain(row.v.text, 40)} by ${colQs.map((q) => plain(q.text, 20)).join(" and ")}` } as SurveyAction], qDetected([row.v, ...colQs]));
+  }
+  /* a tracker: "track awareness and NPS by wave", "set up a tracker for X" */
+  m = /^(?:track|trend)\s+(.+?)\s+(?:by|across|over)\s+(?:the\s+)?(?:waves?|time|months?|quarters?)$|^(?:set\s+up|create|build)\s+(?:a\s+)?(?:tracker|tracking(?:\s+study)?)\s+(?:for|of|on)\s+(.+)$/i.exec(t);
+  if (m) {
+    const items = (m[1] ?? m[2]).split(/\s*,\s*(?:and\s+)?|\s+and\s+/).map((x) => x.trim()).filter(Boolean);
+    const qs: Question[] = [];
+    for (const it of items) { const q = conceptOrAsk(r, it, "analysis", `Track ${items.join(", ")} by wave.`); if (!q.ok) return q.out; qs.push(q.v); }
+    const wave = r.def.questions.find((q) => /^WAVE$/i.test(q.variableName));
+    const actions: SurveyAction[] = [];
+    if (!wave) actions.push({ op: "create_question", ref: "wave", type: "hidden", text: "Wave", variable: "WAVE" } as SurveyAction);
+    actions.push({ op: "add_crosstab", rows: qs.map((q) => q.variableName), columns: ["WAVE"], priority: 1, reason: `${qs.map((q) => plain(q.text, 24)).join(", ")} by wave (tracker)` } as SurveyAction);
+    return act(r, "analysis", `A tracker: ${qs.map((q) => `${code(q)} (${q.variableName})`).join(", ")} by WAVE, each wave tested against the others.${wave ? "" : " WAVE is added as a hidden variable — set it per wave (e.g. from the link: ?WAVE=3) so every response carries its wave."}`, actions, qDetected(qs));
+  }
+  return null;
+};
+
 /* ---------------------------------------------------------- accessibility, devices, the look (IM8) */
 
 const accessReview: Recogniser = (r) => {
@@ -2892,6 +2967,9 @@ const OUTPUT_VERB = String.raw`(?:create|write|draft|prepare|produce|generate|bu
 const OUTPUT_MOD = String.raw`(?:(?:client[-\s]ready|client|final|full|formal|complete|executive|research|findings|results|study|topline|detailed|polished|professional)\s+)*`;
 const outputRequest: Recogniser = (r) => {
   const t = r.text.replace(/[.!]+$/, "").trim();
+  /* IM9: "make an infographic of the key findings" — a dashboard from the findings that hold */
+  if (/^(?:make|create|build|design|produce|generate|turn)\s+(?:me\s+)?(?:an?\s+|the\s+)?(?:one[-\s]page\s+)?infographics?\b|\binfographic\s+(?:of|from|for|with)\s+(?:the\s+)?(?:key\s+)?(?:findings|results)\b|^(?:turn|make)\s+(?:the\s+)?(?:key\s+)?findings\s+into\s+an?\s+infographic\b/i.test(t))
+    return { kind: "output", category: "reporting", understood: "An infographic of the findings that hold: a pictogram for each share (“7 in 10 …”), a KPI tile for each other finding, every tile tied to its analysis — saved as a dashboard. Nothing about a finding that does not hold.", output: { type: "infographic", audience: "client", words: "an infographic of the key findings" }, detected: [det("output", "infographic")] };
   let m: RegExpExecArray | null;
   let type: OutputRequest["type"] | null = null;
   let tail = "";
@@ -3660,7 +3738,7 @@ const advancedModels: Recogniser = (r) => {
 const ADVANCED_ANALYSIS = /\b(?:hb|hierarchical\s+bayes(?:ian)?|individual[\s-]level\s+(?:utilit(?:y|ies)|estimation|scores)|latent[\s-]class|gabor[\s\-–]granger)\b/i;
 
 const RECOGNISERS: Recogniser[] = [
-  conflicts, downstreamAsk, accessReview, cleaningRequest, advancedModels,
+  conflicts, downstreamAsk, accessReview, analyticsDepth, cleaningRequest, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
   fieldworkRequest, availabilityCheck, quotaSentences, productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,

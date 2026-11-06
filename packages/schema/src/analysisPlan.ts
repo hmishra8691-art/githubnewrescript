@@ -151,7 +151,21 @@ export type MultipleComparisons = (typeof MULTIPLE_COMPARISONS)[number];
 export const MISSING_DATA = ["listwise", "pairwise", "impute_none"] as const;
 export type MissingDataPolicy = (typeof MISSING_DATA)[number];
 
+/**
+ * THE PLAN'S WEIGHTING (Intelligent Mode IM9, 2026-11-06): rim targets — each variable's category shares, keyed by
+ * the option code — and the cap on the weights. Every analysis the plan runs is weighted by it; `basis` says where
+ * the targets come from ("the 2021 census"). The words of `qualityStandards.weighting` stay the description.
+ */
+export const PlanWeighting = z.object({
+  rim: z.array(z.object({ variable: z.string(), targets: z.record(z.number().nonnegative()) })).min(1).max(8),
+  cap: z.tuple([z.number().positive(), z.number().positive()]).optional(),
+  basis: z.string().max(200).optional(),
+});
+export type PlanWeighting = z.infer<typeof PlanWeighting>;
+
 export const AnalysisPlan = z.object({
+  /** IM9: the rim weighting every planned analysis runs with — see PlanWeighting */
+  weightingScheme: PlanWeighting.optional(),
   crosstabs: z.array(PlannedCrosstab).default([]),
   tests: z.array(PlannedTest).default([]),
   derived: z.array(PlannedDerived).default([]),

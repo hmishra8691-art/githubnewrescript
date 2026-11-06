@@ -1,3 +1,4 @@
+import { stripHtmlText } from "./html.js";
 import type { AnalysisMethod, AnalysisPlan, AnalysisRole, MeasurementLevel, PlannedCrosstab, PlannedDerived, PlannedSegment, PlannedTest, Question, SurveyDefinition } from "@rescript/schema";
 import { ANALYSIS_METHODS, ANALYSIS_ROLES, MEASUREMENT_LEVELS } from "@rescript/schema";
 import { buildAnalysisFramework, crosstabKey, freePlanId, isNonQuestionVariable, testKey } from "./analysisFramework.js";
@@ -51,13 +52,15 @@ export type AnalysisAction =
   | { op: "update_crosstab"; id: string; rows?: string[]; columns?: string[]; measure?: PlannedCrosstab["measure"] | null; priority?: number; hypotheses?: string[]; reason?: string | null }
   | { op: "update_analysis_test"; id: string; method?: AnalysisMethod; outcome?: string | null; variables?: string[]; groupBy?: string | null; moderator?: string | null; mediator?: string | null; priority?: number; hypotheses?: string[]; reason?: string | null; /** merged into the item's options; a key set to null is removed */ options?: Record<string, unknown> | null }
   /** the ids in the order wanted; an id left out keeps its relative place after the ones named */
-  | { op: "reorder_analysis_plan"; crosstabs?: string[]; tests?: string[] };
+  | { op: "reorder_analysis_plan"; crosstabs?: string[]; tests?: string[] }
+  /** IM9: the plan's rim weighting — variable → {option code or label: share}; shares are normalised per variable; null clears */
+  | { op: "set_weighting"; rim: { variable: string; targets: Record<string, number> }[] | null; cap?: [number, number]; basis?: string };
 
 export const ANALYSIS_ACTION_OPS = [
   "set_question_analysis", "propose_analysis_plan", "set_analysis_plan",
   "add_crosstab", "remove_crosstab", "add_analysis_test", "remove_analysis_test",
   "add_derived_variable", "remove_derived_variable",
-  "update_crosstab", "update_analysis_test", "reorder_analysis_plan",
+  "update_crosstab", "update_analysis_test", "reorder_analysis_plan", "set_weighting",
 ] as const;
 const OPS = new Set<string>(ANALYSIS_ACTION_OPS);
 export const isAnalysisOp = (op: string): boolean => OPS.has(op);
@@ -158,6 +161,24 @@ const list = <T,>(v: unknown, f: (x: unknown) => T | string): T[] | undefined =>
 /** The model's JSON as a typed action, a reason it was refused, or null when the op is not one of ours. */
 export function coerceAnalysisAction(op: string, o: Record<string, unknown>): AnalysisAction | string | null {
   switch (op) {
+    case "set_weighting": case "set_weights": case "weight_data": {
+      if (o.rim === null || o.clear === true) return { op: "set_weighting", rim: null };
+      const raw = Array.isArray(o.rim) ? o.rim : Array.isArray(o.targets) ? o.targets : null;
+      if (!raw?.length) return "set_weighting needs rim: [{variable, targets: {option: share}}] (or rim: null to clear)";
+      const rim: { variable: string; targets: Record<string, number> }[] = [];
+      for (const r of raw.slice(0, 8)) {
+        const x = (r ?? {}) as Record<string, unknown>;
+        const variable = str(x.variable ?? x.question);
+        const t = x.targets && typeof x.targets === "object" && !Array.isArray(x.targets) ? x.targets as Record<string, unknown> : null;
+        if (!variable || !t) return "each rim entry needs a variable and targets {option: share}";
+        const targets: Record<string, number> = {};
+        for (const [k, v] of Object.entries(t)) { const n = typeof v === "number" ? v : Number(String(v).replace("%", "")); if (!Number.isFinite(n) || n < 0) return `the target for ${k} is not a share`; targets[k] = n; }
+        if (!Object.keys(targets).length) return `${variable} has no targets`;
+        rim.push({ variable, targets });
+      }
+      const cap = Array.isArray(o.cap) && o.cap.length === 2 && o.cap.every((n) => typeof n === "number" && n > 0) ? [o.cap[0] as number, o.cap[1] as number] as [number, number] : undefined;
+      return { op: "set_weighting", rim, ...(cap ? { cap } : {}), ...(str(o.basis) ? { basis: str(o.basis)!.slice(0, 200) } : {}) };
+    }
     case "set_question_analysis": {
       const target = str(o.target ?? o.question);
       if (!target) return "set_question_analysis needs a target";
@@ -339,6 +360,28 @@ const sameTest = (a: PlannedTest, b: PlannedTest) => testKey(a) === testKey(b);
 
 export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, env: AnalysisEnv): AnalysisApplied {
   switch (a.op) {
+    case "set_weighting": {
+      const plan = planOf(def);
+      if (a.rim === null) { if (!plan.weightingScheme) fail("the plan has no weighting"); delete plan.weightingScheme; plan.updatedAt = env.now; return { description: "Weighting removed — the analyses run unweighted", destructive: "Removes the plan's weighting", touched: [] }; }
+      const rim = a.rim.map((r) => {
+        const q = env.question(r.variable) ?? fail(`there is no question “${r.variable}” to weight on`);
+        const opts = q.options ?? [];
+        if (!opts.length) fail(`${q.code} has no options — weight on a question whose answers are categories`);
+        const targets: Record<string, number> = {};
+        for (const [k, v] of Object.entries(r.targets)) {
+          const o = opts.find((x) => String(x.code) === k) ?? opts.find((x) => stripHtmlText(x.label).toLowerCase() === k.toLowerCase()) ?? fail(`${q.code} has no option “${k}” — its options are ${opts.map((x) => `${x.code}=${stripHtmlText(x.label)}`).join(", ")}`);
+          targets[String(o.code)] = v;
+        }
+        const sum = Object.values(targets).reduce((s, n) => s + n, 0);
+        if (!sum) fail(`the targets for ${q.code} add up to nothing`);
+        if (sum > 1.5 && Math.abs(sum - 100) > 1) fail(`the targets for ${q.code} add up to ${sum} % — they should add up to 100 %`);
+        return { variable: q.variableName, targets };
+      });
+      plan.weightingScheme = { rim, ...(a.cap ? { cap: a.cap } : { cap: [0.3, 3] as [number, number] }), ...(a.basis ? { basis: a.basis } : {}) };
+      plan.updatedAt = env.now;
+      const unmatched = rim.flatMap((r) => { const q = env.question(r.variable)!; const left = (q.options ?? []).filter((o) => !(String(o.code) in r.targets)); return left.length ? [`${q.code}: ${left.map((o) => stripHtmlText(o.label)).join(", ")}`] : []; });
+      return { description: `Weighting: ${rim.map((r) => `${r.variable} (${Object.keys(r.targets).length} targets)`).join(", ")}, capped ${plan.weightingScheme.cap!.join("–")}${a.basis ? `, to ${a.basis}` : ""}`, touched: [], ...(unmatched.length ? { warnings: [`Answers with no target weigh nothing (${unmatched.join("; ")}) — give them a share or merge them`] } : {}) } as AnalysisApplied;
+    }
     case "set_question_analysis": {
       const q = env.question(a.target) ?? fail(`there is no question “${a.target}”`);
       const cur = q.analysis ?? { primary: [], crosstabBy: [], modeling: [], relatedTo: [], hypotheses: [] };
@@ -555,6 +598,7 @@ function checkHypotheses(def: SurveyDefinition, labels: string[]) {
 
 export function describeAnalysisAction(a: AnalysisAction): string {
   switch (a.op) {
+    case "set_weighting": return a.rim ? `Weight the analyses (${a.rim.map((r) => r.variable).join(", ")})` : "Remove the weighting";
     case "set_question_analysis": return `Analysis of ${a.target}`;
     case "propose_analysis_plan": return a.merge ? "Add the engine's analysis plan" : "Plan the analysis";
     case "set_analysis_plan": return !a.crosstabs && !a.tests && !a.derived && !a.segments && a.advancedRerun !== undefined ? "Set when the advanced models re-run" : a.merge ? "Add to the analysis plan" : "Set the analysis plan";

@@ -55,3 +55,4 @@ export * from "./advancedStale.js";
 /* G3 2026-10-22: panel entries and exits (redirect-based panel recruitment), shared by the runtime and the Studio sandbox */
 export * from "./panels/service.js";
 export * from "./panels/stores.js";
+export * from "./infographic.js";

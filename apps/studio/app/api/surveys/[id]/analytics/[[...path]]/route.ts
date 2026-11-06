@@ -1,3 +1,4 @@
+import { infographicDashboard } from "@rescript/analytics";
 import { shareView } from "@/lib/shareView";
 import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, projectLookup, recordUsage } from "@/lib/metering";
@@ -341,6 +342,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     if (!r.ok) return json({ error: r.error, warnings: r.warnings ?? [] }, r.status);
     log(ctx, "analytics.plan_run", r.runId ?? r.applyId ?? null, { applied: true, status: r.summary?.status, n: r.summary?.n, analyses: r.summary?.items.length, created: r.summary?.counts.created, updated: r.summary?.counts.updated, charts: r.summary?.counts.charts, report: r.report?.action, dashboard: r.dashboard?.action });
     return json(r);
+  }
+  /*
+   * AN INFOGRAPHIC FROM THE FINDINGS (IM9). The latest run's findings that hold, as a one-screen dashboard: a
+   * pictogram per share ("7 in 10"), a KPI tile per other finding, every tile tied to its analysis so it moves with
+   * the data. Saved as a dashboard like any other (analytics.edit); nothing about a finding that does not hold.
+   */
+  if (head === "infographic") {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const run = await latestRun(db, surveyId);
+    if (!run) return bad("No analysis run yet — run the plan first, then ask for the infographic.");
+    const title = `${(loaded.def.research?.objective ?? loaded.def.meta.title).slice(0, 80)} — at a glance`;
+    const ig = infographicDashboard(run.findings, { title });
+    if (!ig.used) return bad("No finding holds in the latest run — an infographic would have nothing true to show yet.");
+    const { data, error } = await db.from("analytics_reports").insert({ survey_id: surveyId, kind: "dashboard", name: title.slice(0, 160), definition: ig.dashboard, theme_id: null, mode: "live", created_by: ctx.user.userId, updated_by: ctx.user.userId }).select("id").single();
+    if (error || !data) return bad(`The infographic could not be saved: ${error?.message ?? "no row"}`, 500);
+    log(ctx, "analytics.report_created", String(data.id), { infographic: true, used: ig.used, skipped: ig.skipped });
+    return json({ ok: true, dashboardId: String(data.id), used: ig.used, skipped: ig.skipped }, 201);
   }
   /* run the whole plan now and keep the findings */
   if (head === "plan" && itemId === "run") {

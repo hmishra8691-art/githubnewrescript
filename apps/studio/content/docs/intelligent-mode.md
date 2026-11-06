@@ -189,6 +189,17 @@ A quota sentence names the question by code, variable or wording; shares map to 
 
 *Check accessibility* reads the definition against WCAG 2.1 AA — the contrast of the theme's own colour pairs, stimulus images with no text alternative, time limits that cannot be extended, text below 16 px, grids too wide to read in order, questions with no text — names each criterion, and proposes the fixes one change can make (the nearest colours that reach 4.5:1, a readable text size). *Set the alt text of Q3 to …* writes what a screen reader announces. *How does it look on a phone?* lists what a phone does to this survey (wide grids, long lists, drag ranking, sliders, fixed widths) with the fix for each; the preview's device frames show it. *Make it look right for …* proposes a look from who answers — a professional audience, older respondents, a phone-first audience, a sensitive topic — each choice with its reason. Brand guidelines as a PDF (Branding → Brand guidelines) give their stated colours and typeface to the same palette generator the website import uses. All of these read the definition; a check with a screen reader and a keyboard on the real page is still a person's job.
 
+### Analysis and qualitative depth
+
+| Sentence | Read as |
+|---|---|
+| Cross-tab FAV by region and gender with significance testing | actions |
+| Weight the data to the census: 48% male, 52% female | actions |
+| Track FAV by wave | actions |
+| Make an infographic of the key findings | output |
+
+A **banner** puts several column variables side by side, each tested against the others. **Weighting** sentences become the analysis plan's rim weighting — each group's share mapped to its answer, the shares checked to add up, the weights capped 0.3–3, the efficiency and design effect reported with every table; every planned analysis runs with it. A **tracker** adds a WAVE variable (set per wave from the link) and the KPIs by wave. The **infographic** is a dashboard of the findings that hold — a pictogram per share (“7 in 10 …”), a KPI tile per other finding, each tied to its analysis. In the qualitative data, *what themes are emerging since 1 November?* compares each theme's share of participant segments before and after the date (new, rising, fading, steady — a qualitative signal, not a test), and *what emotions come through in the price theme?* asks the model for each excerpt's emotion with the words that carry it, dropping any reading whose cue is not verbatim.
+
 ### Data cleaning
 
 | Sentence | Read as |

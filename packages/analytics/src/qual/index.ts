@@ -22,3 +22,4 @@ export * from "./groupStoreDb.js";
 /* platform audit 2026-11-05: the mixed-methods hand-off */
 export * from "./handoff.js";
 export * from "./deckQuotes.js";
+export * from "./depth.js";
