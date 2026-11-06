@@ -359,6 +359,11 @@ export function IntelligentView() {
       await copilot.themeRequest(t, interp, heard);
       setBusy(false); inputRef.current?.focus(); return;
     }
+    // a production-like test (IM3): simulated respondents against the live counts and gates — nothing written
+    if (interp.kind === "test") {
+      await copilot.runProductionTest(t, interp, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     // the research workflow (Phase 6): where the study stands and what comes next — the planner on this survey, the Workflow tab open
     if (interp.kind === "workflow") {
       await copilot.showWorkflow(t, interp, heard);

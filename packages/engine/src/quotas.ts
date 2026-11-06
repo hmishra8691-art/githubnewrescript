@@ -140,3 +140,21 @@ export function tallyQuotaCells(
   }
   return n;
 }
+
+/**
+ * THE COUNTERS A PRODUCTION-LIKE TEST LINK STARTS FROM (IM3, 2026-11-06): the counts given (the live ones, for
+ * `?counts=live`), with the named cells set to their limit (`?full=<cell id or label>,…`) — a fill never lowers a
+ * count. Pure: nothing is written; the test session's own completes still go to the TEST counters.
+ */
+export function simulatedQuotaCounts(def: SurveyDefinition, base: QuotaCounts, full: string[]): QuotaCounts {
+  const out: QuotaCounts = JSON.parse(JSON.stringify(base ?? {}));
+  const want = new Set(full.map((s) => s.trim().toLowerCase()).filter(Boolean));
+  if (!want.size) return out;
+  for (const q of def.quotas) for (const c of q.cells) {
+    if (!want.has(c.id.toLowerCase()) && !want.has(c.label.trim().toLowerCase()) && !want.has(q.id.toLowerCase()) && !want.has(q.name.trim().toLowerCase())) continue;
+    const lim = effectiveLimit(q, c.limit, c.limitType);
+    const by = (out[q.id] ??= {});
+    by[c.id] = Math.max(by[c.id] ?? 0, lim);
+  }
+  return out;
+}

@@ -123,3 +123,5 @@ export type {
   TestCase, TestCaseInput, TestCaseResult, TestExpectations, TestOutcome,
   TestVerdict, OutcomeChange, SuiteResult, SuiteSummary,
 } from "./testCases.js";
+export { productionTest, startingCounts } from "./productionTest.js";
+export type { ProductionTestOptions, ProductionTestReport, ProductionQuotaCell, QuotaFill } from "./productionTest.js";

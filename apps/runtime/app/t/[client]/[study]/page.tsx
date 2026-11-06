@@ -1,5 +1,6 @@
 import { loadTestBuild } from "@/lib/deployment";
 import { loadQuotaCounts } from "@/lib/session";
+import { simulatedQuotaCounts } from "@rescript/engine";
 import { Runner } from "@/components/Runner";
 import { respondentDefinition } from "@/lib/assessmentPayload";
 
@@ -61,7 +62,13 @@ export default async function TestSurveyPage({
   // the row is minted (or resumed) by the runner via /api/session/start —
   // see the live page for why; test mode mints a throwaway respondent for
   // unique-link and invitation surveys so every access mode can be tested
-  const quotaCounts = await loadQuotaCounts(dep.surveyId, true);
+  /*
+   * A PRODUCTION-LIKE TEST LINK (IM3, 2026-11-06): `?counts=live` starts the quota decisions from the LIVE counters
+   * and `?full=<cell>,…` simulates cells as full, so a tester meets the quota-full path a live respondent would.
+   * Reading only: this session's own complete still increments the TEST counters, never the live ones.
+   */
+  const liveCounts = searchParams.counts === "live";
+  const quotaCounts = simulatedQuotaCounts(dep.definition, await loadQuotaCounts(dep.surveyId, !liveCounts), (searchParams.full ?? "").split(",").slice(0, 50));
   return (
     <Runner
       /* ASSESSMENTS (step 4A): a test link is a respondent payload too — the key is scored on the server after submit */

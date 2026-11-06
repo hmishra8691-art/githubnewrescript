@@ -84,6 +84,8 @@ export type IntentCategory =
   | "logic" | "validation" | "randomization" | "masking" | "variables" | "calculations" | "translation"
   | "analysis" | "findings" | "research_design" | "quality_control" | "data_cleaning" | "reporting"
   | "visualization" | "export" | "debugging" | "dependency_analysis" | "impact_analysis"
+  /** IM3: testing the survey — a production-like simulation */
+  | "testing"
   /** clearly outside the platform ("write me a poem", "book a flight"): answered with UNSUPPORTED_MESSAGE, no model call */
   | "unsupported";
 
@@ -116,6 +118,8 @@ export type Interpretation =
   | { kind: "output"; category: IntentCategory; understood: string; output: OutputRequest; detected: Detected[] }
   /** a REPORT THEME request (2026-10-18): the look of the documents and decks, or (asked for in words) their section order — the Studio reads the words into a theme, previews it and applies it on approval */
   | { kind: "theme"; category: IntentCategory; understood: string; request: ThemeRequest; detected: Detected[] }
+  /** a PRODUCTION-LIKE TEST (IM3, 2026-11-06): the Studio simulates respondents against the live counts and gates — nothing is written */
+  | { kind: "test"; category: IntentCategory; understood: string; request: ProductionTestRequest; detected: Detected[] }
   /** the research agent's workflow (Phase 6): the Studio runs the planner on the survey and shows the steps — with the objective when the sentence gave one */
   | { kind: "workflow"; category: IntentCategory; understood: string; objective?: string; detected: Detected[] }
   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
@@ -143,6 +147,9 @@ export interface InterpretContext {
   /** IM2: "today" for relative dates ("close on 1 December"), ISO; the clock when absent */
   now?: string | null;
 }
+
+/** a production-like test as a sentence asked for it (IM3): how many simulated respondents, and which cells to simulate as filled */
+export interface ProductionTestRequest { count?: number; fill?: { quota: string; cell?: string; share: number }[] }
 
 /** what the Studio produces for an output request (Phase 5) */
 export interface OutputRequest {
@@ -1441,6 +1448,52 @@ function adviceOut(r: Run, advice: SettingAdvice[], context?: string): Interpret
   const out = act(r, "survey_editing", `Settings for this study${context ? ` (${plain(context, 80)})` : ""} — ${changes.map((a) => `${a.setting.toLowerCase()}: ${a.recommended}, because ${a.because}`).join(" · ")}${advice.some((a) => a.status === "conflict") ? ` · Also: ${advice.filter((a) => a.status === "conflict").map((a) => a.because).join(" ")}` : ""}`, changes.flatMap((a) => a.actions), changes.map((a) => det(a.setting.toLowerCase(), a.recommended)));
   return out;
 }
+
+/* ---------------------------------------------------------- the production-like test (IM3) */
+
+const TEST_WORDS = /\b(?:production[-\s]like|production|live[-\s]like|realistic|dress\s+rehearsal|pre[-\s]?launch|as\s+if\s+(?:it\s+(?:were|was)\s+)?live|like\s+(?:a\s+)?live\s+(?:survey|link|respondents?)|under\s+live\s+conditions)\b/i;
+/** "with the Cardiology cell full", "when 18-24 is at 90%", "Female quota 95 % full" → fills, named against the survey's quotas */
+export function readQuotaFills(def: SurveyDefinition, text: string): { quota: string; cell?: string; share: number }[] {
+  const out: { quota: string; cell?: string; share: number }[] = [];
+  const names = [...def.quotas.flatMap((q) => [{ quota: q.name, cell: undefined as string | undefined, words: q.name }, ...q.cells.map((c) => ({ quota: q.name, cell: c.label as string | undefined, words: c.label }))])].sort((a, b) => b.words.length - a.words.length);
+  const t = text.replace(/[–—]/g, "-");
+  const seen = new Set<string>();
+  for (const n of names) {
+    const w = n.words.replace(/[–—]/g, "-").replace(/\s*[=≤<>].*$/, "").trim();
+    if (w.length < 2) continue;
+    const esc = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    const m = new RegExp(String.raw`\b${esc}\b(?:\s+(?:quota|cell|group))?\s+(?:is\s+|are\s+|being\s+)?(?:(full|filled|closed)|(?:at\s+)?(\d{1,3})\s*%(?:\s+full)?)`, "i").exec(t)
+      ?? new RegExp(String.raw`\b(?:fill|close)\s+(?:the\s+)?${esc}\b(?:\s+(?:quota|cell))?`, "i").exec(t);
+    if (!m) continue;
+    const key = `${n.quota}/${n.cell ?? ""}`;
+    if (seen.has(key)) continue;
+    /* a cell named inside a longer, already-matched name is not a second fill */
+    if ([...seen].some((k) => k.includes(w))) continue;
+    seen.add(key);
+    const share = m[2] ? Math.max(0, Math.min(100, Number(m[2]))) / 100 : 1;
+    out.push({ quota: n.quota, ...(n.cell ? { cell: n.cell } : {}), share });
+  }
+  return out;
+}
+const productionTestRequest: Recogniser = (r) => {
+  const t = r.text.replace(/[.!?]+$/, "");
+  const asks = /^(?:run|do|start|give\s+me|perform|set\s+up|let['’]?s\s+(?:run|do))\s+(?:a\s+|an\s+|the\s+)?(?:production[-\s]like|production|live[-\s]like|realistic|full|pre[-\s]?launch)\s+(?:test|simulation|dry[-\s]run|run)\b/i.test(t)
+    || /^(?:test|simulate|dry[-\s]run|rehearse)\s+(?:the\s+|this\s+)?(?:survey|study|questionnaire|fieldwork|launch)\b/i.test(t) && TEST_WORDS.test(t)
+    || /^simulate\s+(?:\d[\d,]*\s+)?(?:live\s+)?(?:respondents|completes|fieldwork)\b/i.test(t)
+    || /^what\s+happens\s+when\s+.+\s+(?:is|are)\s+(?:full|at\s+\d{1,3}\s*%)/i.test(t) && r.def.quotas.length > 0
+    || /\bproduction[-\s]like\s+test\b/i.test(t) && t.split(/\s+/).length <= 30
+    || /^(?:let\s+me\s+|i\s+(?:want|need)\s+to\s+|can\s+i\s+|help\s+me\s+)?(?:test|try|run\s+through|check)\s+(?:the\s+|this\s+|my\s+)?(?:survey|study|questionnaire)\b/i.test(t) && /\b(?:(?:a|the)\s+live\s+respondents?|live\s+quotas?|live\s+counts?|live\s+conditions|as\s+if\s+(?:it\s+(?:were|was)\s+)?live|in\s+production)\b/i.test(t);
+  if (!asks) return null;
+  const n = /\b(\d[\d,]{1,6})\s+(?:simulated\s+)?(?:respondents|completes|people|interviews|runs)\b/i.exec(t);
+  const count = n ? Math.max(10, Math.min(2000, Number(n[1].replace(/,/g, "")))) : undefined;
+  const fill = readQuotaFills(r.def, t);
+  const request: ProductionTestRequest = { ...(count ? { count } : {}), ...(fill.length ? { fill } : {}) };
+  return {
+    kind: "test", category: "testing",
+    understood: `A production-like test: ${count ?? 200} simulated respondents walk the survey as the live link would meet them — the live quota counts${fill.length ? `, with ${fill.map((f) => `${f.cell ?? f.quota} at ${Math.round(f.share * 100)} %`).join(", ")}` : ""}, the fieldwork dates, the access settings. Nothing is written: no response, no live or test counter.`,
+    request, detected: [det("test", "production-like"), ...fill.map((f) => det("simulated fill", `${f.cell ?? f.quota} ${Math.round(f.share * 100)} %`))],
+  };
+};
 
 /* ---------------------------------------------------------- survey settings */
 
@@ -3351,13 +3404,13 @@ const RECOGNISERS: Recogniser[] = [
   conflicts, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
-  settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
+  productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];
 
 /** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
-const WHOLE_FIRST: Recogniser[] = [conflicts, audience, shorten, reportTheme, ownerIntents];
+const WHOLE_FIRST: Recogniser[] = [conflicts, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
@@ -3516,7 +3569,7 @@ function compound(def: SurveyDefinition, text: string, parts: string[], ctx: Int
     if (it.kind === "refused" && it.noop) { noops.push(it); category ??= it.category; continue; }
     if (it.kind === "clarify") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, choices: it.choices.map((c) => ({ label: c.label, text: text.replace(part, c.text) })) }; continue; }
     if (it.kind === "refused") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, reason: `${it.reason} Nothing else in the request was applied.`, ...(it.suggestion ? { suggestion: { text: text.replace(part, it.suggestion.text) } } : {}) }; continue; }
-    if (it.kind === "answer" || it.kind === "query" || it.kind === "output" || it.kind === "workflow" || it.kind === "theme") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
+    if (it.kind === "answer" || it.kind === "query" || it.kind === "output" || it.kind === "workflow" || it.kind === "theme" || it.kind === "test") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
     category ??= it.category;
     actions.push(...it.actions);
     detected.push(...it.detected);

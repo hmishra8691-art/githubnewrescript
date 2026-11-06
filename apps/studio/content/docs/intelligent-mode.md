@@ -136,6 +136,31 @@ The catalogue below is checked by a test against the engine on every build: each
 | Create a report showing the key findings. | output |
 | start the research workflow for understanding brand switching | workflow |
 | what's next? | workflow |
+| Run a production-like test | test |
+| Simulate 500 respondents | test |
+| Let me test the survey exactly as a live respondent will see it, with the live quotas | test |
+
+### Settings, access and testing
+
+Settings are actions like any other — previewed, applied on approval, undone from History. Every one changes something the runtime honours; the advice says *because* in the study's own terms (what its questions ask, where its respondents come from, how long it is, what its brief says), never by research type.
+
+| Sentence | Read as |
+|---|---|
+| Make the survey anonymous | actions |
+| Password protect the survey with Oncology26 | actions |
+| Use unique links | actions |
+| Allow retakes | actions |
+| Close the survey on 21 December 2026 | actions |
+| Turn off dictation | actions |
+| Disable the back button | actions |
+| Prevent duplicate responses and add bot protection | actions |
+| Add a consent screen at the start | actions |
+| Require a number between 1 and 100 in Q1 | actions |
+| Make the survey anonymous but record every respondent's email | clarify |
+
+**Anonymous** means no IP hash, no device hash and no cross-study linking; a question asking for an email, a name or a phone number is named as breaking it. **Save and resume** is always on — every answer is saved as the respondent goes and the resume link continues on another device. **Opening and closing dates** are enforced on the live link only; test links ignore them. *Recommend the settings for this study* proposes the changes the study calls for, each with its reason; a research brief being built gets the same advice in its plan.
+
+**A production-like test** walks simulated respondents through the draft as the live link would meet them: the quota counters start from the LIVE counts (and any cell you name as full — "with the Cardiology cell full", "18–24 at 90 %"), the fieldwork dates, the password and the unique links are checked, and the publish gate runs. Nothing is written — no response, no live or test counter. The report gives the outcomes, the length, each quota cell from start to end and when it fills, the issues the walk met and a verdict, and a test link that opens the survey for a person under the same conditions (`?counts=live&full=…`; their complete still counts as a test). The generator steers respondents past screeners, so the screen-out share is a lower bound, not an incidence forecast.
 
 ### What the model is asked
 

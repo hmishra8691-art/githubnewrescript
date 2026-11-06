@@ -81,7 +81,7 @@ test("the generated reference pages are what the code generates now", async () =
 test("every sentence the Intelligent-mode page lists is read as it says, without a model", () => {
   const md = read("intelligent-mode.md");
   const def = tracker();
-  const rows = [...md.matchAll(/^\| (.+?) \| (actions|answer|query|output|workflow) \|$/gm)].map((m) => [m[1], m[2]] as const).filter(([s]) => s !== "Sentence");
+  const rows = [...md.matchAll(/^\| (.+?) \| (actions|answer|query|output|workflow|test|clarify) \|$/gm)].map((m) => [m[1], m[2]] as const).filter(([s]) => s !== "Sentence");
   assert.ok(rows.length >= 90, `${rows.length} sentences listed`);
   const wrong: string[] = [];
   for (const [sentence, kind] of rows) {

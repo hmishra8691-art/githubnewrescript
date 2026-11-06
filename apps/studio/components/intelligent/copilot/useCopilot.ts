@@ -1118,6 +1118,36 @@ export function useCopilot(opts: {
     } finally { setBusy(false); }
   }, [opts, s.surveyDbId, s.def, recordOp, analysisRun]);
   /*
+   * A PRODUCTION-LIKE TEST (IM3, 2026-11-06). The engine read the sentence into a test request; the route walks
+   * simulated respondents through the draft against the LIVE quota counts (plus any simulated fullness) and the live
+   * gates, and writes nothing. The card is the report: outcomes, length, every quota cell's start → end, the gates,
+   * the issues, the verdict — each line saying it is simulated.
+   */
+  const runProductionTest = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "test" }>, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    const engine: EngineTurn = { kind: "test", category: it.category, understood: it.understood, detected: it.detected };
+    const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
+    setBusy(true);
+    const fail = (message: string) => opts.patch(id, { status: "ready", reply: reply(message), engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "test", engine: "test" }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
+    try {
+      if (s.surveyDbId === "sandbox") { fail("The sandbox has no live link to test against. Open a saved survey and ask there — the test reads its live quota counts and gates."); return; }
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/production-test`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(it.request) });
+      const d = await r.json().catch(() => null) as { report?: { verdict: string; lines: string[]; quotas: { quota: string; cell: string; start: number; end: number; limit: number; full: boolean; filledAt: number | null }[]; gates: { ok: boolean; message: string }[]; outcomes: Record<string, number>; loiMinutes: { median: number; p90: number }; issues: { kind: string; message: string; count: number }[] }; runsAgainst?: { source: string; version?: string | null }; testLink?: string | null; error?: string } | null;
+      if (!r.ok || !d?.report) { fail(d?.error ?? (r.status === 401 ? "Sign in to test this survey." : `The test could not run (HTTP ${r.status}).`)); return; }
+      const rep = d.report;
+      const sections = [
+        { title: "Live gates (simulated)", items: rep.gates.map((g) => ({ label: `${g.ok ? "✓" : "✗"} ${g.message}` })) },
+        ...(rep.quotas.length ? [{ title: "Quota cells — start → end of the simulation", items: rep.quotas.map((c) => ({ label: `${c.quota} / ${c.cell}: ${c.start} → ${c.end} of ${c.limit}${c.full ? " · full" : ""}`, ...(c.filledAt === 0 ? { detail: "full before the test started" } : c.filledAt ? { detail: `filled after ${c.filledAt} simulated respondents` } : {}) })) }] : []),
+        ...(rep.issues.length ? [{ title: "Issues the walk met", items: rep.issues.slice(0, 12).map((x) => ({ label: `${x.kind.replace(/_/g, " ")} (${x.count}×)`, detail: x.message })) }] : []),
+      ];
+      const answer = [...rep.lines, d.testLink ? `To take it yourself under the same conditions (live counters${it.request.fill?.length ? ", the simulated full cells" : ""}; your complete counts as a TEST): ${d.testLink}` : "Deploy a test build (Versions & Deploy) to take it yourself under the same conditions."].join("\n");
+      opts.patch(id, { status: "ready", reply: reply(answer), engine: { ...engine, kind: "answer", sections }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "test", engine: "test" }, detected: it.detected, statusDetail: answer.slice(0, 2000), apiCalls: [{ route: "/api/surveys/[id]/production-test", mode: "simulation", charge: 0 }] }) });
+    } catch (e) {
+      fail(`The test could not run: ${(e as Error).message || "the network request failed"}.`);
+    } finally { setBusy(false); }
+  }, [opts, s.surveyDbId, recordOp]);
+  /*
    * A DOCUMENT TO PRODUCE (Phase 5). The engine read the sentence into an
    * output request; the output route makes the file — the proposal from the
    * design, the findings report or deck from a fresh run on the data, with
@@ -1596,7 +1626,7 @@ export function useCopilot(opts: {
     downloadOutput, regenerateOutput, themeRequest, themeCardAction, qualRequest, qualCardAction,
     planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,
     taskAction, openTaskResult, activeTask, taskDurable,
-    executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,
+    executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep, runProductionTest,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,
