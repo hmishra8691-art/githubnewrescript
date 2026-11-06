@@ -160,6 +160,16 @@ Settings are actions like any other — previewed, applied on approval, undone f
 
 **Anonymous** means no IP hash, no device hash and no cross-study linking; a question asking for an email, a name or a phone number is named as breaking it. **Save and resume** is always on — every answer is saved as the respondent goes and the resume link continues on another device. **Opening and closing dates** are enforced on the live link only; test links ignore them. *Recommend the settings for this study* proposes the changes the study calls for, each with its reason; a research brief being built gets the same advice in its plan.
 
+### Quotas
+
+| Sentence | Read as |
+|---|---|
+| Set a quota of 600 completes split 45/45/10 by gender | actions |
+| Set a quota of 500 completes split equally by gender | actions |
+| Split 1000 completes equally by region | actions |
+
+A quota sentence names the question by code, variable or wording; shares map to its options in order, and an option that is not a substantive answer (“Prefer not to say”) is left out of the cells and said to be. *Interlocking quotas for age group and region with 1,000 completes* crosses the options into cells whose limits add up to the total; *separate quotas* keep one quota per question. *Make the age quota soft*, *stop when the gender quota is full*, *set the Male cell to 300* and *delete the age quota* change an existing quota. *Is there enough sample for the quotas? 2,000 panelists, 25 % incidence, women are 35 %* sets each cell's need against its expected supply (available × incidence × response × share), shows the arithmetic, and reports a cell whose population share was not given as unchecked — never as equal.
+
 **A production-like test** walks simulated respondents through the draft as the live link would meet them: the quota counters start from the LIVE counts (and any cell you name as full — "with the Cardiology cell full", "18–24 at 90 %"), the fieldwork dates, the password and the unique links are checked, and the publish gate runs. Nothing is written — no response, no live or test counter. The report gives the outcomes, the length, each quota cell from start to end and when it fills, the issues the walk met and a verdict, and a test link that opens the survey for a person under the same conditions (`?counts=live&full=…`; their complete still counts as a test). The generator steers respondents past screeners, so the screen-out share is a lower bound, not an incidence forecast.
 
 ### What the model is asked

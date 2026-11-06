@@ -1,3 +1,4 @@
+import { sampleAvailability } from "./sampleAvailability.js";
 import { adviseSettings, briefOfSurvey, describeSettingsAdvice, type SettingAdvice } from "./settingsAdvice.js";
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { dontKnowEligible } from "./dontKnow.js";
@@ -1448,6 +1449,136 @@ function adviceOut(r: Run, advice: SettingAdvice[], context?: string): Interpret
   const out = act(r, "survey_editing", `Settings for this study${context ? ` (${plain(context, 80)})` : ""} — ${changes.map((a) => `${a.setting.toLowerCase()}: ${a.recommended}, because ${a.because}`).join(" · ")}${advice.some((a) => a.status === "conflict") ? ` · Also: ${advice.filter((a) => a.status === "conflict").map((a) => a.because).join(" ")}` : ""}`, changes.flatMap((a) => a.actions), changes.map((a) => det(a.setting.toLowerCase(), a.recommended)));
   return out;
 }
+
+/* ---------------------------------------------------------- quotas, read without a model (IM4) */
+
+const NON_SUBSTANTIVE = /\b(?:prefer\s+not|refus|don['’]?t\s+know|not\s+sure|other|none\s+of|no\s+answer|rather\s+not)\b/i;
+const numberWords = (s: string) => Number(s.replace(/[,\s]/g, "").replace(/k$/i, "000"));
+/** the quota a phrase names: by its name, a cell label, or the question its cells read */
+function quotaNamed(def: SurveyDefinition, phrase: string): SurveyDefinition["quotas"][number] | null {
+  const p = phrase.trim().toLowerCase().replace(/^(?:the\s+)?/, "").replace(/\s+quotas?$/, "");
+  if (!p) return null;
+  const exact = def.quotas.find((q) => q.name.toLowerCase() === p || q.id.toLowerCase() === p);
+  if (exact) return exact;
+  const byName = def.quotas.filter((q) => q.name.toLowerCase().includes(p) || p.includes(q.name.toLowerCase()));
+  if (byName.length === 1) return byName[0];
+  const c = resolveConcept(def, p);
+  if (c.ok) {
+    const reading = def.quotas.filter((q) => q.cells.some((cell) => JSON.stringify(cell.when).includes(`"${c.question.id}"`)));
+    if (reading.length === 1) return reading[0];
+  }
+  return null;
+}
+const quotaSentences: Recogniser = (r) => {
+  const t = r.text.replace(/[.!]+$/, "").replace(/[–—]/g, "-");
+  const N = String.raw`(\d[\d,]*(?:\.\d+)?k?)`;
+  let m: RegExpExecArray | null;
+  /* A · one dimension with shares: "a quota of 500 completes split 50/50 by gender", "500 completes, 60/40 by gender", "split 1,000 equally by region" */
+  m = new RegExp(String.raw`^(?:(?:set|create|add|make|build|use)\s+(?:a\s+|an?\s+)?(?:hard\s+|soft\s+)?quota\s+(?:of\s+)?|quota\s+(?:of\s+)?)?${N}\s*(?:completes?|completed\s+(?:interviews|responses)|interviews|respondents|responses)?\s*,?\s*(?:split|divided|balanced|allocated)?\s*((?:\d{1,3}(?:\.\d+)?\s*%?\s*\/\s*)+\d{1,3}(?:\.\d+)?\s*%?|equally|evenly)\s+(?:by|on|across|between)\s+(.+)$`, "i").exec(t)
+    ?? new RegExp(String.raw`^(?:split|divide|balance|allocate)\s+(?:the\s+)?${N}\s*(?:completes?|interviews|respondents|responses)?\s+((?:\d{1,3}\s*%?\s*\/\s*)+\d{1,3}\s*%?|equally|evenly)\s+(?:by|on|across|between)\s+(.+)$`, "i").exec(t);
+  if (m) {
+    const total = numberWords(m[1]);
+    const phrase = m[3].replace(/\s+bands?$/i, "");
+    const q = conceptOrAsk(r, phrase, "survey_editing", `A quota of ${total} completes by ${phrase}.`);
+    if (!q.ok) return q.out;
+    const opts = (q.v.options ?? []).filter((o) => !/exclusive/.test(String(o.flags ?? "")));
+    if (!opts.length) return refused("survey_editing", `A quota by ${phrase}.`, `${code(q.v)} has no options to split by — a numeric question needs bands ("18-34, 35-54, 55+").`, qDetected([q.v]));
+    const shares = /equally|evenly/i.test(m[2]) ? [] : m[2].split("/").map((x) => Number(x.replace(/[%\s]/g, "")));
+    const sum = shares.reduce((a, b) => a + b, 0);
+    if (shares.length && Math.abs(sum - 100) > 0.5) return refused("survey_editing", `A quota of ${total} by ${phrase}.`, `The shares ${m[2].replace(/\s+/g, "")} add up to ${sum} %, not 100 %.`, qDetected([q.v]));
+    const substantive = opts.filter((o) => !NON_SUBSTANTIVE.test(stripHtmlText(o.label)));
+    const use = shares.length ? (shares.length === opts.length ? opts : shares.length === substantive.length ? substantive : null) : substantive.length ? substantive : opts;
+    if (!use) return refused("survey_editing", `A quota of ${total} by ${phrase}.`, `${shares.length} shares for ${code(q.v)}, which has ${opts.length} options (${opts.map((o) => stripHtmlText(o.label)).join(", ")}) — give one share per option.`, qDetected([q.v]));
+    const left = opts.filter((o) => !use.includes(o));
+    const bands = use.map((o, i) => ({ label: stripHtmlText(o.label), codes: [o.code], ...(shares.length ? { share: shares[i] } : {}) }));
+    const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+    const name = cap(phrase.replace(/^(?:the|a|an)\s+/i, "").trim() || q.v.variableName);
+    const words = use.map((o, i) => `${stripHtmlText(o.label)} ${shares.length ? `${shares[i]} %` : `${Math.round(100 / use.length)} %`}`).join(", ");
+    return act(r, "survey_editing", `A hard quota of ${total.toLocaleString("en")} completes on ${code(q.v)}: ${words}; the survey ends (quota full) for a respondent whose cell is full.${left.length ? ` ${left.map((o) => `“${stripHtmlText(o.label)}”`).join(", ")} ${left.length === 1 ? "is" : "are"} in no cell — counted by no limit.` : ""}`, [{ op: "create_quota", name: `${name} quota`, dimensions: [{ question: code(q.v), bands }], total } as SurveyAction], [...qDetected([q.v]), det("total", String(total))]);
+  }
+  /* B · interlocked / separate quotas over several questions: "interlocking quotas for age group and region with 1,000 completes" */
+  m = new RegExp(String.raw`^(?:create|set\s+up|add|make|build|use)\s+(?:an?\s+)?(interlock(?:ed|ing)|nested|crossed|separate|flat|independent)?\s*quotas?\s+(?:for|on|of|by|across)\s+(.+?)(?:\s+(?:with|for|totalling|totaling|of)\s+(?:a\s+total\s+of\s+)?${N}\s*(?:completes?|interviews|respondents|responses)?)?$`, "i").exec(t);
+  if (m && /\band\b|,/.test(m[2])) {
+    const total = m[3] ? numberWords(m[3]) : r.def.research?.sampleSize;
+    const phrases = m[2].split(/\s*,\s*(?:and\s+)?|\s+and\s+/).map((x) => x.replace(/\s+bands?$/i, "").trim()).filter(Boolean);
+    if (!total) return { kind: "clarify", category: "survey_editing", understood: `Quotas on ${phrases.join(" and ")}.`, question: "How many completes do the quotas split? (The research design has no sample size.)", choices: [500, 1000, 2000].map((n) => ({ label: `${n.toLocaleString("en")} completes`, text: `${r.text} with ${n} completes` })), detected: [] };
+    const qs: Question[] = [];
+    for (const p of phrases) { const q = conceptOrAsk(r, p, "survey_editing", `Quotas on ${phrases.join(" and ")}.`); if (!q.ok) return q.out; qs.push(q.v); }
+    const notChoice = qs.filter((q) => !(q.options ?? []).length);
+    if (notChoice.length) return refused("survey_editing", `Quotas on ${phrases.join(" and ")}.`, `${notChoice.map(code).join(", ")} ${notChoice.length === 1 ? "has" : "have"} no options — a numeric question needs bands ("AGE 18-34, 35-54, 55+") before it can be a quota.`, qDetected(qs));
+    const bandsOf = (q: Question) => { const o = (q.options ?? []); const sub = o.filter((x) => !NON_SUBSTANTIVE.test(stripHtmlText(x.label))); return (sub.length ? sub : o).map((x) => ({ label: stripHtmlText(x.label), codes: [x.code] })); };
+    const interlock = !m[1] || /interlock|nested|crossed/i.test(m[1]);
+    if (interlock) {
+      const cells = qs.reduce((n, q) => n * bandsOf(q).length, 1);
+      return act(r, "survey_editing", `Interlocked quota of ${total.toLocaleString("en")} completes: ${qs.map((q) => `${code(q)} (${bandsOf(q).length} bands)`).join(" × ")} = ${cells} cells, equal shares (about ${Math.floor(total / cells)} each) — adjust a cell's limit to the population's real mix.`, [{ op: "create_quota", name: `${phrases.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" × ")} quota`, dimensions: qs.map((q) => ({ question: code(q), bands: bandsOf(q) })), total } as SurveyAction], [...qDetected(qs), det("total", String(total))]);
+    }
+    return act(r, "survey_editing", `Separate quotas of ${total.toLocaleString("en")} completes on ${qs.map(code).join(", ")}, equal shares within each — one respondent counts once in each quota.`, qs.map((q, i) => ({ op: "create_quota", name: `${phrases[i].charAt(0).toUpperCase() + phrases[i].slice(1)} quota`, dimensions: [{ question: code(q), bands: bandsOf(q) }], total } as SurveyAction)), [...qDetected(qs), det("total", String(total))]);
+  }
+  /* C · soft / hard: "make the age quota soft" */
+  m = /^(?:make|set|turn|change)\s+(?:the\s+)?(.+?)\s+quotas?\s+(?:to\s+)?(?:be\s+)?(soft|hard|flag[-\s]only)$/i.exec(t);
+  if (m) {
+    const q = quotaNamed(r.def, m[1]);
+    if (!q) return r.def.quotas.length ? { kind: "clarify", category: "survey_editing", understood: `Make the ${m[1]} quota ${m[2]}.`, question: `Which quota? This survey's quotas are ${r.def.quotas.map((x) => `“${x.name}”`).join(", ")}.`, choices: r.def.quotas.map((x) => ({ label: x.name, text: `Make the ${x.name} quota ${m![2]}` })), detected: [] } : refused("survey_editing", `Make the ${m[1]} quota ${m[2]}.`, "This survey has no quotas yet.", []);
+    const mode = /hard/i.test(m[2]) ? "hard" : "soft";
+    if (q.mode === mode) return alreadySo("survey_editing", `Make “${q.name}” ${mode}.`, `“${q.name}” is already ${mode}.`, [det("quota", q.name)]);
+    return act(r, "survey_editing", mode === "soft" ? `Make “${q.name}” soft: a full cell flags the respondent and lets them continue — nobody is ended by it.` : `Make “${q.name}” hard: a respondent whose cell is full ends as quota full.`, [{ op: "update_quota", quota: q.id, mode, ...(mode === "soft" ? { onFull: { kind: "flag" } } : { onFull: { kind: "terminate" } }) } as SurveyAction], [det("quota", q.name), det("mode", mode)]);
+  }
+  /* D · what happens when full: "stop when the gender quota is full", "flag when the region quota is full" */
+  m = /^(?:stop|end|terminate|screen\s+out|close)\s+(?:the\s+survey\s+|respondents\s+)?(?:when|once|if)\s+(?:the\s+)?(.+?)\s+quotas?\s+(?:is|are|gets?|becomes?)\s+full$/i.exec(t)
+    ?? /^(?:when|once|if)\s+(?:the\s+)?(.+?)\s+quotas?\s+(?:is|are)\s+full,?\s+(?:stop|end|terminate|screen\s+(?:them\s+)?out)(?:\s+the\s+survey|\s+them)?$/i.exec(t);
+  if (m) {
+    const q = quotaNamed(r.def, m[1]);
+    if (!q) return refused("survey_editing", `End the survey when the ${m[1]} quota is full.`, r.def.quotas.length ? `No quota is called “${m[1]}” — this survey's quotas are ${r.def.quotas.map((x) => `“${x.name}”`).join(", ")}.` : "This survey has no quotas yet.", []);
+    if (q.mode === "hard" && q.onFull.kind === "terminate") return alreadySo("survey_editing", `End the survey when “${q.name}” is full.`, `“${q.name}” already ends the survey (quota full) when a respondent's cell is full.`, [det("quota", q.name)]);
+    return act(r, "survey_editing", `“${q.name}”: a respondent whose cell is full ends as quota full (hard quota).`, [{ op: "update_quota", quota: q.id, mode: "hard", onFull: { kind: "terminate" } } as SurveyAction], [det("quota", q.name)]);
+  }
+  /* E · a cell's limit: "set the Male cell to 300", "change the Female limit to 250" */
+  m = /^(?:set|change|make|raise|lower|increase|decrease|cap)\s+(?:the\s+)?(.+?)\s+(?:cell|limit|target|quota\s+cell)(?:'s\s+limit)?\s+(?:to|at)\s+(\d[\d,]*)$/i.exec(t);
+  if (m && r.def.quotas.length) {
+    const label = m[1].trim().toLowerCase();
+    const hits = r.def.quotas.flatMap((q) => q.cells.filter((c) => c.label.toLowerCase() === label || c.label.toLowerCase().startsWith(label + " ")).map((c) => ({ q, c })));
+    if (!hits.length) return null;
+    if (hits.length > 1) return { kind: "clarify", category: "survey_editing", understood: `Set the ${m[1]} cell to ${m[2]}.`, question: `“${m[1]}” is a cell of ${hits.length} quotas — which one?`, choices: hits.map((h) => ({ label: `${h.q.name} / ${h.c.label}`, text: `Set the ${h.c.label} cell of the ${h.q.name} quota to ${m![2]}` })), detected: [] };
+    const { q, c } = hits[0];
+    const limit = numberWords(m[2]);
+    return act(r, "survey_editing", `“${q.name}” / ${c.label}: limit ${c.limit} → ${limit}${c.limitType === "percent" ? " %" : ""}.`, [{ op: "update_quota", quota: q.id, cells: [{ cell: c.id, limit }] } as SurveyAction], [det("quota", q.name), det("cell", c.label)]);
+  }
+  /* F · delete */
+  m = /^(?:delete|remove|drop)\s+(?:the\s+)?(.+?)\s+quotas?$/i.exec(t);
+  if (m && r.def.quotas.length) {
+    const q = quotaNamed(r.def, m[1]);
+    if (!q) return null;
+    return act(r, "survey_editing", `Delete the quota “${q.name}” (${q.cells.length} cells); its live counts stay in the data but nothing limits on them.`, [{ op: "delete_quota", quota: q.id } as SurveyAction], [det("quota", q.name)]);
+  }
+  return null;
+};
+
+/* "is there enough sample for the quotas? 5,000 panelists, 20 % incidence, women are 35 %" (IM4) */
+export function readAvailability(text: string): { available?: number; incidence?: number; responseRate?: number; shares: Record<string, number> } {
+  const t = text.replace(/[–—]/g, "-");
+  const num = (s: string) => Number(s.replace(/[,\s]/g, "").replace(/k$/i, "000"));
+  const avail = /(\d[\d,]*(?:\.\d+)?k?)\s+(?:people|panel(?:ists|\s+members)?|members|respondents|contacts|doctors|physicians|employees|customers|records|names|available|reachable)\b/i.exec(t) ?? /\b(?:available|reachable|panel\s+size|sample\s+size\s+available|we\s+can\s+reach)\s*(?:is|of|=|:)?\s*(\d[\d,]*(?:\.\d+)?k?)\b/i.exec(t);
+  const ir = /(\d{1,3}(?:\.\d+)?)\s*%\s*(?:incidence|ir|qualif\w*|eligib\w*)|\b(?:incidence|ir)\s*(?:of|is|=|:|at)?\s*(\d{1,3}(?:\.\d+)?)\s*%/i.exec(t);
+  const rr = /(\d{1,3}(?:\.\d+)?)\s*%\s*(?:response(?:\s+rate)?|completion\s+rate)|\b(?:response|completion)\s+rate\s*(?:of|is|=|:)?\s*(\d{1,3}(?:\.\d+)?)\s*%/i.exec(t);
+  const shares: Record<string, number> = {};
+  for (const m of t.matchAll(/\b([A-Za-z][\w+\-/ ]{0,30}?)\s+(?:are|is|make\s+up|=)\s+(\d{1,3}(?:\.\d+)?)\s*%/gi)) { const k = (m[1].split(/\s+(?:and|with|where|while|but|of\s+whom)\s+|,|;/i).pop() ?? "").replace(/^(?:the|and)\s+/i, "").trim(); if (!/^(?:incidence|ir|response|completion|rate)$/i.test(k)) shares[k] = Number(m[2]); }
+  for (const m of t.matchAll(/\b(\d{1,3}(?:\.\d+)?)\s*%\s+(?:are\s+)?([A-Za-z][\w+\-/]{1,30}(?:\s+[\w+\-/]{1,30})?)/gi)) { const k = m[2].trim(); if (!/^(?:incidence|ir|response|completion|qualif|eligib)/i.test(k)) shares[k] ??= Number(m[1]); }
+  return { ...(avail ? { available: num(avail[1]) } : {}), ...(ir ? { incidence: Number(ir[1] ?? ir[2]) } : {}), ...(rr ? { responseRate: Number(rr[1] ?? rr[2]) } : {}), shares };
+}
+const availabilityCheck: Recogniser = (r) => {
+  const t = r.text.replace(/[.!]+$/, "");
+  if (!/\b(?:enough\s+(?:sample|respondents|people|panel(?:ists)?)|sample\s+availability|availability\s+(?:check|of\s+sample)|(?:can|could|will)\s+(?:we|the\s+panel|the\s+sample)\s+(?:fill|meet|deliver|hit)\s+(?:the\s+)?(?:quotas?|cells?|targets?)|(?:quotas?|cells?)\s+(?:be\s+)?(?:fillable|feasible|achievable))\b/i.test(t)) return null;
+  if (!r.def.quotas.length && !r.def.research?.sampleSize) return refused("survey_editing", "Check the sample against the quotas.", "This survey has no quotas and no sample size yet — set the quotas first (e.g. “500 completes split 50/50 by gender”).", []);
+  const a = readAvailability(t);
+  if (!a.available) return { kind: "clarify", category: "survey_editing", understood: "Check whether the sample can fill the quotas.", question: "How many people of the target audience can be reached, and what share qualifies? Add the population share of the groups the quotas read when you know them.", choices: [{ label: "5,000 reachable, 30 % incidence", text: `${t} — 5,000 available, 30% incidence` }, { label: "20,000 reachable, 10 % incidence", text: `${t} — 20,000 available, 10% incidence` }], detected: [] };
+  const rep = sampleAvailability(r.def, { available: a.available, ...(a.incidence !== undefined ? { incidence: a.incidence } : {}), ...(a.responseRate !== undefined ? { responseRate: a.responseRate } : {}), shares: a.shares });
+  return {
+    kind: "answer", category: "survey_editing", understood: `Check ${a.available.toLocaleString("en")} available${a.incidence !== undefined ? ` at ${a.incidence} % incidence` : ""} against the quotas${Object.keys(a.shares).length ? `, with ${Object.entries(a.shares).map(([k, v]) => `${k} ${v} %`).join(", ")}` : ""}.`,
+    answer: rep.lines.join("\n"),
+    sections: [{ title: "Each cell", items: rep.cells.map((c) => ({ label: `${c.status === "short" ? "✗" : c.status === "tight" ? "!" : c.status === "ok" ? "✓" : "?"} ${c.quota} / ${c.cell}: need ${c.need}`, detail: c.because })) }],
+    detected: [det("available", String(a.available)), ...(a.incidence !== undefined ? [det("incidence", `${a.incidence} %`)] : []), ...Object.entries(a.shares).map(([k, v]) => det("share", `${k} ${v} %`))],
+  };
+};
 
 /* ---------------------------------------------------------- the production-like test (IM3) */
 
@@ -3404,13 +3535,13 @@ const RECOGNISERS: Recogniser[] = [
   conflicts, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
-  productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
+  availabilityCheck, quotaSentences, productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];
 
 /** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
-const WHOLE_FIRST: Recogniser[] = [conflicts, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
+const WHOLE_FIRST: Recogniser[] = [conflicts, availabilityCheck, productionTestRequest, audience, shorten, reportTheme, ownerIntents];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
