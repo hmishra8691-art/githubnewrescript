@@ -266,3 +266,4 @@ export * from "./settingsAdvice.js";
 export * from "./sampleAvailability.js";
 export * from "./fieldworkPlan.js";
 export * from "./lifecycle.js";
+export * from "./accessibility.js";

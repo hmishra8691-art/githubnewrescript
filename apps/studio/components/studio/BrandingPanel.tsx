@@ -388,8 +388,35 @@ function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) =
     }
   };
 
+  /* IM8: the brand book as a PDF — its stated colours become the generator's seeds, its typeface the font */
+  const [guideFonts, setGuideFonts] = React.useState<string[] | null>(null);
+  const fromGuide = async (file: File) => {
+    if (sandboxed) return;
+    setBusy(true); setError(null); setGenerated(null); setDetectedColors(null); setGuideFonts(null);
+    setSiteStatus("Reading the brand guidelines…");
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const res = await fetch(`/api/surveys/${s.surveyDbId}/brand-guide`, { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({ ok: false, error: "That didn't come back as a usable response." }));
+      const rgbs = data.ok && Array.isArray(data.seeds) ? (data.seeds as { hex: string }[]).map((x) => hexToRgb(x.hex)).filter((x: RGB | null): x is RGB => !!x) : [];
+      if (rgbs.length) {
+        fromRgbSeeds(rgbs);
+        setDetectedColors(data.seeds);
+        if (Array.isArray(data.fonts) && data.fonts.length) setGuideFonts(data.fonts);
+        setSiteStatus(`Found ${rgbs.length} brand colour${rgbs.length === 1 ? "" : "s"}${data.fonts?.length ? ` and the typeface ${data.fonts[0]}` : ""} in the guidelines.`);
+        return;
+      }
+      setSiteStatus(null);
+      setError(data.error || "No colours are stated in that PDF as text — enter the brand colour below.");
+    } catch {
+      setSiteStatus(null);
+      setError("Couldn't read the guidelines — try entering a colour below.");
+    } finally { setBusy(false); }
+  };
+
   const apply = () => {
     if (!generated) return;
+    if (guideFonts?.length) set((x) => { x.typography = { ...x.typography, fontFamily: `${guideFonts[0]}, system-ui, sans-serif` }; });
     set((x) => { x.colors = { ...x.colors, ...generated }; });
     s.toast("Palette applied — every color below can still be tweaked by hand");
   };
@@ -408,6 +435,10 @@ function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) =
               {busy && siteStatus ? "Analyzing…" : "🔗 Analyze website"}
             </button>
           </div>
+        </label>
+        <label className="btn" data-testid="brand-guide-upload" title={sandboxed ? "Save the survey first — reading guidelines needs a saved survey." : "Read the colours and typeface from a brand-guidelines PDF"} style={{ cursor: sandboxed || busy ? "not-allowed" : "pointer", opacity: sandboxed || busy ? 0.6 : 1 }}>
+          📘 Brand guidelines (PDF)
+          <input type="file" accept="application/pdf" hidden disabled={sandboxed || busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void fromGuide(f); }} />
         </label>
         <button type="button" className="btn" disabled={!b.logoUrl || busy} data-testid="detect-logo-colors" onClick={() => void fromLogo()}
           title={b.logoUrl ? "Analyze the logo above and generate a palette from its colors" : "Add a logo above first"}>

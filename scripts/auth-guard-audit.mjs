@@ -274,6 +274,10 @@ const LOCK_EXEMPT = {
     "declares a supplier in public.sample_sources — a row in a table, not a change to the questionnaire",
   "surveys/[id]/sample-sources/route.ts DELETE":
     "removes a declared supplier; the responses that cite it keep their provenance either way",
+  "surveys/[id]/brand-guide/route.ts POST":
+    "reads an uploaded brand-guidelines PDF in memory and returns colour strings, role words and typeface names for "
+    + "the client's palette generator; it writes nothing — no survey, no table, no file — so taking the edit lock "
+    + "from a colleague would buy nothing (IM8, the same reason as brand-scrape)",
   "surveys/[id]/brand-scrape/route.ts POST":
     "reads a public web page and returns colour strings and at most one image URL for the client's palette generator; "
     + "it writes nothing — no survey, no table — so taking the edit lock from a colleague would buy nothing",

@@ -2,6 +2,7 @@ import { sampleAvailability } from "./sampleAvailability.js";
 import { fieldworkPlan } from "./fieldworkPlan.js";
 import { readResearchBrief } from "./researchBrief.js";
 import { downstreamOf } from "./lifecycle.js";
+import { accessibilityReview, adviseLook, deviceReview } from "./accessibility.js";
 import { adviseSettings, briefOfSurvey, describeSettingsAdvice, type SettingAdvice } from "./settingsAdvice.js";
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { dontKnowEligible } from "./dontKnow.js";
@@ -1609,6 +1610,44 @@ const downstreamAsk: Recogniser = (r) => {
   const d = downstreamOf(r.def, after.def);
   const lines = d.length ? d.map((x) => `${x.area}: ${x.what}${x.sentence ? ` — say “${x.sentence}”` : ""}`) : ["nothing else in the survey reads it — no quotas, screeners, settings or plans depend on it"];
   return act(r, "research_design", `Record the ${/method/.test(what) ? "methodology" : /sample/.test(what) ? "sample size" : "population"} as “${value}”. What else it touches: ${lines.join("; ")}. Nothing else is changed by this — each is its own request.`, [action], [det(what, value), ...d.map((x) => det("downstream", x.area))]);
+};
+
+/* ---------------------------------------------------------- accessibility, devices, the look (IM8) */
+
+const accessReview: Recogniser = (r) => {
+  const t = r.text.replace(/[.!?]+$/, "");
+  /* alt text: "set the alt text of Q3 to a pack of the new biscuit" */
+  let m = /^(?:set|add|write|give)\s+(?:the\s+)?(?:alt(?:ernative)?[-\s]?text|image\s+description|screen[-\s]reader\s+text)\s+(?:of|for|on|to)\s+(\S+)\s+(?:to|as|:)\s+(.+)$/i.exec(t);
+  if (m) {
+    const q = questionOf(r, m[1], "question_modification", `Set the alt text of ${m[1]}.`);
+    if (!q.ok) return q.out;
+    const alt = unquote(m[2]).trim().slice(0, 300);
+    return act(r, "question_modification", `${code(q.v)}'s stimulus is announced as “${plain(alt, 80)}” to screen readers (WCAG 1.1.1).`, [{ op: "set_question_media", target: code(q.v), altText: alt, decorative: false } as never], qDetected([q.v]));
+  }
+  /* the review: "check accessibility", "is this survey accessible?", "WCAG check", "fix the contrast" */
+  const fix = /^(?:fix|improve|correct)\s+(?:the\s+)?(?:colou?r\s+)?contrast\b|^make\s+(?:the\s+)?(?:colou?rs|theme|survey)\s+(?:more\s+)?accessible$/i.test(t);
+  if (fix || /^(?:check|review|audit|test|run)\s+(?:the\s+)?(?:survey(?:['’]s)?\s+|an?\s+)?(?:accessibility|wcag|a11y)(?:\s+(?:check|review|audit))?$|^(?:is|how)\s+(?:this|the)\s+survey\s+(?:accessible|wcag[-\s]compliant)|^accessibility\s+(?:check|review|audit)$|^(?:check|review|audit|scan|test)\s+(?:the\s+|this\s+)?(?:survey\s+|questionnaire\s+)?for\s+(?:accessibility|wcag|a11y)(?:\s+(?:problems|issues|errors|failures))?$/i.test(t)) {
+    const rev = accessibilityReview(r.def);
+    const actions = rev.findings.flatMap((f) => f.actions ?? []);
+    if (actions.length) return act(r, "quality_control", `${rev.lines.join(" ")} The fixes that one change can make are proposed: ${rev.findings.filter((f) => f.actions).map((f) => f.fix).join("; ")}.`, actions, [det("accessibility", `${rev.findings.length} findings`)]);
+    return { kind: "answer", category: "quality_control", understood: "Check the survey against WCAG 2.1 AA.", answer: rev.lines.join("\n"), sections: [{ title: "Accessibility", items: rev.findings.map((f) => ({ label: `${f.level === "error" ? "✗" : "!"} ${f.where}: ${f.criterion}`, detail: `${f.message}${f.fix ? ` Fix: ${f.fix}.` : ""}` })) }], detected: [det("accessibility", `${rev.findings.length} findings`)] };
+  }
+  /* devices: "how does it look on a phone?", "preview on mobile", "check the survey on a tablet" */
+  m = /^(?:how\s+does\s+(?:it|the\s+survey|this)\s+look\s+on\s+(?:a\s+)?|preview\s+(?:it\s+|the\s+survey\s+)?on\s+(?:a\s+)?|check\s+(?:the\s+survey\s+|it\s+)?on\s+(?:a\s+)?|is\s+(?:it|the\s+survey)\s+(?:ok|fine|usable)\s+on\s+(?:a\s+)?|will\s+(?:it|the\s+survey)\s+work\s+on\s+(?:a\s+)?)(mobile|phones?|smartphones?|tablets?|desktop|computer)s?$/i.exec(t);
+  if (m) {
+    const device = /tablet/i.test(m[1]) ? "tablet" : /desktop|computer/i.test(m[1]) ? "desktop" : "mobile";
+    const rev = deviceReview(r.def, device);
+    return { kind: "answer", category: "quality_control", understood: `Check the survey on a ${device}.`, answer: `${rev.lines.join("\n")}\nOpen the preview and pick the ${device} frame to see it.`, sections: rev.findings.length ? [{ title: `On a ${device}`, items: rev.findings.map((f) => ({ label: f.where, detail: `${f.message} Fix: ${f.fix}.` })) }] : [], detected: [det("device", device)] };
+  }
+  /* the look from who answers: "suggest a look for this study", "make it look right for doctors" */
+  m = /^(?:suggest|recommend|propose|choose|pick)\s+(?:a\s+|the\s+)?(?:look|theme|style|design)\s+(?:for|that\s+suits)\s+(?:this|the)\s+(?:study|survey|audience|respondents)$|^make\s+(?:it|the\s+survey)\s+look\s+(?:right|appropriate|professional)\s+for\s+(.+)$/i.exec(t);
+  if (m) {
+    const brief = readResearchBrief([m[1] ? `research among ${m[1]}` : "", r.def.research?.objective ?? "", r.def.research?.population ?? "", r.def.research?.audience?.description ?? ""].filter(Boolean).join(". "));
+    const look = adviseLook(r.def, brief);
+    if (!Object.keys(look.patch).length) return { kind: "answer", category: "survey_editing", understood: "Suggest a look for this study.", answer: `Nothing about who answers calls for a different look (${look.because[0]}). Name the respondents (“make it look right for older patients”) or describe the look.`, sections: [], detected: [] };
+    return act(r, "survey_editing", `A look for who answers — ${look.because.join("; ")}.`, [{ op: "set_theme", patch: look.patch, label: "Look for this study" } as SurveyAction], [det("look", look.because.length + " reasons")]);
+  }
+  return null;
 };
 
 /* ---------------------------------------------------------- data cleaning (IM6) */
@@ -3621,7 +3660,7 @@ const advancedModels: Recogniser = (r) => {
 const ADVANCED_ANALYSIS = /\b(?:hb|hierarchical\s+bayes(?:ian)?|individual[\s-]level\s+(?:utilit(?:y|ies)|estimation|scores)|latent[\s-]class|gabor[\s\-–]granger)\b/i;
 
 const RECOGNISERS: Recogniser[] = [
-  conflicts, downstreamAsk, cleaningRequest, advancedModels,
+  conflicts, downstreamAsk, accessReview, cleaningRequest, advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, ownerIntents, uxLook, longBrief,
   fieldworkRequest, availabilityCheck, quotaSentences, productionTestRequest, settingsAdvice, deploymentSettings, surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,

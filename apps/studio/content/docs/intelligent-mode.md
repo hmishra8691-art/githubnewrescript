@@ -179,6 +179,16 @@ A quota sentence names the question by code, variable or wording; shares map to 
 
 *Plan the fieldwork* writes the plan of record (the study's `research.fieldwork`): the start and close dates (the live link's closing date is set with it), a soft launch of 10 % checked before the full launch, the completes needed a day overall, per market and per quota cell, the invitations the incidence implies, the cost when a CPI or a budget is given, the milestones, and the risks — a professional audience at a fast pace, low incidence, a long survey, cells too small to report, translations on the critical path, a short field period, a cost over budget, quotas the brief asks for that do not exist — each with its reason and what to do. Every number says where it came from; what was assumed is said. *Estimate the cost and the daily completes we need* answers the same plan without storing it. Vendor pricing stays with Recruitment → Plan, which has the rate cards.
 
+### Accessibility, devices and the look
+
+| Sentence | Read as |
+|---|---|
+| Check accessibility | actions |
+| How does it look on a phone? | answer |
+| Make it look right for older patients | actions |
+
+*Check accessibility* reads the definition against WCAG 2.1 AA — the contrast of the theme's own colour pairs, stimulus images with no text alternative, time limits that cannot be extended, text below 16 px, grids too wide to read in order, questions with no text — names each criterion, and proposes the fixes one change can make (the nearest colours that reach 4.5:1, a readable text size). *Set the alt text of Q3 to …* writes what a screen reader announces. *How does it look on a phone?* lists what a phone does to this survey (wide grids, long lists, drag ranking, sliders, fixed widths) with the fix for each; the preview's device frames show it. *Make it look right for …* proposes a look from who answers — a professional audience, older respondents, a phone-first audience, a sensitive topic — each choice with its reason. Brand guidelines as a PDF (Branding → Brand guidelines) give their stated colours and typeface to the same palette generator the website import uses. All of these read the definition; a check with a screen reader and a keyboard on the real page is still a person's job.
+
 ### Data cleaning
 
 | Sentence | Read as |
