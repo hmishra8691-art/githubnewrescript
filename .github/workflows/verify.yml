@@ -50,7 +50,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: pyreadstat, so the statistical exports are read back, not only written
-        run: python3 -m pip install --quiet pyreadstat
+        run: python3 -m pip install --quiet pyreadstat pandas
 
       - run: pnpm install --frozen-lockfile
 
