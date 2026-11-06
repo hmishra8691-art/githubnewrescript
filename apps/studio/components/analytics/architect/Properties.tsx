@@ -35,6 +35,7 @@ export function Properties(p: { entry: CatalogueEntry | null; result: RunResult 
         <div className="eyebrow">What it is</div>
         <div className="axa-prop-label">{e.label}</div>
         <p className="axa-prop-descr">{e.description}</p>
+        {e.redundantOf && <p className="axa-warning" data-testid="axa-redundant">Repeats another analysis on the same variables — one of the two can go.</p>}
         <dl className="axa-dl">
           <dt>State</dt><dd><span className={`axa-dot ${e.status}`} /> {STATUS_WORD[e.status] || "—"}{e.verdict ? ` · ${e.verdict.replace("_", " ")}` : ""}</dd>
           {e.hypotheses.length > 0 && <><dt>Serves</dt><dd>{e.hypotheses.join(", ")}</dd></>}

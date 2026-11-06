@@ -11,6 +11,8 @@ import type { ExplorerCategory, Selection } from "@/lib/analyticsArchitect";
  */
 export const STATUS_WORD: Record<CatalogueEntry["status"], string> = { ready: "ready", planned: "planned, not run", stale: "stale — the plan changed", blocked: "cannot run", unknown: "" };
 
+const PAGE = 150;
+
 export function Explorer(p: {
   catalogue: AnalysisCatalogue | null;
   category: ExplorerCategory; onCategory: (c: ExplorerCategory) => void;
@@ -21,6 +23,10 @@ export function Explorer(p: {
 }) {
   const c = p.catalogue;
   const total = c?.all.length ?? 0;
+  const [attention, setAttention] = React.useState(false);
+  const [pages, setPages] = React.useState(1);
+  React.useEffect(() => { setPages(1); }, [p.category, p.filter]);
+  const visible = p.entries.slice(0, PAGE * pages);
   const selected = new Set(p.selection.keys);
   const inView = p.entries.filter((e) => selected.has(e.key)).length;
   return (
@@ -38,6 +44,14 @@ export function Explorer(p: {
       <div className="axa-filter">
         <input className="input" value={p.filter} onChange={(e) => p.onFilter(e.target.value)} placeholder="Find by label, code or variable…" aria-label="Filter the Explorer" data-testid="axa-filter" />
       </div>
+      {c && c.advice.length > 0 && (
+        <div className="axa-attention" data-testid="axa-attention">
+          <button className="axa-attention-head" onClick={() => setAttention((a) => !a)} aria-expanded={attention}>
+            <span className="axa-dot blocked" /> {c.advice.length} thing{c.advice.length === 1 ? "" : "s"} deserve{c.advice.length === 1 ? "s" : ""} attention {attention ? "▾" : "▸"}
+          </button>
+          {attention && <ul className="axa-attention-list">{c.advice.map((a, i) => <li key={i} data-kind={a.kind}>{a.text}{a.keys[0] && c.all.some((e) => e.key === a.keys[0]) ? <> <button className="axa-link" onClick={() => p.onFocus(a.keys[0])}>open</button></> : null}</li>)}</ul>}
+        </div>
+      )}
       <div className="axa-select-row">
         <span className="muted" style={{ fontSize: 12 }}>{p.entries.length} shown{inView ? ` · ${inView} ticked` : ""}</span>
         <span className="grow" />
@@ -47,7 +61,7 @@ export function Explorer(p: {
       <div className="axa-list" role="list">
         {!c && <div className="muted" style={{ padding: 10, fontSize: 13 }}>Loading the catalogue…</div>}
         {c && !p.entries.length && <div className="muted" style={{ padding: 10, fontSize: 13 }}>{p.filter ? "Nothing matches." : "Nothing here yet."}</div>}
-        {p.entries.map((e) => {
+        {visible.map((e) => {
           const on = selected.has(e.key); const focused = p.selection.focus === e.key;
           return (
             <div key={e.key} role="listitem" className={`axa-row ${focused ? "focus" : ""} ${on ? "on" : ""}`} data-testid="axa-entry" data-key={e.key} data-status={e.status}>
@@ -58,10 +72,12 @@ export function Explorer(p: {
                 {p.category === "all" && <span className="axa-row-cat">{CATALOGUE_CATEGORIES.find((k) => k.key === e.category)?.label}</span>}
                 {e.verdict && e.verdict !== "untested" && <span className={`axa-verdict ${e.verdict}`}>{e.verdict.replace("_", " ")}</span>}
                 {!!e.findings && <span className="axa-sig" title={`${e.findings} significant finding${e.findings === 1 ? "" : "s"}`}>★{e.findings}</span>}
+                {e.redundantOf && <span className="axa-chip" title="Repeats another analysis on the same variables">duplicate</span>}
               </button>
             </div>
           );
         })}
+        {p.entries.length > visible.length && <button className="btn small ghost" style={{ margin: 6 }} onClick={() => setPages((n) => n + 1)} data-testid="axa-more">Show {Math.min(PAGE, p.entries.length - visible.length)} more of {p.entries.length - visible.length}</button>}
       </div>
     </div>
   );

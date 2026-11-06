@@ -78,6 +78,8 @@ export interface CatalogueEntry {
   evidence?: { id: string; headline: string; evidence: string; holds: boolean; analysisId: string | null; planned: string | null }[];
   /** for a hypothesis: why it cannot be tested, when it cannot (a construct without a question, no planned test) */
   untestable?: string | null;
+  /** this analysis repeats another one (same kind, same variables in the same roles): the key of the one it repeats */
+  redundantOf?: string;
   updatedAt?: string | null;
   technical: {
     kind?: string;
@@ -95,12 +97,25 @@ export interface CatalogueEntry {
 
 export interface CatalogueSection { category: CatalogueCategory; label: string; description: string; entries: CatalogueEntry[] }
 
+export interface CatalogueAdvice {
+  kind: "redundant" | "untestable" | "unplanned" | "not_created" | "blocked" | "stale" | "no_run" | "coverage";
+  text: string;
+  /** the entries the advice is about */
+  keys: string[];
+}
+
 export interface AnalysisCatalogue {
   sections: CatalogueSection[];
   /** every entry, in Explorer order, for the "All" view */
   all: CatalogueEntry[];
   counts: Record<CatalogueCategory, number>;
   objective: string | null;
+  /**
+   * WHAT DESERVES ATTENTION (M8) — research-based, never "because it is possible": analyses that repeat another
+   * (same kind, same variables), hypotheses that cannot be tested and why, planned analyses not yet created,
+   * analyses that cannot run, analyses stale against the plan, hypotheses nothing tests.
+   */
+  advice: CatalogueAdvice[];
 }
 
 export interface CatalogueInput {
@@ -380,9 +395,40 @@ export function buildCatalogue(input: CatalogueInput): AnalysisCatalogue {
     });
   }
 
+  /* redundancy: the same kind on the same variables in the same roles — the later one repeats the earlier */
+  const signature = (d: AnalysisDefinition) => [d.kind, (d.rows ?? []).join(","), (d.columns ?? []).join(","), (d.layers ?? []).join(","), d.kind === "crosstab" ? "" : [...d.variables].join(","), String(d.options?.test ?? d.options?.model ?? d.options?.method ?? ""), JSON.stringify(d.filter ?? null)].join("|");
+  const seen = new Map<string, string>();
+  for (const row of analyses) {
+    const sig = signature(row.definition); const key = `${categoryOfKind(row.kind)}:${row.id}`;
+    const first = seen.get(sig);
+    if (first) { const e = sections.get(categoryOfKind(row.kind))!.find((x) => x.key === key); if (e) e.redundantOf = first; } else seen.set(sig, key);
+  }
+
   const out: CatalogueSection[] = CATALOGUE_CATEGORIES.map((c) => ({ category: c.key, label: c.label, description: c.description, entries: sections.get(c.key)! }));
+  const all = out.flatMap((s) => s.entries);
   const counts = Object.fromEntries(out.map((s) => [s.category, s.entries.length])) as Record<CatalogueCategory, number>;
-  return { sections: out, all: out.flatMap((s) => s.entries), counts, objective };
+  return { sections: out, all, counts, objective, advice: catalogueAdvice(all, { hasRun: findings.length > 0 || (input.hypotheses ?? []).some((h) => h.verdict) }) };
+}
+
+export function catalogueAdvice(all: readonly CatalogueEntry[], ctx: { hasRun: boolean }): CatalogueAdvice[] {
+  const advice: CatalogueAdvice[] = [];
+  const redundant = all.filter((e) => e.redundantOf);
+  for (const e of redundant) advice.push({ kind: "redundant", text: `“${e.label}” repeats “${all.find((x) => x.key === e.redundantOf)?.label ?? e.redundantOf}” — the same analysis on the same variables; one of them can go.`, keys: [e.key, e.redundantOf!] });
+  const untestable = all.filter((e) => e.category === "hypotheses" && e.untestable);
+  for (const e of untestable) advice.push({ kind: "untestable", text: `${e.label.split(" — ")[0]} cannot be tested: ${e.untestable}`, keys: [e.key] });
+  const notCreated = all.filter((e) => e.planned && !e.analysisId && e.status === "planned");
+  if (notCreated.length) advice.push({ kind: "not_created", text: `${notCreated.length} planned analys${notCreated.length === 1 ? "is is" : "es are"} not created yet — apply the plan to create and run ${notCreated.length === 1 ? "it" : "them"}.`, keys: notCreated.map((e) => e.key) });
+  const blocked = all.filter((e) => e.status === "blocked" && e.category !== "hypotheses" && e.technical.missing?.length);
+  for (const e of blocked) advice.push({ kind: "blocked", text: `“${e.label}” cannot run: ${e.technical.missing!.join(", ")} ${e.technical.missing!.length === 1 ? "is" : "are"} not in the survey.`, keys: [e.key] });
+  const stale = all.filter((e) => e.status === "stale");
+  if (stale.length) advice.push({ kind: "stale", text: `${stale.length} analys${stale.length === 1 ? "is is" : "es are"} stale against the plan — apply the plan again to update ${stale.length === 1 ? "it" : "them"}.`, keys: stale.map((e) => e.key) });
+  const hyps = all.filter((e) => e.category === "hypotheses");
+  const unplanned = hyps.filter((h) => !h.untestable && !all.some((x) => x.category !== "hypotheses" && x.hypotheses.includes(h.id)));
+  for (const h of unplanned) advice.push({ kind: "unplanned", text: `${h.label.split(" — ")[0]} is measured but nothing tests it — add a crosstab or a test for it, or let the engine propose the plan.`, keys: [h.key] });
+  if (!ctx.hasRun && all.some((e) => e.planned)) advice.push({ kind: "no_run", text: "The plan has not been run on this dataset: hypotheses are untested and findings empty until it is applied.", keys: [] });
+  const analysesWithoutHypothesis = all.filter((e) => ["crosstabs", "tests", "models", "correlations"].includes(e.category) && !e.hypotheses.length && !e.planned);
+  if (hyps.length && analysesWithoutHypothesis.length >= 5) advice.push({ kind: "coverage", text: `${analysesWithoutHypothesis.length} analyses serve no hypothesis — exploration is fine, but a deliverable reads better when each table answers a question the study asked.`, keys: analysesWithoutHypothesis.map((e) => e.key) });
+  return advice;
 }
 
 function chartWord(t: ChartType | undefined): string {

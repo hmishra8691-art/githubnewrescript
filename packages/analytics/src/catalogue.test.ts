@@ -147,6 +147,14 @@ test("the catalogue: every category, with saved analyses, planned-but-unsaved it
   const dash = c.all.find((e) => e.key === "dashboards:d1")!;
   assert.match(dash.description, /1 widget, 1 on analyses · published v2/);
 
+  /* attention: the duplicate, the hypothesis nothing tests, the planned-not-created item, the blocked item */
+  assert.ok(c.advice.some((a) => a.kind === "not_created" && a.keys.includes("tests:plan:t1")), JSON.stringify(c.advice));
+  assert.ok(c.advice.some((a) => a.kind === "blocked" && a.keys.includes("crosstabs:plan:x2")));
+  const dup = buildCatalogue({ def, dictionary, analyses: [...saved, { id: "a9", name: "again", kind: "regression", version: 1, definition: { name: "again", kind: "regression", dataset: spec, variables: ["NPS", "SAT", "AGE"] } }], charts: [], planItems: [] });
+  const again = dup.all.find((e) => e.key === "models:a9")!;
+  assert.equal(again.redundantOf, "models:a2");
+  assert.ok(dup.advice.some((a) => a.kind === "redundant" && a.keys.includes("models:a9") && a.keys.includes("models:a2")));
+
   /* search reads labels, codes and variable names */
   assert.deepEqual(searchCatalogue(c, "Q7").map((e) => e.key).sort(), ["charts:c1", "crosstabs:a1"]);
   assert.ok(searchCatalogue(c, "purchase intent").length >= 2);

@@ -25,6 +25,7 @@ Everything here is grounded in the platform's own code. The three reference page
 
 ## Data and integration
 
+- **[Data Analytics](analytics)** — the four modes (Overview, Explore, Architect, Present), research labels, the statistical and plain-language interpretation, hypothesis verdicts, the unified selection and bulk export, Ask with its microphone, levels of detail.
 - **[Data and exports](data-and-exports)** — what each question type stores, the export columns, datasets (clean, all, custom), CSV, Excel, SPSS, SAS, Stata and JSON, the variable dictionary.
 - **[Localization and quotas](localization-and-quotas)** — languages, translation keys, routing, the glossary; quotas, cells, quota checks and quota variables in logic.
 - **[HTTP API](api)** — authentication, the Studio routes by area with the capability each needs, the respondent runtime endpoints.

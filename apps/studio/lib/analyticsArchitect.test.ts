@@ -5,7 +5,7 @@ import { explorerEntries, readPanes, renderable, selectionSummary, DEFAULT_PANES
 
 const entry = (key: string, category: CatalogueEntry["category"], label: string, analysisId: string | null = "a"): CatalogueEntry =>
   ({ key, category, id: key.split(":").pop()!, label, description: "", hypotheses: [], status: "ready", analysisId, technical: { variables: [] } });
-const cat = (entries: CatalogueEntry[]): AnalysisCatalogue => ({ all: entries, sections: [], counts: {} as never, objective: null });
+const cat = (entries: CatalogueEntry[]): AnalysisCatalogue => ({ all: entries, sections: [], counts: {} as never, objective: null, advice: [] });
 
 test("pane widths are read back clamped, or fall to the defaults", () => {
   assert.deepEqual(readPanes(null), DEFAULT_PANES);
