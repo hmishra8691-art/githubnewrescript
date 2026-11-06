@@ -2932,3 +2932,32 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .ax-ov-themes { display: flex; flex-wrap: wrap; gap: 6px; }
 .axa-chip.faint { opacity: .6; }
 @media (max-width: 1100px) { .ax-ov-cols, .ax-ov-cols.three { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------------------ EXPLORE — the board (M3) */
+.ax-explore { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 14px; align-items: start; }
+.ax-explore-picker { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 10px; display: flex; flex-direction: column; gap: 8px; position: sticky; top: 8px; max-height: calc(100vh - 120px); }
+.ax-explore-pick-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; }
+.ax-explore-picked { display: flex; flex-wrap: wrap; gap: 5px; }
+.ax-explore-x { border: 0; background: transparent; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 0 0 3px; color: inherit; }
+.ax-explore-choice { border: 1px solid var(--c-primary-100, #e0e7ff); background: var(--c-primary-50, #eef2ff); border-radius: 8px; padding: 8px 10px; }
+.ax-explore-vars { overflow: auto; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; }
+.ax-explore-var { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 6px; align-items: center; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 5px 6px; text-align: left; cursor: pointer; color: var(--text); font-size: 12.5px; }
+.ax-explore-var:hover { background: var(--panel2); } .ax-explore-var.on { border-color: var(--c-primary, #4f46e5); background: var(--c-primary-100, #e0e7ff); }
+.ax-explore-var:disabled { opacity: .45; cursor: not-allowed; }
+.ax-explore-var-code { font-size: 11px; color: var(--subtle); overflow: hidden; text-overflow: ellipsis; }
+.ax-explore-var-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ax-explore-role { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #e2e8f0; color: #334155; }
+.ax-explore-role.quantity { background: #dbeafe; color: #1e40af; } .ax-explore-role.text { background: #fef3c7; color: #92400e; }
+.ax-explore-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.ax-explore-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ax-explore-filters { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ax-explore-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 12px; }
+.ax-explore-panel { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 10px 12px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.ax-explore-panel-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ax-explore-panel-title { font-weight: 600; font-size: 13.5px; }
+.ax-explore-panel-why { font-size: 12px; }
+.ax-explore-chart { min-width: 0; overflow: hidden; transition: opacity .2s; } .ax-explore-chart.stale { opacity: .5; }
+.ax-explore-table { overflow: auto; max-height: 360px; }
+.ax-explore-insight { font-size: 12.5px; }
+.select.small { padding: 2px 6px; font-size: 12px; }
+@media (max-width: 1100px) { .ax-explore { grid-template-columns: 1fr; } .ax-explore-picker { position: static; max-height: 320px; } .ax-explore-grid { grid-template-columns: 1fr; } }

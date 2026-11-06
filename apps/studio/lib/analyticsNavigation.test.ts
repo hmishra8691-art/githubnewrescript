@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { PLACES, DEFAULT_VIEW, placeOf, resolveTab, type WsTab } from "../components/analytics/navigation.ts";
 
 /* the twelve tabs the workspace had before Phase 5, and the two views the five places added */
-const EARLIER: WsTab[] = ["home", "plan", "analysis", "charts", "tables", "segments", "filters", "reports", "ask", "themes", "exports", "sharing", "findings", "architect"];
+const EARLIER: WsTab[] = ["home", "plan", "analysis", "charts", "tables", "segments", "filters", "reports", "ask", "themes", "exports", "sharing", "findings", "architect", "board"];
 
 test("every earlier tab is reachable: it is a view of exactly one mode, or the Ask panel", () => {
   for (const t of EARLIER) {
@@ -26,7 +26,7 @@ test("four modes in the order a researcher works — Overview → Explore → Ar
 });
 
 test("links: a mode or an earlier place name opens its first view; spacing and case are forgiven; nonsense is nothing", () => {
-  assert.equal(resolveTab("explore"), "analysis");
+  assert.equal(resolveTab("explore"), "board"); assert.equal(resolveTab("analysis"), "analysis");
   assert.equal(resolveTab("Present"), "reports");
   assert.equal(resolveTab("architect"), "architect");
   assert.equal(resolveTab(" findings "), "findings");

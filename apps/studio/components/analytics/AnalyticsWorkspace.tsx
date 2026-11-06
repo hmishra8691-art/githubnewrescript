@@ -21,6 +21,7 @@ import { CHART_PAGE, analysisIdsFor, hiddenCount, visibleCharts } from "./chartP
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 import { ArchitectAnalytics, type FocusRequest } from "./architect/ArchitectAnalytics";
 import { OverviewDashboard } from "./OverviewDashboard";
+import { ExploreBoard } from "./ExploreBoard";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
@@ -168,6 +169,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         {tab === "home" && <Home home={home} analyses={analyses} onOpen={(a) => openBuilder({ analysis: a })} onNew={(kind) => openBuilder(kind ? { kind } : undefined)} onTab={setTab} canEdit={p.canEdit} api={api} refresh={refresh} plan={planBrief} surveyId={p.surveyId} />}
         {tab === "plan" && <PlanWorkspace api={api} surveyId={p.surveyId} surveyTitle={p.surveyTitle} dataset={dataset} variables={vars} counts={counts} analyses={analyses} canEdit={p.canEdit} canEditPlan={!!p.canEditPlan} canExport={p.canExport}
           onOpenAnalysis={(a) => openBuilder({ analysis: a })} onTab={(t) => setTab(t)} onApplied={() => { void refresh(); void loadPlanBrief(); }} />}
+        {tab === "board" && <ExploreBoard api={api} dataset={dataset} variables={vars} themes={themeList} canEdit={p.canEdit} onSaved={() => void refresh()} onOpenInBuilder={(a) => openBuilder({ analysis: a })} onAsk={() => { setAskMounted(true); setAskOpen(true); }} />}
         {tab === "analysis" && (
           <div className="ax-analysis-layout" data-testid="ax-analysis-layout">
             <AnalysesRail analyses={analyses} currentId={currentAnalysisId} dirty={dirty} canEdit={p.canEdit} onNew={() => openBuilder()} onFromPlan={railFromPlan} onOpen={(a) => { if (a.id !== currentAnalysisId) openBuilder({ analysis: a }); }} onDuplicate={railDuplicate} onRename={railRename} onMove={railMove} onDelete={railDelete} />

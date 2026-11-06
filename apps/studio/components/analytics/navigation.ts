@@ -4,7 +4,7 @@
  * one continuous workflow over one engine:
  *
  *   OVERVIEW   the executive summary of the study, and the findings behind it
- *   EXPLORE    interactive exploration: analyses, tables, charts, segments, filters
+ *   EXPLORE    the interactive board (pick variables → the analysis that fits), the builder, tables, charts, segments, filters
  *   ARCHITECT  the three-pane research environment, and the analysis plan it runs
  *   PRESENT    reports, report themes, exports, sharing
  *
@@ -16,7 +16,7 @@
  *
  * Kept free of React and of `@/` aliases so it is tested on its own.
  */
-export type WsTab = "home" | "findings" | "plan" | "architect" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "ask" | "themes" | "exports" | "sharing";
+export type WsTab = "home" | "findings" | "plan" | "architect" | "board" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "ask" | "themes" | "exports" | "sharing";
 export type PlaceKey = "overview" | "explore" | "architect" | "present";
 
 export interface View { key: Exclude<WsTab, "ask">; label: string }
@@ -24,15 +24,12 @@ export interface Place { key: PlaceKey; label: string; /** the question the mode
 
 export const PLACES: Place[] = [
   { key: "overview", label: "Overview", question: "What did the study find?", views: [{ key: "home", label: "Overview" }, { key: "findings", label: "Findings" }] },
-  { key: "explore", label: "Explore", question: "What does the data show?", views: [{ key: "analysis", label: "Analysis" }, { key: "tables", label: "Tables" }, { key: "charts", label: "Charts" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" }] },
+  { key: "explore", label: "Explore", question: "What does the data show?", views: [{ key: "board", label: "Explore" }, { key: "analysis", label: "Analysis" }, { key: "tables", label: "Tables" }, { key: "charts", label: "Charts" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" }] },
   { key: "architect", label: "Architect", question: "Every analysis, in research terms, under full control", views: [{ key: "architect", label: "Workspace" }, { key: "plan", label: "Analysis plan" }] },
   { key: "present", label: "Present", question: "How do we get this to people?", views: [{ key: "reports", label: "Reports" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" }] },
 ];
 
-/** the modes, as the workspace lists them — PLACES under its historical name */
-export const MODES = PLACES;
-
-export const DEFAULT_VIEW: Record<PlaceKey, View["key"]> = { overview: "home", explore: "analysis", architect: "architect", present: "reports" };
+export const DEFAULT_VIEW: Record<PlaceKey, View["key"]> = { overview: "home", explore: "board", architect: "architect", present: "reports" };
 
 /** the earlier five places, read into the mode that holds what they held */
 const LEGACY_PLACES: Record<string, View["key"]> = { plan: "plan", findings: "findings", deliver: "reports" };
