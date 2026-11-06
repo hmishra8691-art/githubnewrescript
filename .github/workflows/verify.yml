@@ -1,0 +1,129 @@
+# THE GATE (platform audit 2026-11-05).
+#
+# "There is no continuous integration. Nothing runs pnpm verify on a push. Vercel builds the three applications,
+# so a type error fails a deploy — but the 5,000 package tests, the authorisation-guard audit and the
+# dependency-boundary check run only when somebody remembers. Nine of the ten piping defects in this report
+# would have been caught at the commit that introduced them by two sweeps that take seconds."
+#
+# This runs them on every push and pull request:
+#   typecheck     every package and all three apps
+#   test          every package (built from clean dist), the Studio's lib, the runtime's lib, the renderer —
+#                 with pyreadstat installed, so the two SPSS / SAS / Stata round-trip tests that prove the
+#                 files can actually be OPENED stop skipping
+#   audit:code    the Studio authorisation audit, the Interviews + runtime guard audit, the piping sweep
+#                 (SQL functions nothing calls, tables nothing reads or writes, exports nothing imports,
+#                 environment variables nobody documented), the dependency boundaries
+#   migrations    the whole chain 0001→latest on a clean Postgres 16, each migration applied TWICE (every one
+#                 is written to be re-runnable), then two posture checks: nothing SECURITY DEFINER is
+#                 executable by anon but the share resolver, and every table has row-level security
+#   docs          the public reference pages are current
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pyreadstat, so the statistical exports are read back, not only written
+        run: python3 -m pip install --quiet pyreadstat
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Build the packages from clean
+        run: |
+          find packages -maxdepth 2 -name dist -type d -prune -exec rm -rf {} +
+          pnpm -r --filter "./packages/*" build
+
+      - name: Test
+        run: pnpm -r test
+
+      - name: Code audits — authorisation, app guards, the piping sweep, dependency boundaries
+        run: pnpm audit:code
+
+      - name: Public reference pages are current
+        run: node scripts/gen-public-docs.mjs --check
+
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: rescript
+    steps:
+      - uses: actions/checkout@v4
+      - name: A database with Supabase's auth shim
+        run: |
+          sudo apt-get install -y -qq postgresql-client >/dev/null
+          psql -d postgres -qc "create database rescript"
+          psql -v ON_ERROR_STOP=1 -q <<'SQL'
+          create extension if not exists pgcrypto;
+          create schema if not exists auth;
+          create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text, raw_user_meta_data jsonb, created_at timestamptz default now());
+          create or replace function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+          create or replace function auth.role() returns text language sql stable as $$ select current_setting('request.jwt.claim.role', true) $$;
+          create or replace function auth.jwt() returns jsonb language sql stable as $$ select '{}'::jsonb $$;
+          do $$ begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
+          end $$;
+          SQL
+      - name: The chain, every migration applied twice
+        run: |
+          set -e
+          n=0
+          for f in supabase/migrations/*.sql; do
+            psql -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null
+            psql -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null 2>&1 || { echo "::error::$f is not re-runnable"; exit 1; }
+            n=$((n+1))
+          done
+          echo "$n migrations applied, each twice"
+      - name: Nothing public is executable by anon
+        run: |
+          bad=$(psql -Atc "select string_agg(p.proname, ', ') from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prosecdef and has_function_privilege('anon', p.oid, 'execute') and p.proname <> 'rescript_resolve_share_variants'")
+          if [ -n "$bad" ]; then echo "::error::SECURITY DEFINER functions executable by anon: $bad"; exit 1; fi
+          off=$(psql -Atc "select string_agg(c.relname, ', ') from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity")
+          if [ -n "$off" ]; then echo "::error::tables without row-level security: $off"; exit 1; fi
+          echo "anon can execute nothing but the share resolver; every table has RLS"

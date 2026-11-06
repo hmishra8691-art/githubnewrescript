@@ -355,10 +355,6 @@ export function languageLocale(code: string, cfg?: LanguageConfig): string {
 
 /* ------------------------------------------------------------- lookup */
 
-export function translationOf(def: SurveyDefinition, lang: string, key: string): TranslationEntry | undefined {
-  return def.localization?.translations?.[lang]?.[key];
-}
-
 /** The text a respondent in `lang` sees for `key`: an approved-or-better translation, else the source. */
 export function textFor(def: SurveyDefinition, lang: string, key: string, source: string): string {
   const loc = def.localization;
@@ -589,11 +585,6 @@ export function formatNumber(n: number, f: LocaleFormat, opts: { maximumFraction
   return s;
 }
 
-export function formatCurrency(n: number, f: LocaleFormat, currency?: string): string {
-  const cur = currency ?? f.currency ?? "USD";
-  try { return new Intl.NumberFormat(f.locale, { style: "currency", currency: cur }).format(n); } catch { return `${cur} ${n}`; }
-}
-
 export function formatDate(d: Date | string, f: LocaleFormat): string {
   const date = typeof d === "string" ? new Date(d) : d;
   if (Number.isNaN(date.getTime())) return String(d);
@@ -602,12 +593,6 @@ export function formatDate(d: Date | string, f: LocaleFormat): string {
     return f.datePattern.replace(/yyyy/g, String(date.getFullYear())).replace(/MM/g, p2(date.getMonth() + 1)).replace(/dd/g, p2(date.getDate())).replace(/yy/g, String(date.getFullYear()).slice(-2));
   }
   try { return new Intl.DateTimeFormat(f.locale, { dateStyle: f.dateStyle ?? "medium" }).format(date); } catch { return date.toISOString().slice(0, 10); }
-}
-
-export function formatTime(d: Date | string, f: LocaleFormat): string {
-  const date = typeof d === "string" ? new Date(d) : d;
-  if (Number.isNaN(date.getTime())) return String(d);
-  try { return new Intl.DateTimeFormat(f.locale, { timeStyle: "short", hour12: f.timeFormat ? f.timeFormat === "12h" : undefined }).format(date); } catch { return date.toTimeString().slice(0, 5); }
 }
 
 /* ------------------------------------------------------------- glossary */

@@ -14,7 +14,7 @@
     "eval:ai": "node --experimental-strip-types --no-warnings scripts/eval-ai.mjs",
     "report:ai-cache": "node --experimental-strip-types --no-warnings scripts/ai-cache-report.mjs",
     "verify:all": "pnpm verify && pnpm verify:browser",
-    "audit:code": "node scripts/auth-guard-audit.mjs && node scripts/dependency-boundaries.mjs --self-test && node scripts/dependency-boundaries.mjs",
+    "audit:code": "node scripts/auth-guard-audit.mjs && node scripts/app-guard-audit.mjs && node scripts/piping-sweep.mjs && node scripts/dependency-boundaries.mjs --self-test && node scripts/dependency-boundaries.mjs",
     "pretest": "pnpm -r --filter \"./packages/*\" build"
   },
   "packageManager": "pnpm@10.28.0",

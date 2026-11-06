@@ -4,7 +4,7 @@ import {
   PART_BYTES, UPLOAD_SECONDS, planUpload, responseMediaKey,
 } from "@rescript/storage";
 import { supabaseAdmin } from "@/lib/admin";
-import { isFailure, requireProject } from "@/lib/auth";
+import { isFailure, requireProjectFor, requireUser } from "@/lib/auth";
 import { setParticipants } from "@/lib/recordings";
 import { storageOrResponse } from "@/lib/storage";
 
@@ -39,6 +39,9 @@ const extensionFor = (mime: string) =>
   mime.includes("mp4") ? "mp4" : mime.includes("ogg") ? "ogg" : mime.includes("audio") ? "webm" : "webm";
 
 export async function POST(req: NextRequest) {
+  /* the session first, then the lookup that says which project to gate on (app-guard-audit, 2026-11-05) */
+  const user = await requireUser(req);
+  if (isFailure(user)) return user.response;
   const body = await req.json().catch(() => ({}));
 
   const interviewId = String(body?.interviewId ?? "");
@@ -60,7 +63,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "That interview does not exist." }, { status: 404 });
   }
 
-  const ctx = await requireProject(req, interview.project_id, "candidates.invite");
+  const ctx = await requireProjectFor(user, interview.project_id, "candidates.invite");
   if (isFailure(ctx)) return ctx.response;
 
   /* the participant list is part of starting, so it is validated before anything is signed */

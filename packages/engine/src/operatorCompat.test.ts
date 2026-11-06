@@ -1,3 +1,11 @@
+/*
+ * THE SNAPSHOT WAS TAKEN IN UTC. Two of the matrix's cells parse a bare digit string ("02108") as a local date,
+ * and a local date in America/Los_Angeles is not the one in UTC, so the test failed on any developer machine
+ * west of Greenwich and passed in CI (platform audit 2026-11-05: 2,667 of 2,668). The clock is pinned before
+ * anything constructs a Date; Node re-reads TZ when process.env.TZ changes.
+ */
+process.env.TZ = "UTC";
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";

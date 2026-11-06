@@ -283,3 +283,31 @@ test("Phase 7: the '+/−' note says when the marks are adjusted, and a planted 
   const raw = runAnalysis(XT({ rows: ["SAT"], columns: ["GENDER"] }, { sigVsTotal: true, correction: "none" }), ds);
   assert.doesNotMatch((raw.tables[0].notes ?? []).join(" "), /adjusted/);
 });
+
+/* ---------------------------------------------------------------- platform audit 2026-11-05, calculation defects 2 and 3 */
+
+test("letters are withheld below an effective base of 30 by default, the figures still print, and the footnote says so", () => {
+  // keep every column's base above 30 except Male: a filter that leaves a handful of men
+  const few = rows.filter((r, i) => r.answers?.q_gender !== 1 || i % 50 === 0);
+  const small = buildDataset(def, few, { spec: dsSpec });
+  const r = runAnalysis(XT({}), small);
+  const t = r.tables[0];
+  const base = t.columnBases!["1"];
+  assert.ok(base < 30, `male base ${base}`);
+  for (const row of t.rows.filter((x) => x.__kind === "category")) {
+    assert.ok(row["1"] != null, "the small column's percentages still print");
+    assert.ok(!row["1__sig"], `no letter on a base of ${base}: ${String(row["1__sig"])}`);
+    assert.ok(!(row["2__sig"] as string | undefined)?.includes("a"), "no column is marked against the untestable one");
+  }
+  assert.ok(t.notes!.some((n) => /effective base below 30 carry no significance letters/.test(n)), t.notes!.join(" | "));
+  // sigMinBase: 0 restores letters at any base
+  const r0 = runAnalysis(XT({}, { sigMinBase: 0 }), small);
+  assert.ok(!r0.tables[0].notes!.some((n) => /carry no significance letters/.test(n)));
+});
+
+test("means are compared with Welch's t: the planted gender effect keeps its letter, and the note names the test", () => {
+  const means = runAnalysis(XT({ measure: "mean" }), ds);
+  const t = means.tables[0];
+  assert.equal(t.rows[0]["2__sig"], "a", "the planted effect survives the t");
+  assert.ok(t.notes!.some((n) => /Welch t/.test(n)), t.notes!.join(" | "));
+});

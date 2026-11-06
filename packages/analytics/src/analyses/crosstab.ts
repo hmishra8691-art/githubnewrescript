@@ -1,7 +1,7 @@
 import type { AnalysisDefinition, AnalysisResult, ChartData, ResultColumn, ResultTable, CrosstabRowKind } from "../types.js";
 import { categoricalColumn, categoriesOf, labelOf, numericColumn, weights, type Dataset } from "../dataset.js";
 import { chiSquare, oneWayAnova, type TestResult } from "../stats/tests.js";
-import { normalCdf } from "../stats/distributions.js";
+import { normalCdf, tTestP } from "../stats/distributions.js";
 import { fmtNum, fmtPct, isOrdered, makeResult, MIN_BASE, opt, pct, refused, round } from "./common.js";
 import { adjustP, CORRECTION_WORDS, type CorrectionMethod } from "../posthoc.js";
 
@@ -91,16 +91,25 @@ function zProportions(p1: number, n1: number, p2: number, n2: number): number | 
   const z = (p1 - p2) / se;
   return 2 * (1 - normalCdf(Math.abs(z)));
 }
-/** Welch z on weighted means with effective bases */
+/**
+ * Welch t on weighted means with effective bases (platform audit 2026-11-05, calculation defect 3). This was a z
+ * through `normalCdf`, which is conventional for banner tables and immaterial above an effective base of ~30 —
+ * and, combined with letters printed on bases as low as 2, meant the smallest bases got the least conservative
+ * test. The t with Welch–Satterthwaite degrees of freedom converges on the z as the bases grow and is honest
+ * below that; `tCdf` was already in stats/distributions.ts.
+ */
 function zMeans(a: Acc, b: Acc): number | null {
   const na = effN(a), nb = effN(b);
   if (na < 2 || nb < 2 || !a.w || !b.w) return null;
   const ma = a.sum / a.w, mb = b.sum / b.w;
   const va = accVariance(a), vb = accVariance(b);
   if (va == null || vb == null) return null;
-  const se = Math.sqrt(va / na + vb / nb);
+  const sa = va / na, sb = vb / nb;
+  const se = Math.sqrt(sa + sb);
   if (!se) return null;
-  return 2 * (1 - normalCdf(Math.abs((ma - mb) / se)));
+  const df = (sa + sb) ** 2 / ((sa * sa) / (na - 1) + (sb * sb) / (nb - 1));
+  if (!Number.isFinite(df) || df < 1) return null;
+  return tTestP((ma - mb) / se, df);
 }
 
 interface ColumnDef { key: string; label: string; code: string; variable: string; group: string; letter: string }
@@ -121,6 +130,23 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const nestRows = (opt(def, "nestRows", false) as boolean) && rowVars.length >= 2;
   const baseMode = opt(def, "base", "answered") as "answered" | "all";
   const minBase = Math.max(0, Number(opt(def, "minBase", 0)) || 0);
+  /*
+   * THE BASE BELOW WHICH NO LETTER IS PRINTED (platform audit 2026-11-05, calculation defect 2). `minBase`
+   * suppresses whole columns and defaults to 0, so a banner column of three respondents used to carry a
+   * significance letter a reader would take for a finding; MIN_BASE only drove a caption. Letters and the
+   * "+ / −" marks are now withheld for a column whose EFFECTIVE base is below `sigMinBase` (default MIN_BASE,
+   * 30). The column's figures still print — the data are the data — and the footnote says why it is unlettered.
+   * `sigMinBase: 0` restores the old behaviour for a researcher who wants letters at any base.
+   */
+  const sigMinBase = Math.max(0, Number(opt(def, "sigMinBase", MIN_BASE)) || 0);
+  /** the columns of a block too thin to test, merged with the suppressed ones for the letter functions */
+  const untestable = (colBase: Map<string, Acc>, suppressed: Set<string>): Set<string> => {
+    if (!sigMinBase) return suppressed;
+    const out = new Set(suppressed);
+    for (const [key, a] of colBase) if (key !== "__total" && effN(a) < sigMinBase) out.add(key);
+    return out;
+  };
+  let unlettered = 0;
   const sortRows = opt(def, "sortRows", "none") as "none" | "desc" | "asc";
   const hideEmpty = opt(def, "hideEmptyRows", false) as boolean;
   const summaryRows = (opt(def, "summaryRows", []) as string[]).filter(Boolean);
@@ -233,7 +259,9 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     const rCats = categoriesOf(ds, b.rv);
     const tot = b.colBase.get("__total")?.w ?? 0;
     const val = (v: number | null) => (v == null ? null : cellType === "pct" ? pct(v, decimals) : round(v, decimals));
-    const letters = (prop: (ck: string) => { p: number; n: number } | null) => letterMarks(cols, suppressed, (a, o) => {
+    const testable = untestable(b.colBase, suppressed);
+    unlettered += Math.max(0, testable.size - suppressed.size);
+    const letters = (prop: (ck: string) => { p: number; n: number } | null) => letterMarks(cols, testable, (a, o) => {
       const x = prop(a.key), y = prop(o.key); if (!x || !y) return null;
       return { p: zProportions(x.p, x.n, y.p, y.n), aHigher: x.p > y.p };
     });
@@ -243,7 +271,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       /* each column is tested against the rest of the sample; the columns of one column variable are a family, so their p-values are adjusted together, as the letters are */
       const families = new Map<string, { key: string; p: number | null; higher: boolean }[]>();
       for (const c of cols) {
-        if (!c.variable || suppressed.has(c.key)) continue;
+        if (!c.variable || testable.has(c.key)) continue;
         const me = prop(c.key); if (!me || t.n <= me.n) continue;
         // the column against its complement, so a large column is not tested against itself
         const rest = { p: (t.p * t.n - me.p * me.n) / (t.n - me.n), n: t.n - me.n };
@@ -261,7 +289,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       const meanRow = mark({ row: b.rowsIsNumeric ? "Mean" : `Mean (${b.label})`, __format: "number" }, "summary");
       const sdRow = mark({ row: "Std. deviation", __format: "number" }, "summary");
       const nRow = mark({ row: "n", __format: "count" }, "summary");
-      const sig = showSig ? letterMarks(cols, suppressed, (x, y) => { const m1 = b.nums.get(x.key), m2 = b.nums.get(y.key); if (!m1 || !m2 || !m1.w || !m2.w) return null; return { p: zMeans(m1, m2), aHigher: m1.sum / m1.w > m2.sum / m2.w }; }) : {};
+      const sig = showSig ? letterMarks(cols, testable, (x, y) => { const m1 = b.nums.get(x.key), m2 = b.nums.get(y.key); if (!m1 || !m2 || !m1.w || !m2.w) return null; return { p: zMeans(m1, m2), aHigher: m1.sum / m1.w > m2.sum / m2.w }; }) : {};
       for (const c of cols) {
         const s = b.nums.get(c.key);
         if (suppressed.has(c.key)) { meanRow[c.key] = null; sdRow[c.key] = null; nRow[c.key] = s?.count ?? 0; continue; }
@@ -346,7 +374,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
           const row = mark({ row: "Mean", __format: "number" }, "summary");
           const moments = new Map<string, Acc>();
           for (const c of cols) { const a = acc(); for (const rc of rCats) { const cell = b.grid.get(rc.code)?.get(c.key); if (!cell) continue; const v = Number(rc.code); a.count += cell.count; a.w += cell.w; a.w2 += cell.w2; a.sum += v * cell.w; a.sumSq += v * v * cell.w; } moments.set(c.key, a); }
-          const momentSig = showSig ? letterMarks(cols, suppressed, (x, y) => { const m1 = moments.get(x.key)!, m2 = moments.get(y.key)!; if (!m1.w || !m2.w) return null; return { p: zMeans(m1, m2), aHigher: m1.sum / m1.w > m2.sum / m2.w }; }) : {};
+          const momentSig = showSig ? letterMarks(cols, testable, (x, y) => { const m1 = moments.get(x.key)!, m2 = moments.get(y.key)!; if (!m1.w || !m2.w) return null; return { p: zMeans(m1, m2), aHigher: m1.sum / m1.w > m2.sum / m2.w }; }) : {};
           for (const c of cols) {
             const a = moments.get(c.key)!;
             row[c.key] = suppressed.has(c.key) || !a.w ? null : round(a.sum / a.w, Math.max(decimals, 2));
@@ -491,7 +519,8 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     const notes = [
       measure === "pct_col" ? "Column percentages." : measure === "pct_row" ? "Row percentages." : measure === "pct_total" ? "Percent of total." : measure === "mean" ? "Column means." : ds.weighted ? "Weighted counts." : "Counts.",
       ...(baseMode === "all" ? ["Based on everyone in the column; “No answer” counts the respondents who did not answer the row question."] : []),
-      ...(showSig ? [top.meanMode ? `Letters mark columns with a significantly lower mean at the ${Math.round((1 - alpha) * 100)}% level.` : sigNote] : []),
+      ...(showSig ? [top.meanMode ? `Letters mark columns with a significantly lower mean at the ${Math.round((1 - alpha) * 100)}% level (Welch t${ds.weighted ? ", weighted, effective bases" : ""}${correctionWords}).` : sigNote] : []),
+      ...(showSig && sigMinBase > 0 && unlettered > 0 ? [`Columns with an effective base below ${sigMinBase} carry no significance letters: too few respondents to test.`] : []),
       ...(sigVsTotal ? [`+ / − mark cells significantly above / below the rest of the sample${correction === "none" ? "" : ` (${CORRECTION_WORDS[correction]}-adjusted for the columns compared in each row)`}.`] : []),
       ...(suppressed.size ? [`* Columns with fewer than ${minBase} respondents are suppressed.`] : []),
       ...(Object.entries(colBases).some(([k, b]) => k !== "__total" && b > 0 && b < 30) ? ["Some columns have a base below 30 — read with caution."] : []),

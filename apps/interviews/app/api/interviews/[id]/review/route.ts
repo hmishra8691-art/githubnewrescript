@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isVerdict } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
-import { isFailure, requireProject } from "@/lib/auth";
+import { isFailure, requireProjectFor, requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -29,12 +29,15 @@ export const dynamic = "force-dynamic";
 const RECOMMENDATIONS = ["advance", "hold", "decline"] as const;
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  /* the session first, then the lookup that says which project to gate on — a read before any gate was an interview-id oracle for anybody (app-guard-audit, 2026-11-05) */
+  const user = await requireUser(req);
+  if (isFailure(user)) return user.response;
   const db = supabaseAdmin();
   const { data: interview } = await db
     .from("interviews").select("project_id").eq("id", params.id).maybeSingle();
   if (!interview) return NextResponse.json({ error: "No such interview." }, { status: 404 });
 
-  const ctx = await requireProject(req, interview.project_id, "analysis.read");
+  const ctx = await requireProjectFor(user, interview.project_id, "analysis.read");
   if (isFailure(ctx)) return ctx.response;
 
   const { data } = await db
@@ -49,12 +52,14 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+  const user = await requireUser(req);
+  if (isFailure(user)) return user.response;
   const db = supabaseAdmin();
   const { data: interview } = await db
     .from("interviews").select("id, project_id, status").eq("id", params.id).maybeSingle();
   if (!interview) return NextResponse.json({ error: "No such interview." }, { status: 404 });
 
-  const ctx = await requireProject(req, interview.project_id, "review.write");
+  const ctx = await requireProjectFor(user, interview.project_id, "review.write");
   if (isFailure(ctx)) return ctx.response;
 
   const body = await req.json().catch(() => ({}));
