@@ -67,6 +67,8 @@ export class AxApi {
   askUndo(records: UndoRecord[]) { return this.req<{ undone: { name: string; status: "undone" | "skipped"; message: string }[] }>("intelligent/undo", { method: "POST", body: JSON.stringify({ records }) }); }
   access(shareId: string) { return this.req<{ events: Row[] }>(`shares/${shareId}/access`); }
   /* the analysis plan (Data Analytics → Analysis plan): read, edit with analysis actions, apply */
+  /** the selection as a report definition (M6) — what "Save as report" saves */
+  selectionDefinition(body: Record<string, unknown>) { return this.req<{ definition: import("@rescript/analytics").ReportDefinition; skipped: { key: string; reason: string }[]; analyses: number }>("selection/definition", { method: "POST", body: JSON.stringify(body) }); }
   /** the two-layer interpretation of one result — the engine's always; the model's implications through the gate when `model` */
   interpret(body: { analysisId?: string; definition?: AnalysisDefinition; model?: boolean }) { return this.req<InterpretPayload>("interpret", { method: "POST", body: JSON.stringify(body) }); }
   /** the executive Overview: the latest run read for a non-statistician, who answered, data quality, the summary (`narrative` asks the model through the gate) */

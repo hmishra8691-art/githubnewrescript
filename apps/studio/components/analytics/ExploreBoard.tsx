@@ -6,6 +6,7 @@ import { Chart, ResultTableView } from "./charts/Chart";
 import { MAX_PICK, chartChoices, combinedFilter, crossFilter, exploreDefinition, exploreRole, type CrossFilterState } from "@/lib/analyticsExplore";
 import { conditionText } from "./FilterBuilder";
 import { InterpretationPanel } from "./InterpretationPanel";
+import { SelectTick, analysisKey } from "./selection";
 
 /**
  * EXPLORE — the interactive board (Analytics upgrade M3).
@@ -148,6 +149,7 @@ export function ExploreBoard(p: { api: AxApi; dataset: DatasetSpec; variables: V
                   <button className={`btn small ghost ${panel.table ? "on" : ""}`} onClick={() => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, table: !x.table } : x)))} data-testid="ax-explore-table">{panel.table ? "Chart" : "Table"}</button>
                   {r && <button className={`btn small ghost ${panel.explain ? "on" : ""}`} onClick={() => setPanels((ps) => ps.map((x) => (x.id === panel.id ? { ...x, explain: !x.explain } : x)))} data-testid="ax-explore-explain">Explain</button>}
                   {p.canEdit && !panel.savedId && <button className="btn small" onClick={() => void save(panel)} data-testid="ax-explore-save">Save</button>}
+                  {panel.savedId && <SelectTick keyName={analysisKey(panel.definition.kind, panel.savedId)} label={panel.definition.name} />}
                   {panel.savedId && <button className="btn small" onClick={() => p.onOpenInBuilder({ id: panel.savedId, name: panel.definition.name, kind: panel.definition.kind, definition: panel.definition })}>Open in builder</button>}
                   <button className="btn small ghost" aria-label="Remove panel" onClick={() => { setPanels((ps) => ps.filter((x) => x.id !== panel.id)); setCross((cs) => cs.filter((c) => c.panelId !== panel.id)); }}>×</button>
                 </header>

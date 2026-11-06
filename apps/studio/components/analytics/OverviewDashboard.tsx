@@ -5,6 +5,7 @@ import type { AxApi, OverviewPayload, Row } from "./api";
 import { Chart } from "./charts/Chart";
 import { useResults } from "./architect/useResults";
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
+import { SelectTick } from "./selection";
 
 /**
  * THE EXECUTIVE OVERVIEW (Analytics upgrade M2) — the default landing of Analytics: the study at a glance for a
@@ -108,6 +109,7 @@ export function OverviewDashboard(p: { api: AxApi; dataset: DatasetSpec; analyse
                     : k.analysisId ? <div className="ax-ov-chart muted" style={{ fontSize: 12 }}>Drawing…</div> : null}
                   <div className="ax-ov-evidence mono">{k.evidence}</div>
                   <div className="ax-ov-why">{k.why}</div>
+                  <div className="row" style={{ marginTop: 2 }}><SelectTick keyName={`findings:${k.id}`} label={k.title} /></div>
                 </article>
               );
             })}

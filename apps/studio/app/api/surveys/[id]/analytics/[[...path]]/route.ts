@@ -4,7 +4,7 @@ import { assertNotReadOnly, getMeter, projectContext, projectLookup, recordUsage
 import type { Environment } from "@rescript/billing";
 import type { AuditEvent, Capability } from "@rescript/access";
 import { capabilitiesOf } from "@rescript/access";
-import { buildPptx, buildXlsx, ExportUnsupportedError, isEmbeddableImage } from "@rescript/analytics/export";
+import { buildCsv, buildPdf, buildPptx, buildXlsx, checkPdf, ExportUnsupportedError, isEmbeddableImage } from "@rescript/analytics/export";
 import {
   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
   type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, parseAskOps, parseUndo, analysisReadiness, type StoryDefinition } from "@rescript/analytics";
@@ -18,6 +18,7 @@ import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
 import { cataloguePayload } from "@/lib/analyticsCatalogue";
 import { overviewPayload } from "@/lib/analyticsOverview";
 import { interpretPayload } from "@/lib/analyticsInterpret";
+import { selectionReport, type SelectionItem } from "@/lib/analyticsSelection";
 import { modelJobsGET, modelJobsPOST } from "@/lib/modelJobs";
 import { advancedGET, advancedInterpretationsFor, advancedPOST } from "@/lib/advancedModels";
 
@@ -470,6 +471,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     }
     return bad("Unknown intelligent endpoint.", 404);
   }
+  /* THE SELECTION AS A REPORT DEFINITION (M6): what "Save as report" saves — built the same way an export is, saved through the ordinary reports route */
+  if (head === "selection" && itemId === "definition") {
+    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const items = (Array.isArray(body.selection) ? body.selection as unknown[] : []).filter((x): x is SelectionItem => !!x && typeof x === "object" && typeof (x as SelectionItem).key === "string").slice(0, 200);
+    if (!items.length) return bad("The selection is empty.");
+    const title = String(body.title ?? "").trim() || `${ctx.survey.title} — selection`;
+    const sel = await selectionReport(db, surveyId, loaded, items, { title, subtitle: ctx.survey.title, interpretations: body.interpretations !== false, author: ctx.user.fullName || undefined });
+    return json({ definition: sel.report, skipped: sel.skipped, analyses: Object.keys(sel.results).length });
+  }
   /* DUAL-LAYER INTERPRETATION (M5): the engine's statistical and plain readings of one result; the model's implications through the gate when asked */
   if (head === "interpret") {
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
@@ -501,8 +512,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
      */
     try {
     const ctx = await gate(req, surveyId, "analytics.export"); if (isFailure(ctx)) return ctx.response;
-    if (body.format != null && body.format !== "xlsx" && body.format !== "pptx") return bad(`Unknown export format “${String(body.format)}” — use pptx or xlsx.`);
-    const format = body.format === "xlsx" ? "xlsx" : "pptx";
+    if (body.format != null && !["xlsx", "pptx", "pdf", "csv"].includes(String(body.format))) return bad(`Unknown export format “${String(body.format)}” — use pptx, xlsx, pdf or csv.`);
+    const format = (body.format === "xlsx" || body.format === "pdf" || body.format === "csv" ? body.format : "pptx") as "pptx" | "xlsx" | "pdf" | "csv";
     /*
      * METERING: report generation respects READ_ONLY (unless exports are
      * allowed) and is recorded as REPORT_GENERATION — against the environment
@@ -517,7 +528,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const settings = (body.settings as Record<string, unknown>) ?? {};
     const themeId = (body.themeId as string | null) ?? null;
     let report: ReportDefinition & { author?: string; date?: string }; let results: Record<string, AnalysisResult>; let reportId: string | null = null; let analysisId: string | null = null; let reportVersion: number | null = null; let themeSrc: unknown = null; let name = "";
-    if (typeof body.reportId === "string" && isUuid(body.reportId)) {
+    let skippedNotes: string[] = [];
+    if (Array.isArray(body.selection)) {
+      /* THE UNIFIED SELECTION (M6): catalogue keys from any mode → one report, computed now */
+      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+      const items = (body.selection as unknown[]).filter((x): x is SelectionItem => !!x && typeof x === "object" && typeof (x as SelectionItem).key === "string").slice(0, 200);
+      if (!items.length) return bad("The selection is empty.");
+      name = String(body.title ?? "").trim() || `${ctx.survey.title} — selection`;
+      const sel = await selectionReport(db, surveyId, loaded, items, { title: name, subtitle: ctx.survey.title, interpretations: body.interpretations !== false, author: ctx.user.fullName || undefined });
+      report = sel.report; results = sel.results;
+      skippedNotes = sel.skipped.map((x) => `${x.key}: ${x.reason}`);
+      const ids = Object.keys(results);
+      if (ids.length) { const { data: defs } = await db.from("analytics_analyses").select("definition").in("id", ids); exportEnv = environmentOf((defs ?? []).map((d) => (d.definition as AnalysisDefinition)?.dataset?.environment)); }
+    } else if (typeof body.reportId === "string" && isUuid(body.reportId)) {
       const { data: r } = await db.from("analytics_reports").select("*").eq("id", body.reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
       if (!r) return bad("Unknown report.", 404);
       reportId = r.id; name = r.name;
@@ -580,12 +603,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
      * message can say what the file does not contain.
      */
     const check = checkSnapshot(report, results);
+    check.problems.push(...skippedNotes);
     const withData = reportAnalysisIds(report).filter((id) => results[id] && !results[id].error && (results[id].base?.n ?? 0) > 0);
     if (reportAnalysisIds(report).length && !withData.length && body.allowEmpty !== true) return NextResponse.json({ error: `Nothing to export. ${check.problems.join(" ") || "No analysis in this report has any respondents in its selected data."}`, problems: check.problems }, { status: 409 });
     let buf: Buffer;
     try {
-      buf = format === "pptx" ? await buildPptx({ report: { ...report, author: report.author ?? ctx.user.fullName }, results, theme, settings: settings as never, meta, images }) : await buildXlsx({ report, results, theme, settings: settings as never, meta: { Survey: ctx.survey.title, "Generated by": ctx.user.fullName || ctx.user.email } });
-      if (!buf || buf.length < 1500 || buf.subarray(0, 2).toString("latin1") !== "PK") throw new Error("the built file is empty or not a valid Office document");
+      if (format === "pdf") { buf = await buildPdf({ report: { ...report, author: report.author ?? ctx.user.fullName }, results, theme, meta, settings: settings as never }); const pc = checkPdf(buf); if (!pc.ok) throw new Error(`the built PDF failed its check: ${pc.problems.join("; ")}`); }
+      else if (format === "csv") { buf = Buffer.from(buildCsv({ report, results }), "utf8"); if (buf.length < 10) throw new Error("the built CSV is empty"); }
+      else {
+        buf = format === "pptx" ? await buildPptx({ report: { ...report, author: report.author ?? ctx.user.fullName }, results, theme, settings: settings as never, meta, images }) : await buildXlsx({ report, results, theme, settings: settings as never, meta: { Survey: ctx.survey.title, "Generated by": ctx.user.fullName || ctx.user.email } });
+        if (!buf || buf.length < 1500 || buf.subarray(0, 2).toString("latin1") !== "PK") throw new Error("the built file is empty or not a valid Office document");
+      }
     } catch (e) {
       /* a known reason (a dashboard with nothing chosen yet) is told as it is */
       if (e instanceof ExportUnsupportedError) return bad(e.message, 422);
@@ -599,7 +627,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     void recordUsage(getMeter(), projectContext(ctx, exportEnv), { eventType: "REPORT_GENERATION", quantity: 1, metadata: { format, bytes: buf.length, reportId, analysisId, environment: exportEnv } });
     log(ctx, "analytics.export_generated", reportId ?? analysisId, { name, format, version: reportVersion });
     const filename = `${(name || "analytics").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") || "analytics"}.${format}`;
-    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { ...(check.problems.length ? { "x-rescript-export-notes": encodeURIComponent(JSON.stringify(check.problems)) } : {}), "content-type": format === "pptx" ? "application/vnd.openxmlformats-officedocument.presentationml.presentation" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "content-disposition": `attachment; filename="${filename}"`, "cache-control": "no-store" } });
+    const mime = { pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", pdf: "application/pdf", csv: "text/csv; charset=utf-8" }[format];
+    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { ...(check.problems.length ? { "x-rescript-export-notes": encodeURIComponent(JSON.stringify(check.problems)) } : {}), "content-type": mime, "content-disposition": `attachment; filename="${filename}"`, "cache-control": "no-store" } });
     } catch (e) {
       /* anything that escapes the build above (computing, loading, the database) is answered in a sentence with a reference — the cause goes to the log, never to the screen */
       const ref = Math.random().toString(36).slice(2, 8);

@@ -23,7 +23,7 @@ const nextConfig = {
    * are imported through a workspace package, which that list does not reach.
    */
   webpack: (config, { isServer }) => {
-    if (isServer) config.externals = [...(Array.isArray(config.externals) ? config.externals : [config.externals].filter(Boolean)), { "@resvg/resvg-js": "commonjs @resvg/resvg-js", "ffmpeg-static": "commonjs ffmpeg-static" }];
+    if (isServer) config.externals = [...(Array.isArray(config.externals) ? config.externals : [config.externals].filter(Boolean)), { "@resvg/resvg-js": "commonjs @resvg/resvg-js", "ffmpeg-static": "commonjs ffmpeg-static", /* pdfkit reads its font metrics from its own data/ folder at run time (M6) */ pdfkit: "commonjs pdfkit" }];
     return config;
   },
   transpilePackages: ["@rescript/schema", "@rescript/engine", "@rescript/designs", "@rescript/exporters", "@rescript/import", "@rescript/templates", "@rescript/analytics", "@rescript/renderer", "@rescript/mail", "@rescript/ai", "@rescript/media"],
@@ -49,7 +49,7 @@ const nextConfig = {
   /* the public documentation pages are read from disk at request time (Phase 7): a traced deploy must carry them */
   experimental: {
     /* the story-report renderer: native modules and a binary, loaded from node_modules at run time, never bundled */
-    serverComponentsExternalPackages: ["@resvg/resvg-js", "ffmpeg-static"],
+    serverComponentsExternalPackages: ["@resvg/resvg-js", "ffmpeg-static", "pdfkit"],
     outputFileTracingIncludes: {
       "/api/surveys/*/stories/**": ["./public/report-fonts/**", ffmpegFile],
       "/api/cron/story-renders": ["./public/report-fonts/**", ffmpegFile],

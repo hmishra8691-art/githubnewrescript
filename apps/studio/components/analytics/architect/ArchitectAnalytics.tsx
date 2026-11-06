@@ -6,7 +6,8 @@ import { Explorer } from "./Explorer";
 import { Workspace, specFor, type FocusView, type WorkspaceView } from "./Workspace";
 import { Properties } from "./Properties";
 import { useResults } from "./useResults";
-import { DEFAULT_PANES, EMPTY_SELECTION, PANES_KEY, clampPane, explorerEntries, focusKey, pruneSelection, readPanes, selectAll, selectionSummary, toggleKey, type ExplorerCategory, type Panes, type Selection } from "@/lib/analyticsArchitect";
+import { useSelection } from "../selection";
+import { DEFAULT_PANES, PANES_KEY, clampPane, explorerEntries, readPanes, selectionSummary, type ExplorerCategory, type Panes, type Selection } from "@/lib/analyticsArchitect";
 
 /**
  * ANALYTICS ARCHITECT MODE (2026-11-06) — a research environment over the analytics engine.
@@ -42,7 +43,10 @@ export function ArchitectAnalytics(p: {
   const [error, setError] = React.useState<string | null>(null);
   const [category, setCategory] = React.useState<ExplorerCategory>("all");
   const [filter, setFilter] = React.useState("");
-  const [selection, setSelection] = React.useState<Selection>(EMPTY_SELECTION);
+  /* the ticks are the workspace-wide selection (M6); the focus is this pane's own */
+  const basket = useSelection();
+  const [focusedKey, setFocusedKey] = React.useState<string | null>(null);
+  const selection = React.useMemo<Selection>(() => ({ keys: basket.items.map((i) => i.key), focus: focusedKey }), [basket.items, focusedKey]);
   const [view, setView] = React.useState<WorkspaceView>("focus");
   const [focusView, setFocusView] = React.useState<FocusView>("combined");
   /* the All view's sections that are on screen — what gets computed */
@@ -53,7 +57,7 @@ export function ArchitectAnalytics(p: {
   React.useEffect(() => { try { setPanes(readPanes(window.localStorage.getItem(PANES_KEY))); } catch { /* fine */ } }, []);
 
   const load = React.useCallback(async () => {
-    try { const d = await p.api.catalogue({ environment: p.dataset.environment, dataset: p.dataset.dataset }); setPayload(d); setError(null); setSelection((s) => pruneSelection(s, d.catalogue)); }
+    try { const d = await p.api.catalogue({ environment: p.dataset.environment, dataset: p.dataset.dataset }); setPayload(d); setError(null); setFocusedKey((f) => (f && d.catalogue.all.some((e) => e.key === f) ? f : null)); }
     catch (e) { setError((e as Error).message); }
   }, [p.api, p.dataset.environment, p.dataset.dataset]);
   React.useEffect(() => { void load(); }, [load, p.refreshKey]);
@@ -72,7 +76,7 @@ export function ArchitectAnalytics(p: {
   React.useEffect(() => { results.invalidate(); }, [p.dataset.environment, p.dataset.dataset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const focus = (key: string | null) => {
-    setSelection((s) => focusKey(s, key));
+    setFocusedKey(key);
     if (key) { setView("focus"); const e = catalogue?.all.find((x) => x.key === key); setSpec(e ? specFor(e, p.charts, e.analysisId ? results.results[e.analysisId] : undefined) : null); }
   };
   React.useEffect(() => { p.onFocusChange?.(focused ? { key: focused.key, label: focused.label, analysisId: focused.analysisId ?? null } : null); }, [focused]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -111,8 +115,8 @@ export function ArchitectAnalytics(p: {
       <aside className="ar-map axa-pane">
         <div className="ar-pane-head"><span className="ar-pane-title">Analysis Explorer</span><span className="ar-pane-meta">{catalogue ? `${catalogue.all.length} entries` : "…"}</span></div>
         <Explorer catalogue={catalogue} category={category} onCategory={setCategory} filter={filter} onFilter={setFilter} entries={entries} selection={selection}
-          onToggle={(k) => setSelection((s) => toggleKey(s, k))} onFocus={focus}
-          onSelectAll={() => setSelection((s) => selectAll(s, entries.map((e) => e.key)))} onSelectNone={() => setSelection(EMPTY_SELECTION)} />
+          onToggle={(k) => { const e = catalogue?.all.find((x) => x.key === k); basket.toggle(k, e?.label ?? k); }} onFocus={focus}
+          onSelectAll={() => basket.addMany(entries.map((e) => ({ key: e.key, label: e.label })))} onSelectNone={() => basket.clear()} />
       </aside>
       <div className="ar-divider" onPointerDown={startDrag("explorer")} role="separator" aria-orientation="vertical" data-testid="axa-divider-explorer" />
       <main className="ar-work axa-pane">

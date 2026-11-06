@@ -10,3 +10,5 @@ export * from "./officeCheck.js";
 export * from "./qualDocx.js";
 export * from "./qualSlides.js";
 export * from "./conjointSimulator.js";
+export * from "./pdf.js";
+export * from "./csv.js";

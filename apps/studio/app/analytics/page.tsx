@@ -6,6 +6,7 @@ import { useSession } from "@/lib/useSession";
 import { AnalyticsWorkspace, type WsTab } from "@/components/analytics/AnalyticsWorkspace";
 import { resolveTab } from "@/components/analytics/navigation";
 import { AppHeader } from "@/components/ui/AppHeader";
+import { SelectionProvider } from "@/components/analytics/selection";
 
 /**
  * /analytics — THE DATA ANALYTICS TAB (§1, §2). A top-level destination beside
@@ -95,7 +96,7 @@ export default function AnalyticsPage() {
       {surveys && !surveys.length && <div className="card">You have no surveys yet. Create one from the <a href="/">dashboard</a>, collect responses, and come back to analyse them.</div>}
       {survey && waiting && <div className="card muted" data-testid="ax-access-loading">Checking your access to this project…</div>}
       {survey && !waiting && !canRead && <div className="card" data-testid="ax-no-access">Your role on “{survey.title}” ({survey.myRole}) does not include analytics access. Ask the project owner for a Viewer role or higher, or for Data Analytics access.</div>}
-      {survey && !waiting && canRead && <AnalyticsWorkspace key={survey.id} surveyId={survey.id} surveyTitle={survey.title} canEdit={perms.canEdit} canEditPlan={perms.canEditPlan} canPublish={perms.canPublish} canExport={perms.canExport} initialTab={initialTab} />}
+      {survey && !waiting && canRead && <SelectionProvider surveyId={survey.id}><AnalyticsWorkspace key={survey.id} surveyId={survey.id} surveyTitle={survey.title} canEdit={perms.canEdit} canEditPlan={perms.canEditPlan} canPublish={perms.canPublish} canExport={perms.canExport} initialTab={initialTab} /></SelectionProvider>}
     </div>
   );
 }

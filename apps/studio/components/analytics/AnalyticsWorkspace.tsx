@@ -22,6 +22,8 @@ import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 import { ArchitectAnalytics, type FocusRequest } from "./architect/ArchitectAnalytics";
 import { OverviewDashboard } from "./OverviewDashboard";
 import { ExploreBoard } from "./ExploreBoard";
+import { PresentWorkbench } from "./PresentWorkbench";
+import { useSelection } from "./selection";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
@@ -43,6 +45,7 @@ export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit
 
 export function AnalyticsWorkspace(p: WorkspaceProps) {
   const api = React.useMemo(() => new AxApi(p.surveyId), [p.surveyId]);
+  const selection = useSelection();
   /* the view on show. "ask" is not a view: it opens the Ask panel over whichever place you are in */
   const [tab, setTabRaw] = React.useState<Exclude<WsTab, "ask">>(p.initialTab && p.initialTab !== "ask" ? p.initialTab : "home");
   const [askOpen, setAskOpen] = React.useState(p.initialTab === "ask");
@@ -154,7 +157,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
           {i > 0 && <span className="ax-place-arrow" aria-hidden>→</span>}
           <button className={`ax-place ${place === pl.key ? "on" : ""}`} aria-current={place === pl.key ? "page" : undefined} title={pl.question} data-testid={`ax-place-${pl.key}`}
             onClick={() => { if (place === pl.key) return; if (tab === "analysis" && !guard()) return; setTab(lastView[pl.key] ?? DEFAULT_VIEW[pl.key]); }}>
-            <span className="ax-place-n">{i + 1}</span>{pl.label}{pl.key === "explore" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}
+            <span className="ax-place-n">{i + 1}</span>{pl.label}{pl.key === "explore" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}{pl.key === "present" && selection.items.length > 0 ? <span className="ax-place-badge" title={`${selection.items.length} selected`} data-testid="ax-present-badge">{selection.items.length}</span> : null}
           </button></React.Fragment>))}
         <span className="grow" />
         <button ref={askButtonRef} className={`btn small ax-ask-open ${askOpen ? "on" : ""}`} onClick={() => { setAskMounted(true); setAskOpen((o) => !o); }} aria-expanded={askOpen} aria-controls="ax-ask-drawer" title="Ask in words — it proposes, you review" data-testid="ax-ask-open">Ask</button>
@@ -184,6 +187,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         {tab === "segments" && <SegmentsPanel api={api} variables={vars} items={segments} kind="segment" onChange={() => void refresh()} />}
         {tab === "filters" && <SegmentsPanel api={api} variables={vars} items={segments} kind="filter" onChange={() => void refresh()} />}
         {tab === "findings" && <FindingsView api={api} dataset={dataset} analyses={analyses} onOpenAnalysis={(a) => openBuilder({ analysis: a })} onTab={(t) => setTab(t)} />}
+        {tab === "present" && <PresentWorkbench api={api} surveyTitle={p.surveyTitle} canExport={p.canExport} canEdit={p.canEdit} themes={themes} onTab={(t) => setTab(t)} onSaved={() => void refresh()} />}
         {tab === "reports" && <ReportsPanel api={api} analyses={analyses} themes={themes} items={reports} onChange={() => void refresh()} pendingAdd={pendingAdd} clearPending={() => setPendingAdd(null)} surveyTitle={p.surveyTitle} />}
         {tab === "themes" && <ThemesPanel api={api} items={themes} onChange={() => void refresh()} />}
         {tab === "exports" && <ExportsPanel api={api} reports={reports} analyses={analyses} themes={themes} />}
