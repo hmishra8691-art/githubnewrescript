@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { Loading } from "@/components/ui/Loading";
-import { CATEGORY_LABELS, VALIDATION_RECORD } from "@rescript/quality";
+import { CATEGORY_LABELS, VALIDATION_RECORD, DIMENSIONS, OUTCOME_LABELS, type CleaningImpact } from "@rescript/quality";
 import { useStudio } from "./store";
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
@@ -93,6 +93,80 @@ function ValidationGateCard() {
   );
 }
 
+/**
+ * BEFORE AND AFTER CLEANING (roadmap 1.4, tracker 1.5): what removing the responses marked REMOVE did — counts, the
+ * reasons, quality and outcomes, the six quality dimensions, and every answer share it moved by 3 points or more
+ * (where cleaning could bias the sample). The raw dataset is the "before" column; nothing is deleted.
+ */
+function CleaningImpactCard({ include }: { include: Include }) {
+  const s = useStudio();
+  const [data, setData] = React.useState<CleaningImpact | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [open, setOpen] = React.useState(false);
+  const env = include === "test" ? "TEST" : "LIVE";
+  React.useEffect(() => {
+    if (!open || s.surveyDbId === "sandbox") return;
+    let live = true;
+    fetch(`/api/surveys/${s.surveyDbId}/quality/impact?environment=${env}`, { cache: "no-store" }).then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (!live) return;
+      if (!r.ok) setError((j as { error?: string }).error ?? `HTTP ${r.status}`); else setData((j as { impact: CleaningImpact }).impact);
+    }).catch(() => live && setError("The report could not be loaded."));
+    return () => { live = false; };
+  }, [open, s.surveyDbId, env]);
+  const csv = () => {
+    if (!data) return;
+    const q = (x: unknown) => `"${String(x).replace(/"/g, '""')}"`;
+    const lines = [["section", "item", "before", "after", "change"].join(","),
+      ["completes", "", data.before, data.after, data.after - data.before].join(","),
+      ["quality score", "mean", data.qualityScore.before ?? "", data.qualityScore.after ?? "", ""].join(","),
+      ...Object.keys(data.outcomes.before).map((k) => ["outcome", k, data.outcomes.before[k as never], data.outcomes.after[k as never], ""].join(",")),
+      ...data.removedBecause.map((r) => ["removed because", q(r.reason), r.count, "", ""].join(",")),
+      ...data.shifts.map((x) => ["share", q(`${x.code} · ${x.option}`), x.before, x.after, x.points].join(",")),
+      ...data.blanks.map((x) => ["blank rate", q(x.code), x.before, x.after, Math.round((x.after - x.before) * 10) / 10].join(","))];
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+    a.download = `${s.def.meta.code || "survey"}-cleaning-impact.csv`;
+    a.click();
+  };
+  return (
+    <details className="card" style={{ padding: "10px 14px" }} data-testid="cleaning-impact" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary style={{ cursor: "pointer" }}><b>Before and after cleaning</b><span className="muted" style={{ fontSize: 12.5 }}> — what removing responses did to the sample ({env.toLowerCase()} data)</span></summary>
+      {s.surveyDbId === "sandbox" && <p className="muted" style={{ fontSize: 12.5 }}>Available for a saved survey with responses.</p>}
+      {error && <p className="chip warn">{error}</p>}
+      {data && (
+        <div style={{ marginTop: 8, fontSize: 13 }} data-testid="cleaning-impact-body">
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <span className="chip">{data.before} completes before</span>
+            <span className="chip">{data.removed} removed</span>
+            <span className="chip">{data.after} after</span>
+            {data.pendingReview > 0 && <span className="chip warn">{data.pendingReview} still waiting for review</span>}
+            <span className="chip">quality {data.qualityScore.before ?? "—"} → {data.qualityScore.after ?? "—"}</span>
+            <button type="button" className="btn small" onClick={csv} data-testid="cleaning-impact-csv">Download (.csv)</button>
+          </div>
+          <table className="table" style={{ marginTop: 8, fontSize: 12.5 }}>
+            <thead><tr><th>Outcome</th><th>Before</th><th>After</th></tr></thead>
+            <tbody>{(Object.keys(data.outcomes.before) as (keyof typeof data.outcomes.before)[]).filter((k) => data.outcomes.before[k] || data.outcomes.after[k]).map((k) => <tr key={k}><td>{k === "unscored" ? "Not scored" : OUTCOME_LABELS[k]}</td><td>{data.outcomes.before[k]}</td><td>{data.outcomes.after[k]}</td></tr>)}</tbody>
+          </table>
+          <table className="table" style={{ marginTop: 8, fontSize: 12.5 }}>
+            <thead><tr><th>Quality dimension (mean risk, 0–100)</th><th>Before</th><th>After</th></tr></thead>
+            <tbody>{DIMENSIONS.map((d) => <tr key={d.id}><td>{d.label}</td><td>{data.dimensions.before[d.id]}</td><td>{data.dimensions.after[d.id]}</td></tr>)}</tbody>
+          </table>
+          {data.removedBecause.length > 0 && <p style={{ margin: "8px 0 0" }}><b>Removed because:</b> {data.removedBecause.slice(0, 6).map((r) => `${r.reason} (${r.count})`).join(" · ")}</p>}
+          <p style={{ margin: "8px 0 4px" }}><b>{data.shifts.length ? `Answer shares cleaning moved by ${data.notablePoints}+ points` : `No answer share moved by ${data.notablePoints} points or more`}</b>{data.shifts.length > 0 && <span className="muted"> — check these before reporting: removals that shift a profile can bias results</span>}</p>
+          {data.shifts.length > 0 && (
+            <table className="table" style={{ fontSize: 12.5 }} data-testid="cleaning-impact-shifts">
+              <thead><tr><th>Question</th><th>Answer</th><th>Before</th><th>After</th><th>Change</th></tr></thead>
+              <tbody>{data.shifts.slice(0, 15).map((x) => <tr key={`${x.questionId}:${x.option}`}><td title={x.text}>{x.code}</td><td>{x.option}</td><td>{x.before} %</td><td>{x.after} %</td><td style={{ color: Math.abs(x.points) >= 5 ? "var(--red)" : undefined }}>{x.points > 0 ? "+" : ""}{x.points}</td></tr>)}</tbody>
+            </table>
+          )}
+          {data.blanks.length > 0 && <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>Blank answers changed: {data.blanks.slice(0, 8).map((b) => `${b.code} ${b.before} % → ${b.after} %`).join(" · ")}</p>}
+        </div>
+      )}
+    </details>
+  );
+}
+
 export function QualityPanel({ include }: { include: Include }) {
   const s = useStudio();
   const [data, setData] = React.useState<Payload | null>(null);
@@ -161,6 +235,7 @@ export function QualityPanel({ include }: { include: Include }) {
     <div data-testid="quality-panel">
       <ConfigCard data={data} include={include} busy={busy} onRecompute={recompute} onSettings={() => s.goToTab?.("settings")} />
       <ValidationGateCard />
+      <CleaningImpactCard include={include} />
       {!data.enabled && (
         <div className="chip warn qd-note" data-testid="quality-disabled-note">
           Quality checks are off for this survey — enable them under Survey settings → Quality checks. Responses finished while off are unscored; “Re-assess” scores them with the current settings.
