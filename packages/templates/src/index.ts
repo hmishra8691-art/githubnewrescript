@@ -125,3 +125,5 @@ export type {
 } from "./testCases.js";
 export { productionTest, startingCounts } from "./productionTest.js";
 export type { ProductionTestOptions, ProductionTestReport, ProductionQuotaCell, QuotaFill } from "./productionTest.js";
+export { explorePaths, comparePaths, summarizePaths } from "./paths.js";
+export type { PathExploration, PathComparison, ElementReach } from "./paths.js";

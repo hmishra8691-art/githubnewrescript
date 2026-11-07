@@ -2,6 +2,7 @@ import type { QuotaCounts } from "@rescript/engine";
 import { effectiveLimit, fieldworkWindow, quotaIncrements, QUESTIONS_PER_MINUTE } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import { generatePopulation } from "./generate.js";
+import { summarizePaths, type PathExploration } from "./paths.js";
 
 /**
  * A PRODUCTION-LIKE TEST (Intelligent Mode IM3, 2026-11-06).
@@ -48,6 +49,8 @@ export interface ProductionTestReport {
   gates: { id: string; ok: boolean; message: string }[];
   issues: { kind: string; message: string; count: number }[];
   coverage: { questions: string; never: string[] };
+  /** who goes where: reach per flow element, the commonest routes, pages and branch paths nobody reached */
+  paths: PathExploration;
   verdict: "ready" | "needs_attention" | "blocked";
   lines: string[];
 }
@@ -140,11 +143,14 @@ export function productionTest(def: SurveyDefinition, opts: ProductionTestOption
   for (const c of neverReached) lines.push(`${c.quota} / ${c.cell}: no simulated complete fell in it — check its condition can be met by an answer the survey asks.`);
   if (outcomes.quota_full) lines.push(`${outcomes.quota_full} respondents ended on the quota-full path; its end page and redirect are what they would see live.`);
   for (const x of issues.slice(0, 8)) lines.push(`Issue (${x.kind.replace(/_/g, " ")}, ${x.count}×): ${x.message}`);
+  const paths = summarizePaths(def, pop);
+  if (paths.routes[0]) lines.push(`Most common route (${paths.routes[0].share} %): ${paths.routes[0].pages.length} pages, ending ${paths.routes[0].ending}; ${paths.routes.length} distinct routes in the top list.`);
+  if (paths.neverReached.length) lines.push(`No simulated respondent reached: ${paths.neverReached.slice(0, 8).map((x) => x.kind === "path" ? x.label : x.id).join(", ")} — check the conditions in front of them.`);
   if (never.length) lines.push(`Never shown to any simulated respondent: ${never.slice(0, 12).join(", ")}${never.length > 12 ? ` and ${never.length - 12} more` : ""}.`);
   lines.push(verdict === "ready" ? "Verdict: ready — nothing in the simulation would stop or mislead a live respondent." : verdict === "blocked" ? "Verdict: blocked — fix the ✗ lines before launch." : "Verdict: needs attention — read the lines above before launch.");
 
   return {
     simulated: true, respondents: pop.respondents.length, outcomes, completeShare: pct(completes, pop.respondents.length) / 100, loiMinutes: loi, quotas, gates, issues,
-    coverage: { questions: `${pop.coverage.questions.exercised} of ${pop.coverage.questions.total}`, never }, verdict, lines,
+    coverage: { questions: `${pop.coverage.questions.exercised} of ${pop.coverage.questions.total}`, never }, paths, verdict, lines,
   };
 }

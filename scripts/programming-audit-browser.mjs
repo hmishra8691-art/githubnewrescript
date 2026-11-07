@@ -28,9 +28,13 @@ const variants = QUESTION_VARIANTS.filter((v) => v.status === "stable" && isSele
 const qs = variants.map((v, i) => { const q = E.withStarterOptions(E.createQuestionFromVariant(v, { code: `V${i + 1}`, variableName: `V${i + 1}` }, ids), ids); q.text = q.text || `${v.label} (${v.id})`; return q; });
 /* not drawn for respondents (filled by the engine) / drawn only once their content exists (a design, an image, a video) */
 const NOT_DRAWN = new Set(["calculated", "hidden", "embedded_data"]);
-const NEEDS_CONTENT = new Set(["maxdiff_task", "conjoint_task", "acbc_task", "annotation", "media_timeline", "hotspot", "html", "experiment"]); // a design, an image or video, display-only content, an A/B stimulus
+/* SAMPLE CONTENT (2026-11-07): image-based types get a stimulus, so their controls are checked like every other type's */
+const SAMPLE_IMAGE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="#dde"/><rect x="40" y="40" width="200" height="140" fill="#88a"/><circle cx="460" cy="260" r="80" fill="#a88"/></svg>')}`;
+const IMAGE_STIMULUS = new Set(["hotspot", "annotation"]);
+for (const q of qs) if (IMAGE_STIMULUS.has(q.type) || /^(hotspot|image)\./.test(q.variant ?? "")) q.settings = { ...q.settings, imageUrl: q.settings?.imageUrl || SAMPLE_IMAGE };
+const NEEDS_CONTENT = new Set(["maxdiff_task", "conjoint_task", "acbc_task", "media_timeline", "html", "experiment"]); // a design, an image or video, display-only content, an A/B stimulus
 const drawnIds = () => qs.filter((q) => !NOT_DRAWN.has(q.type) && !/^ai\.(classification|sentiment)$/.test(q.variant ?? "")).map((q) => q.id);
-const controlIds = () => qs.filter((q) => drawnIds().includes(q.id) && !NEEDS_CONTENT.has(q.type) && !["media.watch_time", "comparison.before_after", "hotspot.regions", "hotspot.shelf"].includes(q.variant ?? "")).map((q) => q.id);
+const controlIds = () => qs.filter((q) => drawnIds().includes(q.id) && !NEEDS_CONTENT.has(q.type) && !["media.watch_time", "comparison.before_after"].includes(q.variant ?? "")).map((q) => q.id);
 const all = SurveyDefinition.parse({ meta: { id: "types", code: "TY", title: "All types", version: "1" }, questions: qs, flow: [{ type: "page", id: "p", questionIds: qs.map((q) => q.id) }] });
 
 for (const [label, viewport] of [["desktop", { width: 1280, height: 900 }], ["phone", { width: 390, height: 844 }]]) {

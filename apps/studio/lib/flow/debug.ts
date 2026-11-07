@@ -55,7 +55,8 @@ export function coerceAnswer(def: SurveyDefinition, qid: string, v: string | str
   return one(v);
 }
 
-export function debugPath(def: SurveyDefinition, answersText: string): DebugResult {
+/** typed answers → stored answers keyed by question id, plus the names that matched no question */
+export function answersFromText(def: SurveyDefinition, answersText: string): { answers: Record<string, unknown>; unknown: string[]; applied: number } {
   const answers: Record<string, unknown> = {};
   const unknown: string[] = [];
   let applied = 0;
@@ -65,6 +66,11 @@ export function debugPath(def: SurveyDefinition, answersText: string): DebugResu
     answers[q.id] = coerceAnswer(def, q.id, v);
     applied++;
   }
+  return { answers, unknown, applied };
+}
+
+export function debugPath(def: SurveyDefinition, answersText: string): DebugResult {
+  const { answers, unknown, applied } = answersFromText(def, answersText);
   const maxPages = 400;
   try {
     const r = simulateRespondent(def, { answers, seed: 1, maxPages });

@@ -10,7 +10,7 @@
  */
 import { SurveyDefinition, QUESTION_VARIANTS, isSelectableVariant } from "../packages/schema/dist/index.js";
 import * as E from "../packages/engine/dist/index.js";
-import { simulateRespondent } from "../packages/templates/dist/index.js";
+import { simulateRespondent, explorePaths, comparePaths } from "../packages/templates/dist/index.js";
 
 const results = [];
 const check = (area, name, ok, detail = "") => { results.push({ area, name, ok: !!ok, detail }); };
@@ -336,6 +336,15 @@ tryRun("AI", "Intelligent Mode sets auto-next per question (refused on a multi-s
   const st = E.createResponseState(r.def, { seed: 1 }); st.answers.s2 = 2;
   const labels = E.effectiveQuestion(c1, { def: r.def, state: st, loop: null }).options.map((o) => o.label);
   return { ok: !r.errors.length && r.def.questions.find((q) => q.id === "s2").settings.autoNext === true && bad.errors.length > 0 && labels.join() === "Yes, for her,Not for me", detail: `${r.errors.join(" | ") || "applied"}; multi refused: ${bad.errors[0]?.slice(0, 80)}; C1 for a woman: ${labels.join(" / ")}` };
+});
+
+tryRun("Test", "Path explorer: reach per element and endings; path comparison shows the option text each answer set sees", () => {
+  const r = E.applySurveyActions(study, E.coerceSurveyActions([{ op: "set_dynamic_options", target: "C1", by: "S2", grid: { "1": { Female: "Yes, for her" }, "2": { "*": "Not for me" } } }]).actions, { ids });
+  const x = explorePaths(r.def, { count: 40, seed: 5 });
+  const total = Object.values(x.endings).reduce((a, b) => a + b, 0);
+  const c = comparePaths(r.def, { s2: 1 }, { s2: 2 });
+  const d = c.differences.find((y) => y.questionId === "c1" && y.what === "options");
+  return { ok: x.respondents > 0 && total === x.respondents && x.pages[0].reached === x.respondents && !!d, detail: `${x.respondents} walked, ${x.routes.length} top routes, never reached ${x.neverReached.length}; C1 A “${d?.a ?? "—"}” vs B “${d?.b ?? "—"}”` };
 });
 
 /* ---------------------------------------------------------------- report */

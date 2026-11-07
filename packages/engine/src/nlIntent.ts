@@ -1816,6 +1816,8 @@ const productionTestRequest: Recogniser = (r) => {
     || /^simulate\s+(?:\d[\d,]*\s+)?(?:live\s+)?(?:respondents|completes|fieldwork)\b/i.test(t)
     || /^what\s+happens\s+when\s+.+\s+(?:is|are)\s+(?:full|at\s+\d{1,3}\s*%)/i.test(t) && r.def.quotas.length > 0
     || /\bproduction[-\s]like\s+test\b/i.test(t) && t.split(/\s+/).length <= 30
+    || /^(?:show\s+(?:me\s+)?|explore\s+|map\s+)?(?:the\s+)?(?:respondent\s+)?paths?\s+(?:through|in)\s+(?:the\s+|this\s+|my\s+)?(?:survey|study|questionnaire)\b/i.test(t)
+    || /^(?:who\s+goes\s+where|where\s+do\s+(?:the\s+)?respondents\s+go|which\s+(?:pages|branches|paths)\s+(?:does\s+)?(?:no\s*one|nobody)\s+(?:see|reach))\b/i.test(t)
     || /^(?:let\s+me\s+|i\s+(?:want|need)\s+to\s+|can\s+i\s+|help\s+me\s+)?(?:test|try|run\s+through|check)\s+(?:the\s+|this\s+|my\s+)?(?:survey|study|questionnaire)\b/i.test(t) && /\b(?:(?:a|the)\s+live\s+respondents?|live\s+quotas?|live\s+counts?|live\s+conditions|as\s+if\s+(?:it\s+(?:were|was)\s+)?live|in\s+production)\b/i.test(t);
   if (!asks) return null;
   const n = /\b(\d[\d,]{1,6})\s+(?:simulated\s+)?(?:respondents|completes|people|interviews|runs)\b/i.exec(t);

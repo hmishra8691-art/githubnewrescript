@@ -19,7 +19,7 @@ const def = SurveyDefinition.parse({
 });
 
 test("the sentences that ask for it", () => {
-  for (const s of ["Run a production-like test", "Test the survey as if it were live", "Simulate 500 respondents", "Run a production test with 300 respondents and the Cardiology cell full", "What happens when Oncology is full?", "Do a pre-launch test"]) {
+  for (const s of ["Run a production-like test", "Test the survey as if it were live", "Simulate 500 respondents", "Run a production test with 300 respondents and the Cardiology cell full", "What happens when Oncology is full?", "Do a pre-launch test", "Show me the paths through the survey", "Who goes where?", "Which pages does nobody reach?"]) {
     const out = interpretRequest(def, s);
     assert.equal(out.kind, "test", `${s}: ${JSON.stringify(out).slice(0, 200)}`);
     assert.match((out as { understood: string }).understood, /Nothing is written/);

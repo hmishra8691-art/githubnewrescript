@@ -16,12 +16,13 @@ import type { VariableDef } from "@rescript/schema";
  * preserve. See `spss.ts`.
  */
 
-export type ValueMode = "code" | "label" | "code_label";
+export type ValueMode = "code" | "label" | "code_label" | "value";
 
 export const VALUE_MODES: { mode: ValueMode; label: string; hint: string }[] = [
   { mode: "code", label: "Codes only", hint: "1, 2 — what the survey stored. The default, and what data processing expects." },
   { mode: "label", label: "Labels only", hint: "Male, Female — readable without the questionnaire beside it." },
   { mode: "code_label", label: "Codes + labels", hint: "2 - Male — both, for reconciling one against the other." },
+  { mode: "value", label: "Export values", hint: "Each option's export value where one is set (e.g. a scale scored 5…1), the code elsewhere." },
 ];
 
 /** The separator between a code and its label. Kept in one place so every format agrees. */
@@ -69,6 +70,12 @@ export function renderValue(raw: unknown, v: VariableDef | undefined, mode: Valu
    */
   if (Array.isArray(raw)) return raw.map((item) => renderValue(item, v, mode));
 
+  if (mode === "value") {
+    const ev = v?.exportValues;
+    if (!ev) return raw;
+    const key = String(raw);
+    return Object.prototype.hasOwnProperty.call(ev, key) ? ev[key] : raw;
+  }
   const label = labelForCode(v, raw);
   if (label == null) return raw;
   return mode === "label" ? label : `${raw}${CODE_LABEL_SEPARATOR}${label}`;

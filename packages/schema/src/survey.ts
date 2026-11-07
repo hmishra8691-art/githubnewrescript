@@ -618,6 +618,8 @@ export const VariableDef = z.object({
   responseType: z.string(),
   valueCodes: z.array(z.union([z.string(), z.number()])).default([]),
   valueLabels: z.record(z.string()).default({}),
+  /** code → the option's export value, present only when some option sets one (2026-11-07) */
+  exportValues: z.record(z.union([z.string(), z.number()])).optional(),
   pageId: z.string().optional(),
   sectionId: z.string().optional(),
   derived: z.boolean().default(false),

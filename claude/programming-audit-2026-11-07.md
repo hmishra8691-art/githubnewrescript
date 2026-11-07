@@ -31,3 +31,28 @@ The option export value field (schema) is not editable and not used by exports (
 ## Verification
 Typecheck clean; engine 2757, studio 1172, runtime 113, templates 125, import 100, quality 102, analytics 410,
 renderer 12, schema 18 — 0 failing; audit:code clean; studio and runtime builds clean; both harnesses green.
+
+## Follow-up phases (patches 0093–0094)
+- **0093 — auto-next + answer × option grid.** `autoNextKind/autoNextReady` (engine): single-answer questions advance
+  on click; multi-selects, open answers, sliders, rankings wait; grids wait for every row; a page of several singles
+  advances after the last; other-specify waits. Survey default (`branding.layout.autoAdvance`) + per-question
+  `settings.autoNext`; Studio controls; IM via update_question / set_theme. Ternary option text fixed (compares by
+  code) and the **option-text-by-answer grid** (`dynamicGrid`, `compileDynamicGrid`, Studio grid editor, IM
+  `set_dynamic_options … grid`).
+- **0094 — paths, library, export values, CI.**
+  - Respondent-path explorer (`explorePaths` / `summarizePaths`, templates): reach per flow element and branch path,
+    endings, top routes, never-reached, validation blocks. `comparePaths`: where two answer sets part, pages only one
+    sees, piped text / options that differ. Studio Flow › **Paths**; IM "who goes where?" / "show me the paths"
+    → production-like test card with routes and never-reached.
+  - Library insert (`importQuestions`, engine): copy pages / questions from any project as a new block — fresh ids,
+    colliding codes renamed, rules between copies follow, piping follows, rules naming uncopied questions removed and
+    listed. Studio Questions › "From another survey".
+  - Option export value: editable in the option list ("Export values" toggle); `VariableDef.exportValues`; new export
+    mode "Export values" (CSV / Excel / JSON). Closes the audit's open Low item.
+  - Hotspot click question operable by keyboard (arrow-key marker, Enter places, Backspace removes) — found by the
+    browser harness once image types got sample content.
+  - CI: `.github/workflows/programming-audit.yml` runs both harnesses on every push.
+  - Guide: `docs/JQUERY-AND-CUSTOM-JS-MIGRATION-2026-11-07.md`.
+- Verification (0094): engine 2765, studio 1172, runtime 113, templates 127, exporters 149, analytics 410, import 100,
+  quality 102, renderer 12, schema 18 — 0 failing; audit:code clean; studio + runtime builds clean; engine harness
+  59/59; browser harness 23/23 (hotspot / annotation now checked with a sample image).

@@ -16,6 +16,7 @@ import {
   type Layout, type LaidOutNode, type LaidOutEdge,
 } from "../../lib/flow/layout";
 import { debugPath, type DebugResult } from "../../lib/flow/debug";
+import { PathsPanel } from "./PathsPanel";
 
 /**
  * FLOW — the survey's behaviour, drawn.
@@ -212,6 +213,7 @@ export function FlowCanvas() {
   React.useEffect(() => { if (matches && matches.size) { const n = layout.byId.get([...matches][0]); if (n) centreOn(n); } }, [matches, layout, centreOn]);
 
   const [debugOn, setDebugOn] = React.useState(false);
+  const [pathsOn, setPathsOn] = React.useState(false);
   const [answers, setAnswers] = React.useState("");
   const debug = React.useMemo<DebugResult | null>(() => (debugOn ? debugPath(def, answers) : null), [debugOn, def, answers]);
   const debugNodes = React.useMemo(() => {
@@ -279,6 +281,7 @@ export function FlowCanvas() {
           <span className="fc-count" data-testid="flow-count">{layout.nodes.length} nodes · {layout.edges.length} edges</span>
           <span className="grow" />
           <button className={`fc-chip${debugOn ? " on" : ""}`} data-testid="flow-debug-toggle" onClick={() => setDebugOn((v) => !v)} title="Type answers and see the path a respondent takes"><Icon name="flask" size={12} /> Debug</button>
+          <button className={`fc-chip${pathsOn ? " on" : ""}`} data-testid="flow-paths-toggle" onClick={() => setPathsOn((v) => !v)} title="Where do respondents go? Explore reach and compare two answer sets"><Icon name="shuffle" size={12} /> Paths</button>
           <button className={`fc-chip${focus ? " on" : ""}`} data-testid="focus-toggle" aria-pressed={focus} onClick={() => mode?.setFocus(!focus)} title="Focus (⌘⇧F)"><Icon name="sparkle" size={12} /> Focus</button>
           <div className="fc-seg fc-zoom" role="group" aria-label="Zoom">
             <button onClick={() => zoomBy(1 / 1.2)} title="Zoom out (−)" data-testid="flow-zoom-out">−</button>
@@ -303,6 +306,7 @@ export function FlowCanvas() {
             )}
           </div>
         )}
+        {pathsOn && <PathsPanel def={def} onSelect={(id) => { select(id); const n = layout.nodes.find((x) => x.id === id); if (n) centreOn(n); }} />}
         {tagsPresent.size > 0 && (
           <div className="fc-tags" data-testid="flow-tag-legend">
             {[...tagsPresent].map((t) => <span key={t} className={`fc-tag-key fc-badge-${t}`}><i>{TAG_TEXT[t]}</i> {TAG_LEGEND[t] ?? t}</span>)}

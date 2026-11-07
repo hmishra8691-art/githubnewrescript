@@ -2194,3 +2194,24 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
    predate it and would stack the rails under the conversation) */
 .iq[data-inspector] { grid-template-columns: var(--iq-cols, minmax(0, 1fr)) !important; }
 .iq[data-inspector] > .iq-divider { display: block !important; }
+/* Paths — reach explorer and two-path comparison (2026-11-07) */
+.fc-paths { border-bottom: 1px solid var(--c-primary-100); background: var(--c-surface); max-height: 46vh; overflow: auto; flex: none; font-size: 12.5px; }
+.fc-paths-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; position: sticky; top: 0; background: var(--c-surface); border-bottom: 1px solid var(--c-border, #e5e7eb); z-index: 1; }
+.fc-paths-n { display: inline-flex; gap: 6px; align-items: center; color: var(--c-text-muted, #666); }
+.fc-paths-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.fc-paths-sum { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fc-paths-pill { padding: 1px 8px; border-radius: 999px; background: var(--c-primary-50); color: var(--c-primary-700); }
+.fc-paths-warn { padding: 6px 10px; border-radius: 7px; background: #fff7e6; color: #8a5a00; display: flex; flex-wrap: wrap; gap: 6px; }
+.fc-paths-err { color: #b42318; }
+.fc-paths-table { width: 100%; border-collapse: collapse; }
+.fc-paths-table th { text-align: left; font-weight: 600; font-size: 11px; color: var(--c-text-muted, #666); padding: 4px 8px; }
+.fc-paths-table td { padding: 3px 8px; border-top: 1px solid var(--c-border, #eee); vertical-align: top; }
+.fc-paths-table tr.zero td { color: #b42318; }
+.fc-paths-table tbody tr { cursor: pointer; }
+.fc-paths-bar { display: inline-block; width: 80px; height: 6px; border-radius: 3px; background: var(--c-primary-50); vertical-align: middle; overflow: hidden; }
+.fc-paths-bar i { display: block; height: 100%; background: var(--c-primary-500, #4f46e5); }
+.fc-paths-sub { font-weight: 600; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--c-text-muted, #666); }
+.fc-paths-routes { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.fc-paths-ans { display: flex; gap: 8px; align-items: center; font-weight: 600; }
+.fc-paths-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (prefers-color-scheme: dark) { .fc-paths-warn { background: #3a2a05; color: #f5c66a; } }

@@ -272,3 +272,5 @@ export * from "./dynamicLogic.js";
 export * from "./flowLogicActions.js";
 export * from "./numbering.js";
 export * from "./autoNext.js";
+export { importQuestions } from "./questionImport.js";
+export type { ImportResult } from "./questionImport.js";

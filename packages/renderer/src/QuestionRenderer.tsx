@@ -2791,36 +2791,50 @@ export function HotspotClick(p: QRProps) {
   const pts: { x: number; y: number }[] = Array.isArray(p.value) ? (p.value as any) : [];
   const max = p.q.settings.maxSelections ?? 1;
   const img = p.q.settings.imageUrl;
+  /* KEYBOARD (audit 2026-11-07): a cursor the arrow keys move and Enter / Space places — the image is operable without a mouse */
+  const [cursor, setCursor] = React.useState<{ x: number; y: number } | null>(null);
   if (!img) {
     return <div className="rs-error-msg">No stimulus image configured — set the image URL in the editor.</div>;
   }
-  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const place = (x: number, y: number) => {
     if (p.q.settings.readOnly) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
     const next = [...pts, { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 }];
     p.onChange(max === 1 ? next.slice(-1) : next.slice(0, max));
   };
-  const removeAt = (i: number, e: React.MouseEvent) => {
+  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    place(((e.clientX - rect.left) / rect.width) * 100, ((e.clientY - rect.top) / rect.height) * 100);
+  };
+  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const c = cursor ?? { x: 50, y: 50 };
+    const step = e.shiftKey ? 1 : 5;
+    const move: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    if (move[e.key]) { e.preventDefault(); const [dx, dy] = move[e.key]!; setCursor({ x: Math.max(0, Math.min(100, c.x + dx)), y: Math.max(0, Math.min(100, c.y + dy)) }); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); place(c.x, c.y); setCursor(c); }
+    else if ((e.key === "Backspace" || e.key === "Delete") && pts.length) { e.preventDefault(); p.onChange(pts.slice(0, -1)); }
+  };
+  const removeAt = (i: number, e: React.SyntheticEvent) => {
     e.stopPropagation();
     p.onChange(pts.filter((_, j) => j !== i));
   };
   return (
     <div>
-      <div className="rs-hotspot" onClick={onClick} role="img" aria-label="Click to place a point">
+      <div className="rs-hotspot" onClick={onClick} onKeyDown={onKey} tabIndex={p.q.settings.readOnly ? -1 : 0} role="application"
+        aria-label={`Image — click, or move the marker with the arrow keys and press Enter to place a point (${pts.length} of ${max} placed)`}
+        onFocus={() => setCursor((c) => c ?? { x: 50, y: 50 })} onBlur={() => setCursor(null)}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <SafeImage src={img} alt="" draggable={false} imageOnly />
+        {cursor && <span className="rs-hotspot-cursor" aria-hidden="true" style={{ position: "absolute", left: `${cursor.x}%`, top: `${cursor.y}%`, width: 18, height: 18, margin: "-9px 0 0 -9px", border: "2px dashed currentColor", borderRadius: "50%", pointerEvents: "none" }} />}
         {pts.map((pt, i) => (
-          <span key={i} className="rs-hotspot-pin"
+          <button type="button" key={i} className="rs-hotspot-pin" tabIndex={-1}
             style={{ left: `${pt.x}%`, top: `${pt.y}%` }}
-            title="click to remove"
+            title="click to remove" aria-label={`Remove point ${i + 1}`}
             onClick={(e) => removeAt(i, e)}>
             {max > 1 ? i + 1 : ""}
-          </span>
+          </button>
         ))}
       </div>
-      <div className="rs-hotspot-status">
+      <div className="rs-hotspot-status" aria-live="polite">
         {pts.length} / {max} point{max > 1 ? "s" : ""} placed
         {pts.length > 0 && (
           <button type="button" className="rs-hotspot-clear" onClick={() => p.onChange([])}>clear</button>

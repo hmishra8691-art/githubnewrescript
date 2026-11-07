@@ -1233,3 +1233,15 @@ test("S5b long timing file: one row per respondent × page and × question, visi
   assert.ok(!csv.includes("\n=cmd()"), "formula-guarded cells");
   assert.equal(csv.trim().split("\n").length, 7);
 });
+
+test("export values: an option's export value replaces its code only in “Export values” mode", () => {
+  const def = makeSurvey();
+  def.questions[0]!.options = [{ code: "1", label: "Male", value: 10, flags: [] }, { code: "2", label: "Female", value: 20, flags: [] }, { code: "99", label: "Prefer not to say", flags: [] }];
+  const codes = responsesToCSV(def, states);
+  const values = responsesToCSV(def, states, undefined, { valueMode: "value" });
+  assert.match(codes, /,1,/);
+  assert.match(values, /,10,/);
+  assert.match(values, /,42,/, "a number with no option is untouched");
+  // a survey with no export values writes the codes in value mode
+  assert.equal(responsesToCSV(makeSurvey(), states, undefined, { valueMode: "value" }), responsesToCSV(makeSurvey(), states));
+});

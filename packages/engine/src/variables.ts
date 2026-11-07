@@ -35,14 +35,24 @@ const valueLabel = (label: string) => (label.includes("<") ? stripHtmlText(label
  * dictionary is always consistent with the instrument.
  */
 
-function valueMap(q: { options: { code: string | number; label: string }[] }): {
+function valueMap(q: { options: { code: string | number; label: string; value?: string | number }[] }): {
   codes: (string | number)[];
   labels: Record<string, string>;
+  exportValues?: Record<string, string | number>;
 } {
   const codes = q.options.map((o) => o.code);
   const labels: Record<string, string> = {};
   for (const o of q.options) labels[String(o.code)] = valueLabel(o.label);
-  return { codes, labels };
+  const ev = exportValuesOf(q.options);
+  return { codes, labels, ...(ev ? { exportValues: ev } : {}) };
+}
+
+/** code → export value, only when at least one option sets a value different from its code */
+function exportValuesOf(options: { code: string | number; value?: string | number }[]): Record<string, string | number> | undefined {
+  if (!options.some((o) => o.value !== undefined && o.value !== "" && String(o.value) !== String(o.code))) return undefined;
+  const out: Record<string, string | number> = {};
+  for (const o of options) out[String(o.code)] = o.value !== undefined && o.value !== "" ? o.value : o.code;
+  return out;
 }
 
 function pageLocator(def: SurveyDefinition): Map<string, { pageId: string; sectionId?: string }> {
@@ -158,8 +168,8 @@ export function questionVariables(
         }
         break;
       }
-      const { codes, labels } = valueMap(q);
-      push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "numeric", valueCodes: codes, valueLabels: labels });
+      const { codes, labels, exportValues } = valueMap(q);
+      push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "numeric", valueCodes: codes, valueLabels: labels, ...(exportValues ? { exportValues } : {}) });
       break;
     }
     case "multi_select":
@@ -246,6 +256,7 @@ export function questionVariables(
       const colOpts = q.columns[0]?.options?.length ? q.columns[0].options : q.options;
       const labels: Record<string, string> = {};
       for (const o of colOpts) labels[String(o.code)] = valueLabel(o.label);
+      const scaleValues = exportValuesOf(colOpts);
       for (const row of rows) {
         push({
           name: rowColumn(q.variableName, row.code, naming),
@@ -253,6 +264,7 @@ export function questionVariables(
           dataType: "numeric",
           valueCodes: colOpts.map((o) => o.code),
           valueLabels: labels,
+          ...(scaleValues ? { exportValues: scaleValues } : {}),
           rowCode: String(row.code),
         });
       }

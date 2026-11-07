@@ -71,7 +71,7 @@ export function DataPanel() {
    * default and always has been — a data processor's file — so a researcher
    * who never opens this control keeps getting exactly what they got before.
    */
-  const [values, setValues] = React.useState<"code" | "label" | "code_label">("code");
+  const [values, setValues] = React.useState<"code" | "label" | "code_label" | "value">("code");
   const [showExports, setShowExports] = React.useState(false);
   /* §44.4 — saved delivery settings, workspace-wide */
   const [presets, setPresets] = React.useState<any[] | null>(null);
@@ -317,6 +317,7 @@ export function DataPanel() {
               ["code", "Codes only", "1, 2 — what the survey stored"],
               ["label", "Labels only", "Male, Female — readable on its own"],
               ["code_label", "Codes + labels", "2 - Male — both, for reconciling"],
+              ["value", "Export values", "each option's export value where one is set (e.g. a reversed scale), the code elsewhere"],
             ] as const).map(([mode, label, hint]) => (
               <button key={mode} className={`btn small ${values === mode ? "primary" : ""}`}
                 data-testid={`export-values-${mode}`} title={hint}

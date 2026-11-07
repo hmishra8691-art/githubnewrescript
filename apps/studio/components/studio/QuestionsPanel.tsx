@@ -105,6 +105,7 @@ import {
 } from "@rescript/engine"; // also registers builtin question types
 import { optionLogicHasEffect, isEmptyConditionTree } from "@rescript/schema";
 import { useStudio, uid } from "./store";
+import { LibraryInsertDialog } from "./LibraryInsertDialog";
 import {
   type PageRef, type BlockRef, listPages, listBlocks, wrapBlock, unwrapIfSingle, newBlockNode,
 } from "./blockModel";
@@ -303,6 +304,8 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
   const [showAll, setShowAll] = React.useState(false);
   const [pasteOpen, setPasteOpen] = React.useState(false);
   const [pasteText, setPasteText] = React.useState("");
+  /* EXPORT VALUES (2026-11-07): the value an option is written as in "Export values" files (a reversed scale, 5…1) */
+  const [valuesOpen, setValuesOpen] = React.useState(() => options.some((o) => o.value !== undefined && o.value !== ""));
   /**
    * Paste box modes. REPLACE is the default: the box opens showing the list
    * as it is (`code<TAB>label`), so what you see is what you get after
@@ -489,6 +492,11 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
             title={frozen
               ? "Codes are frozen once this survey has live responses — moving a code would rewrite what a respondent said"
               : "code"} />
+          {valuesOpen && (
+            <input className="input code-input" data-testid="option-export-value" placeholder={String(o.code)}
+              value={o.value === undefined ? "" : String(o.value)} title="Export value — written instead of the code when an export uses “Export values”. Empty = the code."
+              onChange={(e) => { const t = e.target.value; set(i, { value: t === "" ? undefined : /^-?\d+(\.\d+)?$/.test(t.trim()) ? Number(t.trim()) : t }); }} />
+          )}
           <InlineRichText className="grow" value={o.label} index={i} testId="option-label" questionId={questionId}
             onChange={(label) => set(i, { label })}
             onEnter={() => insertAfter(i)}
@@ -654,6 +662,9 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           onClick={openPaste}>
           {pasteOpen ? "hide paste box" : "📋 paste a list"}
         </button>
+        <button className={`btn small${valuesOpen ? " primary" : ""}`} data-testid="toggle-export-values" aria-pressed={valuesOpen}
+          title="Give each option an export value (e.g. score a scale 5…1) — used by exports set to “Export values”; the stored code never changes"
+          onClick={() => setValuesOpen((v) => !v)}>Export values</button>
         <span className="muted" style={{ fontSize: 11.5, alignSelf: "center" }}>
           “+ option” adds one; “paste a list” imports many at once.
         </span>
@@ -2589,6 +2600,7 @@ function remapRefs(node: any, map: Map<string, string>, skipKeys = new Set<strin
 export function QuestionsPanel() {
   const s = useStudio();
   const [pickerAt, setPickerAt] = React.useState<{ pageId: string; pos: number } | null>(null);
+  const [libraryOpen, setLibraryOpen] = React.useState(false);
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
   const [menuFor, setMenuFor] = React.useState<string | null>(null);
   const { previewBlock, modal: previewBlockModal } = usePreviewBlock();
@@ -3157,6 +3169,9 @@ export function QuestionsPanel() {
         <span className="grow" />
         <button className="btn" onClick={addBlock}
           data-testid="add-block" data-command={BLOCK_COMMANDS.ADD_BLOCK}>+ Add block</button>
+        <button className="btn" onClick={() => setLibraryOpen(true)} data-testid="library-open"
+          title="Copy pages or questions from another of your surveys — codes, rules and piping follow">⇣ From another survey</button>
+        {libraryOpen && <LibraryInsertDialog onClose={() => setLibraryOpen(false)} />}
         <button className="btn primary" data-testid="add-question-top" onClick={() => {
           const last = blocks[blocks.length - 1]?.pages.slice(-1)[0];
           setPickerAt(last ? { pageId: last.node.id, pos: last.node.questionIds.length } : { pageId: "", pos: 0 });
