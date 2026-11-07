@@ -43,6 +43,21 @@ function LogicCheck() {
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");
   const [showWarnings, setShowWarnings] = React.useState(false);
+  /* the programming audit log as Excel (roadmap 3.6): the definition in the editor, checked on the server, downloaded */
+  const [auditBusy, setAuditBusy] = React.useState(false);
+  const downloadAudit = async () => {
+    setAuditBusy(true);
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/programming-audit`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ definition: s.def }) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); s.toast((j as { error?: string }).error ?? `The audit log could not be made (HTTP ${r.status}).`, "err"); return; }
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await r.blob());
+      a.download = `${s.def.meta.code || "survey"}-programming-audit.xlsx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch { s.toast("The audit log could not be downloaded.", "err"); }
+    finally { setAuditBusy(false); }
+  };
 
   return (
     <div data-testid="logic-check">
@@ -52,6 +67,10 @@ function LogicCheck() {
         </span>
         <span className="chip">{warnings.length} warning{warnings.length === 1 ? "" : "s"}</span>
         {cycles.length > 0 && <span className="chip warn">{cycles.length} circular dependency</span>}
+        <button className="btn small" data-testid="programming-audit-xlsx" disabled={auditBusy} onClick={() => void downloadAudit()}
+          title="Every finding as an Excel QA sheet: severity, location, issue, expected and actual behaviour, recommended correction, status">
+          {auditBusy ? "Preparing…" : "Download audit log (.xlsx)"}
+        </button>
         {warnings.length > 0 && (
           <button className="btn small" onClick={() => setShowWarnings((v) => !v)}>
             {showWarnings ? "hide warnings" : "show warnings"}

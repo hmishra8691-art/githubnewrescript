@@ -6,6 +6,7 @@ import { hypothesisLabel } from "@rescript/schema";
 import { useStudio } from "./store";
 import { InlineRichText } from "./RichTextEditor";
 import { ResearchDocuments } from "./ResearchDocuments";
+import { SampleSizeCalculator } from "./SampleSizeCalculator";
 
 /**
  * THE RESEARCH DESIGN, EDITED BY HAND (Research Engine audit, Phase 1).
@@ -135,6 +136,8 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
           <span className="row" style={{ gap: 6, alignItems: "center" }}><input type="checkbox" data-testid="rd-strict-box" checked={r.strict === true} onChange={(e) => patch(e.target.checked ? "enforce the research design" : "stop enforcing the research design", (d) => { d.strict = e.target.checked ? true : undefined; })} /> research gaps are blockers</span>
         </label>
       </div>
+
+      <SampleSizeCalculator onUse={(n) => patch("set planned sample size from the calculator", (d) => { d.sampleSize = n; })} />
 
       <h4 className="rd-h">Hypotheses <span className="muted">· {r.hypotheses.length}</span></h4>
       <ol className="rd-list" data-testid="rd-hypotheses">

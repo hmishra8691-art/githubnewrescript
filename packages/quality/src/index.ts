@@ -17,3 +17,4 @@ export * from "./cluster.js";
 export * from "./cleaning.js";
 export * from "./openEndJudgement.js";
 export * from "./validation.js";
+export { VALIDATION_RECORD } from "./validationRecord.js";

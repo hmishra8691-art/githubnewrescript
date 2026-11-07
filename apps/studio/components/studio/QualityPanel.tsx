@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { Loading } from "@/components/ui/Loading";
-import { CATEGORY_LABELS } from "@rescript/quality";
+import { CATEGORY_LABELS, VALIDATION_RECORD } from "@rescript/quality";
 import { useStudio } from "./store";
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
@@ -60,6 +60,38 @@ interface Payload {
 }
 
 const fmtClass = (c: string | null) => (c ?? "UNSCORED").replace("_", " ");
+
+/**
+ * WHETHER THESE SCORES MAY DRIVE AUTOMATIC EXCLUSION (roadmap Phase 1, tracker 1.3). The last validation of the
+ * engine against labelled responses (`scripts/quality-validation.mjs --record`, committed with the code), and the
+ * gate's verdict: locked until a person-labelled sample of real responses clears every check. Until then a
+ * response is excluded only by a person, through the cleaning controls.
+ */
+function ValidationGateCard() {
+  const r = VALIDATION_RECORD;
+  const pct = (x: number) => `${(x * 100).toFixed(1)} %`;
+  const failed = r.checks.filter((c) => !c.ok);
+  return (
+    <details className={`card qd-gate${r.gateOpen ? " open" : ""}`} data-testid="quality-validation-gate" style={{ padding: "10px 14px" }}>
+      <summary style={{ cursor: "pointer" }}>
+        <b>Automatic exclusion: {r.gateOpen ? "may be enabled" : "locked"}</b>
+        <span className="muted" style={{ fontSize: 12.5 }}> — {r.responses ? `engine validated on ${r.responses} labelled responses (${r.source}${r.source === "synthetic" ? ", a regression benchmark" : ""}), ${r.generatedAt.slice(0, 10)}` : "no validation run recorded"}{!r.gateOpen && failed[0] ? `; waiting for: ${failed.map((c) => c.name).join(", ")}` : ""}</span>
+      </summary>
+      {r.responses > 0 && (
+        <div style={{ marginTop: 8, fontSize: 13 }}>
+          <p style={{ margin: "0 0 6px" }}>
+            Flagged responses that were real problems: <b>{pct(r.flaggedPrecision)}</b> · genuine respondents flagged: <b>{pct(r.genuineFlagged)}</b> · genuine respondents sent to review: <b>{pct(r.genuineReview)}</b>
+            {" · "}caught: {Object.entries(r.recall).map(([k, v]) => `${k} ${pct(v)}`).join(", ")}
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {r.checks.map((c) => <li key={c.name} style={{ color: c.ok ? undefined : "var(--red)" }}>{c.ok ? "✓" : "✗"} {c.name}: {c.detail}</li>)}
+          </ul>
+          <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>Until the gate opens, nobody is excluded automatically: flags send responses to review, and a person removes them with the cleaning controls (reversible; the raw data is kept).</p>
+        </div>
+      )}
+    </details>
+  );
+}
 
 export function QualityPanel({ include }: { include: Include }) {
   const s = useStudio();
@@ -128,6 +160,7 @@ export function QualityPanel({ include }: { include: Include }) {
   return (
     <div data-testid="quality-panel">
       <ConfigCard data={data} include={include} busy={busy} onRecompute={recompute} onSettings={() => s.goToTab?.("settings")} />
+      <ValidationGateCard />
       {!data.enabled && (
         <div className="chip warn qd-note" data-testid="quality-disabled-note">
           Quality checks are off for this survey — enable them under Survey settings → Quality checks. Responses finished while off are unscored; “Re-assess” scores them with the current settings.

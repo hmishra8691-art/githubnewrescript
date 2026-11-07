@@ -274,3 +274,5 @@ export * from "./numbering.js";
 export * from "./autoNext.js";
 export { importQuestions } from "./questionImport.js";
 export type { ImportResult } from "./questionImport.js";
+export { programmingAuditRows } from "./programmingAudit.js";
+export type { ProgrammingAuditRow, AuditSeverity } from "./programmingAudit.js";

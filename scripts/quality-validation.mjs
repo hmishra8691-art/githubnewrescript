@@ -7,6 +7,8 @@
  *                                                          "responses": [{ "response": <ResponseRecord>, "label": "genuine"|…,
  *                                                          "persona": "…", "segments": { "device": "mobile" } }] }
  *   QV_JSON=out.json …                                      also writes the full report
+ *   --record                                               writes packages/quality/src/validationRecord.ts — the
+ *                                                          last run, shown in the Studio's Quality panel (commit it)
  *
  * Prints precision, recall and false-positive rates (overall, per label, per segment), the genuine respondents the
  * engine sent to review with its reasons, and whether automatic exclusion may be switched on (the gate). Exits 0;
@@ -16,7 +18,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { SurveyDefinition } from "../packages/schema/dist/index.js";
 import { syntheticLabelledCorpus, evaluateQuality, exclusionGate } from "../packages/quality/dist/index.js";
 
-const file = process.argv[2];
+const args = process.argv.slice(2);
+const record = args.includes("--record");
+const file = args.find((a) => !a.startsWith("--"));
 let def, responses;
 if (file) {
   const j = JSON.parse(readFileSync(file, "utf8"));
@@ -44,3 +48,15 @@ const g = exclusionGate(r);
 console.log(`\nAutomatic exclusion: ${g.open ? "MAY BE ENABLED — every check passed" : "LOCKED"}`);
 for (const c of g.checks) console.log(`  ${c.ok ? "✓" : "✗"} ${c.name}: ${c.detail}`);
 if (process.env.QV_JSON) writeFileSync(process.env.QV_JSON, JSON.stringify({ report: r, gate: g }, null, 2));
+
+if (record) {
+  const rec = {
+    generatedAt: new Date().toISOString(), source: r.source, responses: r.responses,
+    flaggedPrecision: r.flagged.precision.rate, genuineFlagged: r.flagged.genuineFalsePositive.rate, genuineReview: r.detected.genuineFalsePositive.rate,
+    recall: Object.fromEntries(Object.entries(r.recallByLabel).map(([k, v]) => [k, v.rate])),
+    gateOpen: g.open, checks: g.checks,
+  };
+  const path = new URL("../packages/quality/src/validationRecord.ts", import.meta.url);
+  writeFileSync(path, `/* written by scripts/quality-validation.mjs --record — do not edit by hand */\nimport type { ValidationRecord } from "./validation.js";\n\nexport const VALIDATION_RECORD: ValidationRecord = ${JSON.stringify(rec, null, 2)};\n`);
+  console.log(`\nRecorded to ${path.pathname}`);
+}

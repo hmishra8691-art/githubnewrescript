@@ -7,3 +7,4 @@ export * from "./regression.js";
 export * from "./multivariate.js";
 export * from "./choice.js";
 export * from "./bootstrap.js";
+export * from "./sampleSize.js";

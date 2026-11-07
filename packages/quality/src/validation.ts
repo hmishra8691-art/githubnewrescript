@@ -378,3 +378,16 @@ export function syntheticLabelledCorpus(opts: { seed?: number; genuine?: number;
   }
   return { def: validationSurvey(), responses: out };
 }
+
+/** the last validation run, as committed by `scripts/quality-validation.mjs --record` and shown in the Quality panel */
+export interface ValidationRecord {
+  generatedAt: string;
+  source: "synthetic" | "manual" | "mixed";
+  responses: number;
+  flaggedPrecision: number;
+  genuineFlagged: number;
+  genuineReview: number;
+  recall: Record<string, number>;
+  gateOpen: boolean;
+  checks: { name: string; ok: boolean; detail: string }[];
+}
