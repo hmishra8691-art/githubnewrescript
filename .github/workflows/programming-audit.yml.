@@ -1,0 +1,64 @@
+# THE SURVEY-PROGRAMMING HARNESSES (programming audit 2026-11-07).
+#
+#   engine    scripts/programming-audit.mjs — whole surveys built as a programmer and as Intelligent Mode builds them,
+#             walked by simulated respondents through the runtime's own functions and replayed by the server's
+#             checkSubmission; auto-next, the answer × option grid, the path explorer, numbering, timers.
+#   browser   scripts/programming-audit-browser.mjs — the BUILT runtime in Chromium: every respondent variant at
+#             1280 / 390 px, a multi-block survey clicked through and compared with the engine page for page,
+#             auto-next (single advances, multi waits, grids wait for every row), dynamic option text.
+#
+# Both exit 1 on any FAIL; the JSON reports are uploaded as the "programming-audit" artifact.
+name: programming audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: programming-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harnesses:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the packages
+        run: pnpm -r --filter "./packages/*" build
+      - name: Engine harness
+        run: AUDIT_JSON=engine-audit.json node scripts/programming-audit.mjs
+      - name: Chromium for the browser harness
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build and start the runtime
+        run: |
+          cd apps/runtime
+          npx next build
+          PORT=3001 npx next start > ../../runtime.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:3001/preview > /dev/null && break; sleep 1; done
+      - name: Browser harness
+        run: RUNTIME_URL=http://localhost:3001 AUDIT_JSON=browser-audit.json node scripts/programming-audit-browser.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: programming-audit
+          path: |
+            engine-audit.json
+            browser-audit.json
+            runtime.log
+          if-no-files-found: ignore
