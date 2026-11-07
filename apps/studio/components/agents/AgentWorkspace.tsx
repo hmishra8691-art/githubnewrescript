@@ -6,6 +6,7 @@ import { workflowStages, type StageView } from "../../lib/agents/workflow";
 import type { ModuleStatus } from "../../lib/projectOverview";
 import { moduleStates } from "../../lib/projectOverview";
 import type { SurveyDefinition } from "@rescript/schema";
+import { AgentLauncher, TaskControls, TaskResultReview } from "./AgentActions";
 
 /**
  * THE AI AGENT WORKSPACE (ResLens analytics & agents redesign, 2026-11-07).
@@ -42,7 +43,7 @@ const dur = (ms?: number) => (ms == null ? "" : ms < 1000 ? `${ms} ms` : ms < 60
 
 const POLL_MS = 3000;
 
-export function AgentWorkspace({ surveyId, def, onTab }: { surveyId: string; def: SurveyDefinition; onTab?: (tab: string) => void }) {
+export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply }: { surveyId: string; def: SurveyDefinition; onTab?: (tab: string) => void; canEdit?: boolean; onApply?: (next: SurveyDefinition, label: string) => void }) {
   const [data, setData] = React.useState<TasksResponse | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [selected, setSelected] = React.useState<string | null>(null);
@@ -72,6 +73,15 @@ export function AgentWorkspace({ surveyId, def, onTab }: { surveyId: string; def
   }, [surveyId, def]);
 
   const tasks = React.useMemo(() => data?.tasks ?? [], [data]);
+  /** a task an action answered with: replace it in the list (or add it, newest first) and select it */
+  const upsert = React.useCallback((t: ClientTask) => {
+    setData((d) => {
+      const list = d?.tasks ?? [];
+      const has = list.some((x) => x.id === t.id);
+      return { ...(d ?? {}), tasks: has ? list.map((x) => (x.id === t.id ? t : x)) : [t, ...list], task: d?.task?.id === t.id ? t : d?.task ?? t };
+    });
+    setSelected(t.id);
+  }, []);
   const current = React.useMemo(() => tasks.find((t) => t.id === selected) ?? data?.task ?? tasks[0] ?? null, [tasks, selected, data]);
   const live = tasks.some(isLive) || isLive(data?.task);
 
@@ -107,7 +117,7 @@ export function AgentWorkspace({ surveyId, def, onTab }: { surveyId: string; def
           <React.Fragment key={s.id}>
             {i > 0 && <span className="agw-journey-arrow" aria-hidden="true">→</span>}
             <div className={`agw-stage st-${s.state}`} data-testid={`agw-stage-${s.id}`} data-state={s.state}>
-              <div className="agw-stage-top"><b>{s.label}</b><span className="agw-stage-state">{STAGE_WORD[s.state]}</span></div>
+              <div className="agw-stage-top"><b>{s.label}</b><span className="agw-stage-state">{modules ? STAGE_WORD[s.state] : "Reading…"}</span></div>
               <div className="agw-stage-q">{s.question}</div>
               <ul>{s.modules.map((m) => <li key={m.key} className={`m-${m.state}`}>{onTab ? <button type="button" className="linkish" onClick={() => onTab(m.tab)} title={m.detail}>{m.label}</button> : m.label}<span className="muted"> · {m.detail}</span></li>)}</ul>
               {s.state === "unknown" && modules && !modules.fromServer && <div className="muted agw-stage-note">Read from the saved project — open a saved survey to see it.</div>}
@@ -115,6 +125,8 @@ export function AgentWorkspace({ surveyId, def, onTab }: { surveyId: string; def
           </React.Fragment>
         ))}
       </section>
+
+      <AgentLauncher surveyId={surveyId} def={def} canEdit={canEdit} onStarted={(t) => { upsert(t); void load(); }} />
 
       <div className="agw-canvas">
         {/* the agents */}
@@ -155,9 +167,11 @@ export function AgentWorkspace({ surveyId, def, onTab }: { surveyId: string; def
               <p>Agents run when you ask the Copilot for a substantial piece of work — writing a questionnaire from a brief, a translation, an exam with an answer key. Each step they take appears here as it happens.</p>
             </div>
           )}
+          {current && <TaskControls task={current} surveyId={surveyId} canEdit={canEdit} onTask={upsert} />}
           {current && graph && <TaskMap task={current} graph={graph} selected={node} onSelect={setNode} />}
           {picked && <NodeDetail node={picked} onClose={() => setNode(null)} />}
           {current?.blocked && <div className="agw-error" role="status">Waiting for a person: {current.blocked.message}</div>}
+          {current && onApply && <TaskResultReview task={current} surveyId={surveyId} def={def} canEdit={canEdit} onApply={onApply} />}
         </section>
       </div>
     </div>

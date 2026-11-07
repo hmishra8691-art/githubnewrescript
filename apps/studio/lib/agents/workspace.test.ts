@@ -73,3 +73,17 @@ test("the journey reads the overview's module states; unreadable stages are unkn
   const u = workflowStages([m("research", "configured"), m("programming", "configured"), m("quotas", "configured"), m("languages", "configured")], { unknown: ["collect", "analyze", "act"] });
   assert.deepEqual(u.map((s) => s.state), ["done", "unknown", "unknown", "unknown"]);
 });
+
+test("every launcher names a planner that is registered, and says plainly what the agent is asked", async () => {
+  const { LAUNCHERS, launchMessage } = await import("./launch.ts");
+  const dir = join(import.meta.dirname, "..", "tasks", "handlers");
+  const src = readdirSync(dir).filter((x) => x.endsWith(".ts") && !x.includes(".test.")).map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
+  for (const l of LAUNCHERS) {
+    assert.ok(src.includes(`id: "${l.planner}"`), `${l.id}: planner ${l.planner} is registered`);
+    assert.ok(AGENTS.some((a) => a.id === l.agent && a.availability !== "planned"), `${l.id}: its agent ${l.agent} exists`);
+  }
+  const tr = LAUNCHERS.find((l) => l.id === "translate")!;
+  assert.equal(launchMessage(tr, { language: "French" }), "Translate the whole survey into French");
+  assert.equal(launchMessage(tr, { scope: "Q1–Q5" }), "", "a required field missing sends nothing");
+  assert.equal(launchMessage(LAUNCHERS.find((l) => l.id === "build")!, { brief: "Bank app CSAT", count: "40" }), "Write a 40 question survey: Bank app CSAT");
+});

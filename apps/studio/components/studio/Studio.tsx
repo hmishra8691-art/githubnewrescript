@@ -1110,7 +1110,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "quotas" && <QuotaDashboard />}
           {tab === "listfill" && <ListFillPanel />}
           {tab === "designs" && <DesignsPanel />}
-          {tab === "agents" && <AgentWorkspace surveyId={s.surveyDbId} def={s.def} onTab={(t) => setTab(t as Tab)} />}
+          {tab === "agents" && <AgentWorkspace surveyId={s.surveyDbId} def={s.def} onTab={(t) => setTab(t as Tab)} canEdit={!(collaboration && collab.readOnly)} onApply={(next, label) => { s.labelNextEdit(label); s.replace(next); }} />}
           {tab === "qualitative" && <QualPanel />}
           {tab === "branding" && <BrandingPanel />}
           {tab === "assets" && <AssetsPanel />}

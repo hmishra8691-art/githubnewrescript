@@ -3195,3 +3195,23 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .agw-detail dd { margin: 0; }
 .agw-detail .btn { color: var(--agw-text); }
 @media (prefers-reduced-motion: reduce) { .agw-edges path.live, .agw-agent.s-working .agw-dot { animation: none; } }
+/* agent workspace: launcher, controls, review (phase 1) */
+.agw-launch { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--surface, #fff); display: grid; gap: 10px; }
+.agw-launch-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
+.agw-launch-head b { font-size: 15px; }
+.agw-launch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.agw-launch-card { --c: #64748b; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); border-left: 4px solid var(--c); background: var(--surface, #fff); cursor: pointer; font-size: 12.5px; color: inherit; }
+.agw-launch-card span { color: var(--muted, #64748b); line-height: 1.35; }
+.agw-launch-card.on { box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 60%, transparent); }
+.agw-launch-card:disabled { opacity: .55; cursor: not-allowed; }
+.agw-launch-form { display: grid; gap: 8px; padding: 10px; border-radius: 10px; background: var(--tint, #f5f7fb); }
+.agw-launch-preview { font-size: 12.5px; padding: 6px 8px; border-radius: 6px; background: var(--surface, #fff); border: 1px dashed var(--border); }
+.agw-launch-err { color: #b91c1c; font-size: 12.5px; }
+.agw-ctl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.agw-ctl .btn { color: inherit; }
+.agw-ctl-note { font-size: 12px; color: var(--agw-sub); }
+.agw-canvas .agw-launch-err { color: #fca5a5; }
+.agw-review { background: var(--agw-card); border: 1px solid var(--agw-line); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; display: grid; gap: 8px; }
+.agw-review .muted { color: var(--agw-sub); }
+.agw-review summary { cursor: pointer; color: var(--agw-sub); }
+.agw-warn { color: #fcd34d; }
