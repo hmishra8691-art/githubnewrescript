@@ -33,6 +33,10 @@ import { adjustP, CORRECTION_WORDS, type CorrectionMethod } from "../posthoc.js"
  *   significance  boolean, alpha number   — letters, and their level
  *   sigVsTotal    boolean                 — "+" / "−" on cells that differ from the Total
  *   showCounts    boolean                 — a UI hint; `<key>__n` is always written
+ *   nets          {variable, label, codes}[] — the researcher's own merged categories ("Any competitor" = 3 + 4 + 5),
+ *                                           shown under the row variable's categories. Counted ONCE PER RESPONDENT
+ *                                           (anyone who gave any of the codes), so a multi-select net is never the
+ *                                           sum of its parts; lettered like any category row.
  */
 
 interface Acc { count: number; w: number; w2: number; sum: number; sumSq: number; vals: number[]; ws: number[] }
@@ -114,6 +118,26 @@ function zMeans(a: Acc, b: Acc): number | null {
 
 interface ColumnDef { key: string; label: string; code: string; variable: string; group: string; letter: string }
 
+interface CrosstabNet { variable: string; label: string; codes: string[] }
+
+/** the nets that can be computed: a known categorical variable, at least two of its real codes, a label */
+function cleanNets(raw: unknown, ds: Dataset, warnings: string[]): CrosstabNet[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CrosstabNet[] = [];
+  for (const x of raw.slice(0, 50)) {
+    const n = x as Partial<CrosstabNet>;
+    if (!n || typeof n.variable !== "string" || !Array.isArray(n.codes)) continue;
+    const meta = ds.byName.get(n.variable);
+    if (!meta) { warnings.push(`Net “${n.label ?? "?"}” names ${n.variable}, which is not in this survey's dictionary.`); continue; }
+    const known = new Set(categoriesOf(ds, n.variable).map((c) => c.code));
+    const codes = [...new Set(n.codes.map(String))].filter((c) => known.has(c));
+    if (codes.length < 2) { warnings.push(`Net “${n.label ?? "?"}” needs at least two of ${labelOf(ds, n.variable)}'s categories; it is not shown.`); continue; }
+    const label = typeof n.label === "string" && n.label.trim() ? n.label.trim().slice(0, 80) : categoriesOf(ds, n.variable).filter((c) => codes.includes(c.code)).map((c) => c.label).join(" + ");
+    out.push({ variable: n.variable, label, codes });
+  }
+  return out;
+}
+
 export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
   const rowVars = def.rows?.length ? def.rows : def.variables.slice(0, 1);
   const colVars = def.columns?.length ? def.columns : def.variables.slice(1, 2);
@@ -153,6 +177,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const totalRow = opt(def, "totalRow", false) as boolean;
   const decimals = Math.min(4, Math.max(0, Number(opt(def, "decimals", 1)) || 0));
   const warnings: string[] = [];
+  const nets = cleanNets(opt(def, "nets", []), ds, warnings);
   /** columns under the minimum base, across every table — reported ONCE, not once per column */
   const lowCols = new Map<string, { label: string; group: string; n: number }>();
   const tables: ResultTable[] = [];
@@ -191,6 +216,8 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     rowsIsNumeric: boolean; meanMode: boolean;
     grid: Map<string, Map<string, Acc>>; colBase: Map<string, Acc>; rowBase: Map<string, Acc>; nums: Map<string, Acc>;
     noAnswer: Map<string, Acc>;
+    /** net index → column key → the respondents who gave any of its codes */
+    netGrid: Map<number, Map<string, Acc>>;
   }
   const accumulate = (layer: Dataset, rv: string, cols: ColumnDef[], cvs: string[], keep: (i: number) => boolean, level: number, label: string, groupKey?: string): Block => {
     const lw = weights(layer);
@@ -200,7 +227,8 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     const rVals = categoricalColumn(layer, rv);
     const rNum = meanMode ? numericColumn(layer, rv) : null;
     const colVals = cvs.map((cv) => categoricalColumn(layer, cv));
-    const grid = new Map<string, Map<string, Acc>>(), colBase = new Map<string, Acc>(), rowBase = new Map<string, Acc>(), nums = new Map<string, Acc>(), noAnswer = new Map<string, Acc>();
+    const grid = new Map<string, Map<string, Acc>>(), colBase = new Map<string, Acc>(), rowBase = new Map<string, Acc>(), nums = new Map<string, Acc>(), noAnswer = new Map<string, Acc>(), netGrid = new Map<number, Map<string, Acc>>();
+    const myNets = nets.map((n, k) => ({ k, codes: new Set(n.codes), n })).filter((x) => x.n.variable === rv);
     const keyOf = (cv: string, code: string) => (cvs.length > 1 ? `${cv}::${code}` : code);
     const known = new Set(cols.map((c) => c.key));
     layer.cases.forEach((_, i) => {
@@ -229,8 +257,14 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
         for (const ck of cks) inc(rowMap, ck, wt);
         grid.set(r, rowMap);
       }
+      for (const n of myNets) {
+        if (!rcs.some((r) => n.codes.has(String(r)))) continue;
+        const m = netGrid.get(n.k) ?? new Map<string, Acc>();
+        for (const ck of cks) inc(m, ck, wt);
+        netGrid.set(n.k, m);
+      }
     });
-    return { rv, label, level, groupKey, rowsIsNumeric, meanMode, grid, colBase, rowBase, nums, noAnswer };
+    return { rv, label, level, groupKey, rowsIsNumeric, meanMode, grid, colBase, rowBase, nums, noAnswer, netGrid };
   };
 
   const cellType = measure === "mean" ? "number" as const : measure === "count" ? "count" as const : "pct" as const;
@@ -330,6 +364,31 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       }
       out.push(row);
     }
+    /* the researcher's nets: one row each, under the categories, from respondents counted once */
+    nets.forEach((n, k) => {
+      if (n.variable !== b.rv) return;
+      const m = b.netGrid.get(k) ?? new Map<string, Acc>();
+      const np = (ck: string) => { const base = b.colBase.get(ck); if (!base || !base.w) return null; return { p: (m.get(ck)?.w ?? 0) / base.w, n: effN(base) }; };
+      const row = mark({ row: `${n.label} (net)`, __net: true, __codes: n.codes.join(",") }, "summary");
+      const sig = showSig ? letters(np) : {};
+      const vs = sigVsTotal ? vsTotal(np) : {};
+      const rowTot = m.get("__total")?.w ?? 0;
+      for (const c of cols) {
+        const cell = m.get(c.key) ?? acc();
+        const base = b.colBase.get(c.key) ?? acc();
+        let v: number | null;
+        if (suppressed.has(c.key)) v = null;
+        else if (measure === "count") v = round(cell.w, ds.weighted ? 1 : 0);
+        else if (measure === "pct_row") v = rowTot ? (cell.w / rowTot) * 100 : null;
+        else if (measure === "pct_total") v = tot ? (cell.w / tot) * 100 : null;
+        else v = base.w ? (cell.w / base.w) * 100 : null;
+        row[c.key] = measure === "count" ? v : val(v);
+        row[`${c.key}__n`] = cell.count;
+        if (sig[c.key]) row[`${c.key}__sig`] = sig[c.key];
+        if (vs[c.key]) row[`${c.key}__vs`] = vs[c.key];
+      }
+      out.push(row);
+    });
     if (baseMode === "all" && b.noAnswer.size) {
       const na = mark({ row: "No answer" }, "noanswer");
       for (const c of cols) { const cell = b.noAnswer.get(c.key) ?? acc(); const base = b.colBase.get(c.key) ?? acc(); na[c.key] = suppressed.has(c.key) ? null : measure === "count" ? round(cell.w, ds.weighted ? 1 : 0) : measure === "pct_row" ? (cell.w ? 100 : 0) : measure === "pct_total" ? val(tot ? (cell.w / tot) * 100 : 0) : val(base.w ? (cell.w / base.w) * 100 : 0); na[`${c.key}__n`] = cell.count; }

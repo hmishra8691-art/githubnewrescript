@@ -19,6 +19,7 @@ import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { useCollab } from "@/lib/useCollab";
 import { useSession } from "@/lib/useSession";
 import { DesignsPanel } from "./DesignsPanel";
+import { AgentWorkspace } from "../agents/AgentWorkspace";
 import { QualPanel } from "./qual/QualPanel";
 import { BrandingPanel, ScriptsPanel, ThemeLivePreview } from "./BrandingPanel";
 import { AllCodePanel } from "./AllCodePanel";
@@ -50,7 +51,7 @@ import { ModeChooser } from "./ModeChooser";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "data" | "fieldwork" | "recruitment"
+  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "agents" | "data" | "fieldwork" | "recruitment"
   | "distribution" | "project" | "usage" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -108,6 +109,12 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
    * route gates it on `survey.edit` without the lock, for the same reason.
    */
   { key: "tests", label: "Tests", icon: "check", group: "Research tools" },
+  /*
+   * THE AI AGENT WORKSPACE (2026-11-07): what the task engine's agents are doing on this survey, and the
+   * Design → Collect → Analyze → Act journey. Read-only — it observes the Copilot's tasks and drives none of
+   * them — so not in EDITING_TABS.
+   */
+  { key: "agents", label: "AI Agents", icon: "sparkle", group: "Research tools" },
   { key: "data", label: "Data", icon: "data", group: "Results" },
   /*
    * Not in EDITING_TABS: a fieldwork manager watching supplier delivery is
@@ -1103,6 +1110,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "quotas" && <QuotaDashboard />}
           {tab === "listfill" && <ListFillPanel />}
           {tab === "designs" && <DesignsPanel />}
+          {tab === "agents" && <AgentWorkspace surveyId={s.surveyDbId} def={s.def} onTab={(t) => setTab(t as Tab)} />}
           {tab === "qualitative" && <QualPanel />}
           {tab === "branding" && <BrandingPanel />}
           {tab === "assets" && <AssetsPanel />}

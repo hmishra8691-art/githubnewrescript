@@ -311,3 +311,30 @@ test("means are compared with Welch's t: the planted gender effect keeps its let
   assert.equal(t.rows[0]["2__sig"], "a", "the planted effect survives the t");
   assert.ok(t.notes!.some((n) => /Welch t/.test(n)), t.notes!.join(" | "));
 });
+
+test("nets: merged categories are counted once per respondent, lettered, and refuse codes that are not real", () => {
+  /* single-select: a net equals the sum of its categories */
+  const s = runAnalysis(XT({ rows: ["REGION"] }, { nets: [{ variable: "REGION", label: "North or South", codes: ["1", "2"] }] }), ds);
+  const t = s.tables[0];
+  const cat = (code: string) => t.rows.find((x) => x.__code === code)!;
+  const net = t.rows.find((x) => x.__net)!;
+  assert.equal(net.row, "North or South (net)");
+  for (const k of ["__total", "1", "2"]) assert.ok(Math.abs(num(net[k]) - (num(cat("1")[k]) + num(cat("2")[k]))) < 0.15, `single-select net = sum at ${k}`);
+  assert.ok(t.rows.indexOf(net) > t.rows.indexOf(cat("3")), "the net sits under the categories");
+  /* multi-select: the union, not the sum — someone aware of Alpha AND Beta is counted once */
+  const m = runAnalysis(XT({ rows: ["AWARE"] }, { nets: [{ variable: "AWARE", label: "Alpha or Beta", codes: [1, 2] }] }), ds);
+  const mt = m.tables[0];
+  const mNet = mt.rows.find((x) => x.__net)!;
+  const a = num(mt.rows.find((x) => x.__code === "1")!.__total), b = num(mt.rows.find((x) => x.__code === "2")!.__total);
+  const both = rows.filter((r) => { const v = (r.answers as Record<string, unknown>).q_brands; return Array.isArray(v) && v.map(String).includes("1") && v.map(String).includes("2"); }).length;
+  assert.ok(both > 0, "the fixture has respondents aware of both");
+  assert.ok(num(mNet.__total) < a + b - 0.5, `union ${mNet.__total} is below the sum ${a + b}`);
+  assert.ok(num(mNet.__total) >= Math.max(a, b), "and at least the larger part");
+  /* a net with fewer than two real codes is dropped with a warning */
+  const bad = runAnalysis(XT({ rows: ["REGION"] }, { nets: [{ variable: "REGION", label: "Ghost", codes: ["1", "99"] }] }), ds);
+  assert.ok(!bad.tables[0].rows.some((x) => x.__net));
+  assert.ok(bad.warnings.some((w) => /Ghost/.test(w)));
+  /* the total row (100% check) still sums the categories only */
+  const tr = runAnalysis(XT({ rows: ["REGION"] }, { totalRow: true, nets: [{ variable: "REGION", label: "N+S", codes: ["1", "2"] }] }), ds);
+  assert.ok(Math.abs(num(tr.tables[0].rows.find((x) => x.__kind === "total")!.__total) - 100) < 0.3);
+});

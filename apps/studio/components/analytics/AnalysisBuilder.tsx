@@ -92,14 +92,57 @@ function VariablePicker({ variables, selected, onChange, roles, max, label }: { 
   );
 }
 
-function DropZone({ label, items, onChange, variables, hint }: { label: string; items: string[]; onChange: (v: string[]) => void; variables: VariableMeta[]; hint?: string }) {
+function DropZone({ label, items, onChange, variables, hint, onMoveIn }: { label: string; items: string[]; onChange: (v: string[]) => void; variables: VariableMeta[]; hint?: string; /** a pill dragged in from another zone: move it, do not copy it */ onMoveIn?: (name: string, fromZone: string) => void }) {
   const [over, setOver] = React.useState(false);
   return (
-    <div className={`ax-drop ${over ? "over" : ""}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={(e) => { e.preventDefault(); setOver(false); const n = e.dataTransfer.getData("text/variable"); if (n && !items.includes(n)) onChange([...items, n]); }} data-testid={`ax-drop-${label.toLowerCase()}`}>
+    <div className={`ax-drop ${over ? "over" : ""}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={(e) => { e.preventDefault(); setOver(false); const n = e.dataTransfer.getData("text/variable"); if (!n || items.includes(n)) return; const from = e.dataTransfer.getData("text/zone"); if (from && from !== label && onMoveIn) onMoveIn(n, from); else onChange([...items, n]); }} data-testid={`ax-drop-${label.toLowerCase()}`}>
       <div className="ax-drop-label">{label}</div>
-      {items.map((n) => <span key={n} className="ax-pill">{variables.find((v) => v.name === n)?.label ?? n}<button onClick={() => onChange(items.filter((x) => x !== n))}>×</button></span>)}
+      {items.map((n) => <span key={n} className="ax-pill" draggable onDragStart={(e) => { e.dataTransfer.setData("text/variable", n); e.dataTransfer.setData("text/zone", label); }} title="Drag to the other zone to move it">{variables.find((v) => v.name === n)?.label ?? n}<button onClick={() => onChange(items.filter((x) => x !== n))}>×</button></span>)}
       {!items.length && <span className="muted" style={{ fontSize: 13 }}>{hint ?? "Drag a variable here"}</span>}
     </div>
+  );
+}
+
+interface NetDef { variable: string; label: string; codes: string[] }
+
+/**
+ * MERGE CATEGORIES INTO A NET (ResLens analytics redesign). Tick two or more answers of a row question, name the
+ * net, and the table gains a row for everyone who gave ANY of them — computed by the crosstab engine from the
+ * respondents (`options.nets`), so a multi-select net is never the sum of its parts and it gets letters like any row.
+ */
+function NetsEditor({ rows, variables, nets, onChange }: { rows: string[]; variables: VariableMeta[]; nets: NetDef[]; onChange: (n: NetDef[]) => void }) {
+  const candidates = rows.map((r) => variables.find((v) => v.name === r)).filter((v): v is VariableMeta => !!v && (v.categories?.length ?? 0) >= 3);
+  const [varName, setVarName] = React.useState("");
+  const [picked, setPicked] = React.useState<string[]>([]);
+  const [label, setLabel] = React.useState("");
+  const current = candidates.find((v) => v.name === varName) ?? candidates[0];
+  React.useEffect(() => { setPicked([]); }, [current?.name]);
+  const labelOf = (v: VariableMeta, code: string) => v.categories?.find((c) => c.code === code)?.label ?? code;
+  const add = () => {
+    if (!current || picked.length < 2) return;
+    const ordered = current.categories!.map((c) => c.code).filter((c) => picked.includes(c));
+    onChange([...nets, { variable: current.name, label: label.trim() || ordered.map((c) => labelOf(current, c)).join(" + "), codes: ordered }]);
+    setPicked([]); setLabel("");
+  };
+  return (
+    <fieldset className="ax-optgroup" data-testid="ax-nets"><legend>Nets — merge categories</legend>
+      {!candidates.length ? <div className="muted" style={{ fontSize: 12.5 }}>Add a row question with three or more answers to merge some of them into a net.</div> : <>
+        {candidates.length > 1 && <label className="ax-field"><span>Question</span><select className="select small" value={current?.name ?? ""} onChange={(e) => setVarName(e.target.value)} data-testid="ax-net-var">{candidates.map((v) => <option key={v.name} value={v.name}>{v.label}</option>)}</select></label>}
+        <div className="ax-field"><span>Answers to merge{current ? ` (${current.label})` : ""}</span>
+          <div className="ax-chips">{current?.categories!.map((c) => <button key={c.code} type="button" aria-pressed={picked.includes(c.code)} className={`ax-chip ${picked.includes(c.code) ? "on" : ""}`} onClick={() => setPicked((p) => p.includes(c.code) ? p.filter((x) => x !== c.code) : [...p, c.code])} data-testid={`ax-net-code-${c.code}`}>{c.label}</button>)}</div>
+        </div>
+        <div className="row" style={{ gap: 6 }}>
+          <input className="input small" placeholder="Net name (optional)" value={label} onChange={(e) => setLabel(e.target.value)} style={{ flex: 1 }} data-testid="ax-net-label" />
+          <button type="button" className="btn small primary" disabled={picked.length < 2} onClick={add} data-testid="ax-net-add" title={picked.length < 2 ? "Pick two or more answers" : undefined}>Merge into net</button>
+        </div>
+      </>}
+      {nets.length > 0 && <ul className="ax-netlist">{nets.map((n, i) => {
+        const v = variables.find((x) => x.name === n.variable);
+        const stale = !rows.includes(n.variable);
+        return <li key={i} data-testid="ax-net-item"><b>{n.label}</b> <span className="muted">= {n.codes.map((c) => (v ? labelOf(v, c) : c)).join(" + ")}{stale ? " · question is not in Rows" : ""}</span><button type="button" className="btn tiny ghost" aria-label={`Remove net ${n.label}`} onClick={() => onChange(nets.filter((_, j) => j !== i))}>×</button></li>;
+      })}</ul>}
+      <div className="muted" style={{ fontSize: 12.5 }}>Counted once per respondent (anyone who gave any of the answers), with significance letters.</div>
+    </fieldset>
   );
 }
 
@@ -107,7 +150,7 @@ type Sel = (k: string, label: string, opts: [string, string][], dflt?: string) =
 type Num = (k: string, label: string, ph?: string) => React.ReactNode;
 
 /** the crosstab's controls, grouped the way a researcher thinks about a table */
-function CrosstabOptions({ def, set, o, alpha, sel, num }: { def: AnalysisDefinition; set: (o: Record<string, unknown>) => void; o: Record<string, unknown>; alpha: React.ReactNode; sel: Sel; num: Num }) {
+function CrosstabOptions({ def, set, o, alpha, sel, num, variables }: { def: AnalysisDefinition; set: (o: Record<string, unknown>) => void; o: Record<string, unknown>; alpha: React.ReactNode; sel: Sel; num: Num; variables: VariableMeta[] }) {
   const summary = (o.summaryRows as string[] | undefined) ?? [];
   const toggleSummary = (k: string) => set({ summaryRows: summary.includes(k) ? summary.filter((x) => x !== k) : [...summary, k] });
   const check = (k: string, label: string, dflt = false, title?: string) => <label className="ax-toggle" title={title}><input type="checkbox" checked={(o[k] as boolean | undefined) ?? dflt} onChange={(e) => set({ [k]: e.target.checked })} /> {label}</label>;
@@ -136,6 +179,7 @@ function CrosstabOptions({ def, set, o, alpha, sel, num }: { def: AnalysisDefini
         {check("totalRow", "Total row (100% check)")}
         <div className="ax-field"><span>Summary rows for scales</span><div className="ax-chips">{([["mean", "Mean"], ["top1", "Top box"], ["top2", "Top 2 box"], ["bottom1", "Bottom box"], ["bottom2", "Bottom 2 box"], ["net", "Net (T2B − B2B)"]] as [string, string][]).map(([k, l]) => <button key={k} type="button" className={`ax-chip ${summary.includes(k) ? "on" : ""}`} onClick={() => toggleSummary(k)} data-testid={`ax-summary-${k}`}>{l}</button>)}</div></div>
       </fieldset>
+      <NetsEditor rows={def.rows ?? []} variables={variables} nets={(o.nets as NetDef[] | undefined) ?? []} onChange={(nets) => set({ nets: nets.length ? nets : undefined })} />
       <fieldset className="ax-optgroup"><legend>Suppression</legend>
         {num("minBase", "Minimum column base (blank = none)", "e.g. 30")}
         <div className="muted" style={{ fontSize: 12.5 }}>Columns with fewer respondents are shown with their base only; their cells are hidden and the column is starred.</div>
@@ -157,7 +201,7 @@ function Options({ def, set, variables }: { def: AnalysisDefinition; set: (o: Re
   switch (def.kind) {
     case "descriptive": return <>{num("bins", "Histogram bins", "10")}{sel("confidence", "Confidence", [["0.9", "90%"], ["0.95", "95%"], ["0.99", "99%"]], "0.95")}<label className="ax-toggle"><input type="checkbox" checked={!!o.scaleAsNumeric} onChange={(e) => set({ scaleAsNumeric: e.target.checked })} /> Treat scales as numeric (means)</label></>;
     case "topbox": return <>{sel("primaryBox", "Primary box", [["1", "Top / bottom 1"], ["2", "Top / bottom 2"], ["3", "Top / bottom 3"]], "2")}</>;
-    case "crosstab": return <CrosstabOptions def={def} set={set} o={o} alpha={alpha} sel={sel} num={num} />;
+    case "crosstab": return <CrosstabOptions def={def} set={set} o={o} alpha={alpha} sel={sel} num={num} variables={variables} />;
     case "test": return <>{sel("test", "Test", [["auto", "Auto-select"], ["chi_square", "Chi-square"], ["fisher_exact", "Fisher's exact"], ["trend_proportion", "Trend in a proportion (Cochran–Armitage)"], ["t_one_sample", "One-sample t"], ["t_independent", "Independent t (equal variance)"], ["t_welch", "Welch t"], ["t_paired", "Paired t"], ["anova_one_way", "One-way ANOVA"], ["anova_two_way", "Two-way ANOVA (outcome, factor A, factor B)"], ["mann_whitney", "Mann-Whitney U"], ["wilcoxon_signed_rank", "Wilcoxon signed-rank"], ["kruskal_wallis", "Kruskal-Wallis"], ["friedman", "Friedman"], ["proportion_one_sample", "One-sample proportion"]], "auto")}{alpha}{sel("correction", "Pairwise comparisons after ANOVA / Kruskal–Wallis", [["holm", "Holm (default)"], ["bonferroni", "Bonferroni"], ["bh", "Benjamini–Hochberg (FDR)"], ["none", "None (omnibus test only)"]], "holm")}{num("mu", "Test value (one-sample t)", "0")}{num("p0", "Test proportion (0–1)", "0.5")}</>;
     case "correlation": return <>{sel("method", "Method", [["pearson", "Pearson"], ["spearman", "Spearman"], ["kendall", "Kendall"]], "pearson")}{alpha}</>;
     case "regression": return <>{sel("model", "Model", [["linear", "Linear (OLS)"], ["logistic", "Logistic (binary)"], ["multinomial", "Multinomial logistic"], ["mediation", "Mediation (Y, X, M)"]], "linear")}<label className="ax-toggle"><input type="checkbox" checked={!!o.moderation} onChange={(e) => set({ moderation: e.target.checked })} /> Moderation (interaction of first two predictors)</label>{def.options?.model === "logistic" && <label className="ax-field"><span>Target category code</span><input className="input small" value={(o.target as string | undefined) ?? ""} onChange={(e) => set({ target: e.target.value || undefined })} placeholder="last category" /></label>}</>;
@@ -431,8 +475,9 @@ export function AnalysisBuilder(p: BuilderProps) {
                 {def.kind === "crosstab" ? (
                   <div className="ax-xt-layout">
                     <div className="ax-xt-zones">
-                      <DropZone label="Rows" items={def.rows ?? []} onChange={(v) => update({ rows: v })} variables={p.variables} hint="The questions down the side" />
-                      <DropZone label="Columns" items={def.columns ?? []} onChange={(v) => update({ columns: v })} variables={p.variables} hint="The banner across the top" />
+                      <DropZone label="Rows" items={def.rows ?? []} onChange={(v) => update({ rows: v })} variables={p.variables} hint="The questions down the side" onMoveIn={(n) => update({ rows: [...(def.rows ?? []), n], columns: (def.columns ?? []).filter((x) => x !== n) })} />
+                      <DropZone label="Columns" items={def.columns ?? []} onChange={(v) => update({ columns: v })} variables={p.variables} hint="The banner across the top" onMoveIn={(n) => update({ columns: [...(def.columns ?? []), n], rows: (def.rows ?? []).filter((x) => x !== n) })} />
+                      <button type="button" className="btn small ghost ax-swap" disabled={!(def.rows?.length || def.columns?.length)} onClick={() => update({ rows: def.columns ?? [], columns: def.rows ?? [] })} data-testid="ax-xt-swap" title="Swap rows and columns">⇅ Swap rows and columns</button>
                       <DropZone label="Layers" items={def.layers ?? []} onChange={(v) => update({ layers: v.slice(0, 1) })} variables={p.variables} hint="Optional: one table per category" />
                       <div className="ax-xt-target" role="radiogroup" aria-label="Ticked variables go to" data-testid="ax-xt-target">
                         <span className="muted" style={{ fontSize: 12.5 }}>Ticked variables go to</span>

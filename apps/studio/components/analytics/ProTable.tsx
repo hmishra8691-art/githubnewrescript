@@ -152,7 +152,7 @@ export function ProTable({ table, formatting, testId = "ax-table", maxHeight, sc
               const isGroup = kind === "group", isSection = kind === "section";
               const gkey = isGroup ? String(r.__key) : null;
               return (
-                <tr key={first + i} className={`k-${kind || "plain"} lvl-${level}`} style={windowed ? { height: rowH } : undefined}>
+                <tr key={first + i} className={`k-${kind || "plain"} lvl-${level}${r.__net ? " ax-row-net" : ""}`} style={windowed ? { height: rowH } : undefined}>
                   <td className="stub" style={{ paddingLeft: 10 + level * 18 }}>
                     {isGroup && <button type="button" className="ax-pro-caret" onClick={() => toggleGroup(gkey!)} aria-expanded={!collapsed.has(gkey!)} title={collapsed.has(gkey!) ? "Expand" : "Collapse"}>{collapsed.has(gkey!) ? "▸" : "▾"}</button>}
                     {String(r[stub.key] ?? "")}
