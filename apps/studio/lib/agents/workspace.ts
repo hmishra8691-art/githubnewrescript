@@ -50,10 +50,10 @@ export const AGENTS: AgentDef[] = [
     kinds: ["gen.validate", "copilot.check", "assessment.validate", "translation.verify"] },
   { id: "analysis", name: "Analysis", role: "Writes the analysis plan, runs every planned analysis on the data, and verifies findings and hypothesis verdicts", stage: "analyze", availability: "active", deterministic: true,
     kinds: ["gen.analysis_plan", "analysis.check", "analysis.apply", "analysis.verify"] },
-  { id: "writing", name: "Report writing", role: "Drafts reports and stories from verified results", stage: "act", availability: "planned", kinds: [],
-    note: "Planned. Reports are drafted today by the report builder in Analytics › Present, outside the task engine." },
-  { id: "decision", name: "Decision", role: "Turns verified findings into recommendations and next steps", stage: "act", availability: "planned", kinds: [],
-    note: "Planned. The findings deck's implications and recommendations are written by the analytics engine from the verdicts." },
+  { id: "writing", name: "Report writing", role: "Writes the findings storyline from the latest verified run, then hands it to the deck and Word report", stage: "act", availability: "active", deterministic: true,
+    kinds: ["report.evidence", "report.storyline", "report.check"] },
+  { id: "decision", name: "Decision", role: "Turns verdicts and the findings that hold into recommended actions, each tied to its evidence", stage: "act", availability: "active", deterministic: true,
+    kinds: ["decision.evidence", "decision.brief", "decision.check"] },
 ];
 
 export const STAGES: { id: Stage; label: string; question: string }[] = [

@@ -45,7 +45,7 @@ test("a dependency loop is cut, not looped forever", () => {
   assert.equal(g.nodes.length, 2);
 });
 
-test("agent states come from the rows: working only while a step runs in an open task; planned agents never work", () => {
+test("agent states come from the rows: working only while a step runs in an open task; a planned agent never works", () => {
   const open = { status: "running", steps: [step("b1", "gen.batch", "running"), step("v", "gen.validate", "pending", ["b1"]), step("t", "translation.batch", "failed", [], { finishedAt: 5 })] } as never;
   const done = { status: "completed", steps: [step("l", "gen.logic", "completed", [], { finishedAt: 9 }), step("x", "gen.repair", "failed")] } as never;
   const s = Object.fromEntries(agentStatuses([open, done]).map((a) => [a.id, a]));
@@ -56,8 +56,8 @@ test("agent states come from the rows: working only while a step runs in an open
   assert.equal(s.logic.state, "done", "finished work in a closed task");
   assert.equal(s.logic.lastActive, 9);
   assert.equal(s.assessment.state, "idle");
-  assert.equal(s.writing.state, "planned");
-  assert.equal(s.decision.state, "planned");
+  assert.equal(s.writing.state, "idle", "the report agent exists now and has not run here");
+  assert.equal(s.decision.state, "idle");
   assert.equal(s.writer.steps.failed, 1, "a failure in a closed task is counted but does not raise attention");
   assert.equal(isLive({ status: "running" }), true);
   assert.equal(isLive({ status: "needs_attention" }), false);

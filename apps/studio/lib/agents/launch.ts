@@ -21,6 +21,7 @@ export interface Launcher {
 }
 
 const t = (s: string | undefined) => (s ?? "").trim();
+const AUDIENCES: [string, string][] = [["client", "Client"], ["executive", "Executive"], ["researcher", "Researcher"]];
 const DATASETS: [string, string][] = [["LIVE", "Production responses"], ["TEST", "Test responses"], ["ALL", "All responses"]];
 
 export const LAUNCHERS: Launcher[] = [
@@ -49,6 +50,14 @@ export const LAUNCHERS: Launcher[] = [
     fields: [{ key: "dataset", label: "Data", type: "select", options: DATASETS }, { key: "clean", label: "Responses", type: "select", options: [["all", "All completes"], ["clean", "Clean dataset (quality removals applied)"]] }],
     message: (f) => `Run the analysis plan on the ${(DATASETS.find(([v]) => v === (f.dataset || "LIVE"))?.[1] ?? "production responses").toLowerCase()}${f.clean === "clean" ? " (clean dataset)" : ""}`,
     options: (f) => ({ environment: f.dataset || "LIVE", dataset: f.clean === "clean" ? "clean" : "all" }) },
+  { id: "report", agent: "writing", planner: "report", title: "Draft the findings report", blurb: "A storyline from the latest verified run: summary, key findings, segments, method, caveats",
+    fields: [{ key: "audience", label: "Audience", type: "select", options: AUDIENCES }, { key: "focus", label: "Anything to lead with? (optional)", placeholder: "The NPS gap between new and existing customers" }],
+    message: (f) => `Draft the findings report for a ${(f.audience || "client")} audience${t(f.focus) ? `, leading with ${t(f.focus)}` : ""}`,
+    options: (f) => ({ audience: f.audience || "client", focus: t(f.focus) || undefined }) },
+  { id: "decide", agent: "decision", planner: "decision", title: "Recommend next steps", blurb: "Decisions from the verdicts and findings that hold — each one tied to its evidence",
+    fields: [{ key: "question", label: "The business decision (optional)", placeholder: "Should we launch the premium tier in Q1?" }],
+    message: (f) => `Recommend next steps from the findings${t(f.question) ? ` for the decision: ${t(f.question)}` : ""}`,
+    options: (f) => ({ question: t(f.question) || undefined }) },
 ];
 
 export function launchMessage(l: Launcher, fields: Record<string, string>): string {

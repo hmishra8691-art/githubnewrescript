@@ -80,3 +80,65 @@ test("verify: only findings that hold after correction count; verdicts carry the
   assert.equal((await __research.runVerify(ctx("verify"))).status, "failed");
   setResearchBackend(null);
 });
+
+test("report agent: no run pauses; the storyline is the engine's deck, led by the researcher's focus; the check names what a slide may claim", async () => {
+  const { leadWith, slideOutline, reportPlanner } = await import("./research.ts");
+  const p = await reportPlanner.plan({ message: "Draft the findings report", survey: def, ai: (async () => ({})) as never, options: { audience: "executive", focus: "satisfaction" } });
+  assert.deepEqual(p.steps.map((s) => s.kind), ["report.evidence", "report.storyline", "report.check"]);
+  setResearchBackend(fake({ latestRun: async () => null }));
+  const none = await __research.runEvidence(ctx("report.evidence"));
+  assert.equal(none.status, "blocked");
+  assert.match((none as { reason: string }).reason, /Run the Analysis agent/);
+  /* leadWith moves the matching key finding to the front of the key findings, nothing else */
+  const slides = [{ type: "summary", title: "S", headline: "h", bullets: [] }, { type: "key_finding", title: "Price matters", evidence: "e", soWhat: "", significant: true, chart: {} }, { type: "key_finding", title: "Satisfaction differs by gender", evidence: "e", soWhat: "", significant: true, chart: {} }] as never;
+  const led = leadWith(slides, "satisfaction gap");
+  assert.equal(led.led, "Satisfaction differs by gender");
+  assert.deepEqual(led.slides.map((s) => (s as { title: string }).title), ["S", "Satisfaction differs by gender", "Price matters"]);
+  assert.equal(leadWith(slides, "zzz").led, null);
+  assert.deepEqual(slideOutline({ type: "recommendations", title: "R", items: ["a", "b"] } as never), { type: "recommendations", title: "R", points: ["a", "b"] });
+  /* the check: missing sections are errors; a non-significant key finding is flagged */
+  const chk = await __research.runReportCheck({ ...(ctx("report.check") as object), deps: { storyline: { data: { slides: [{ type: "summary", title: "s" }, { type: "key_finding", title: "k", significant: false }] }, validation: { ok: true, errors: [], warnings: [] } } } } as never);
+  const v = (chk as { output: { validation: { ok: boolean; errors: string[]; warnings: string[] } } }).output.validation;
+  assert.equal(v.ok, false);
+  assert.ok(v.errors.some((e) => /method/.test(e)) && v.errors.some((e) => /caveats/.test(e)));
+  assert.ok(v.warnings.some((w) => /NOT significant/.test(w)));
+  setResearchBackend(null);
+});
+
+test("decision agent: actions follow the corrected verdicts; only findings that hold are evidence; acting needs evidence", async () => {
+  const { decisionItems } = await import("./research.ts");
+  const items = decisionItems(run);
+  assert.deepEqual(items.map((i) => [i.id, i.action]), [["H1", "act"], ["H2", "plan"]]);
+  assert.deepEqual(items[0].evidence, ["Finding a"], "b is significant raw but not after correction, so it is not evidence");
+  assert.equal(items[0].strength, "moderate");
+  /* a discovery beyond the plan is a lead to confirm, never an action */
+  const extra = decisionItems({ ...run, findings: [...run.findings, finding("z", true, true)] as never });
+  assert.ok(extra.some((i) => i.id === "z" && i.action === "test"));
+  const chk = await __research.runDecisionCheck({ ...(ctx("decision.check") as object), deps: { brief: { data: { items: [{ id: "H9", action: "act", title: "", basis: "", evidence: [], strength: "none" }] }, validation: { ok: true, errors: [], warnings: [] } } } } as never);
+  assert.equal((chk as { output: { validation: { ok: boolean } } }).output.validation.ok, false);
+  setResearchBackend(fake());
+  const b = await __research.runBrief(ctx("decision.brief", { question: "Launch premium?" }));
+  assert.equal((b as { output: { data: { question: string; items: unknown[] } } }).output.data.question, "Launch premium?");
+  setResearchBackend(null);
+});
+
+test("end to end on the real engine: a run of the synthetic study → storyline (the engine's deck) → decision brief, every check passing", async () => {
+  const fx = await import("../../../../../packages/analytics/dist/analyses/fixture.js") as unknown as { def: never; synthRows: () => never[] };
+  const an = await import("../../../../../packages/analytics/dist/index.js") as unknown as { buildDataset: (d: never, r: never[], o: unknown) => never; runPlan: (d: never, ds: never, o?: unknown) => ResearchRunLite };
+  const ds = an.buildDataset(fx.def, fx.synthRows(), { spec: { environment: "LIVE", dataset: "all" } });
+  const real = an.runPlan(fx.def, ds, { trigger: "test" });
+  assert.ok(real.n > 0 && real.findings.length > 0);
+  setResearchBackend(fake({ definition: async () => ({ def: fx.def }), latestRun: async () => real }));
+  const story = await __research.runStoryline(ctx("report.storyline", { audience: "client" }));
+  assert.equal(story.status, "completed");
+  const sd = (story as { output: { data: { slides: { type: string }[] } } }).output;
+  const chk = await __research.runReportCheck({ ...(ctx("report.check") as object), deps: { storyline: sd } } as never);
+  assert.equal((chk as { output: { validation: { ok: boolean; errors: string[] } } }).output.validation.ok, true, JSON.stringify((chk as never as { output: { validation: unknown } }).output.validation));
+  for (const t of ["summary", "method", "caveats"]) assert.ok(sd.data.slides.some((s) => s.type === t), t);
+  const brief = await __research.runBrief(ctx("decision.brief"));
+  const bd = (brief as { output: { data: { items: { action: string; evidence: string[] }[] } } }).output;
+  const dchk = await __research.runDecisionCheck({ ...(ctx("decision.check") as object), deps: { brief: bd } } as never);
+  assert.equal((dchk as { output: { validation: { ok: boolean } } }).output.validation.ok, true);
+  for (const i of bd.data.items) if (i.action === "act") assert.ok(i.evidence.length > 0);
+  setResearchBackend(null);
+});

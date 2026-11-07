@@ -3229,3 +3229,8 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .agw-out-table tr.v-not_supported td:nth-child(2) { color: #fca5a5; }
 .agw-out-table tr.v-mixed td:nth-child(2), .agw-out-table tr.v-inconclusive td:nth-child(2) { color: #fcd34d; }
 .agw-out textarea { width: 100%; background: #0f1528; color: var(--agw-text); border: 1px solid var(--agw-line); border-radius: 6px; padding: 6px; font: inherit; }
+.agw-out-slides { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.agw-out-slides ul { margin: 2px 0 0; padding-left: 16px; color: var(--agw-sub); }
+.agw-out-badge { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #fb923c; margin-right: 4px; }
+.agw-out-slides li.ns > b { color: var(--agw-sub); }
+.agw-out-table select, .agw-out-table input { background: #0f1528; color: var(--agw-text); border: 1px solid var(--agw-line); }
