@@ -910,18 +910,23 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="All projects">R</a>
         {/* the project's overview is one click away, and the overview is one click from the project list (dashboard brief §2) */}
         <a href={s.surveyDbId === "sandbox" ? "/sandbox/overview" : `/studio/${s.surveyDbId}`} className="btn small ctx-overview" data-testid="project-overview-link" title="Project overview — status, configuration, spend, modules">← Overview</a>
+        {/*
+          * WHICH SURVEY, AND IS IT SAVED (2026-11-07 polish). The name, with the save status beside it as quiet text;
+          * under it only the version and whether the live link runs it. The survey code and the row revision are
+          * in the name's tooltip — programmers who need them still have them, nobody else reads them every minute.
+          */}
         <div className="ctx" data-testid="project-context">
-          <span className="ctx-title title">{s.def.meta.title}</span>
+          <span className="ctx-line">
+            <span className="ctx-title title" title={`${s.def.meta.title} · ${s.def.meta.code}${s.revision != null ? ` · revision ${s.revision}` : ""}`}>{s.def.meta.title}</span>
+            <SaveIndicator />
+          </span>
           <span className="ctx-meta">
-            <span className="mono">{s.def.meta.code}</span>
-            <span className="ctx-sep">·</span>
-            <span className="ver" title="Version number of the last saved version, and the row revision every save is based on">
-              v{s.def.meta.version}{s.revision != null && <span className="muted"> · rev {s.revision}</span>}
+            <span className="ver" title={`Survey code ${s.def.meta.code}. Version number of the last saved version${s.revision != null ? `; edits are based on revision ${s.revision}` : ""}`}>
+              Version {s.def.meta.version}
             </span>
-            {live && <><span className="ctx-sep">·</span><span className={`badge ${liveIsBehind ? "warning" : "success"}`} title={liveIsBehind ? `Live link runs v${live.version}` : "Live link is on this version"}>Live v{live.version}</span></>}
+            {live && <span className={`ctx-live${liveIsBehind ? " behind" : ""}`} title={liveIsBehind ? `Live link runs v${live.version}` : "Live link is on this version"}>{liveIsBehind ? `Live runs v${live.version}` : "Live"}</span>}
           </span>
         </div>
-        <SaveIndicator />
         <span className="spacer" />
         <PaletteButton />
         <button className="btn" onClick={preview} disabled={saving}
@@ -942,17 +947,15 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         <AlertBell />
         {s.surveyDbId === "sandbox" ? <WalletBadge surveyId={s.surveyDbId} onOpen={() => setTab("usage")} /> : <WalletMenu inStudio onAddFunds={() => setTab("usage")} />}
         {session.state.kind === "signed_in" && (
-          <span className="row" style={{ gap: 6 }} data-testid="studio-user">
+          <a className="topbar-user" href="/profile" data-testid="studio-user" title={`${session.state.user.name} (${session.state.user.userCode}) — account`} aria-label="Account">
             <span
               className="avatar sm"
               style={{ background: `hsl(${[...session.state.user.userId].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0)} 62% 45%)` }}
-              title={`${session.state.user.name} · ${session.state.user.userCode}`}
               aria-hidden="true"
             >
               {session.state.user.name.trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?"}
             </span>
-            <a className="btn" href="/profile" title={`${session.state.user.name} (${session.state.user.userCode})`}>Account</a>
-          </span>
+          </a>
         )}
         <button className="btn primary" disabled={saving || roWrite} onClick={() => save()}
           {...(roWrite ? { title: "Enter edit mode to save a version" } : {})}

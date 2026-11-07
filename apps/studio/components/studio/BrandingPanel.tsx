@@ -3,12 +3,14 @@ import React from "react";
 import { useStudio } from "./store";
 import { THEME_PRESETS } from "@/lib/defaults";
 import { Branding, SurveyDefinition } from "@rescript/schema";
-import { createResponseState, start, setAnswer, codeGate } from "@rescript/engine";
+import { createResponseState, start, setAnswer, codeGate, listPages } from "@rescript/engine";
 import { QuestionRenderer, ProgressIndicator, brandingVars, widthModeClass, brandingClasses, brandingResponsiveCss } from "@rescript/renderer";
 import { TypographyMore, BackgroundSection, AppearanceSection, ResponsiveSection, ThemeAssistant } from "./BrandingAdvanced";
 import { UxItemsEditor } from "./UxItemsEditor";
 import { OptionalCondition } from "./ConditionBuilder";
 import { themePreviewStore } from "@/lib/themePreview";
+import { brandingFocus, activeRegion } from "@/lib/brandingFocus";
+import { describeBrandingChanges, type BrandingChange, type PreviewRegion } from "@/lib/brandingChanges";
 import { AiConversationSection } from "./AiConversationPanel";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { MediaDisplayControls } from "./MediaDisplayControls";
@@ -17,7 +19,7 @@ import { LegacyScriptsBanner } from "./LegacyScripts";
 import { CodeEditor } from "./code/CodeEditor";
 import { useScriptTools } from "./code/ScriptTools";
 import { duplicateLogicScript, DUPLICATE_NOTE } from "@/lib/scripts/manage.ts";
-import { dominantColorsFromImage, generatePalette, generatePaletteFromHex, hexToRgb, type GeneratedColors, type RGB } from "@/lib/paletteFromImage";
+import { dominantColorsFromImage, generatePalette, generatePaletteFromHex, hexToRgb, contrastRatio, type GeneratedColors, type RGB } from "@/lib/paletteFromImage";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
   return (
@@ -202,30 +204,119 @@ const PREVIEW_ERROR = { questionId: "pv2", message: "Please enter a value greate
  * fixed preview survey, same live read of `branding`, same `data-testid`s —
  * only where it is mounted did.
  */
+/** one edit in the "Just changed" list: each setting, before → after, what it affects (pointing outlines it) */
+function ChangeGroup({ items, latest }: { items: BrandingChange[]; latest?: boolean }) {
+  return (
+    <div className={`tp-change${latest ? " latest" : ""}`}>
+      {items.length > 3 ? (
+        <details>
+          <summary><b>{items.length} settings</b> changed at once (a preset or theme)</summary>
+          {items.map((x) => <div key={x.path} className="tp-change-line"><b>{x.label}</b> <span className="mono">{x.before} → {x.after}</span></div>)}
+        </details>
+      ) : items.map((x) => (
+        <div key={x.path} className="tp-change-line" onMouseEnter={() => brandingFocus.setHover(x.region)} onMouseLeave={() => brandingFocus.setHover(null)}>
+          <b>{x.label}</b> <span className="mono">{x.before} → {x.after}</span>
+          <small className="muted"> — {x.impact}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Branding; logoUrl?: string }) {
   const s = useStudio();
-  // a theme on approval (the theme assistant's proposal) shows here until it is applied or cancelled
+  // a theme on approval (the theme assistant's proposal, a preset under the pointer) shows here until it is applied or cancelled
   const proposed = React.useSyncExternalStore(themePreviewStore.subscribe, themePreviewStore.get, () => null);
+  const focus = React.useSyncExternalStore(brandingFocus.subscribe, brandingFocus.get, brandingFocus.get);
   const branding = proposed ?? saved;
   const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
+  /* a group about a screen size (Phone & tablet) switches the preview to it */
+  React.useEffect(() => { if (focus.device) setDevice(focus.device); }, [focus.device, focus.seq]);
+  const [source, setSource] = React.useState<"sample" | "survey">("sample");
   const [answers, setAnswers] = React.useState<Record<string, unknown>>({ pv1: "2" });
-  const state = React.useMemo(() => {
-    const st = createResponseState(PREVIEW_DEF);
-    start(PREVIEW_DEF, st);
-    for (const [qid, v] of Object.entries(answers)) setAnswer(PREVIEW_DEF, st, qid, v);
-    return st;
-  }, [answers]);
 
+  /*
+   * WHAT IS PREVIEWED. "Sample" is the fixed page below (every element a theme touches, with a validation message
+   * showing); "This survey" is the first page of the survey being edited. Both carry the CURRENT branding, so the
+   * display settings the renderer reads from the definition (question numbers, option letters) show too.
+   */
+  const page = React.useMemo(() => {
+    if (source === "survey") {
+      for (const p of listPages(s.def.flow as unknown[])) {
+        const ids = ((p.node as { questionIds?: string[] }).questionIds ?? []).filter((id) => s.def.questions.some((q) => q.id === id && q.type !== "hidden" && q.type !== "calculated" && q.type !== "embedded_data")).slice(0, 4);
+        if (ids.length) return { def: { ...s.def, branding } as SurveyDefinition, ids, errors: [] as { questionId: string; message: string }[] };
+      }
+    }
+    return { def: { ...PREVIEW_DEF, branding } as SurveyDefinition, ids: ["pv1", "pv2", "pv3"], errors: [PREVIEW_ERROR] };
+  }, [source, s.def, branding]);
+  const state = React.useMemo(() => {
+    try {
+      const st = createResponseState(page.def);
+      start(page.def, st);
+      for (const [qid, v] of Object.entries(answers)) if (page.def.questions.some((q) => q.id === qid)) setAnswer(page.def, st, qid, v);
+      return st;
+    } catch { return createResponseState(page.def); }
+  }, [answers, page.def]);
+
+  /* JUST CHANGED: each edit named, before → after, what it affects; the affected part flashes */
+  const [changes, setChanges] = React.useState<{ id: number; items: BrandingChange[]; at: number }[]>([]);
+  const prev = React.useRef<{ branding: unknown; navigation: unknown } | null>(null);
+  React.useEffect(() => {
+    const snap = { branding: saved, navigation: s.def.navigation ?? null };
+    const before = prev.current;
+    prev.current = snap;
+    if (!before) return;
+    const items = describeBrandingChanges({ ...(before.branding as object), navigation: before.navigation }, { ...(saved as object), navigation: snap.navigation });
+    if (!items.length) return;
+    setChanges((cs) => [{ id: Date.now(), items, at: Date.now() }, ...cs].slice(0, 4));
+    brandingFocus.flash(items[0]!.region);
+  }, [saved, s.def.navigation]);
+
+  const region = activeRegion(focus);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (!region) return;
+    const sel: Record<string, string> = { cards: ".rs-card", text: ".rs-qtext", hints: ".rs-qinstruction", options: ".rs-options", inputs: ".rs-input, .rs-textarea, .rs-select", progress: ".rs-progress", buttons: ".rs-nav", error: ".rs-error-msg", logo: ".rs-header", nav: ".tp-secnav" };
+    const el = sel[region] ? rootRef.current?.querySelector(sel[region]!) : null;
+    const t = setTimeout(() => el?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 120);
+    return () => clearTimeout(t);
+  }, [region]);
   const vars = brandingVars(branding) as React.CSSProperties;
   const cls = `rs-shell rs-${branding.layout.cardStyle} ${widthModeClass(branding)} ${brandingClasses(branding)}`;
+  const label = (k: string) => ({ page: "the page", cards: "the cards", text: "question text", hints: "hints", options: "the answers", inputs: "the inputs", progress: "the progress bar", buttons: "the buttons", error: "error messages", logo: "the header", nav: "the navigation" } as Record<string, string>)[k] ?? k;
 
   return (
-    <div className="theme-preview" data-testid="theme-live-preview" data-device={device} data-proposed={proposed ? "1" : undefined}>
-      <div className="row" style={{ gap: 4, marginBottom: 6 }} role="group" aria-label="Preview device">
-        {(["desktop", "tablet", "mobile"] as const).map((d) => (
-          <button key={d} type="button" className={`btn small${device === d ? " primary" : ""}`} onClick={() => setDevice(d)} data-testid={`theme-preview-${d}`}>{d === "mobile" ? "phone" : d}</button>
-        ))}
-        {proposed && <span className="muted" style={{ fontSize: 11.5, alignSelf: "center" }} data-testid="theme-preview-proposed">showing the proposed theme</span>}
+    <div ref={rootRef} className={`theme-preview${region ? ` tp-hl tp-hl-${region}` : ""}${focus.flash ? " tp-flash" : ""}`} data-testid="theme-live-preview" data-device={device} data-proposed={proposed ? "1" : undefined} data-region={region ?? undefined}>
+      <div className="row" style={{ gap: 4, marginBottom: 6, flexWrap: "wrap" }}>
+        <div className="row" style={{ gap: 4 }} role="group" aria-label="Preview device">
+          {(["desktop", "tablet", "mobile"] as const).map((d) => (
+            <button key={d} type="button" className={`btn small${device === d ? " primary" : ""}`} onClick={() => setDevice(d)} data-testid={`theme-preview-${d}`}>{d === "mobile" ? "phone" : d}</button>
+          ))}
+        </div>
+        <span className="grow" />
+        <div className="row" style={{ gap: 4 }} role="group" aria-label="What to preview">
+          <button type="button" className={`btn small${source === "sample" ? " primary" : ""}`} onClick={() => setSource("sample")} data-testid="theme-preview-source-sample" title="A fixed page with every element a theme changes">Sample page</button>
+          <button type="button" className={`btn small${source === "survey" ? " primary" : ""}`} onClick={() => setSource("survey")} data-testid="theme-preview-source-survey" title="The first page of this survey">This survey</button>
+        </div>
+      </div>
+      <div className="tp-status muted" aria-live="polite">
+        {proposed ? <span data-testid="theme-preview-proposed">Showing a proposed look — not applied yet.</span>
+          : region ? <span data-testid="theme-preview-pointing">Outlined: {label(region)}</span>
+          : <span>Point at a setting to see what it changes.</span>}
+      </div>
+      <div className="tp-changes" data-testid="theme-preview-changes" hidden={!changes.length}>
+        <div className="row" style={{ alignItems: "center" }}>
+          <b style={{ fontSize: 12 }}>Just changed</b>
+          <span className="grow" />
+          {changes.length > 0 && <button type="button" className="btn small" disabled={!s.canUndo} onClick={() => s.undo()} data-testid="theme-preview-undo">↶ Undo</button>}
+        </div>
+        {changes.slice(0, 1).map((c) => <ChangeGroup key={c.id} items={c.items} latest />)}
+        {changes.length > 1 && (
+          <details className="tp-earlier">
+            <summary>Earlier changes ({changes.length - 1})</summary>
+            {changes.slice(1).map((c) => <ChangeGroup key={c.id} items={c.items} />)}
+          </details>
+        )}
       </div>
       {branding.responsive && <style dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(branding, '[data-testid="theme-preview-shell"]') }} />}
       <div className={`theme-preview-frame${device !== "desktop" ? ` rs-viewport ${device}` : ""}`} style={device === "mobile" ? { maxWidth: 390, margin: "0 auto" } : device === "tablet" ? { maxWidth: 768, margin: "0 auto" } : undefined}>
@@ -236,22 +327,25 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
               <img src={logoUrl} alt="" style={{ maxHeight: 36 }} />
             </div>
           )}
+          {(s.def.navigation?.sectionNav ?? "off") !== "off" && (
+            <div className="tp-secnav" data-testid="theme-preview-secnav"><span className="on">Section 1</span><span>Section 2</span><span>Section 3</span></div>
+          )}
           {/* D20: the runtime's own indicator — page 3 of 7 of the fixed preview; "bottom" is drawn after the buttons */}
           {branding.layout.progressBar === "top" && (
             <ProgressIndicator position="top" style={branding.layout.progressStyle} current={3} total={7} testid="theme-preview-progress" />
           )}
-          <div className="rs-card" data-testid="theme-preview-q1">
-            <QuestionRenderer def={PREVIEW_DEF} q={PREVIEW_DEF.questions[0]} state={state} loop={null}
-              value={answers.pv1} errors={[]} onChange={(v) => setAnswers((a) => ({ ...a, pv1: v }))} />
-          </div>
-          <div className="rs-card" data-testid="theme-preview-q2">
-            <QuestionRenderer def={PREVIEW_DEF} q={PREVIEW_DEF.questions[1]} state={state} loop={null}
-              value={answers.pv2} errors={[PREVIEW_ERROR]} onChange={(v) => setAnswers((a) => ({ ...a, pv2: v }))} />
-          </div>
-          <div className="rs-card" data-testid="theme-preview-q3">
-            <QuestionRenderer def={PREVIEW_DEF} q={PREVIEW_DEF.questions[2]} state={state} loop={null}
-              value={answers.pv3} errors={[]} onChange={(v) => setAnswers((a) => ({ ...a, pv3: v }))} />
-          </div>
+          {page.ids.map((id, i) => {
+            const q = page.def.questions.find((x) => x.id === id)!;
+            return (
+              <div className="rs-card" key={id} data-testid={source === "sample" ? `theme-preview-q${i + 1}` : `theme-preview-survey-${q.code}`}>
+                <QuestionRenderer def={page.def} q={q} state={state} loop={null}
+                  value={answers[id]} errors={page.errors.filter((e) => e.questionId === id)} onChange={(v) => setAnswers((a) => ({ ...a, [id]: v }))} />
+              </div>
+            );
+          })}
+          {branding.layout.autoAdvance && (
+            <p className="tp-note" data-testid="theme-preview-autonext">Auto-next is on: a page of single-answer questions moves on as soon as it is answered.</p>
+          )}
           <div className="rs-nav">
             {branding.buttons.showBack && (
               <button type="button" className={`rs-btn secondary ${branding.buttons.style}`} data-testid="theme-preview-back">
@@ -269,7 +363,7 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
         </div>
       </div>
       <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
-        A fixed preview survey, not {s.def.meta.title || "this survey"} — updates as you edit anything below.
+        {source === "sample" ? <>A fixed sample page, not {s.def.meta.title || "this survey"} — switch to &ldquo;This survey&rdquo; to see its first page.</> : <>The first page of {s.def.meta.title || "this survey"}, with this look. Answers you click here are not saved.</>}
       </p>
     </div>
   );
@@ -414,45 +508,61 @@ function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) =
     } finally { setBusy(false); }
   };
 
+  /* the generated palette is shown in the live preview until it is applied or dismissed */
+  React.useEffect(() => {
+    themePreviewStore.set(generated ? Branding.parse({ ...b, colors: { ...b.colors, ...generated } }) : null);
+    return () => themePreviewStore.set(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generated]);
   const apply = () => {
     if (!generated) return;
     if (guideFonts?.length) set((x) => { x.typography = { ...x.typography, fontFamily: `${guideFonts[0]}, system-ui, sans-serif` }; });
     set((x) => { x.colors = { ...x.colors, ...generated }; });
-    s.toast("Palette applied — every color below can still be tweaked by hand");
+    setGenerated(null);
+    s.toast("Palette applied — every colour can still be tweaked under Colours");
   };
 
   return (
     <div className="card" style={{ padding: 12, marginTop: 4 }} data-testid="theme-generator">
-      <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-end", gap: 10 }}>
-        <label className="f" style={{ width: 260 }}><span>Import brand from URL</span>
-          <div className="row" style={{ gap: 6 }}>
-            <input className="input" style={{ minWidth: 160 }} placeholder="https://example.com" value={siteUrl}
-              disabled={sandboxed} data-testid="brand-url-input"
+      <div className="bw-sources">
+        <div className="bw-source">
+          <b>From your website</b>
+          <small className="bw-hint">We read its colours (and fonts) and build a palette.</small>
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            <input className="input grow" placeholder="https://example.com" value={siteUrl}
+              disabled={sandboxed} data-testid="brand-url-input" aria-label="Import brand from URL"
               onChange={(e) => setSiteUrl(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void fromUrl(); } }} />
             <button type="button" className="btn" disabled={!siteUrl.trim() || busy || sandboxed} data-testid="analyze-brand-url"
               onClick={() => void fromUrl()} title={sandboxed ? "Save the survey first — brand analysis needs a saved survey." : "Analyze this website's colors and generate a theme from them"}>
-              {busy && siteStatus ? "Analyzing…" : "🔗 Analyze website"}
+              {busy && siteStatus ? "Analyzing…" : "Analyze"}
             </button>
           </div>
-        </label>
-        <label className="btn" data-testid="brand-guide-upload" title={sandboxed ? "Save the survey first — reading guidelines needs a saved survey." : "Read the colours and typeface from a brand-guidelines PDF"} style={{ cursor: sandboxed || busy ? "not-allowed" : "pointer", opacity: sandboxed || busy ? 0.6 : 1 }}>
-          📘 Brand guidelines (PDF)
-          <input type="file" accept="application/pdf" hidden disabled={sandboxed || busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void fromGuide(f); }} />
-        </label>
-        <button type="button" className="btn" disabled={!b.logoUrl || busy} data-testid="detect-logo-colors" onClick={() => void fromLogo()}
-          title={b.logoUrl ? "Analyze the logo above and generate a palette from its colors" : "Add a logo above first"}>
-          {busy && !siteStatus ? "Analyzing…" : "🎨 Detect logo colors"}
-        </button>
-        <span className="muted" style={{ fontSize: 12.5 }}>or</span>
-        <label className="f" style={{ width: 130 }}><span>Brand color</span>
-          <div className="row" style={{ gap: 6 }}>
-            <input type="color" value={brandHex} onChange={(e) => setBrandHex(e.target.value)}
-              style={{ width: 30, height: 28, padding: 0, border: "1px solid var(--border)", background: "none", borderRadius: 6 }} />
-            <input className="input mono" style={{ width: 82 }} value={brandHex} onChange={(e) => setBrandHex(e.target.value)} />
+        </div>
+        <div className="bw-source">
+          <b>From a document or your logo</b>
+          <small className="bw-hint">A brand-guidelines PDF, or the logo set under Page &amp; logo.</small>
+          <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+            <label className="btn" data-testid="brand-guide-upload" title={sandboxed ? "Save the survey first — reading guidelines needs a saved survey." : "Read the colours and typeface from a brand-guidelines PDF"} style={{ cursor: sandboxed || busy ? "not-allowed" : "pointer", opacity: sandboxed || busy ? 0.6 : 1 }}>
+              Brand guidelines (PDF)
+              <input type="file" accept="application/pdf" hidden disabled={sandboxed || busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void fromGuide(f); }} />
+            </label>
+            <button type="button" className="btn" disabled={!b.logoUrl || busy} data-testid="detect-logo-colors" onClick={() => void fromLogo()}
+              title={b.logoUrl ? "Analyze the logo and generate a palette from its colors" : "Add a logo under Page & logo first"}>
+              {busy && !siteStatus ? "Analyzing…" : "Logo colours"}
+            </button>
           </div>
-        </label>
-        <button type="button" className="btn" data-testid="generate-from-hex" onClick={fromHex}>Generate theme</button>
+        </div>
+        <div className="bw-source">
+          <b>From one brand colour</b>
+          <small className="bw-hint">We derive the rest of the palette from it.</small>
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            <input type="color" value={brandHex} onChange={(e) => setBrandHex(e.target.value)} aria-label="Brand color"
+              style={{ width: 34, height: 34, padding: 0, border: "1px solid var(--border)", background: "none", borderRadius: 6, flex: "none" }} />
+            <input className="input mono" style={{ width: 96 }} value={brandHex} onChange={(e) => setBrandHex(e.target.value)} />
+            <button type="button" className="btn" data-testid="generate-from-hex" onClick={fromHex}>Generate</button>
+          </div>
+        </div>
       </div>
       {sandboxed && <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Save the survey first — brand analysis needs a saved survey.</p>}
       {siteStatus && <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }} data-testid="brand-url-status">{siteStatus}</p>}
@@ -479,282 +589,495 @@ function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) =
               }} />
             ))}
           </div>
-          <button type="button" className="btn primary small" style={{ marginTop: 8 }} data-testid="apply-generated-palette" onClick={apply}>
-            Use this palette
-          </button>
+          <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>Showing in the live preview — nothing has changed yet.</p>
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            <button type="button" className="btn primary small" data-testid="apply-generated-palette" onClick={apply}>Use this palette</button>
+            <button type="button" className="btn small" data-testid="dismiss-generated-palette" onClick={() => setGenerated(null)}>Dismiss</button>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-/** Branding / theming (requirement §19) + presets (§20). */
+/* ================================================== the Branding workspace (2026-11-07 redesign) */
+
+/**
+ * THE SAME SETTINGS, ORGANISED BY WHAT THEY CHANGE (Branding redesign, 2026-11-07).
+ *
+ * Every control the panel had is still here, with the same data-testids and the same writes to the definition.
+ * What changed is how they are presented:
+ *   - "Start from" puts the four ways to get a whole look in one place: a preset, your brand (website / PDF / logo
+ *     / colour), a description for the AI, a workspace theme.
+ *   - The settings are grouped by the part of the respondent's page they change (Colours, Text, Page, Answers &
+ *     inputs, Background, Buttons & navigation, Respondent experience, Phone & tablet, AI interviewer, Code), one
+ *     group at a time, each with a sentence saying what it is for. The settings most people need come first; the
+ *     rest are under "More …" in the same group, and "Show everything" lays every group out on one page.
+ *   - Pointing at a setting, or opening a group, outlines what it affects in the live preview; every change is
+ *     named in the preview's "Just changed" list (before → after, and what it affects) with Undo.
+ */
+type SectionId = "colors" | "text" | "page" | "answers" | "background" | "buttons" | "experience" | "devices" | "ai" | "code";
+interface SectionDef { id: SectionId; label: string; desc: string; region: PreviewRegion; device?: "tablet" | "mobile"; keywords: string }
+
+const SECTIONS: SectionDef[] = [
+  { id: "colors", label: "Colours", region: "buttons", desc: "Four colours set the whole look; fine-tune individual elements only if you need to.", keywords: "colour color primary secondary background surface text subtle border error accent heading link input button progress palette" },
+  { id: "text", label: "Text", region: "text", desc: "The font and size respondents read in, and how question text is set.", keywords: "font family size typography heading weight line height letter spacing question size" },
+  { id: "page", label: "Page & logo", region: "page", desc: "How wide the survey is, how questions are framed, and the logo at the top.", keywords: "width full contained max width align alignment card style flat line radius corner spacing logo position progress bar" },
+  { id: "answers", label: "Answers & inputs", region: "options", desc: "How answer choices, radio buttons, checkboxes and text boxes look.", keywords: "options look cards pills minimal radio checkbox inputs filled underline shadow padding border gap tint focus button radius progress height logo height" },
+  { id: "background", label: "Background", region: "page", desc: "An image or gradient behind the survey, with an overlay to keep text readable.", keywords: "background image gradient overlay fit cover contain repeat fixed scroll" },
+  { id: "buttons", label: "Buttons & navigation", region: "buttons", desc: "The Next / Back / Submit buttons and how respondents move between sections.", keywords: "button next back submit label style solid outline pill navigation section visited free jump" },
+  { id: "experience", label: "Respondent experience", region: "options", desc: "Behaviour respondents notice: moving on automatically, question numbers, answer letters, block headings.", keywords: "auto next advance automatic question numbers option labels letters numbering block names headings" },
+  { id: "devices", label: "Phone & tablet", region: "page", device: "mobile", desc: "Sizes that change on smaller screens. Empty means the same as on a computer.", keywords: "phone mobile tablet responsive small screen" },
+  { id: "ai", label: "AI interviewer", region: "page", desc: "Run the survey as a text or voice conversation — the questions, logic and data stay the same.", keywords: "ai conversational voice text interviewer probing adaptive follow-up" },
+  { id: "code", label: "Code & custom", region: "page", desc: "For programmers: survey-wide styles, animations and scripts, custom header / footer HTML and CSS.", keywords: "css html header footer script style animation behaviour custom code javascript" },
+];
+
+/** points the live preview at what a group of settings changes, while the pointer or keyboard focus is on it */
+function Zone({ region, children, className, style }: { region: PreviewRegion; children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
+    <div className={className} style={style} data-zone={region}
+      onMouseEnter={() => brandingFocus.setHover(region)} onMouseLeave={() => brandingFocus.setHover(null)}
+      onFocusCapture={() => brandingFocus.setHover(region)} onBlurCapture={() => brandingFocus.setHover(null)}>
+      {children}
+    </div>
+  );
+}
+
+/** the rest of a group's settings, one click away */
+function More({ label, children, testId, open }: { label: string; children: React.ReactNode; testId?: string; open?: boolean }) {
+  return (
+    <details className="bw-more" data-testid={testId} open={open}>
+      <summary>{label}</summary>
+      <div className="bw-more-body">{children}</div>
+    </details>
+  );
+}
+
+const FONT_CHOICES = ["Inter, system-ui, sans-serif", "system-ui, sans-serif", "Georgia, 'Times New Roman', serif", "'Helvetica Neue', Arial, sans-serif", "Verdana, sans-serif", "'Trebuchet MS', sans-serif", "Merriweather, Georgia, serif", "'Source Sans 3', sans-serif", "Roboto, sans-serif", "'Open Sans', sans-serif", "Lato, sans-serif"];
+
+/** READABILITY, AS YOU PICK: the colour pairs respondents actually read, checked against WCAG AA (4.5:1) */
+function ContrastCheck({ b }: { b: Branding }) {
+  const pairs: [string, string | undefined, string | undefined][] = [
+    ["Text on cards", b.colors.text, b.colors.surface],
+    ["Question text on cards", b.colors.heading ?? b.colors.text, b.colors.surface],
+    ["Text on the page", b.colors.text, b.colors.background],
+    ["Button label on the button", b.colors.buttonText ?? "#ffffff", b.colors.buttonBackground ?? b.colors.primary],
+    ["Hints on cards", b.colors.subtleText, b.colors.surface],
+  ];
+  const rows = pairs.flatMap(([label, fg, bg]) => {
+    const a = fg ? hexToRgb(fg) : null, c = bg ? hexToRgb(bg) : null;
+    return a && c ? [{ label, ratio: contrastRatio(a, c) }] : [];
+  });
+  const weak = rows.filter((r) => r.ratio < 4.5);
+  return (
+    <div className={`bw-contrast${weak.length ? " warn" : ""}`} data-testid="branding-contrast">
+      {weak.length
+        ? <>Hard to read: {weak.map((r) => `${r.label} ${r.ratio.toFixed(1)}:1`).join(" · ")} — aim for 4.5:1 or more.</>
+        : <>Readable: every text colour has at least 4.5:1 contrast with what it sits on.</>}
+    </div>
+  );
+}
+
+/**
+ * A PRESET ON TOP OF THIS SURVEY'S LOOK. A preset sets colours, type, layout and buttons; it used to REPLACE each of
+ * those objects whole, which silently switched off settings it does not mention (auto-next, question numbers,
+ * option letters). Merged one level down, it changes what it names and keeps the rest — except the colours, which
+ * are one palette and are replaced together.
+ */
+function withPreset(b: Branding, preset: Partial<Branding>): Branding {
+  const out: Record<string, unknown> = { ...b };
+  for (const [k, v] of Object.entries(preset)) {
+    const cur = (b as unknown as Record<string, unknown>)[k];
+    /* colours are a palette: a preset replaces it whole, so a fine-tuned heading or button colour from the old look does not survive on the new background */
+    out[k] = k !== "colors" && v && typeof v === "object" && !Array.isArray(v) && cur && typeof cur === "object" ? { ...(cur as object), ...(v as object) } : v;
+  }
+  return Branding.parse(out);
+}
+
+/** "Start from": the four ways to get a whole look */
+function StartFrom({ b, set, showAll }: { b: Branding; set(path: (draft: Branding) => void): void; showAll?: boolean }) {
+  const s = useStudio();
+  const [tab, setTab] = React.useState<"preset" | "brand" | "ai" | "workspace">("preset");
+  const tabs = [
+    ["preset", "A preset", "Ready-made looks"],
+    ["brand", "Your brand", "Website, guidelines PDF, logo or colour"],
+    ["ai", "Describe it", "Tell the AI the look you want"],
+    ...(s.surveyDbId === "sandbox" ? [] : [["workspace", "Workspace theme", "Your team's saved looks"]]),
+  ] as [typeof tab, string, string][];
+  return (
+    <section className="bw-start" data-testid="branding-start">
+      <div className="bw-start-head">
+        <b>Start from</b>
+        <span className="muted">Pick a starting point — everything it sets stays editable in the groups below.</span>
+      </div>
+      <div className="bw-start-tabs" role="tablist">
+        {tabs.map(([id, label, hint]) => (
+          <button key={id} role="tab" aria-selected={tab === id} className={`bw-start-tab${tab === id ? " on" : ""}`} data-testid={`branding-start-${id}`} onClick={() => setTab(id)}>
+            <span>{label}</span><small>{hint}</small>
+          </button>
+        ))}
+      </div>
+      <div className="bw-start-body">
+        {(showAll ? tabs.map(([id]) => id) : [tab]).map((cur) => <React.Fragment key={cur}>
+        {showAll && <h4 className="bw-sub">{tabs.find(([id]) => id === cur)![1]}</h4>}
+        {cur === "preset" && (
+          <div className="bw-presets" data-testid="branding-presets">
+            {THEME_PRESETS.map((t) => {
+              const c = t.branding.colors;
+              return (
+                <button key={t.name} type="button" className="bw-preset" data-testid={`branding-preset-${t.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+                  onMouseEnter={() => themePreviewStore.set(withPreset(b, t.branding))} onMouseLeave={() => themePreviewStore.set(null)}
+                  onFocus={() => themePreviewStore.set(withPreset(b, t.branding))} onBlur={() => themePreviewStore.set(null)}
+                  onClick={() => { themePreviewStore.set(null); s.labelNextEdit(`apply ${t.name} theme`); s.update((d) => { d.branding = withPreset(d.branding, t.branding); }); s.toast(`Applied "${t.name}" theme`); }}>
+                  <span className="bw-preset-swatch" style={{ background: c?.background ?? "#fff", borderColor: c?.border ?? "#ddd" }}>
+                    <i style={{ background: c?.surface ?? "#fff", borderColor: c?.border ?? "#ddd" }}><em style={{ background: c?.primary ?? "#333" }} /><em style={{ background: c?.text ?? "#111", opacity: .6 }} /></i>
+                  </span>
+                  <b>{t.name}</b>
+                  <small>{t.description}</small>
+                </button>
+              );
+            })}
+            <p className="muted bw-note">Point at a preset to see it in the preview; click to apply. Undo puts the previous look back.</p>
+          </div>
+        )}
+        {cur === "brand" && (
+          <div>
+            <p className="muted bw-note">Analyse your website, read a brand-guidelines PDF, take the colours from your logo, or start from one brand colour. You review the palette before anything changes.</p>
+            <ThemeGenerator b={b} set={set} />
+          </div>
+        )}
+        {cur === "ai" && <ThemeAssistant />}
+        {cur === "workspace" && (
+          <div>
+            <p className="muted bw-note">Apply a look your team saved, or save this one so other surveys in the workspace can use it.</p>
+            <WorkspaceThemes />
+          </div>
+        )}
+        </React.Fragment>)}
+      </div>
+    </section>
+  );
+}
+
+/** Branding / theming (requirement §19) + presets (§20) — the guided workspace */
 export function BrandingPanel() {
   const s = useStudio();
   const b = s.def.branding;
   const set = (path: (draft: typeof b) => void) => s.update((d) => path(d.branding));
+  const [active, setActive] = React.useState<SectionId>("colors");
+  const [showAll, setShowAll] = React.useState(false);
+  const [query, setQuery] = React.useState("");
 
+  const open = React.useCallback((id: SectionId) => {
+    setActive(id);
+    const sec = SECTIONS.find((x) => x.id === id)!;
+    brandingFocus.setRegion(sec.region, sec.device ?? null);
+  }, []);
+  React.useEffect(() => { open("colors"); return () => { brandingFocus.setRegion(null); brandingFocus.setHover(null); }; }, [open]);
+
+  const q = query.trim().toLowerCase();
+  const matches = q ? SECTIONS.filter((x) => `${x.label} ${x.desc} ${x.keywords}`.toLowerCase().includes(q)) : SECTIONS;
+  React.useEffect(() => { if (q && matches.length && !matches.some((m) => m.id === active)) open(matches[0]!.id); }, [q, matches, active, open]);
+
+  const body: Record<SectionId, React.ReactNode> = {
+    colors: (
+      <>
+        <Zone region="buttons" className="bw-colors">
+          <div className="bw-color-row">
+            <Zone region="buttons"><Color label="Primary" value={b.colors.primary} onChange={(v) => set((x) => { x.colors.primary = v; })} /><small className="bw-hint">Buttons, selected answers, progress</small></Zone>
+            <Zone region="page"><Color label="Background" value={b.colors.background} onChange={(v) => set((x) => { x.colors.background = v; })} /><small className="bw-hint">The page behind the questions</small></Zone>
+            <Zone region="cards"><Color label="Surface" value={b.colors.surface} onChange={(v) => set((x) => { x.colors.surface = v; })} /><small className="bw-hint">The cards questions sit on</small></Zone>
+            <Zone region="text"><Color label="Text" value={b.colors.text} onChange={(v) => set((x) => { x.colors.text = v; })} /><small className="bw-hint">Questions and answers</small></Zone>
+          </div>
+        </Zone>
+        <ContrastCheck b={b} />
+        <More label="More colours — secondary, hints, borders, errors" testId="branding-more-colors">
+          <div className="bw-color-row">
+            <Zone region="buttons"><Color label="Secondary" value={b.colors.secondary} onChange={(v) => set((x) => { x.colors.secondary = v; })} /><small className="bw-hint">Back button, accents</small></Zone>
+            <Zone region="hints"><Color label="Subtle" value={b.colors.subtleText} onChange={(v) => set((x) => { x.colors.subtleText = v; })} /><small className="bw-hint">Instructions, hints</small></Zone>
+            <Zone region="cards"><Color label="Border" value={b.colors.border} onChange={(v) => set((x) => { x.colors.border = v; })} /><small className="bw-hint">Card, option, input edges</small></Zone>
+            <Zone region="error"><Color label="Error" value={b.colors.error} onChange={(v) => set((x) => { x.colors.error = v; })} /><small className="bw-hint">Validation messages</small></Zone>
+          </div>
+        </More>
+        <More label="Fine-tune single elements — unset ones follow the colours above" testId="branding-fine-colors" open={!!(b.colors.accent || b.colors.heading || b.colors.link || b.colors.inputBackground || b.colors.buttonBackground || b.colors.buttonText || b.colors.progress)}>
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            <Zone region="options"><OptionalColor label="Accent" value={b.colors.accent} inherits={b.colors.primary} onChange={(v) => set((x) => { x.colors.accent = v; })} /></Zone>
+            <Zone region="text"><OptionalColor label="Heading" value={b.colors.heading} inherits={b.colors.text} onChange={(v) => set((x) => { x.colors.heading = v; })} /></Zone>
+            <Zone region="text"><OptionalColor label="Link" value={b.colors.link} inherits={b.colors.accent ?? b.colors.primary} onChange={(v) => set((x) => { x.colors.link = v; })} /></Zone>
+            <Zone region="inputs"><OptionalColor label="Input bg" value={b.colors.inputBackground} inherits={b.colors.surface} onChange={(v) => set((x) => { x.colors.inputBackground = v; })} /></Zone>
+            <Zone region="buttons"><OptionalColor label="Button bg" value={b.colors.buttonBackground} inherits={b.colors.primary} onChange={(v) => set((x) => { x.colors.buttonBackground = v; })} /></Zone>
+            <Zone region="buttons"><OptionalColor label="Button text" value={b.colors.buttonText} inherits="#ffffff" onChange={(v) => set((x) => { x.colors.buttonText = v; })} /></Zone>
+            <Zone region="progress"><OptionalColor label="Progress" value={b.colors.progress} inherits={b.colors.accent ?? b.colors.primary} onChange={(v) => set((x) => { x.colors.progress = v; })} /></Zone>
+          </div>
+        </More>
+      </>
+    ),
+    text: (
+      <Zone region="text">
+        <div className="row" style={{ flexWrap: "wrap" }}>
+          <label className="f" style={{ width: 280 }}><span>Font family</span>
+            <input className="input" list="bw-fonts" value={b.typography.fontFamily}
+              onChange={(e) => set((x) => { x.typography.fontFamily = e.target.value; })} />
+            <datalist id="bw-fonts">{FONT_CHOICES.map((f) => <option key={f} value={f} />)}</datalist>
+            <small className="bw-hint">Pick from the list or type any CSS font stack</small></label>
+          <label className="f" style={{ width: 110 }}><span>Base size</span>
+            <input className="input" value={b.typography.baseSize}
+              onChange={(e) => set((x) => { x.typography.baseSize = e.target.value; })} />
+            <small className="bw-hint">16px is standard</small></label>
+        </div>
+        <More label="More text settings — question font, weight, size, line height, letter spacing, progress style" testId="branding-more-text">
+          <TypographyMore b={b} set={set} />
+        </More>
+      </Zone>
+    ),
+    page: (
+      <>
+        <Zone region="page">
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            <label className="f" style={{ width: 150 }} title="Full-width uses the whole browser window on desktop, like a modern web app. Contained keeps the classic centered card at Max width below.">
+              <span>Desktop width</span>
+              <select className="select" data-testid="branding-width-mode" value={b.layout.widthMode}
+                onChange={(e) => set((x) => { x.layout.widthMode = e.target.value as any; })}>
+                <option value="full">full width</option>
+                <option value="contained">contained</option>
+              </select>
+              <small className="bw-hint">{b.layout.widthMode === "full" ? "Uses the whole window on a computer" : "A centred column, Max width wide"}</small></label>
+            {b.layout.widthMode !== "full" && (
+              <label className="f" style={{ width: 110 }}><span>Max width</span>
+                <input className="input" value={b.layout.maxWidth}
+                  onChange={(e) => set((x) => { x.layout.maxWidth = e.target.value; })} /></label>
+            )}
+            <label className="f" style={{ width: 130 }} title="How question text lines up inside the survey's column — the column itself is always centred on the page. Left follows the language's direction (right for RTL), Center suits a branding-forward look.">
+              <span>Content align</span>
+              <select className="select" data-testid="branding-content-align" value={b.layout.contentAlign}
+                onChange={(e) => set((x) => { x.layout.contentAlign = e.target.value as any; })}>
+                <option value="left">left</option>
+                <option value="center">center</option>
+                <option value="right">right</option>
+              </select></label>
+            <label className="f" style={{ width: 120 }}><span>Spacing</span>
+              <select className="select" value={b.layout.spacing}
+                onChange={(e) => set((x) => { x.layout.spacing = e.target.value as any; })}>
+                <option value="compact">compact</option><option value="regular">regular</option><option value="relaxed">relaxed</option>
+              </select></label>
+          </div>
+        </Zone>
+        <Zone region="cards">
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            <label className="f" style={{ width: 130 }}><span>Card style</span>
+              <select className="select" value={b.layout.cardStyle}
+                onChange={(e) => set((x) => { x.layout.cardStyle = e.target.value as any; })}>
+                <option value="card">card</option><option value="flat">flat</option><option value="line">line</option>
+              </select>
+              <small className="bw-hint">How each question is framed</small></label>
+            <label className="f" style={{ width: 110 }}><span>Radius</span>
+              <input className="input" value={b.layout.radius}
+                onChange={(e) => set((x) => { x.layout.radius = e.target.value; })} />
+              <small className="bw-hint">0px is square</small></label>
+          </div>
+        </Zone>
+        <Zone region="progress">
+          <label className="f" style={{ width: 160 }}><span>Progress bar</span>
+            <select className="select" data-testid="branding-progress-bar" value={b.layout.progressBar}
+              onChange={(e) => set((x) => { x.layout.progressBar = e.target.value as any; })}>
+              <option value="top">top</option><option value="bottom">bottom</option><option value="none">none</option>
+            </select></label>
+        </Zone>
+        <Zone region="logo">
+          <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div className="grow">
+              <MediaUrlInput label="Logo" testId="branding-logo" accept={["image"]} placeholder="Logo image URL — or choose / upload from Assets"
+                value={b.logoUrl} onChange={(v) => set((x) => { x.logoUrl = v || undefined; })} />
+            </div>
+            <label className="f" style={{ width: 120 }}><span>Position</span>
+              <select className="select" value={b.logoPosition}
+                onChange={(e) => set((x) => { x.logoPosition = e.target.value as any; })}>
+                <option value="left">left</option><option value="center">center</option><option value="right">right</option>
+              </select></label>
+          </div>
+          {b.logoUrl && (
+            <details className="qs-details" data-testid="branding-logo-display" open={!!b.logoDisplay}>
+              <summary>Logo size &amp; fit</summary>
+              <MediaDisplayControls kind="image" value={b.logoDisplay}
+                onChange={(logoDisplay) => set((x) => { x.logoDisplay = logoDisplay; })} />
+            </details>
+          )}
+        </Zone>
+      </>
+    ),
+    answers: <Zone region="options"><AppearanceSection b={b} set={set} /></Zone>,
+    background: <Zone region="page"><BackgroundSection b={b} set={set} /></Zone>,
+    buttons: (
+      <>
+        <Zone region="buttons">
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            <label className="f" style={{ width: 110 }}><span>Style</span>
+              <select className="select" value={b.buttons.style}
+                onChange={(e) => set((x) => { x.buttons.style = e.target.value as any; })}>
+                <option value="solid">solid</option><option value="outline">outline</option><option value="pill">pill</option>
+              </select></label>
+            <label className="f" style={{ width: 120 }}><span>Next label</span>
+              <input className="input" value={b.buttons.nextLabel}
+                onChange={(e) => set((x) => { x.buttons.nextLabel = e.target.value; })} /></label>
+            <label className="f" style={{ width: 120 }}><span>Back label</span>
+              <input className="input" value={b.buttons.backLabel}
+                onChange={(e) => set((x) => { x.buttons.backLabel = e.target.value; })} /></label>
+            <label className="f" style={{ width: 120 }}><span>Submit label</span>
+              <input className="input" value={b.buttons.submitLabel}
+                onChange={(e) => set((x) => { x.buttons.submitLabel = e.target.value; })} />
+              <small className="bw-hint">Shown on the last page</small></label>
+            <label className="row" style={{ gap: 4, alignSelf: "center" }}>
+              <input type="checkbox" checked={b.buttons.showBack}
+                onChange={(e) => set((x) => { x.buttons.showBack = e.target.checked; })} /> show back button
+            </label>
+          </div>
+        </Zone>
+        {/*
+          * SECTION NAVIGATION (2026-10-30, engine sectionNav.ts): a survey-level behaviour (def.navigation), beside
+          * the Back button because it is the same question — how a respondent moves.
+          */}
+        <Zone region="nav">
+          <h4 className="bw-sub" id="navigation">Moving between sections</h4>
+          <div data-testid="nav-settings">
+            {([
+              ["off", "Off", "Next and Back only — the survey as it has always run."],
+              ["visited", "Visited sections", "A bar of the survey's sections: back to any earlier section, forward only to sections already visited."],
+              ["free", "Free", "Jump to any section reachable with the answers so far."],
+            ] as const).map(([value, label, hint]) => (
+              <label key={value} className="row" style={{ gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
+                <input type="radio" name="section-nav" value={value} data-testid={`nav-mode-${value}`}
+                  checked={(s.def.navigation?.sectionNav ?? "off") === value}
+                  onChange={() => s.update((d) => { d.navigation = { sectionNav: value, position: d.navigation?.position ?? "top" }; })} />
+                <span><b>{label}</b> <span className="muted">— {hint}</span></span>
+              </label>
+            ))}
+            {(s.def.navigation?.sectionNav ?? "off") !== "off" && (
+              <>
+                <label className="f" style={{ width: 220 }}><span>Position</span>
+                  <select className="select" data-testid="nav-position" value={s.def.navigation?.position ?? "top"}
+                    onChange={(e) => s.update((d) => { d.navigation = { sectionNav: d.navigation?.sectionNav ?? "visited", position: e.target.value as "top" | "side" }; })}>
+                    <option value="top">Bar above the page</option>
+                    <option value="side">Side rail (wide screens)</option>
+                  </select></label>
+                <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+                  The navigator lists the survey&apos;s blocks — give each section its own block. It never jumps past an end, a quota check or a skip rule that fires, or to a page hidden by logic.
+                </p>
+                {s.def.navigation?.sectionNav === "free" && (
+                  <p className="muted" data-testid="nav-free-note" style={{ fontSize: 12, margin: "4px 0 0" }}>
+                    Pages a respondent jumps over are not checked when they jump: required questions left unanswered are listed per section at Submit, and Submit waits until they are answered. In an assessment, unanswered questions count as unattempted and Submit only asks the respondent to confirm.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </Zone>
+      </>
+    ),
+    experience: (
+      <div className="bw-cards">
+        <Zone region="options" className="bw-choice">
+          <label className="row" style={{ gap: 8, alignItems: "flex-start" }} title="Single-answer questions (single choice, buttons, stars, NPS, a single-choice grid once every row is answered) move the page on when answered; multi-selects and open ends wait for Next. Each question can override this.">
+            <input type="checkbox" data-testid="branding-auto-advance" checked={!!b.layout.autoAdvance} style={{ width: 16, height: 16, flex: "none", marginTop: 3 }}
+              onChange={(e) => set((x) => { x.layout.autoAdvance = e.target.checked || undefined; })} />
+            <span><b>Auto-next on single-answer questions</b>
+              <small className="bw-hint">Picking an answer moves the page on — single choice, buttons, stars, NPS, a single-choice grid once every row is answered. Multi-selects, open answers, sliders and rankings still wait for Next. Each question can override this (Question › Auto-next).</small></span>
+          </label>
+        </Zone>
+        <Zone region="text" className="bw-choice">
+          <label className="f" style={{ width: 220 }} title="Numbers shown before each question's text — display only; codes and exports are unchanged">
+            <span>Question numbers</span>
+            <select className="select" data-testid="branding-question-numbers" value={b.layout.questionNumbers ?? "none"}
+              onChange={(e) => set((x) => { x.layout.questionNumbers = e.target.value === "none" ? undefined : e.target.value as never; })}>
+              <option value="none">not shown</option><option value="code">question code (Q7.)</option><option value="sequence">1, 2, 3…</option>
+            </select>
+            <small className="bw-hint">Display only — codes and exports don&apos;t change</small></label>
+        </Zone>
+        <Zone region="options" className="bw-choice">
+          <label className="f" style={{ width: 220 }} title="A letter or number before each choice of a list question — display only">
+            <span>Option labels</span>
+            <select className="select" data-testid="branding-option-numbering" value={b.layout.optionNumbering ?? "none"}
+              onChange={(e) => set((x) => { x.layout.optionNumbering = e.target.value === "none" ? undefined : e.target.value as never; })}>
+              <option value="none">plain</option><option value="letters">A. B. C.</option><option value="numbers">1. 2. 3.</option>
+            </select>
+            <small className="bw-hint">A letter or number before each answer</small></label>
+        </Zone>
+        <Zone region="text" className="bw-choice">
+          <label className="f" style={{ width: 240 }} title="Block names always show in the Studio. This decides whether respondents see them as page headings. A block can override it in its ••• menu.">
+            <span>Block names</span>
+            <select className="select" data-testid="show-block-titles"
+              value={b.layout.showBlockTitles ? "show" : "hide"}
+              onChange={(e) => set((x) => { x.layout.showBlockTitles = e.target.value === "show"; })}>
+              <option value="show">shown to respondents</option>
+              <option value="hide">hidden from respondents</option>
+            </select>
+            <small className="bw-hint">As page headings; a block can override it</small></label>
+        </Zone>
+      </div>
+    ),
+    devices: <Zone region="page"><ResponsiveSection b={b} set={set} /></Zone>,
+    ai: <AiConversationSection />,
+    code: (
+      <>
+        <h4 className="bw-sub">Styles, animations &amp; scripts (survey-wide)</h4>
+        <UxItemsEditor scope={{ kind: "survey" }} intro="For the whole survey, its buttons, progress bar and navigation — scoped to this survey. Created here or by Intelligent mode; the same settings." />
+        <h4 className="bw-sub">Header, footer &amp; custom CSS</h4>
+        <div className="f"><span>Header HTML</span>
+          <CodeEditor language="html" value={b.headerHtml ?? ""} minHeight={60} label="Header HTML" testId="branding-header-html" readOnly={s.readOnly}
+            onChange={(v) => set((x) => { x.headerHtml = v || undefined; })} /></div>
+        <div className="f"><span>Footer HTML</span>
+          <CodeEditor language="html" value={b.footerHtml ?? ""} minHeight={60} label="Footer HTML" testId="branding-footer-html" readOnly={s.readOnly}
+            onChange={(v) => set((x) => { x.footerHtml = v || undefined; })} /></div>
+        <div className="f"><span>Custom CSS (survey-wide)</span>
+          <CodeEditor language="css" value={b.customCss ?? ""} minHeight={90} label="Custom CSS (survey-wide)" testId="branding-custom-css" readOnly={s.readOnly}
+            onChange={(v) => set((x) => { x.customCss = v || undefined; })} /></div>
+        {/* survey-wide JavaScript is a script in the list above — the same sandboxed pipeline as everything else */}
+      </>
+    ),
+  };
+
+  const visible = showAll ? matches : matches.filter((x) => x.id === active);
   return (
-    <div>
-      <div className="row" style={{ marginBottom: 14 }}>
-        <h2 style={{ margin: 0, fontSize: 17 }}>Branding &amp; Theme</h2>
+    <div className="bw" data-testid="branding-workspace">
+      <div className="bw-head">
+        <div>
+          <h2 style={{ margin: 0, fontSize: 17 }}>Branding &amp; Theme</h2>
+          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>How respondents see this survey. Every change shows in the live preview — what it touches is outlined, and named under &ldquo;Just changed&rdquo;.</p>
+        </div>
         <span className="grow" />
-        <select className="select" style={{ width: 220 }} value=""
-          onChange={(e) => {
-            const preset = THEME_PRESETS.find((t) => t.name === e.target.value);
-            if (!preset) return;
-            s.update((d) => { d.branding = Branding.parse({ ...d.branding, ...preset.branding }); });
-            s.toast(`Applied "${preset.name}" theme`);
-          }}>
-          <option value="">Apply preset theme…</option>
-          {THEME_PRESETS.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-        </select>
-        <WorkspaceThemes />
+        <button className="btn small" disabled={!s.canUndo} onClick={() => s.undo()} data-testid="branding-undo" title="Undo the last change">↶ Undo</button>
       </div>
       {b.themeId && (
-        <p className="muted" style={{ fontSize: 12.5, marginTop: -6 }} data-testid="theme-origin">
-          This survey&apos;s look came from a workspace theme. Editing anything below changes only
+        <p className="muted" style={{ fontSize: 12.5, margin: "0 0 8px" }} data-testid="theme-origin">
+          This survey&apos;s look came from a workspace theme. Editing anything here changes only
           this survey — save it again as a theme to share the change.
         </p>
       )}
 
-      {/* The live preview used to render here — see ThemeLivePreview's export
-          comment above. It now sits in the right-hand panel (Studio.tsx's
-          RightPanel), beside these controls instead of above them. */}
+      <StartFrom b={b} set={set} showAll={showAll} />
 
-      {/*
-        * THE THEME ASSISTANT — Intelligent mode's theme skill, here. What it
-        * proposes is previewed beside the panel and applied INTO the settings
-        * below, which is where it can then be changed by hand.
-        */}
-      <h3 className="sec">Design with AI</h3>
-      <ThemeAssistant />
-
-      <h3 className="sec">Identity</h3>
-      <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-start" }}>
-        <div className="grow">
-          <MediaUrlInput label="Logo" testId="branding-logo" accept={["image"]} placeholder="Logo image URL — or choose / upload from Assets"
-            value={b.logoUrl} onChange={(v) => set((x) => { x.logoUrl = v || undefined; })} />
+      <div className="bw-nav">
+        <div className="bw-search">
+          <input className="input" placeholder="Find a setting — e.g. radius, logo, auto-next" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="branding-search" aria-label="Find a setting" />
         </div>
-        <label className="f" style={{ width: 120 }}><span>Position</span>
-          <select className="select" value={b.logoPosition}
-            onChange={(e) => set((x) => { x.logoPosition = e.target.value as any; })}>
-            <option value="left">left</option><option value="center">center</option><option value="right">right</option>
-          </select></label>
-      </div>
-      {b.logoUrl && (
-        <details className="qs-details" data-testid="branding-logo-display" open={!!b.logoDisplay}>
-          <summary>Logo size &amp; fit</summary>
-          <MediaDisplayControls kind="image" value={b.logoDisplay}
-            onChange={(logoDisplay) => set((x) => { x.logoDisplay = logoDisplay; })} />
-        </details>
-      )}
-
-      <ThemeGenerator b={b} set={set} />
-
-      <h3 className="sec">Colors</h3>
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <Color label="Primary" value={b.colors.primary} onChange={(v) => set((x) => { x.colors.primary = v; })} />
-        <Color label="Secondary" value={b.colors.secondary} onChange={(v) => set((x) => { x.colors.secondary = v; })} />
-        <Color label="Background" value={b.colors.background} onChange={(v) => set((x) => { x.colors.background = v; })} />
-        <Color label="Surface" value={b.colors.surface} onChange={(v) => set((x) => { x.colors.surface = v; })} />
-        <Color label="Text" value={b.colors.text} onChange={(v) => set((x) => { x.colors.text = v; })} />
-        <Color label="Subtle" value={b.colors.subtleText} onChange={(v) => set((x) => { x.colors.subtleText = v; })} />
-        <Color label="Border" value={b.colors.border} onChange={(v) => set((x) => { x.colors.border = v; })} />
-        <Color label="Error" value={b.colors.error} onChange={(v) => set((x) => { x.colors.error = v; })} />
-      </div>
-      <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
-        <OptionalColor label="Accent" value={b.colors.accent} inherits={b.colors.primary}
-          onChange={(v) => set((x) => { x.colors.accent = v; })} />
-        <OptionalColor label="Heading" value={b.colors.heading} inherits={b.colors.text}
-          onChange={(v) => set((x) => { x.colors.heading = v; })} />
-        <OptionalColor label="Link" value={b.colors.link} inherits={b.colors.accent ?? b.colors.primary}
-          onChange={(v) => set((x) => { x.colors.link = v; })} />
-        <OptionalColor label="Input bg" value={b.colors.inputBackground} inherits={b.colors.surface}
-          onChange={(v) => set((x) => { x.colors.inputBackground = v; })} />
-        <OptionalColor label="Button bg" value={b.colors.buttonBackground} inherits={b.colors.primary}
-          onChange={(v) => set((x) => { x.colors.buttonBackground = v; })} />
-        <OptionalColor label="Button text" value={b.colors.buttonText} inherits="#ffffff"
-          onChange={(v) => set((x) => { x.colors.buttonText = v; })} />
-        <OptionalColor label="Progress" value={b.colors.progress} inherits={b.colors.accent ?? b.colors.primary}
-          onChange={(v) => set((x) => { x.colors.progress = v; })} />
+        <div className="bw-tabs" role="tablist" aria-label="Setting groups">
+          {matches.map((x) => (
+            <button key={x.id} role="tab" aria-selected={!showAll && active === x.id} className={`bw-tab${!showAll && active === x.id ? " on" : ""}`} data-testid={`branding-tab-${x.id}`}
+              onClick={() => { setShowAll(false); open(x.id); }}>{x.label}</button>
+          ))}
+          {!matches.length && <span className="muted" style={{ fontSize: 12.5 }}>No setting matches “{query}”.</span>}
+          <span className="grow" />
+          <label className="bw-all"><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} data-testid="branding-show-all" /> Show everything</label>
+        </div>
       </div>
 
-      <h3 className="sec">Typography &amp; layout</h3>
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <label className="f" style={{ width: 260 }}><span>Font family</span>
-          <input className="input" value={b.typography.fontFamily}
-            onChange={(e) => set((x) => { x.typography.fontFamily = e.target.value; })} /></label>
-        <label className="f" style={{ width: 90 }}><span>Base size</span>
-          <input className="input" value={b.typography.baseSize}
-            onChange={(e) => set((x) => { x.typography.baseSize = e.target.value; })} /></label>
-        <label className="f" style={{ width: 130 }} title="Full-width uses the whole browser window on desktop, like a modern web app. Contained keeps the classic centered card at Max width below.">
-          <span>Desktop width</span>
-          <select className="select" data-testid="branding-width-mode" value={b.layout.widthMode}
-            onChange={(e) => set((x) => { x.layout.widthMode = e.target.value as any; })}>
-            <option value="full">full width</option>
-            <option value="contained">contained</option>
-          </select></label>
-        <label className="f" style={{ width: 110 }} title="How question text lines up inside the survey's column — the column itself is always centred on the page. Left follows the language's direction (right for RTL), Center suits a branding-forward look.">
-          <span>Content align</span>
-          <select className="select" data-testid="branding-content-align" value={b.layout.contentAlign}
-            onChange={(e) => set((x) => { x.layout.contentAlign = e.target.value as any; })}>
-            <option value="left">left</option>
-            <option value="center">center</option>
-            <option value="right">right</option>
-          </select></label>
-        <label className="f" style={{ width: 110 }}><span>Max width</span>
-          <input className="input" value={b.layout.maxWidth} disabled={b.layout.widthMode === "full"}
-            title={b.layout.widthMode === "full" ? "Only applies in Contained mode" : undefined}
-            onChange={(e) => set((x) => { x.layout.maxWidth = e.target.value; })} /></label>
-        <label className="f" style={{ width: 100 }}><span>Radius</span>
-          <input className="input" value={b.layout.radius}
-            onChange={(e) => set((x) => { x.layout.radius = e.target.value; })} /></label>
-        <label className="f" style={{ width: 110 }}><span>Card style</span>
-          <select className="select" value={b.layout.cardStyle}
-            onChange={(e) => set((x) => { x.layout.cardStyle = e.target.value as any; })}>
-            <option value="card">card</option><option value="flat">flat</option><option value="line">line</option>
-          </select></label>
-        <label className="f" style={{ width: 110 }}><span>Spacing</span>
-          <select className="select" value={b.layout.spacing}
-            onChange={(e) => set((x) => { x.layout.spacing = e.target.value as any; })}>
-            <option value="compact">compact</option><option value="regular">regular</option><option value="relaxed">relaxed</option>
-          </select></label>
-        <label className="f" style={{ width: 120 }}><span>Progress bar</span>
-          <select className="select" data-testid="branding-progress-bar" value={b.layout.progressBar}
-            onChange={(e) => set((x) => { x.layout.progressBar = e.target.value as any; })}>
-            <option value="top">top</option><option value="bottom">bottom</option><option value="none">none</option>
-          </select></label>
-        <label className="f" style={{ width: 230 }} title="Block names always show in the Studio. This decides whether respondents see them as page headings. A block can override it in its ••• menu.">
-          <span>Block names</span>
-          <select className="select" data-testid="show-block-titles"
-            value={b.layout.showBlockTitles ? "show" : "hide"}
-            onChange={(e) => set((x) => { x.layout.showBlockTitles = e.target.value === "show"; })}>
-            <option value="show">shown to respondents</option>
-            <option value="hide">hidden from respondents</option>
-          </select></label>
-        {/* respondent-facing numbering and auto-advance (audit 2026-11-07) */}
-        <label className="f" style={{ width: 170 }} title="Numbers shown before each question's text — display only; codes and exports are unchanged">
-          <span>Question numbers</span>
-          <select className="select" data-testid="branding-question-numbers" value={b.layout.questionNumbers ?? "none"}
-            onChange={(e) => set((x) => { x.layout.questionNumbers = e.target.value === "none" ? undefined : e.target.value as never; })}>
-            <option value="none">not shown</option><option value="code">question code (Q7.)</option><option value="sequence">1, 2, 3…</option>
-          </select></label>
-        <label className="f" style={{ width: 150 }} title="A letter or number before each choice of a list question — display only">
-          <span>Option labels</span>
-          <select className="select" data-testid="branding-option-numbering" value={b.layout.optionNumbering ?? "none"}
-            onChange={(e) => set((x) => { x.layout.optionNumbering = e.target.value === "none" ? undefined : e.target.value as never; })}>
-            <option value="none">plain</option><option value="letters">A. B. C.</option><option value="numbers">1. 2. 3.</option>
-          </select></label>
-        <label className="row" style={{ gap: 6, fontSize: 13, alignSelf: "flex-end", marginBottom: 6 }} title="Single-answer questions (single choice, buttons, stars, NPS, a single-choice grid once every row is answered) move the page on when answered; multi-selects and open ends wait for Next. Each question can override this.">
-          <input type="checkbox" data-testid="branding-auto-advance" checked={!!b.layout.autoAdvance}
-            onChange={(e) => set((x) => { x.layout.autoAdvance = e.target.checked || undefined; })} />
-          Auto-next on single-answer questions
-        </label>
-      </div>
-
-      <TypographyMore b={b} set={set} />
-
-      <h3 className="sec">Background</h3>
-      <BackgroundSection b={b} set={set} />
-
-      <h3 className="sec">Cards, options, radio buttons &amp; inputs</h3>
-      <AppearanceSection b={b} set={set} />
-
-      <h3 className="sec">Tablet &amp; phone</h3>
-      <p className="muted" style={{ fontSize: 12, margin: "0 0 6px" }}>Sizes that change on smaller screens. Empty means the same as on a desktop.</p>
-      <ResponsiveSection b={b} set={set} />
-
-      {/*
-        * THE AI CONVERSATIONAL SURVEY — text / voice / both; standard,
-        * conversational or adaptive; the voice, the interviewer, the
-        * follow-ups. One object (branding.aiConversation); the older
-        * layout.presentation / layout.voice fields are mirrored from it.
-        */}
-      <AiConversationSection />
-
-      <h3 className="sec">Buttons</h3>
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <label className="f" style={{ width: 100 }}><span>Style</span>
-          <select className="select" value={b.buttons.style}
-            onChange={(e) => set((x) => { x.buttons.style = e.target.value as any; })}>
-            <option value="solid">solid</option><option value="outline">outline</option><option value="pill">pill</option>
-          </select></label>
-        <label className="f" style={{ width: 110 }}><span>Next label</span>
-          <input className="input" value={b.buttons.nextLabel}
-            onChange={(e) => set((x) => { x.buttons.nextLabel = e.target.value; })} /></label>
-        <label className="f" style={{ width: 110 }}><span>Back label</span>
-          <input className="input" value={b.buttons.backLabel}
-            onChange={(e) => set((x) => { x.buttons.backLabel = e.target.value; })} /></label>
-        <label className="f" style={{ width: 110 }}><span>Submit label</span>
-          <input className="input" value={b.buttons.submitLabel}
-            onChange={(e) => set((x) => { x.buttons.submitLabel = e.target.value; })} /></label>
-        <label className="row" style={{ gap: 4 }}>
-          <input type="checkbox" checked={b.buttons.showBack}
-            onChange={(e) => set((x) => { x.buttons.showBack = e.target.checked; })} /> show back button
-        </label>
-      </div>
-
-      {/*
-        * SECTION NAVIGATION (2026-10-30, engine sectionNav.ts): a survey-level
-        * behaviour (def.navigation), beside the Back button because it is the
-        * same question — how a respondent moves. The engine, the runtime's
-        * navigator, rs.goToPage / rs.goToSection and the save route's replay
-        * all read this one setting.
-        */}
-      <h3 className="sec" id="navigation">Navigation</h3>
-      <div data-testid="nav-settings">
-        {([
-          ["off", "Off", "Next and Back only — the survey as it has always run."],
-          ["visited", "Visited sections", "A bar of the survey's sections: back to any earlier section, forward only to sections already visited."],
-          ["free", "Free", "Jump to any section reachable with the answers so far."],
-        ] as const).map(([value, label, hint]) => (
-          <label key={value} className="row" style={{ gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
-            <input type="radio" name="section-nav" value={value} data-testid={`nav-mode-${value}`}
-              checked={(s.def.navigation?.sectionNav ?? "off") === value}
-              onChange={() => s.update((d) => { d.navigation = { sectionNav: value, position: d.navigation?.position ?? "top" }; })} />
-            <span><b>{label}</b> <span className="muted">— {hint}</span></span>
-          </label>
-        ))}
-        {(s.def.navigation?.sectionNav ?? "off") !== "off" && (
-          <>
-            <label className="f" style={{ width: 220 }}><span>Position</span>
-              <select className="select" data-testid="nav-position" value={s.def.navigation?.position ?? "top"}
-                onChange={(e) => s.update((d) => { d.navigation = { sectionNav: d.navigation?.sectionNav ?? "visited", position: e.target.value as "top" | "side" }; })}>
-                <option value="top">Bar above the page</option>
-                <option value="side">Side rail (wide screens)</option>
-              </select></label>
-            <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
-              The navigator lists the survey&apos;s blocks — give each section its own block. It never jumps past an end, a quota check or a skip rule that fires, or to a page hidden by logic.
-            </p>
-            {s.def.navigation?.sectionNav === "free" && (
-              <p className="muted" data-testid="nav-free-note" style={{ fontSize: 12, margin: "4px 0 0" }}>
-                Pages a respondent jumps over are not checked when they jump: required questions left unanswered are listed per section at Submit, and Submit waits until they are answered. In an assessment, unanswered questions count as unattempted and Submit only asks the respondent to confirm.
-              </p>
-            )}
-          </>
-        )}
-      </div>
-
-      <h3 className="sec">Styles, animations &amp; scripts (survey-wide)</h3>
-      <UxItemsEditor scope={{ kind: "survey" }} intro="For the whole survey, its buttons, progress bar and navigation — scoped to this survey. Created here or by Intelligent mode; the same settings." />
-
-      <h3 className="sec">Header / footer / custom CSS</h3>
-      <div className="f"><span>Header HTML</span>
-        <CodeEditor language="html" value={b.headerHtml ?? ""} minHeight={60} label="Header HTML" testId="branding-header-html" readOnly={s.readOnly}
-          onChange={(v) => set((x) => { x.headerHtml = v || undefined; })} /></div>
-      <div className="f"><span>Footer HTML</span>
-        <CodeEditor language="html" value={b.footerHtml ?? ""} minHeight={60} label="Footer HTML" testId="branding-footer-html" readOnly={s.readOnly}
-          onChange={(v) => set((x) => { x.footerHtml = v || undefined; })} /></div>
-      <div className="f"><span>Custom CSS (survey-wide)</span>
-        <CodeEditor language="css" value={b.customCss ?? ""} minHeight={90} label="Custom CSS (survey-wide)" testId="branding-custom-css" readOnly={s.readOnly}
-          onChange={(v) => set((x) => { x.customCss = v || undefined; })} /></div>
-      {/*
-        * Survey-wide JavaScript is a script in the list above — the same
-        * sandboxed pipeline as everything else. The old "Custom JS" box that
-        * lived here ran through a second engine; a survey that had one was
-        * moved into the list on load.
-        */}
+      {visible.map((x) => (
+        <section key={x.id} className="bw-section" data-testid={`branding-section-${x.id}`}
+          onMouseEnter={showAll ? () => brandingFocus.setRegion(x.region, x.device ?? null) : undefined}>
+          <h3 className="sec" style={{ marginTop: showAll ? 22 : 12 }}>{x.label}</h3>
+          <p className="muted bw-desc">{x.desc}</p>
+          {body[x.id]}
+        </section>
+      ))}
     </div>
   );
 }

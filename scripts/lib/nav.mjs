@@ -45,8 +45,26 @@ async function commitOpenLogicWorkspace(page) {
   await saveWorkspace(page);
 }
 
+/**
+ * THE BRANDING WORKSPACE (2026-11-07) shows one group of settings at a time. The suites written against the old
+ * one-page panel reach every control by test id, so opening Branding here switches on "Show everything" (every
+ * group and every "Start from" source on one page) and opens the "More …" disclosures — the same controls, laid out
+ * as before. A suite about the guided view can untick it.
+ */
+export async function showAllBranding(page) {
+  const box = await page.waitForSelector('[data-testid="branding-show-all"]', { timeout: 5000 }).catch(() => null);
+  if (!box) return;
+  if (!(await box.isChecked())) await box.check();
+  await page.evaluate(() => { for (const d of document.querySelectorAll('[data-testid="branding-workspace"] details')) d.open = true; });
+}
+
 /** open the tool whose menu label is `label` ("JSON", "Survey Settings", …) */
 export async function openTab(page, label) {
+  await openTabOnly(page, label);
+  if (label.trim() === "Branding") await showAllBranding(page);
+}
+
+async function openTabOnly(page, label) {
   await commitOpenLogicWorkspace(page);
   const panel = await openGroup(page, groupButtonFor(label));
   const want = label.trim();
@@ -66,6 +84,7 @@ export async function openTabKey(page, key) {
   const panel = await openGroup(page, `.menubar [data-group-button][data-nav-keys~="${key}"]`);
   await page.click(`${panel} [data-testid="nav-${key}"]`);
   await page.waitForSelector(panel, { state: "detached" });
+  if (key === "branding") await showAllBranding(page);
 }
 
 /** switch the programming mode by id ("grid", "flow", …) through the Mode menu */
