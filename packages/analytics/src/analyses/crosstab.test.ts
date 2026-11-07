@@ -338,3 +338,18 @@ test("nets: merged categories are counted once per respondent, lettered, and ref
   const tr = runAnalysis(XT({ rows: ["REGION"] }, { totalRow: true, nets: [{ variable: "REGION", label: "N+S", codes: ["1", "2"] }] }), ds);
   assert.ok(Math.abs(num(tr.tables[0].rows.find((x) => x.__kind === "total")!.__total) - 100) < 0.3);
 });
+
+test("column nets: a banner column for anyone in any of its categories, never lettered against its own parts", () => {
+  const r = runAnalysis(XT({ rows: ["SAT"], columns: ["COUNTRY"] }, { nets: [{ variable: "COUNTRY", label: "Core EU", codes: ["1", "2", "8"] }, { variable: "COUNTRY", label: "South", codes: ["3", "4"] }] }), ds);
+  const t = r.tables[0];
+  const net = t.columns.find((c) => c.key === "COUNTRY::net0")!;
+  assert.equal(net.label.startsWith("Core EU (net)"), true);
+  const base = t.rows.find((x) => x.__kind === "base")!;
+  const sumParts = ["1", "2", "8"].reduce((s, k) => s + num(base[k]), 0);
+  assert.equal(num(base["COUNTRY::net0"]), sumParts, "single-select column net base = sum of its categories' bases");
+  /* letters on a net cell only ever name the other net's letter */
+  const netLetters = new Set([t.columns.find((c) => c.key === "COUNTRY::net0")!.letter, t.columns.find((c) => c.key === "COUNTRY::net1")!.letter]);
+  for (const row of t.rows) for (const k of ["COUNTRY::net0", "COUNTRY::net1"]) for (const ch of String(row[`${k}__sig`] ?? "")) assert.ok(netLetters.has(ch), `net cell lettered ${ch}`);
+  /* the chart and the chi-square stay on the categories */
+  assert.ok(!(r.chart.series ?? []).some((s) => /net/.test(s.name)));
+});

@@ -162,7 +162,8 @@ export function agentStatuses(tasks: Pick<ClientTask, "status" | "steps">[]): Ag
       if (!open(t)) continue;
       if (s.status === "running") { running = true; now ??= s.title ?? s.kind; }
       else if (s.status === "failed" || s.status === "blocked") attention = true;
-      else if (s.status === "pending" || s.status === "retrying") waiting = true;
+      /* a paused task's queued work is waiting on a person, not on another step */
+      else if (s.status === "pending" || s.status === "retrying") { if (t.status === "needs_attention") attention = true; else waiting = true; }
     }
     const state: AgentState = a.availability === "planned" ? "planned" : running ? "working" : attention ? "attention" : waiting ? "waiting" : counts.completed ? "done" : "idle";
     return { id: a.id, state, steps: counts, ...(lastActive ? { lastActive } : {}), ...(now ? { now } : {}) };

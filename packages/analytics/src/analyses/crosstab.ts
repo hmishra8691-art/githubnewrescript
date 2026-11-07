@@ -207,6 +207,9 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       // separate tables keep the bare code as the key (what saved charts and exports read); a banner qualifies it
       out.push({ key: cvs.length > 1 ? `${cv}::${c.code}` : c.code, label: c.label, code: c.code, variable: cv, group: labelOf(ds, cv), letter: columnLetter(j++) });
     }
+    /* a net on a column variable is a banner column of its own (everyone in any of its categories), lettered only
+       against the other nets of that variable — it overlaps its own categories, so testing it against them is invalid */
+    nets.forEach((n, k) => { if (!cvs.includes(n.variable)) return; out.push({ key: `${n.variable}::net${k}`, label: `${n.label} (net)`, code: `net${k}`, variable: `${n.variable}#net`, group: labelOf(ds, n.variable), letter: columnLetter(j++) }); });
     return out;
   };
 
@@ -231,6 +234,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     const myNets = nets.map((n, k) => ({ k, codes: new Set(n.codes), n })).filter((x) => x.n.variable === rv);
     const keyOf = (cv: string, code: string) => (cvs.length > 1 ? `${cv}::${code}` : code);
     const known = new Set(cols.map((c) => c.key));
+    const colNets = nets.map((n, k) => ({ key: `${n.variable}::net${k}`, index: cvs.indexOf(n.variable), codes: new Set(n.codes) })).filter((x) => x.index >= 0);
     layer.cases.forEach((_, i) => {
       if (!keep(i)) return;
       const wt = lw?.[i] ?? 1;
@@ -240,6 +244,10 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       const cks: string[] = [];
       cvs.forEach((cv, k) => { const cc = colVals[k][i]; if (cc == null) return; for (const code of Array.isArray(cc) ? cc : [cc]) { const key = keyOf(cv, code); if (known.has(key)) cks.push(key); } });
       if (!cks.length) return;
+      for (const nc of colNets) {
+        const cc = colVals[nc.index][i]; if (cc == null) continue;
+        if ((Array.isArray(cc) ? cc : [cc]).some((c) => nc.codes.has(String(c))) && known.has(nc.key)) cks.push(nc.key);
+      }
       cks.unshift("__total");
       if (meanMode) {
         const v = rNum![i];

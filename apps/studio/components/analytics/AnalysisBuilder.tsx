@@ -107,10 +107,10 @@ interface NetDef { variable: string; label: string; codes: string[] }
 
 /**
  * MERGE CATEGORIES INTO A NET (ResLens analytics redesign). Tick two or more answers of a row question, name the
- * net, and the table gains a row for everyone who gave ANY of them — computed by the crosstab engine from the
+ * net, and the table gains a row (or, for a banner question, a column) for everyone who gave ANY of them — computed by the crosstab engine from the
  * respondents (`options.nets`), so a multi-select net is never the sum of its parts and it gets letters like any row.
  */
-function NetsEditor({ rows, variables, nets, onChange }: { rows: string[]; variables: VariableMeta[]; nets: NetDef[]; onChange: (n: NetDef[]) => void }) {
+function NetsEditor({ rows, colsOf, variables, nets, onChange }: { rows: string[]; colsOf: string[]; variables: VariableMeta[]; nets: NetDef[]; onChange: (n: NetDef[]) => void }) {
   const candidates = rows.map((r) => variables.find((v) => v.name === r)).filter((v): v is VariableMeta => !!v && (v.categories?.length ?? 0) >= 3);
   const [varName, setVarName] = React.useState("");
   const [picked, setPicked] = React.useState<string[]>([]);
@@ -126,7 +126,7 @@ function NetsEditor({ rows, variables, nets, onChange }: { rows: string[]; varia
   };
   return (
     <fieldset className="ax-optgroup" data-testid="ax-nets"><legend>Nets — merge categories</legend>
-      {!candidates.length ? <div className="muted" style={{ fontSize: 12.5 }}>Add a row question with three or more answers to merge some of them into a net.</div> : <>
+      {!candidates.length ? <div className="muted" style={{ fontSize: 12.5 }}>Add a question with three or more answers to Rows or Columns to merge some of them into a net. On a row it adds a row; on a column it adds a banner column.</div> : <>
         {candidates.length > 1 && <label className="ax-field"><span>Question</span><select className="select small" value={current?.name ?? ""} onChange={(e) => setVarName(e.target.value)} data-testid="ax-net-var">{candidates.map((v) => <option key={v.name} value={v.name}>{v.label}</option>)}</select></label>}
         <div className="ax-field"><span>Answers to merge{current ? ` (${current.label})` : ""}</span>
           <div className="ax-chips">{current?.categories!.map((c) => <button key={c.code} type="button" aria-pressed={picked.includes(c.code)} className={`ax-chip ${picked.includes(c.code) ? "on" : ""}`} onClick={() => setPicked((p) => p.includes(c.code) ? p.filter((x) => x !== c.code) : [...p, c.code])} data-testid={`ax-net-code-${c.code}`}>{c.label}</button>)}</div>
@@ -139,7 +139,8 @@ function NetsEditor({ rows, variables, nets, onChange }: { rows: string[]; varia
       {nets.length > 0 && <ul className="ax-netlist">{nets.map((n, i) => {
         const v = variables.find((x) => x.name === n.variable);
         const stale = !rows.includes(n.variable);
-        return <li key={i} data-testid="ax-net-item"><b>{n.label}</b> <span className="muted">= {n.codes.map((c) => (v ? labelOf(v, c) : c)).join(" + ")}{stale ? " · question is not in Rows" : ""}</span><button type="button" className="btn tiny ghost" aria-label={`Remove net ${n.label}`} onClick={() => onChange(nets.filter((_, j) => j !== i))}>×</button></li>;
+        const side = colsOf.includes(n.variable) ? " · banner column" : "";
+        return <li key={i} data-testid="ax-net-item"><b>{n.label}</b> <span className="muted">= {n.codes.map((c) => (v ? labelOf(v, c) : c)).join(" + ")}{side}{stale ? " · question is not in the table" : ""}</span><button type="button" className="btn tiny ghost" aria-label={`Remove net ${n.label}`} onClick={() => onChange(nets.filter((_, j) => j !== i))}>×</button></li>;
       })}</ul>}
       <div className="muted" style={{ fontSize: 12.5 }}>Counted once per respondent (anyone who gave any of the answers), with significance letters.</div>
     </fieldset>
@@ -179,7 +180,7 @@ function CrosstabOptions({ def, set, o, alpha, sel, num, variables }: { def: Ana
         {check("totalRow", "Total row (100% check)")}
         <div className="ax-field"><span>Summary rows for scales</span><div className="ax-chips">{([["mean", "Mean"], ["top1", "Top box"], ["top2", "Top 2 box"], ["bottom1", "Bottom box"], ["bottom2", "Bottom 2 box"], ["net", "Net (T2B − B2B)"]] as [string, string][]).map(([k, l]) => <button key={k} type="button" className={`ax-chip ${summary.includes(k) ? "on" : ""}`} onClick={() => toggleSummary(k)} data-testid={`ax-summary-${k}`}>{l}</button>)}</div></div>
       </fieldset>
-      <NetsEditor rows={def.rows ?? []} variables={variables} nets={(o.nets as NetDef[] | undefined) ?? []} onChange={(nets) => set({ nets: nets.length ? nets : undefined })} />
+      <NetsEditor colsOf={def.columns ?? []} rows={[...(def.rows ?? []), ...(def.columns ?? [])]} variables={variables} nets={(o.nets as NetDef[] | undefined) ?? []} onChange={(nets) => set({ nets: nets.length ? nets : undefined })} />
       <fieldset className="ax-optgroup"><legend>Suppression</legend>
         {num("minBase", "Minimum column base (blank = none)", "e.g. 30")}
         <div className="muted" style={{ fontSize: 12.5 }}>Columns with fewer respondents are shown with their base only; their cells are hidden and the column is starred.</div>

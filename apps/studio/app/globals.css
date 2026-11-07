@@ -3234,3 +3234,4 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .agw-out-badge { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #fb923c; margin-right: 4px; }
 .agw-out-slides li.ns > b { color: var(--agw-sub); }
 .agw-out-table select, .agw-out-table input { background: #0f1528; color: var(--agw-text); border: 1px solid var(--agw-line); }
+.agw-stage-agents { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }

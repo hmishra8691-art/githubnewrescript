@@ -87,3 +87,8 @@ test("every launcher names a planner that is registered, and says plainly what t
   assert.equal(launchMessage(tr, { scope: "Q1–Q5" }), "", "a required field missing sends nothing");
   assert.equal(launchMessage(LAUNCHERS.find((l) => l.id === "build")!, { brief: "Bank app CSAT", count: "40" }), "Write a 40 question survey: Bank app CSAT");
 });
+
+test("an agent whose queued work sits in a paused task needs attention, not 'queued'", () => {
+  const paused = { status: "needs_attention", steps: [step("c", "analysis.check", "pending")] } as never;
+  assert.equal(agentStatuses([paused]).find((a) => a.id === "analysis")!.state, "attention");
+});

@@ -27,8 +27,10 @@ async function post(path: string, body: Record<string, unknown>): Promise<{ stat
   } catch { return { status: 0, d: null }; }
 }
 
-export function AgentLauncher({ surveyId, def, canEdit, onStarted }: { surveyId: string; def: SurveyDefinition; canEdit: boolean; onStarted: (task: ClientTask) => void }) {
+export function AgentLauncher({ surveyId, def, canEdit, onStarted, requested }: { surveyId: string; def: SurveyDefinition; canEdit: boolean; onStarted: (task: ClientTask) => void; /** a launcher another part of the page asked for (the journey's stage shortcuts) */ requested?: { id: Launcher["id"]; at: number } | null }) {
   const [open, setOpen] = React.useState<Launcher["id"] | null>(null);
+  const box = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => { if (!requested) return; setOpen(requested.id); setMsg(null); box.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [requested]);
   const [fields, setFields] = React.useState<Record<string, string>>({});
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
@@ -46,7 +48,7 @@ export function AgentLauncher({ surveyId, def, canEdit, onStarted }: { surveyId:
   };
 
   return (
-    <div className="agw-launch" data-testid="agw-launcher">
+    <div className="agw-launch" data-testid="agw-launcher" ref={box}>
       <div className="agw-launch-head"><b>Start an agent</b><span className="muted">The agent plans the work in steps you can watch, pause and review. Nothing changes the survey until you apply it.</span></div>
       <div className="agw-launch-grid">
         {LAUNCHERS.map((l) => (

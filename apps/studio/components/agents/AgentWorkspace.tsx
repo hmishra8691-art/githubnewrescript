@@ -1,12 +1,13 @@
 "use client";
 import React from "react";
 import type { ClientTask } from "../../lib/copilot/taskStore";
-import { AGENTS, STAGES, agentGraph, agentStatuses, isLive, type AgentId, type AgentNode, type AgentState } from "../../lib/agents/workspace";
+import { AGENTS, STAGES, agentGraph, agentStatuses, isLive, type AgentId, type AgentNode, type AgentState, type Stage } from "../../lib/agents/workspace";
 import { workflowStages, type StageView } from "../../lib/agents/workflow";
 import type { ModuleStatus } from "../../lib/projectOverview";
 import { moduleStates } from "../../lib/projectOverview";
 import type { SurveyDefinition } from "@rescript/schema";
 import { AgentLauncher, TaskControls, TaskResultReview } from "./AgentActions";
+import { LAUNCHERS, type Launcher } from "../../lib/agents/launch";
 
 /**
  * THE AI AGENT WORKSPACE (ResLens analytics & agents redesign, 2026-11-07).
@@ -43,6 +44,9 @@ const dur = (ms?: number) => (ms == null ? "" : ms < 1000 ? `${ms} ms` : ms < 60
 
 const POLL_MS = 3000;
 
+/** the agents each stage of the journey can start — Collect has none yet: fieldwork and quality run on their own tabs */
+const STAGE_AGENTS = { design: ["build", "translate"], collect: [], analyze: ["analyse"], act: ["report", "decide"] } as const satisfies Record<Stage, readonly Launcher["id"][]>;
+
 export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply }: { surveyId: string; def: SurveyDefinition; onTab?: (tab: string) => void; canEdit?: boolean; onApply?: (next: SurveyDefinition, label: string) => void }) {
   const [data, setData] = React.useState<TasksResponse | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -50,6 +54,7 @@ export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply 
   const [node, setNode] = React.useState<string | null>(null);
   const [modules, setModules] = React.useState<{ list: ModuleStatus[]; fromServer: boolean } | null>(null);
   const [readAt, setReadAt] = React.useState<number | null>(null);
+  const [requested, setRequested] = React.useState<{ id: Launcher["id"]; at: number } | null>(null);
 
   const load = React.useCallback(async () => {
     try {
@@ -121,12 +126,13 @@ export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply 
               <div className="agw-stage-q">{s.question}</div>
               <ul>{s.modules.map((m) => <li key={m.key} className={`m-${m.state}`}>{onTab ? <button type="button" className="linkish" onClick={() => onTab(m.tab)} title={m.detail}>{m.label}</button> : m.label}<span className="muted"> · {m.detail}</span></li>)}</ul>
               {s.state === "unknown" && modules && !modules.fromServer && <div className="muted agw-stage-note">Read from the saved project — open a saved survey to see it.</div>}
+              {canEdit && STAGE_AGENTS[s.id].length > 0 && <div className="agw-stage-agents">{STAGE_AGENTS[s.id].map((id) => <button key={id} type="button" className="btn tiny" onClick={() => setRequested({ id, at: Date.now() })} data-testid={`agw-stage-launch-${id}`}>{LAUNCHERS.find((l) => l.id === id)?.title}</button>)}</div>}
             </div>
           </React.Fragment>
         ))}
       </section>
 
-      <AgentLauncher surveyId={surveyId} def={def} canEdit={canEdit} onStarted={(t) => { upsert(t); void load(); }} />
+      <AgentLauncher requested={requested} surveyId={surveyId} def={def} canEdit={canEdit} onStarted={(t) => { upsert(t); void load(); }} />
 
       <div className="agw-canvas">
         {/* the agents */}
