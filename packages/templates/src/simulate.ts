@@ -15,7 +15,7 @@ import type { LoopContext, QuotaCounts, ListFillCounts, ValidationError } from "
 import {
   advance, answerKey, applyListFillDestinations, createResponseState, decideListFill, effectiveQuestion, listFillVariables,
   pendingListFills, resolvePiping, questionTextTemplate, runScripts, setAnswer, start, validatePage, visibleQuestions, designRowsFor,
-  normalizeAcbc, emptyAcbcAnswer, submitByo, submitScreen, answerRule, chooseInTournament,
+  normalizeAcbc, emptyAcbcAnswer, submitByo, submitScreen, answerRule, chooseInTournament, recordDisplayOrders,
 } from "@rescript/engine";
 import type { AcbcConfig, AcbcAnswer } from "@rescript/engine";
 import type { Question, SurveyDefinition } from "@rescript/schema";
@@ -71,6 +71,50 @@ export interface SimulationResult {
   listFills: { listFillId: string; items: { code: string; label: string }[] }[];
 }
 
+/*
+ * A DEFAULT THAT PASSES THE QUESTION'S OWN RULES (audit 2026-11-07). The simulated respondent — the production-like
+ * test, the IM3 simulation — gave every text "Demo answer" and every number 10, so an Essay (min 100 characters),
+ * an age question with min_value 18 or a US-state field blocked a survey that is programmed correctly.
+ */
+/** a form field's value by its declared type (an email field gets an email address, a date field a date) */
+function fieldValue(r: { code: string | number; fieldType?: string; label?: string }): unknown {
+  const t = String(r.fieldType ?? "").toLowerCase(), c = `${r.code} ${r.label ?? ""}`.toLowerCase();
+  if (t === "email" || /e-?mail/.test(c)) return "demo@example.com";
+  if (t === "phone" || t === "tel" || /phone|mobile/.test(c)) return "+1 206 555 0100";
+  if (t === "date" || /\b(date|from|to|since|start|end)\b/.test(c)) return /\bto\b|end/.test(c) ? "2026-02-09" : "2026-02-02";
+  if (t === "integer" || t === "number" || t === "numeric" || t === "currency") return 30;
+  if (t === "url" || /website|url/.test(c)) return "https://example.com";
+  if (t === "zip" || t === "postal" || /zip|postal/.test(c)) return "98101";
+  return "Demo";
+}
+function numberFor(q: Question): number {
+  const s = q.settings ?? {};
+  const v = q.validation ?? [];
+  const lo = Math.max(...[s.minValue, ...v.filter((r) => r.kind === "min_value").map((r) => Number(r.value))].filter((x): x is number => typeof x === "number" && Number.isFinite(x)), -Infinity);
+  const hi = Math.min(...[s.maxValue, ...v.filter((r) => r.kind === "max_value").map((r) => Number(r.value))].filter((x): x is number => typeof x === "number" && Number.isFinite(x)), Infinity);
+  if (Number.isFinite(lo) && Number.isFinite(hi)) return Math.round((lo + hi) / 2);
+  if (Number.isFinite(lo)) return Math.ceil(lo) + (lo < 10 ? 10 - Math.ceil(lo) : 0);
+  if (Number.isFinite(hi)) return Math.min(10, Math.floor(hi));
+  return 10;
+}
+function textFor(q: Question, fallback: string): string {
+  const v = q.validation ?? [];
+  const has = (k: string) => v.some((r) => r.kind === k);
+  if (has("email")) return "demo@example.com";
+  if (has("url")) return "https://example.com";
+  if (has("zip")) return "98101";
+  if (has("phone")) return "+1 206 555 0100";
+  if (has("us_state")) return "California";
+  if (has("number_only")) return "42";
+  if (has("date_format")) { const f = String(v.find((r) => r.kind === "date_format")?.value || "MM/DD/YYYY").toUpperCase(); return f.replace("YYYY", "2026").replace("MM", "02").replace("DD", "01"); }
+  let t = has("text_only") ? "Demo answer" : fallback;
+  const range = v.find((r) => r.kind === "length_range")?.value as { min?: number; max?: number } | undefined;
+  const min = Math.max(0, ...v.filter((r) => r.kind === "min_length").map((r) => Number(r.value) || 0), range?.min ?? 0);
+  const max = Math.min(...v.filter((r) => r.kind === "max_length").map((r) => Number(r.value) || Infinity), range?.max ?? Infinity);
+  while (t.length < min) t += has("text_only") ? " more words" : " More detail for the simulated respondent.";
+  return Number.isFinite(max) ? t.slice(0, max) : t;
+}
+
 /** A plausible answer for a question nobody wrote one for. */
 export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: SimulationResult["state"]; loop: LoopContext | null }): unknown {
   const view = effectiveQuestion(q, { def, state: ctx.state, loop: ctx.loop });
@@ -96,11 +140,12 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
     case "multi_select": case "multi_dropdown": case "image_select": return some;
     /* S5c: a price ladder's answer is one of its prices (or 0) — the middle one, the ladder's own start */
     case "numeric": if (q.variant === "numeric.price_ladder") { const ps = ((s as { priceLadder?: { prices?: number[] } }).priceLadder?.prices ?? []).slice().sort((x, y) => x - y); return ps.length ? ps[Math.floor((ps.length - 1) / 2)] : 0; }
-      return s.minValue != null && s.maxValue != null ? Math.round((s.minValue + s.maxValue) / 2) : 10;
+      return numberFor(q);
     case "slider": case "nps": return s.maxValue ?? 10;
-    case "open_text": return q.variant === "text.email" ? "demo@example.com" : q.variant === "text.zip" ? "98101" : q.variant === "text.phone" ? "+1 206 555 0100" : q.variant === "text.url" ? "https://example.com" : "Demo answer";
-    case "long_text": return "Demo open-ended answer with enough text.";
-    case "date": return "2026-02-01";
+    case "open_text": return textFor(q, q.variant === "text.email" ? "demo@example.com" : q.variant === "text.zip" ? "98101" : q.variant === "text.phone" ? "+1 206 555 0100" : q.variant === "text.url" ? "https://example.com" : "Demo answer");
+    case "long_text": return textFor(q, "Demo open-ended answer with enough text.");
+    /* a Monday (a calendar that books weekdays only accepts it); a date-and-time takes both parts */
+    case "date": return q.variant === "datetime.datetime" ? "2026-02-02T12:00" : "2026-02-02";
     case "time": return "12:00";
     case "ranking": case "image_ranking": return codes.slice(0, s.maxSelections ?? codes.length);
     case "matrix_single": case "matrix_dropdown": return Object.fromEntries(rows.map((r) => [r, first]));
@@ -109,7 +154,7 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
     case "matrix_text": return Object.fromEntries(rows.map((r) => [r, "ok"]));
     case "allocation": { const t = s.sumTarget ?? 100; return Object.fromEntries(codes.map((c, i) => [String(c), i === 0 ? t : 0])); }
     case "numeric_list": return Object.fromEntries(rows.map((r) => [r, 100]));
-    case "text_list": return Object.fromEntries(rows.map((r) => [r, "Demo"]));
+    case "text_list": return Object.fromEntries(view.rows.map((r) => [String(r.code), fieldValue(r)]));
     case "composite": case "custom_table": {
       const cols = view.columns.filter((c) => !c.expression && !c.readOnly);
       const share = s.rowSum && s.sumTarget ? s.sumTarget / Math.max(1, cols.length) : null;
@@ -169,7 +214,7 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
       }
       return a;
     }
-    case "repeating_group": return [Object.fromEntries(rows.map((r) => [r, r === "cost" ? 12 : r === "since" ? "2025-01-01" : "Demo"]))];
+    case "repeating_group": return [Object.fromEntries(view.rows.map((r) => [String(r.code), String(r.code) === "cost" ? 12 : String(r.code) === "since" ? "2025-01-01" : fieldValue(r)]))];
     case "hotspot": return [{ x: 50, y: 50 }];
     case "geo": return q.settings.geoMode === "address"
       ? { lat: 51.5007, lng: -0.1246, address: { formatted: "Westminster, London SW1A 0AA, United Kingdom", city: "London", country: "United Kingdom", postal: "SW1A 0AA" }, source: "search" }
@@ -206,6 +251,8 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
      * (`checkSubmission`) sees the same, and a walk that skipped them would
      * produce a "complete" interview the real runtime refuses.
      */
+    /* the Runner writes the page's display orders (ORDER_<ID>) every time it shows it; the server replay does too */
+    recordDisplayOrders(def, state, step);
     let visible = visibleQuestions(def, step, state, quotaCounts);
     const visited: VisitedPage = { pageId: step.pageId, loop, questionIds: visible.map((q) => q.id), texts: {} };
     const answeredHere = new Set<string>();

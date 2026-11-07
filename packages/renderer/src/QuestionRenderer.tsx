@@ -9,7 +9,7 @@ import {
   resolveQuestionMedia, questionMediaList,
   designRowsFor,
   shuffleAlternatives,
-  resolvePiping, questionTextTemplate,
+  resolvePiping, questionTextTemplate, questionNumberLabel, optionNumberLabel,
   resolveAuthorHtml,
   codeGate,
   gateReason,
@@ -195,6 +195,12 @@ export function describedByWithErrors(authored: string | undefined, errId: strin
 }
 
 export const OTHER = (o: Option) => o.flags?.includes("other_specify");
+
+/** option lettering ("A." / "1."), when the survey asks for it (audit 2026-11-07) */
+function OptNum({ def, i }: { def: SurveyDefinition; i: number }) {
+  const t = i >= 0 ? optionNumberLabel(def, i) : "";
+  return t ? <span className="rs-optnum" aria-hidden="true">{t} </span> : null;
+}
 
 /**
  * The text belonging to ONE box.
@@ -508,7 +514,7 @@ export function SingleSelect(p: QRProps) {
               onChange={() => p.onChange(o.code)}
               disabled={p.q.settings.readOnly || !!o.meta?.disabled}
             />
-            <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
+            <OptNum def={p.def} i={filtered.indexOf(o)} /><span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
             {OTHER(o) && sel && <OtherInput {...p} option={o} />}
           </label>
         );
@@ -544,7 +550,7 @@ export function MultiSelect(p: QRProps) {
                 control says so instead of failing quietly. */}
             <input type="checkbox" value={String(o.code)} checked={sel} onChange={() => toggle(o)}
               disabled={p.q.settings.readOnly || atMax || !!o.meta?.disabled} />
-            <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
+            <OptNum def={p.def} i={filtered.indexOf(o)} /><span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
             {OTHER(o) && sel && <OtherInput {...p} option={o} />}
           </label>
         );
@@ -1541,7 +1547,9 @@ export function Ranking(p: QRProps) {
           className={`rs-rank-item ${full ? "rs-rank-locked" : ""}`}
           style={{ cursor: full ? "not-allowed" : "pointer", opacity: full ? 0.45 : 0.85 }}
           aria-disabled={full}
+          role="button" tabIndex={full ? -1 : 0}
           onClick={() => { if (!full) p.onChange([...ranked, o.code]); }}
+          onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !full) { e.preventDefault(); p.onChange([...ranked, o.code]); } }}
         >
           <span className="rs-rank-num empty">–</span>
           <span dangerouslySetInnerHTML={{ __html: o.label }} />
@@ -1607,12 +1615,16 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
     }
   };
   return (
-    <div className="rs-imggrid" style={gridColumnsStyle(p, "repeat(auto-fill, minmax(150px, 1fr))")}>
+    <div className="rs-imggrid" role={p.multi || p.ranking ? "group" : "radiogroup"} aria-label={p.q.code} style={gridColumnsStyle(p, "repeat(auto-fill, minmax(150px, 1fr))")}>
       {options.map((o) => {
         const idx = vals.findIndex((v) => String(v) === String(o.code));
         const sel = idx >= 0;
         return (
-          <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)} {...anchor("option", o.code)}>
+          /* a real control (audit 2026-11-07): role, state, focus and Enter / Space — a clickable div could not be answered by keyboard or screen reader */
+          <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)} {...anchor("option", o.code)}
+            role={p.multi || p.ranking ? "checkbox" : "radio"} aria-checked={sel} tabIndex={0}
+            aria-label={`${o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")}${p.ranking && sel ? `, ranked ${idx + 1}` : ""}`}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); click(o); } }}>
             <ZoomButton src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -2991,6 +3003,8 @@ function QuestionRendererCard(props: QRProps) {
    * read here, once, for every question type.
    */
   const a11y = p.q.settings.accessibility;
+  /* question numbers shown to respondents, when the survey asks for them (audit 2026-11-07) */
+  const qNumber = questionNumberLabel(p.def, p.q);
   /*
    * Programmer chrome (preview / test): the class on the card, the data
    * attributes a suite can read, the head and foot blocks. `pv` is null on a
@@ -3189,11 +3203,13 @@ function QuestionRendererCard(props: QRProps) {
       )}
       {textIsDocument ? (
         <div className="rs-qtext rs-qhtml" {...anchor("text")}>
+          {qNumber && <span className="rs-qnum" data-testid="rs-qnum">{qNumber} </span>}
           <div {...{ [SCOPE_ATTR]: textScope }} dangerouslySetInnerHTML={{ __html: text }} />
           {p.q.required && <span className="rs-required">*</span>}
         </div>
       ) : (
         <p className="rs-qtext" {...anchor("text")}>
+          {qNumber && <span className="rs-qnum" data-testid="rs-qnum">{qNumber} </span>}
           <span {...{ [SCOPE_ATTR]: textScope }} dangerouslySetInnerHTML={{ __html: text }} />
           {p.q.required && <span className="rs-required">*</span>}
         </p>

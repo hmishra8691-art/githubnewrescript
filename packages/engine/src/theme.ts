@@ -41,7 +41,7 @@ const gradient: Check = (v) => (typeof v === "string" && GRADIENT.test(v.trim())
 export const THEME_FIELDS: Record<string, Record<string, Check>> = {
   colors: Object.fromEntries(["primary", "secondary", "background", "surface", "text", "subtleText", "border", "error", "accent", "heading", "link", "inputBackground", "buttonBackground", "buttonText", "progress"].map((k) => [k, color])),
   typography: { fontFamily: font, baseSize: length, headingWeight: num(100, 900), headingFont: font, lineHeight, letterSpacing: length, questionSize: length },
-  layout: { maxWidth: length, widthMode: oneOf("full", "contained"), contentAlign: oneOf("left", "center", "right"), cardStyle: oneOf("flat", "card", "line"), radius: length, spacing: oneOf("compact", "regular", "relaxed"), progressBar: oneOf("top", "bottom", "none"), progressStyle: oneOf("bar", "steps", "percent"), showBlockTitles: bool },
+  layout: { maxWidth: length, widthMode: oneOf("full", "contained"), contentAlign: oneOf("left", "center", "right"), cardStyle: oneOf("flat", "card", "line"), radius: length, spacing: oneOf("compact", "regular", "relaxed"), progressBar: oneOf("top", "bottom", "none"), progressStyle: oneOf("bar", "steps", "percent"), showBlockTitles: bool, questionNumbers: oneOf("none", "code", "sequence"), optionNumbering: oneOf("none", "letters", "numbers"), autoAdvance: bool },
   buttons: { style: oneOf("solid", "outline", "pill"), nextLabel: text(60), backLabel: text(60), submitLabel: text(60), showBack: bool },
   background: { image, size: oneOf("cover", "contain", "auto"), position: (v) => (typeof v === "string" && /^[a-z0-9 %.-]{1,40}$/i.test(v) ? null : "is not a background position"), repeat: bool, attachment: oneOf("fixed", "scroll"), overlay: color, gradient },
   appearance: { shadow: oneOf("none", "soft", "medium", "strong"), cardPadding: length, borderWidth: length, optionStyle: oneOf("default", "cards", "pills", "minimal"), controlStyle: oneOf("native", "custom"), optionGap: length, inputStyle: oneOf("outlined", "filled", "underline"), focusColor: color, selectedTint: num(0, 40), buttonRadius: length, progressHeight: length, logoMaxHeight: length },
@@ -127,7 +127,8 @@ export function diffTheme(before: Branding | undefined, after: Branding | undefi
 }
 
 const PRESENTATION_BRANDING = ["themeId", "logoUrl", "logoPosition", "logoDisplay", "colors", "typography", "background", "appearance", "responsive", "headerHtml", "footerHtml", "customCss", "customJs"];
-const PRESENTATION_LAYOUT = ["maxWidth", "widthMode", "contentAlign", "cardStyle", "radius", "spacing", "progressBar", "progressStyle", "showBlockTitles"];
+/* numbering is how the survey looks; auto-advance changes how it behaves, so a look-only change never toggles it */
+const PRESENTATION_LAYOUT = ["maxWidth", "widthMode", "contentAlign", "cardStyle", "radius", "spacing", "progressBar", "progressStyle", "showBlockTitles", "questionNumbers", "optionNumbering"];
 /**
  * The survey minus how it looks: its UX configuration, the visual part of
  * its branding, and questions' decorative custom HTML. What remains —

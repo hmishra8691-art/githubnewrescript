@@ -115,7 +115,7 @@ import {
   type PreparedLogicScript,
   type ScriptWriteResult,
   /* S4b: native timers and behaviour conditions */
-  pageTimers, timerParadata, timedOutSkips, advanceTimedOut, setBehavior, formatClock,
+  pageTimers, timerParadata, timedOutSkips, advanceTimedOut, setBehavior, formatClock, timerKey,
 } from "@rescript/engine";
 
 /**
@@ -502,6 +502,9 @@ async function runListFills(
  * boundary cannot see because they happen inside an effect. Between them
  * there is no path that leaves the respondent on "Loading survey…" for ever.
  */
+/** single-choice types that may auto-advance (a dropdown and a multi-select never do: the respondent may still be choosing) */
+const AUTO_ADVANCE_TYPES = new Set(["single_select", "image_select", "nps", "yes_no"]);
+
 export function Runner(props: RunnerProps) {
   return (
     <RunnerBoundary diagnostic={props.mode !== "live"}>
@@ -1586,7 +1589,17 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    */
   const clockKey = pageStep ? `${state.stepIndex}|${pageStep.pageId}` : "";
   const clockNow = Date.now();
-  const clockFresh = pageStep ? clockRef.current.enter(clockKey, clockNow) : false;
+  /*
+   * A RELOAD OR A RESUME DOES NOT RESTART A TIMED PAGE (audit 2026-11-07). The page's arrival is kept in embedded
+   * data (`TIMER_<PAGE>_ARRIVED`, epoch ms — saved with every autosave), and when the Runner first mounts on a page
+   * that already has one, its clock continues from it; refreshing a timed task used to give a fresh allowance.
+   * A deliberate new visit (Back, then forward again) still starts the page afresh, as before.
+   */
+  const arrivedKey = pageStep ? `${timerKey(answerKey(pageStep.pageId, pageStep.loop ?? null))}_ARRIVED` : "";
+  const firstMount = clockRef.current.key === "";
+  const storedArrival = pageStep && firstMount ? Number(state.embedded[arrivedKey]) : NaN;
+  const clockFresh = pageStep ? clockRef.current.enter(clockKey, clockNow, Number.isFinite(storedArrival) && storedArrival <= clockNow ? storedArrival : undefined) : false;
+  if (pageStep && clockFresh && !(firstMount && Number.isFinite(storedArrival)) && pageTimers(def, pageStep, visibleQuestions(def, pageStep, state, counts)).some((t) => t.timer.limitSeconds)) state.embedded[arrivedKey] = clockNow;
   if (detectedDeviceRef.current === null) detectedDeviceRef.current = typeof window !== "undefined" ? detectDevice()?.type : undefined;
   const behaviorDevice = effectiveDevice(detectedDeviceRef.current ?? undefined, device, mode === "preview");
   if (pageStep) {
@@ -2580,6 +2593,16 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
               pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
               scheduleOnChange(q.id);
               force();
+              /*
+               * AUTO-ADVANCE (audit 2026-11-07, `branding.layout.autoAdvance`): the page's only answerable question
+               * is a single choice and an answer that opens no "Other" box was chosen → Next, after a short beat so
+               * the choice is seen. The ordinary Next path: validation, scripts, skips and the save all run.
+               */
+              if (b.layout.autoAdvance && v != null && !Array.isArray(v) && AUTO_ADVANCE_TYPES.has(q.type) && !q.options.some((o) => String(o.code) === String(v) && o.flags?.includes("other_specify"))
+                && questions.filter((x) => x.type !== "html" && !x.settings.hidden).length === 1) {
+                const at = state.stepIndex;
+                setTimeout(() => { if (state.stepIndex !== at || advancingRef.current) return; void nextRef.current?.(); }, 450);
+              }
             }}
             onOtherChange={(t, code) => {
               /*

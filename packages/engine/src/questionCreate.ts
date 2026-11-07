@@ -50,3 +50,25 @@ export function createQuestionFromVariant(
   if (v.defaults?.randomization) q.randomization = { ...v.defaults.randomization } as never;
   return q;
 }
+
+/**
+ * STARTER OPTIONS FOR A NEW CHOICE QUESTION (audit 2026-11-07) — three numbered placeholders on a Single / Multi
+ * Select, Dropdown, Image Select, Ranking or Constant Sum that has none and carries nothing forward. The Studio's
+ * picker applies it; the copilot and imports bring their own options and do not.
+ */
+export const STARTER_OPTION_TYPES: ReadonlySet<string> = new Set(["single_select", "multi_select", "dropdown", "multi_dropdown", "image_select", "ranking", "image_ranking", "allocation"]);
+export function withStarterOptions(q: Question, ids: IdMinter = defaultIds): Question {
+  if (STARTER_OPTION_TYPES.has(q.type) && !(q.options ?? []).length && !q.carryForward) {
+    q.options = [1, 2, 3].map((n) => ({ id: ids("opt"), code: n, label: `Option ${n}`, flags: [] })) as never;
+  }
+  /* a single / multi / dropdown grid gets a five-point scale, a cell grid two rows and two columns — the matrices arrived with rows and nothing to click */
+  if (["matrix_single", "matrix_multi", "matrix_dropdown"].includes(q.type) && !(q.options ?? []).length && !q.carryForward && !(q.columns ?? []).length) {
+    const scale = q.type === "matrix_single" ? ["Strongly disagree", "Disagree", "Neutral", "Agree", "Strongly agree"] : ["Column 1", "Column 2", "Column 3"];
+    q.options = scale.map((label, i) => ({ id: ids("opt"), code: i + 1, label, flags: [] })) as never;
+  }
+  if ((q.type === "composite" || q.type === "custom_table") && !(q.columns ?? []).length) {
+    if (!(q.rows ?? []).length) q.rows = [1, 2].map((n) => ({ code: `r${n}`, label: `Row ${n}`, flags: [], validation: [], required: false })) as never;
+    q.columns = [["text", "Text"], ["numeric", "Number"]].map(([responseType, label], i) => ({ id: ids("col"), label, responseType, variableStem: `${q.variableName}_C${i + 1}`, options: [], validation: [], readOnly: false })) as never;
+  }
+  return q;
+}

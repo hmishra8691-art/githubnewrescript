@@ -270,3 +270,4 @@ export * from "./accessibility.js";
 export * from "./branchLogic.js";
 export * from "./dynamicLogic.js";
 export * from "./flowLogicActions.js";
+export * from "./numbering.js";

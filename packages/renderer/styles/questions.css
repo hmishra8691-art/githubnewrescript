@@ -1245,3 +1245,7 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-affixrow .rs-input { flex: 1 1 auto; min-width: 0; }
 .rs-affix { color: var(--rs-subtle, #64748b); white-space: nowrap; flex: none; }
 .rs-affix-block { margin: 4px 0; white-space: normal; }
+
+/* question numbers and option lettering (audit 2026-11-07) */
+.rs-qnum { font-weight: 700; margin-right: 2px; }
+.rs-optnum { font-weight: 600; color: var(--rs-subtle, #64748b); margin-right: 4px; }

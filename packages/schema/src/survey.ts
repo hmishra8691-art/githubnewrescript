@@ -454,6 +454,20 @@ export const Branding = z.object({
        */
       showBlockTitles: z.boolean().default(true),
       /**
+       * QUESTION NUMBERS SHOWN TO RESPONDENTS (audit 2026-11-07). "none" (the default — every survey so far),
+       * "code" (the question's code: "Q7."), or "sequence" (1., 2., 3. … in survey order, counting only questions a
+       * respondent answers — not text blocks, hidden or calculated questions). Static, like Qualtrics' numbering.
+       */
+      questionNumbers: z.enum(["none", "code", "sequence"]).optional(),
+      /** OPTION LETTERING: "none" (default), "letters" (A. B. C.) or "numbers" (1. 2. 3.) before each choice of a list question */
+      optionNumbering: z.enum(["none", "letters", "numbers"]).optional(),
+      /**
+       * AUTO-ADVANCE (audit 2026-11-07): on a page whose only answerable question is a single choice, choosing an
+       * answer moves on by itself (after a short beat, so the choice is seen). Never when the choice opens an "Other"
+       * box, has an error, or the page holds anything else to answer. Off unless switched on.
+       */
+      autoAdvance: z.boolean().optional(),
+      /**
        * PRESENTATION MODE — how the SAME survey is shown, never what it asks.
        *
        * "pages" is every survey so far: a page's questions together, Next

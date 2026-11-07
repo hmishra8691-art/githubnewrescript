@@ -158,11 +158,22 @@ export function calcOptionsFor(def: SurveyDefinition, state: ResponseState, loop
     /* the labels of a coded answer, so `Q1 == "Product A"` reads by label too (calc.ts textEq) */
     labels: (n: string) => {
       const q = getQuestionByCodeOrVar(def, n.replace(EMBEDDED_PREFIX, "") === n ? n : "");
-      if (!q || !q.options?.length) return undefined;
+      if (!q || (!q.options?.length && !q.carryForward)) return undefined;
       let v: unknown = loop ? loopScopedName(def, state, loop, n) : undefined;
       if (v === undefined) v = n in flat ? flat[n] : flat[q.variableName] ?? state.answers[q.id];
       const codes = (Array.isArray(v) ? v : v === undefined || v === null || v === "" ? [] : [v]).map(String);
-      return q.options.filter((o) => codes.includes(String(o.code)) || (o.value !== undefined && codes.includes(String(o.value)))).map((o) => o.label);
+      /* a carried-forward list's labels live on its source (audit 2026-11-07: `Q2 == "Apple"` on a carry-forward Q2 never matched) */
+      const out: string[] = [];
+      for (const c of codes) {
+        let cur: typeof q | undefined = q; const seen = new Set<string>();
+        while (cur && !seen.has(cur.id)) {
+          seen.add(cur.id);
+          const o = cur.options.find((x) => String(x.code) === c || (x.value !== undefined && String(x.value) === c));
+          if (o) { out.push(o.label); break; }
+          cur = cur.carryForward ? def.questions.find((x) => x.id === cur!.carryForward!.sourceQuestionId) : undefined;
+        }
+      }
+      return out;
     },
     names: () => [
       ...Object.keys(flat),

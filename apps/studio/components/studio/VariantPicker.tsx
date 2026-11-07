@@ -9,7 +9,7 @@ import {
   pickerTypesOf,
   variantForLegacyType,
   resolveVariant } from "@rescript/schema";
-import { migrateQuestionType, createQuestionFromVariant, type TypeMigration } from "@rescript/engine";
+import { migrateQuestionType, createQuestionFromVariant, withStarterOptions, type TypeMigration } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { TypeChangeDialog } from "./TypeChangeDialog";
 
@@ -64,8 +64,10 @@ function pickDefined(defaults: Record<string, unknown>, current: Record<string, 
  */
 export function createFromVariant(v: QuestionVariantDef, naming: number | { code: string; variableName: string }): Question {
   // one maker for every creator — the picker, the palette, the copilot (engine `createQuestionFromVariant`)
-  return createQuestionFromVariant(v, naming, uid);
+  /* a new choice question arrives with three starter options (engine withStarterOptions, audit 2026-11-07) */
+  return withStarterOptions(createQuestionFromVariant(v, naming, uid), uid);
 }
+
 
 /* -------------------------------------------------------------- the picker */
 

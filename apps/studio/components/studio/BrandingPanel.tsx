@@ -633,6 +633,24 @@ export function BrandingPanel() {
             <option value="show">shown to respondents</option>
             <option value="hide">hidden from respondents</option>
           </select></label>
+        {/* respondent-facing numbering and auto-advance (audit 2026-11-07) */}
+        <label className="f" style={{ width: 170 }} title="Numbers shown before each question's text — display only; codes and exports are unchanged">
+          <span>Question numbers</span>
+          <select className="select" data-testid="branding-question-numbers" value={b.layout.questionNumbers ?? "none"}
+            onChange={(e) => set((x) => { x.layout.questionNumbers = e.target.value === "none" ? undefined : e.target.value as never; })}>
+            <option value="none">not shown</option><option value="code">question code (Q7.)</option><option value="sequence">1, 2, 3…</option>
+          </select></label>
+        <label className="f" style={{ width: 150 }} title="A letter or number before each choice of a list question — display only">
+          <span>Option labels</span>
+          <select className="select" data-testid="branding-option-numbering" value={b.layout.optionNumbering ?? "none"}
+            onChange={(e) => set((x) => { x.layout.optionNumbering = e.target.value === "none" ? undefined : e.target.value as never; })}>
+            <option value="none">plain</option><option value="letters">A. B. C.</option><option value="numbers">1. 2. 3.</option>
+          </select></label>
+        <label className="row" style={{ gap: 6, fontSize: 13, alignSelf: "flex-end", marginBottom: 6 }} title="On a page whose only question is a single choice, choosing an answer moves on by itself">
+          <input type="checkbox" data-testid="branding-auto-advance" checked={!!b.layout.autoAdvance}
+            onChange={(e) => set((x) => { x.layout.autoAdvance = e.target.checked || undefined; })} />
+          Auto-advance single-choice pages
+        </label>
       </div>
 
       <TypographyMore b={b} set={set} />

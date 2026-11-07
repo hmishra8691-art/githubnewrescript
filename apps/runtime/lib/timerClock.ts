@@ -6,7 +6,8 @@ import type { SurveyDefinition } from "@rescript/schema";
  *
  * Not one per renderer: every timer on a page (the page's own and each question's) counts from the page's arrival
  * on this clock. It is WALL time (`Date.now()`), so it keeps counting while the tab is hidden — the research norm
- * for timed tasks (a respondent cannot stop the clock by switching tabs). A reload starts the page again.
+ * for timed tasks (a respondent cannot stop the clock by switching tabs). A reload or a resume continues the page's clock
+ * from its stored arrival (`TIMER_<PAGE>_ARRIVED`, audit 2026-11-07); a new visit starts it again.
  *
  * `step` is what the Runner's interval calls: it marks the timers that have just run out (each once), and says
  * when the polite announcements are due — the warning (once per timer, at `warnAtSeconds` left) and "you can
@@ -24,9 +25,10 @@ export class PageClock {
   ready = false;
 
   /** arrive on a page (a new key); returns true when the clock restarted */
-  enter(key: string, now: number): boolean {
+  enter(key: string, now: number, resumedFrom?: number): boolean {
     if (key === this.key) return false;
-    this.key = key; this.enteredAt = now;
+    /* `resumedFrom`: the page's stored arrival, after a reload / resume — the clock continues instead of restarting */
+    this.key = key; this.enteredAt = resumedFrom ?? now;
     this.fired = new Set(); this.timedOut = new Set(); this.warned = new Set(); this.ready = false;
     return true;
   }

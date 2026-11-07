@@ -2593,7 +2593,8 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       options: [
         { code: "a", label: "Shown to everyone" },
         { code: "b", label: "Shown only when embedded SEGMENT = premium", visibleIf: { type: "rule", source: { kind: "embedded", ref: "SEGMENT" }, operator: "eq", value: "premium" } },
-        { code: "c", label: "Shown only when Q1 was answered", visibleIf: { type: "rule", source: { kind: "question", ref: "Q1" }, operator: "answered" } },
+        /* audit 2026-11-07: the sample named a question "Q1" that a new survey may not have (or that is this question) — a lint error on creation */
+        { code: "c", label: "Shown only when embedded SEGMENT is not premium", visibleIf: { type: "rule", source: { kind: "embedded", ref: "SEGMENT" }, operator: "ne", value: "premium" } },
       ],
       instruction: "Edit each option's show-when condition in the Options panel.",
     },

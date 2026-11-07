@@ -1504,6 +1504,19 @@ export function lintStructure(def: SurveyDefinition): LogicIssue[] {
         message: `${q.code} is a grid with no rows, and nothing supplies them.`,
       });
     }
+    /* audit 2026-11-07: a single / multi / dropdown grid with rows but no scale drew rows with nothing to click */
+    if (["matrix_single", "matrix_multi", "matrix_dropdown"].includes(q.type) && q.options.length === 0 && !q.carryForward && !(q.columns ?? []).length) {
+      issues.push({
+        level: "error", questionId: q.id, questionCode: q.code, path: "options",
+        message: `${q.code} is a grid with no scale points (columns), so its rows have nothing to choose. Add the scale.`,
+      });
+    }
+    if ((q.type === "composite" || q.type === "custom_table") && !(q.columns ?? []).length) {
+      issues.push({
+        level: "error", questionId: q.id, questionCode: q.code, path: "columns",
+        message: `${q.code} is a cell grid with no columns, so a respondent has nothing to fill in. Add a column.`,
+      });
+    }
     const blank = q.options.filter((o) => !String(o.label ?? "").replace(/<[^>]*>/g, "").trim());
     if (blank.length) {
       issues.push({

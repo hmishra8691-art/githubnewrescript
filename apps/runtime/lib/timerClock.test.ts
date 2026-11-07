@@ -75,3 +75,14 @@ test("S4b: effectiveDevice — detection, and the preview's device switch when c
   assert.equal(effectiveDevice("desktop", "mobile", true), "mobile");
   assert.equal(effectiveDevice("mobile", "desktop", true), "mobile");
 });
+
+test("audit 2026-11-07: a reload / resume continues a timed page from its stored arrival — refreshing never grants a fresh allowance", () => {
+  const timers = [{ ref: "P1", key: "TIMER_P1", timer: { limitSeconds: 30, show: "countdown", onTimeout: "advance" } }] as never;
+  const c = new PageClock();
+  assert.equal(c.enter("3|p1", 100_000, 80_000), true); // mounted after a reload, 20 s after the page was first shown
+  assert.equal(Math.round(c.elapsed(100_000)), 20);
+  assert.equal(c.view(timers, 100_000).countdown?.remaining, 10);
+  const fresh = new PageClock();
+  fresh.enter("3|p1", 100_000);
+  assert.equal(Math.round(fresh.elapsed(100_000)), 0);
+});
