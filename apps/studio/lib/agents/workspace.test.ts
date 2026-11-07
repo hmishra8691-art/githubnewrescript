@@ -92,3 +92,12 @@ test("an agent whose queued work sits in a paused task needs attention, not 'que
   const paused = { status: "needs_attention", steps: [step("c", "analysis.check", "pending")] } as never;
   assert.equal(agentStatuses([paused]).find((a) => a.id === "analysis")!.state, "attention");
 });
+
+test("the newest task decides a finished agent's state: failures in a cancelled task are 'failed', never 'Finished'", () => {
+  const cancelled = { status: "cancelled", steps: [step("w1", "copilot.generate", "completed"), step("w2", "copilot.generate", "failed"), step("c", "copilot.check", "pending")] } as never;
+  const older = { status: "completed", steps: [step("x", "copilot.generate", "completed")] } as never;
+  const s = Object.fromEntries(agentStatuses([cancelled, older]).map((a) => [a.id, a.state]));
+  assert.equal(s.writer, "failed");
+  assert.equal(s.validation, "stopped", "its step never ran because the task was cancelled");
+  assert.equal(Object.fromEntries(agentStatuses([older]).map((a) => [a.id, a.state])).writer, "done");
+});

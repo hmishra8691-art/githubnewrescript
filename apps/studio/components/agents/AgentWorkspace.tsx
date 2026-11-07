@@ -1,12 +1,14 @@
 "use client";
 import React from "react";
 import type { ClientTask } from "../../lib/copilot/taskStore";
-import { AGENTS, STAGES, agentGraph, agentStatuses, isLive, type AgentId, type AgentNode, type AgentState, type Stage } from "../../lib/agents/workspace";
+import { AGENTS, STAGES, agentGraph, agentStatuses, isLive, takeRequestedAgentTask, type AgentId, type AgentNode, type AgentState, type Stage } from "../../lib/agents/workspace";
 import { workflowStages, type StageView } from "../../lib/agents/workflow";
 import type { ModuleStatus } from "../../lib/projectOverview";
 import { moduleStates } from "../../lib/projectOverview";
 import type { SurveyDefinition } from "@rescript/schema";
 import { AgentLauncher, TaskControls, TaskResultReview } from "./AgentActions";
+import { ExecutionPanel } from "../intelligent/ExecutionPanel";
+import { stepOutcome, taskOutcome } from "../../lib/copilot/stepOutcome";
 import { LAUNCHERS, type Launcher } from "../../lib/agents/launch";
 
 /**
@@ -28,7 +30,7 @@ import { LAUNCHERS, type Launcher } from "../../lib/agents/launch";
 
 interface TasksResponse { ok?: boolean; durable?: boolean; task?: ClientTask | null; tasks?: ClientTask[] }
 
-const STATE_WORD: Record<AgentState, string> = { working: "Working", waiting: "Queued", attention: "Needs attention", done: "Finished", idle: "Not used yet", planned: "Planned" };
+const STATE_WORD: Record<AgentState, string> = { working: "Working", waiting: "Queued", attention: "Needs attention", done: "Finished", failed: "Failed in its last task", stopped: "Last task stopped", idle: "Not used yet", planned: "Planned" };
 const STEP_WORD: Record<string, string> = { pending: "Queued", running: "Running", completed: "Done", failed: "Failed", retrying: "Retrying", blocked: "Blocked", tombstoned: "Dropped" };
 const TASK_WORD: Record<string, string> = { pending: "Queued", running: "Running", completed: "Completed", needs_attention: "Waiting for you", failed: "Failed", cancelled: "Cancelled" };
 const KIND_WORD: Record<string, string> = { survey_build: "Survey build", translation: "Translation", conjoint: "Conjoint design", maxdiff: "MaxDiff design", scored_exam: "Scored exam", analysis: "Analysis", other: "Task" };
@@ -50,7 +52,7 @@ const STAGE_AGENTS = { design: ["build", "translate"], collect: [], analyze: ["a
 export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply }: { surveyId: string; def: SurveyDefinition; onTab?: (tab: string) => void; canEdit?: boolean; onApply?: (next: SurveyDefinition, label: string) => void }) {
   const [data, setData] = React.useState<TasksResponse | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [selected, setSelected] = React.useState<string | null>(null);
+  const [selected, setSelected] = React.useState<string | null>(() => takeRequestedAgentTask());
   const [node, setNode] = React.useState<string | null>(null);
   const [modules, setModules] = React.useState<{ list: ModuleStatus[]; fromServer: boolean } | null>(null);
   const [readAt, setReadAt] = React.useState<number | null>(null);
@@ -175,8 +177,9 @@ export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply 
           )}
           {current && <TaskControls task={current} surveyId={surveyId} canEdit={canEdit} onTask={upsert} />}
           {current && graph && <TaskMap task={current} graph={graph} selected={node} onSelect={setNode} />}
-          {picked && <NodeDetail node={picked} onClose={() => setNode(null)} />}
+          {picked && current && <NodeDetail node={picked} taskStatus={current.status} onClose={() => setNode(null)} />}
           {current?.blocked && <div className="agw-error" role="status">Waiting for a person: {current.blocked.message}</div>}
+          {current && <details className="agw-log" data-testid="agw-log"><summary>Execution log — every step, attempt and message</summary><ExecutionPanel task={current} durable={data?.durable !== false} /></details>}
           {current && onApply && <TaskResultReview task={current} surveyId={surveyId} def={def} canEdit={canEdit} onApply={onApply} />}
         </section>
       </div>
@@ -203,8 +206,7 @@ function TaskMap({ task, graph, selected, onSelect }: { task: ClientTask; graph:
     <div className="agw-map" data-testid="agw-map">
       <div className="agw-map-head">
         <b>{KIND_WORD[task.kind] ?? task.kind}</b>
-        <span>{TASK_WORD[task.status] ?? task.status}</span>
-        <span>{done}/{graph.nodes.length} steps</span>
+        <span data-testid="agw-map-outcome">{taskOutcome({ status: task.status, steps: graph.nodes }).label}</span>
         {task.spend.charge > 0 && <span title="What the task has been charged so far, in the platform's own units">charge {task.spend.charge.toFixed(4)}</span>}
         <span className="grow" />
         <span className="agw-legend">{graph.agents.map((a) => <span key={a} className={`a-${a}`}><i />{agentName(a)}</span>)}</span>
@@ -223,10 +225,10 @@ function TaskMap({ task, graph, selected, onSelect }: { task: ClientTask; graph:
             const p = pos.get(n.stepId)!;
             return (
               <button key={n.stepId} type="button" className={`agw-node a-${n.agent ?? "other"} n-${n.status} ${selected === n.stepId ? "on" : ""}`} style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H }}
-                onClick={() => onSelect(selected === n.stepId ? null : n.stepId)} data-testid="agw-node" data-step={n.stepId} data-status={n.status} aria-label={`${agentName(n.agent)}: ${n.title} — ${STEP_WORD[n.status] ?? n.status}`}>
+                onClick={() => onSelect(selected === n.stepId ? null : n.stepId)} data-testid="agw-node" data-step={n.stepId} data-status={n.status} aria-label={`${agentName(n.agent)}: ${n.title} — ${stepOutcome(n, task.status).label}`}>
                 <span className="agw-node-agent">{agentName(n.agent)}</span>
                 <span className="agw-node-title">{n.title}</span>
-                <span className="agw-node-status">{STEP_WORD[n.status] ?? n.status}{n.retryCount ? ` · retry ${n.retryCount}` : ""}{n.durationMs != null ? ` · ${dur(n.durationMs)}` : ""}</span>
+                <span className={`agw-node-status o-${stepOutcome(n, task.status).tone}`}>{stepOutcome(n, task.status).label}{n.durationMs != null ? ` · ${dur(n.durationMs)}` : ""}</span>
               </button>
             );
           })}
@@ -236,13 +238,14 @@ function TaskMap({ task, graph, selected, onSelect }: { task: ClientTask; graph:
   );
 }
 
-function NodeDetail({ node, onClose }: { node: AgentNode; onClose: () => void }) {
+function NodeDetail({ node, onClose, taskStatus }: { node: AgentNode; onClose: () => void; taskStatus: string }) {
   return (
     <div className="agw-detail" data-testid="agw-detail">
       <div className="row" style={{ gap: 8 }}><b>{node.title}</b><span className="grow" /><button className="btn tiny ghost" onClick={onClose} aria-label="Close step details">×</button></div>
       <dl>
         <dt>Agent</dt><dd>{agentName(node.agent)}</dd>
-        <dt>Status</dt><dd>{STEP_WORD[node.status] ?? node.status}{node.retryCount ? ` (attempt ${node.retryCount + 1})` : ""}</dd>
+        <dt>Status</dt><dd>{stepOutcome(node, taskStatus).label}</dd>
+        {node.retryCount > 0 && <><dt>Attempts</dt><dd>{node.retryCount + 1} — {node.retryCount} earlier attempt{node.retryCount === 1 ? "" : "s"} failed{node.status === "completed" ? ", the last one succeeded" : ""}</dd></>}
         {node.dependsOn.length > 0 && <><dt>Waits for</dt><dd>{node.dependsOn.join(", ")}</dd></>}
         {node.modelTier && <><dt>Model tier</dt><dd>{node.modelTier}</dd></>}
         {node.durationMs != null && <><dt>Took</dt><dd>{dur(node.durationMs)}</dd></>}

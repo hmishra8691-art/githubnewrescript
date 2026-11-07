@@ -29,7 +29,8 @@ import { useCopilot, type CopilotEntry } from "./copilot/useCopilot";
 import { applyIntent, undoIntent } from "../../lib/copilot/spoken";
 import { CopilotCard, SaveFailed } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
-import { ExecutionPanel } from "./ExecutionPanel";
+import { TaskStrip } from "./TaskStrip";
+import { requestAgentTask } from "../../lib/agents/workspace";
 import type { ClientTask } from "@/lib/copilot/taskStore";
 import { StructurePane } from "./copilot/StructurePane";
 import { paneLayout, splitterKey, readPaneWidths, PANE_LIMITS } from "../../lib/intelligent/paneLayout";
@@ -218,6 +219,8 @@ export function IntelligentView() {
   /* asking for the inspector (Review, a proposal's changes, research) shows it — as a drawer when it is not docked */
   const layoutRef = React.useRef(layout);
   layoutRef.current = layout;
+  /** the task's full record lives in the AI Agents workspace: open it there, on that task */
+  const openAgents = React.useCallback((taskId?: string) => { requestAgentTask(taskId); s.goToTab?.("agents"); }, [s]);
   const revealInspector = React.useCallback(() => { setShowInspector(true); if (layoutRef.current.inspector !== "docked") setDrawer("inspector"); }, []);
   /* a drawer only for a pane that is not docked; Escape closes it */
   React.useEffect(() => {
@@ -967,7 +970,7 @@ export function IntelligentView() {
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
                     onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); revealInspector(); }}
-                    onReviewTask={(id) => void copilot.openTaskResult(id).then(() => { revealInspector(); copilot.setTab("changes"); })} onShowTask={() => revealInspector()}
+                    onReviewTask={(id) => void copilot.openTaskResult(id).then(() => { revealInspector(); copilot.setTab("changes"); })} onShowTask={(id) => openAgents(id)}
                     onExecutePlan={(id, items) => void copilot.executePlan(id, items)} onCancelPlan={(id) => copilot.cancelPlan(id)}
                     documents={documentActions}
                     onResume={(id) => void copilot.resume(id)} onReviewReady={(id) => void copilot.reviewReady(id)} onBuildRest={(id) => void copilot.buildRemaining(id)} onResumeNow={(id) => copilot.resumeNow(id)} onDiscard={(id) => copilot.discardWork(id)}
@@ -1057,15 +1060,20 @@ export function IntelligentView() {
             aria-label="Resize the inspector (arrow keys)" aria-valuemin={PANE_LIMITS.inspector.min} aria-valuemax={PANE_LIMITS.inspector.max} aria-valuenow={layout.inspectorWidth} data-testid="iq-splitter-inspector" />}
           <div className={`cp-panel-wrap${layout.inspector === "docked" ? "" : " iq-drawer end"}`} data-testid="iq-inspector" {...(layout.inspector === "docked" ? {} : { role: "dialog", "aria-label": "Inspector" })} data-drawer={layout.inspector === "docked" ? undefined : "1"}>
             {layout.inspector !== "docked" && <button type="button" className="iq-btn iq-drawer-close" onClick={() => setDrawer(null)} aria-label="Close the inspector" data-testid="iq-drawer-close">×</button>}
-            {/* ONE panel: the copilot's own task when it is driving one (with its buttons), else the server's record of an open task */}
+            {/*
+              * THE REVIEW PANEL STAYS THE REVIEW PANEL (2026-11-07). The copilot's task shows as a few lines of
+              * step-by-step progress (TaskStrip) above the Changes / Review / Findings tabs, only while it is
+              * running, waiting or ready to review; every row, attempt and message is in the AI Agents workspace.
+              */}
             {copilot.activeTask
-              ? <ExecutionPanel task={copilot.activeTask.task} durable={copilot.taskDurable || durableTask.durable}
+              ? <TaskStrip task={copilot.activeTask.task}
                   onPause={() => void copilot.taskAction(copilot.activeTask!.entryId, "pause")}
                   onResume={() => void copilot.taskAction(copilot.activeTask!.entryId, "resume")}
-                  onRetry={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}
+                  onContinue={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}
                   onCancel={() => void copilot.taskAction(copilot.activeTask!.entryId, "cancel")}
-                  onReview={() => void copilot.openTaskResult(copilot.activeTask!.entryId).then(() => { revealInspector(); copilot.setTab("changes"); })} />
-              : durableTask.task && <ExecutionPanel task={durableTask.task} durable={durableTask.durable} />}
+                  onReview={() => void copilot.openTaskResult(copilot.activeTask!.entryId).then(() => { revealInspector(); copilot.setTab("changes"); })}
+                  onDetails={() => openAgents(copilot.activeTask!.task.id)} />
+              : durableTask.task && <TaskStrip task={durableTask.task} onDetails={() => openAgents(durableTask.task!.id)} />}
             <CopilotPanel copilot={copilot} def={s.def} onSelect={selectQuestion} onApply={applyCopilot} applyNote={applyNote} readOnly={s.readOnly}
               onImportQuotaSheet={() => quotaSheetRef.current?.click()} quotaImport={quotaImport}
               primary={primary} index={index} onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(t) => void ask(t)} onTemplate={writeTemplate}

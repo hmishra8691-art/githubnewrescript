@@ -127,7 +127,7 @@ export function agentGraph(task: Pick<ClientTask, "steps" | "planVersion">): Age
   return { nodes, edges, columns: nodes.reduce((m, n) => Math.max(m, n.column + 1), 0), agents };
 }
 
-export type AgentState = "working" | "waiting" | "attention" | "done" | "idle" | "planned";
+export type AgentState = "working" | "waiting" | "attention" | "done" | "failed" | "stopped" | "idle" | "planned";
 
 export interface AgentStatus {
   id: AgentId;
@@ -165,10 +165,25 @@ export function agentStatuses(tasks: Pick<ClientTask, "status" | "steps">[]): Ag
       /* a paused task's queued work is waiting on a person, not on another step */
       else if (s.status === "pending" || s.status === "retrying") { if (t.status === "needs_attention") attention = true; else waiting = true; }
     }
-    const state: AgentState = a.availability === "planned" ? "planned" : running ? "working" : attention ? "attention" : waiting ? "waiting" : counts.completed ? "done" : "idle";
+    /* with nothing open, the agent's state is how its NEWEST task ended for it (tasks arrive newest first): failed
+       steps in a stopped task are a failure, a cancelled task is stopped — "done" only when that task completed */
+    let closed: AgentState | null = null;
+    const last = tasks.find((t) => t.steps.some((s) => s.status !== "tombstoned" && agentOf(s) === a.id));
+    if (last && !open(last)) {
+      const mine = last.steps.filter((s) => s.status !== "tombstoned" && agentOf(s) === a.id);
+      if (last.status === "completed") closed = "done";
+      else if (mine.some((s) => s.status === "failed" || s.status === "blocked")) closed = "failed";
+      else closed = "stopped";
+    }
+    const state: AgentState = a.availability === "planned" ? "planned" : running ? "working" : attention ? "attention" : waiting ? "waiting" : closed ?? (counts.completed ? "done" : "idle");
     return { id: a.id, state, steps: counts, ...(lastActive ? { lastActive } : {}), ...(now ? { now } : {}) };
   });
 }
 
 /** a task the workspace should keep reading: something on it can still change */
 export const isLive = (t: Pick<ClientTask, "status"> | null | undefined): boolean => !!t && (t.status === "pending" || t.status === "running");
+
+/* the task another screen asked the workspace to open (the Intelligent mode's "Details") — read once on mount */
+let requestedTask: string | null = null;
+export function requestAgentTask(id: string | null | undefined): void { requestedTask = id ?? null; }
+export function takeRequestedAgentTask(): string | null { const t = requestedTask; requestedTask = null; return t; }

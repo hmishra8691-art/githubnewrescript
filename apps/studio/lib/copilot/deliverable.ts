@@ -64,6 +64,7 @@ import {
   type TaskStatus,
 } from "@rescript/engine";
 import { plannedItemReadiness } from "@rescript/analytics";
+import { ATTEMPTS, stepOutcome, taskOutcome, type StepTone } from "./stepOutcome.ts";
 
 /* ============================================================ the exam key */
 
@@ -629,6 +630,9 @@ export interface ExecutionRow {
   retryCount: number;
   inputRef?: string;
   seconds: number | null;
+  /** the one sentence a researcher reads (lib/copilot/stepOutcome.ts): attempt history, check and task status kept apart */
+  outcome: string;
+  tone: StepTone;
 }
 
 export type ExecutionPhase = "planning" | "building" | "validating" | "recovering" | "needs attention" | "done" | "cancelled";
@@ -707,7 +711,7 @@ export interface TaskView {
   deliverable?: DeliverableSpec;
 }
 
-const rowOf = (s: StepRow): ExecutionRow => ({
+const rowOf = (s: StepRow, taskStatus = "running"): ExecutionRow => ({
   stepId: s.stepId,
   title: s.title ?? s.stepId,
   status: s.status,
@@ -720,6 +724,8 @@ const rowOf = (s: StepRow): ExecutionRow => ({
   retryCount: s.retryCount,
   ...(s.inputRef ? { inputRef: s.inputRef } : {}),
   seconds: s.startedAt != null && s.finishedAt != null && s.finishedAt >= s.startedAt ? Math.round((s.finishedAt - s.startedAt) / 100) / 10 : null,
+  outcome: stepOutcome(s, taskStatus).label,
+  tone: stepOutcome(s, taskStatus).tone,
 });
 
 /**
@@ -737,17 +743,20 @@ export function executionView(
      lets the same two counters serve the server's rows and the client's redacted ones. */
   const counted = { steps: task.steps as unknown as ExecStep[] };
   const p = taskProgress(counted);
-  const rows = task.steps.map(rowOf);
+  const rows = task.steps.map((s) => rowOf(s, task.status));
   const spendRaw = taskSpend(counted);
   const spendReal = task.steps.some((s) => s.usage && (s.usage.tokensIn != null || s.usage.tokensOut != null || s.usage.charge != null));
 
   const running = task.steps.find((s) => s.status === "running");
   const retrying = task.steps.filter((s) => s.status === "retrying");
   const failedSteps = task.steps.filter((s) => s.status === "failed");
-  const terminal = failedSteps.filter((s) => s.failureKind && isTerminalFailure(s.failureKind));
+  /* a failure is FINAL when its kind cannot succeed, when its attempts are spent, or when the task has stopped —
+     only then is it "needs attention"; before that it is a failed attempt that will be retried */
+  const closed = task.status === "cancelled" || task.status === "failed" || task.status === "completed";
+  const terminal = failedSteps.filter((s) => (s.failureKind && isTerminalFailure(s.failureKind)) || s.retryCount >= ATTEMPTS || closed);
   const next = task.steps.find((s) => s.status === "pending" || s.status === "retrying" || s.status === "running");
   const current = running ?? retrying[0] ?? next ?? null;
-  const currentRow = current ? rowOf(current) : null;
+  const currentRow = current && !closed ? rowOf(current, task.status) : null;
 
   const invalid = task.steps.filter((s) => s.validation?.status === "invalid");
   const checked = task.steps.filter((s) => s.validation && s.validation.status !== "unchecked").length;
@@ -758,6 +767,7 @@ export function executionView(
      possible, `needs attention` once it is not. */
   let phase: ExecutionPhase;
   if (task.status === "cancelled") phase = "cancelled";
+  else if (task.status === "completed" && !failedSteps.length) phase = "done";
   else if (terminal.length) phase = "needs attention";
   else if (failedSteps.length || retrying.length) phase = "recovering";
   else if (task.status === "completed") phase = "done";
@@ -773,6 +783,7 @@ export function executionView(
   const timed = task.steps.filter((s) => s.status === "completed" && s.startedAt != null && s.finishedAt != null && s.finishedAt > s.startedAt);
   let estimate: ExecutionEstimate;
   if (p.total === 0) estimate = { known: false, text: "No steps yet — nothing to estimate." };
+  else if (task.status === "cancelled" || task.status === "failed") estimate = { known: false, text: "Stopped — nothing is running." };
   else if (remaining === 0) estimate = { known: false, text: "Nothing left to run." };
   else if (terminal.length) estimate = { known: false, text: "Stopped — no estimate while a step needs attention." };
   else if (timed.length < 2) estimate = { known: false, text: `${p.completed} of ${p.total} steps done. No time estimate until two steps have finished.` };
@@ -782,7 +793,9 @@ export function executionView(
     estimate = { known: true, seconds, text: `About ${seconds < 90 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`} left at ${Math.round(per / 100) / 10}s a step.` };
   }
 
-  const headline = phase === "needs attention"
+  const headline = phase === "cancelled"
+    ? taskOutcome(task).label
+    : phase === "needs attention"
     ? `${terminal.length} step${terminal.length === 1 ? "" : "s"} cannot continue — ${terminal[0].failureMessage ?? "see the rows below"}`
     : phase === "recovering"
       ? `${failedSteps.length + retrying.length} step${failedSteps.length + retrying.length === 1 ? "" : "s"} being retried — ${p.completed} of ${p.total} done`
@@ -811,7 +824,9 @@ export function executionView(
     recovery: {
       retrying: retrying.length,
       attention: terminal.length > 0,
-      message: terminal.length
+      message: task.status === "cancelled"
+        ? (failedSteps.length ? `Before the task was cancelled, ${failedSteps.length} step${failedSteps.length === 1 ? "" : "s"} had failed — ${failedSteps[0].title ?? failedSteps[0].stepId}: ${failedSteps[0].failureMessage ?? "failed"}` : null)
+        : terminal.length
         ? `${terminal[0].title ?? terminal[0].stepId}: ${terminal[0].failureMessage ?? "this step cannot succeed as written"}`
         : failedSteps.length
           ? `${failedSteps[0].title ?? failedSteps[0].stepId}: ${failedSteps[0].failureMessage ?? "failed"} — retrying.`

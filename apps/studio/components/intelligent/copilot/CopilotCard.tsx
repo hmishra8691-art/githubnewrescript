@@ -1,5 +1,6 @@
 "use client";
 import { CleaningTurnCard } from "./CleaningTurnCard";
+import { taskOutcome } from "../../../lib/copilot/stepOutcome";
 import { VerifyCard } from "./VerifyCard";
 import type { VerifyView } from "./useCopilot";
 import React from "react";
@@ -61,7 +62,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   /** a planned task (2026-10-29): open its finished result as one proposal */
   onReviewTask?(entryId: string): void;
   /** a planned task: show the execution panel */
-  onShowTask?(): void;
+  /** the task's full record — every step, attempt and message — in the AI Agents workspace */
+  onShowTask?(taskId: string): void;
   counts: { label: string; value: number }[] | null;
   canApply: boolean;
   /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
@@ -149,14 +151,14 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
           /* a planned task (2026-10-29): the rows live in the execution panel; the card says where it stands and offers the result once it is done */
           <div className="cp-task" data-testid="cp-task" data-task-id={entry.task.id} data-task-status={entry.task.status}>
             <p className="iqi-dim" data-testid="cp-task-line">
-              {entry.task.progress.completed} of {entry.task.progress.total} step{entry.task.progress.total === 1 ? "" : "s"} done
-              {entry.task.progress.failed ? ` · ${entry.task.progress.failed} failed` : ""}
+              {entry.task.status === "cancelled" || entry.task.status === "failed" || entry.task.status === "completed" ? taskOutcome(entry.task).label : <>{entry.task.progress.completed} of {entry.task.progress.total} step{entry.task.progress.total === 1 ? "" : "s"} done
+              {entry.task.progress.failed ? ` · ${entry.task.progress.failed} failed` : ""}</>}
               {entry.task.spend?.charge ? ` · ${entry.task.spend.charge.toFixed(2)} credits so far` : ""}
               {entry.task.status === "needs_attention" && entry.task.blocked ? ` — ${entry.task.blocked.message}` : ""}
               {entry.task.status === "running" || entry.task.status === "pending" ? " — each step is saved as it completes; this continues in the background when you close this page." : ""}
             </p>
             <div className="row" style={{ gap: 8 }}>
-              {onShowTask && <button type="button" className="iq-btn" data-testid="cp-task-show" onClick={onShowTask}>Execution panel</button>}
+              {onShowTask && <button type="button" className="iq-btn" data-testid="cp-task-show" onClick={() => onShowTask(entry.task!.id)}>Details in AI Agents</button>}
               {entry.task.status === "completed" && onReviewTask && <button type="button" className="iq-btn primary" data-testid="cp-task-review" onClick={() => onReviewTask(entry.id)}>Review the result</button>}
             </div>
           </div>

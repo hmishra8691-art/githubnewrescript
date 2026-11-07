@@ -13,7 +13,7 @@
  * Every step validates its own actions on the draft before it returns `completed`; a cut-off answer is split in two;
  * an answer in words is retried once with a targeted instruction.
  */
-import { applySurveyActions, coerceSurveyActions, estimateTaskSize, type SurveyAction } from "@rescript/engine";
+import { applySurveyActions, coerceSurveyActions, estimateTaskSize, listBlocks, type SurveyAction } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import { neutralizeUntrusted } from "@rescript/ai";
 import { COPILOT_REPLY_SCHEMA } from "../../copilot/replySchema.ts";
@@ -45,9 +45,18 @@ export const genericPlanner: TaskPlanner = {
     if (e.kind === "generate" || e.kind === "brief") {
       const total = Math.max(1, e.units);
       const start = qs.length + 1;
+      /*
+       * ONE AFTER ANOTHER (2026-11-07). The batches used to run side by side, each on the survey as it was before
+       * any of them — so batch 2 could not see the blocks batch 1 had just made, put its questions in "Core
+       * Constructs", and every one was refused ("there is no block") until its attempts ran out. Each batch now
+       * depends on the one before, so its draft has every block and code written so far.
+       */
+      let prev: string | null = null;
       for (let i = 0; i < total; i += BATCH_GENERATE) {
         const from = start + i, to = start + Math.min(total, i + BATCH_GENERATE) - 1;
-        steps.push({ id: `gen_${from}_${to}`, kind: "copilot.generate", title: `Write questions ${from}–${to}`, dependsOn: [], input: { from, to, units: to - from + 1, range: { from, to }, total: start + total - 1 }, parallelGroup: "batches", modelTier: "standard", estimate: { inputTokens: 3000, outputTokens: (to - from + 1) * 200, usd: 0 } });
+        const id = `gen_${from}_${to}`;
+        steps.push({ id, kind: "copilot.generate", title: `Write questions ${from}–${to}`, dependsOn: prev ? [prev] : [], input: { from, to, units: to - from + 1, range: { from, to }, total: start + total - 1 }, modelTier: "standard", estimate: { inputTokens: 3000, outputTokens: (to - from + 1) * 200, usd: 0 } });
+        prev = id;
       }
       completion.push(`questions>=${qs.length + total}`, "unique_codes");
     } else if (e.kind === "per_question" || e.kind === "rework_all" || e.kind === "translate") {
@@ -65,14 +74,46 @@ export const genericPlanner: TaskPlanner = {
   },
 };
 
+/** block titles and ids a definition has (case-insensitive), as the action engine resolves them */
+function blockTitles(draft: unknown): Set<string> {
+  const out = new Set<string>();
+  for (const b of listBlocks(((draft as { flow?: unknown[] })?.flow) ?? [])) { if (b.title) out.add(String(b.title).trim().toLowerCase()); if (b.id) out.add(String(b.id).toLowerCase()); }
+  return out;
+}
+
+/**
+ * A question placed in a block the survey does not have yet gets that block made first, at the point it is first
+ * named — instead of the question being refused. Deterministic on the draft the step sees, so the task's replay in
+ * plan order makes exactly the same block once.
+ */
+export function withMissingBlocks(actions: SurveyAction[], draft: unknown): SurveyAction[] {
+  const known = blockTitles(draft);
+  const out: SurveyAction[] = [];
+  for (const a of actions) {
+    if (a.op === "create_block") known.add(a.title.trim().toLowerCase());
+    const block = a.op === "create_question" ? a.block?.trim() : undefined;
+    if (block && !known.has(block.toLowerCase()) && !/^(?:block|section)\s*\d+$/i.test(block)) {
+      out.push({ op: "create_block", title: block });
+      known.add(block.toLowerCase());
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 /** the actions of a model reply, refused ones dropped, checked on the draft */
-function actionsChecked(value: unknown, draft: unknown): { actions: SurveyAction[]; errors: string[]; rejected: number } {
+function actionsChecked(value: unknown, draft: unknown): { actions: SurveyAction[]; errors: string[]; rejected: number; created: Set<string> } {
   const raw = value && typeof value === "object" ? (value as { actions?: unknown }).actions : null;
-  const { actions, rejected } = coerceSurveyActions(raw);
-  if (!actions.length) return { actions, errors: [], rejected: rejected.length };
+  const coerced = coerceSurveyActions(raw);
+  const rejected = coerced.rejected;
+  const actions = withMissingBlocks(coerced.actions, draft);
+  if (!actions.length) return { actions, errors: [], rejected: rejected.length, created: new Set() };
   const applied = applySurveyActions(draft as Def, actions);
   const okIdx = new Set(applied.results.filter((r) => r.ok).map((r) => r.index));
-  return { actions: actions.filter((_, i) => okIdx.has(i)), errors: applied.results.filter((r) => !r.ok).map((r) => `${r.description}: ${r.error ?? "refused"}`), rejected: rejected.length };
+  /* what the actions really made: the codes in the result that were not in the draft (a renamed code still counts as made) */
+  const before = new Set(questionsOf(draft).map((q) => q.code));
+  const created = new Set(applied.def.questions.map((q) => q.code).filter((c) => !before.has(c)));
+  return { actions: actions.filter((_, i) => okIdx.has(i)), errors: applied.results.filter((r) => !r.ok).map((r) => `${r.description}: ${r.error ?? "refused"}`), rejected: rejected.length, created };
 }
 
 const outlineOf = (qs: Def["questions"]) => qs.map((q) => `${q.code} [${q.type}] ${neutralizeUntrusted(String(q.text ?? ""), { maxChars: 300 }).replace(/\s+/g, " ")}${Array.isArray((q as { options?: unknown[] }).options) ? ` | ${((q as { options: { code?: unknown; label?: unknown }[] }).options).slice(0, 12).map((o) => `${o.code}=${neutralizeUntrusted(String(o.label ?? ""), { maxChars: 80 })}`).join("; ")}` : ""}`).join("\n");
@@ -110,18 +151,25 @@ export const generateHandler = {
       summaryText(ctx),
       `YOU ARE WRITING PART OF A LARGER QUESTIONNAIRE (${total} questions in all). Write ONLY questions ${from}–${to} as create_question actions, with exactly these codes, in order: ${codes.join(", ")}.`,
       `Codes already in the survey (do not repeat or renumber): ${[...have].slice(-60).join(", ") || "none"}.`,
+      `Blocks already in the survey: ${blockNames(ctx.draft).join(", ") || "none"}. Put each question in one of these, or create the block first with a create_block action.`,
       "Answer in the JSON shape asked for: kind \"proposal\", a one-sentence reply, and the actions.",
       specLine({ op: "generate", codes }),
     ].join("\n\n");
     const r = await batchCall(ctx, "copilot.generate", prompt, Math.max(4000, codes.length * 450), () => halves(ctx, (a, b, s) => ({ id: `${ctx.step.id}${s}`, kind: "copilot.generate", title: `Write questions ${a}–${b}`, dependsOn: ctx.step.dependsOn, input: { ...ctx.step.input, from: a, to: b, units: b - a + 1, range: { from: a, to: b } }, parallelGroup: ctx.step.parallelGroup, modelTier: ctx.step.modelTier })));
     if (!("value" in r)) return r;
     const c = actionsChecked(r.value, ctx.draft);
-    const made = new Set(c.actions.map((a) => (a as { code?: string }).code).filter(Boolean));
-    const missing = codes.filter((x) => !made.has(x));
+    const made = c.created;
+    /* a code the model renamed is still a question made: count by number, and name the difference as a warning */
+    const missing = codes.filter((x) => !made.has(x)).slice(0, Math.max(0, codes.length - made.size));
+    const renamed = made.size >= codes.length ? codes.filter((x) => !made.has(x)) : [];
     if (!c.actions.length) return ctx.attempt < 2 ? { status: "retry", reason: "invalid_output: the answer had no usable question", retryAfterMs: 500 } : { status: "failed", reason: `invalid_output: no usable question for ${codes[0]}–${codes.at(-1)} (${c.errors.slice(0, 2).join("; ")})`, permanent: false };
-    return { status: "completed", output: { actions: c.actions, validation: { ok: missing.length === 0, errors: missing.length ? [`missing ${missing.join(", ")}`] : [], warnings: c.errors.slice(0, 5) } } };
+    /* nothing made at all is not a completed step, whatever else the answer did */
+    if (!made.size) return ctx.attempt < 2 ? { status: "retry", reason: `invalid_output: no question was created (${c.errors.slice(0, 2).join("; ") || "the answer made none"})`, retryAfterMs: 500 } : { status: "failed", reason: `invalid_output: no question created for ${codes[0]}–${codes.at(-1)} (${c.errors.slice(0, 2).join("; ")})`, permanent: false };
+    return { status: "completed", output: { actions: c.actions, validation: { ok: missing.length === 0, errors: missing.length ? [`missing ${missing.join(", ")}`] : [], warnings: [...(renamed.length ? [`codes differ from the plan: ${renamed.join(", ")} were written under other codes`] : []), ...c.errors.slice(0, 5)] } } };
   },
 };
+
+const blockNames = (draft: unknown): string[] => listBlocks(((draft as { flow?: unknown[] })?.flow) ?? []).map((b) => String(b.title ?? "")).filter(Boolean).slice(0, 40);
 
 export const reworkHandler = {
   kind: "copilot.rework",

@@ -3235,3 +3235,30 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .agw-out-slides li.ns > b { color: var(--agw-sub); }
 .agw-out-table select, .agw-out-table input { background: #0f1528; color: var(--agw-text); border: 1px solid var(--agw-line); }
 .agw-stage-agents { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+/* Intelligent mode: the compact programming progress above the review tabs */
+.cp-taskstrip { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin: 8px 10px; display: grid; gap: 6px; background: var(--surface, #fff); font-size: 12.5px; }
+.cp-taskstrip-head { display: flex; align-items: baseline; gap: 8px; }
+.cp-taskstrip-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.cp-taskstrip-steps li { display: grid; grid-template-columns: 16px auto 1fr auto; gap: 6px; align-items: baseline; }
+.cp-taskstrip-ico { text-align: center; font-weight: 700; }
+.cp-taskstrip-n { color: var(--muted, #64748b); font-size: 11.5px; }
+.cp-taskstrip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-taskstrip-out { font-size: 11.5px; color: var(--muted, #64748b); white-space: nowrap; }
+.cp-taskstrip-steps li.t-ok .cp-taskstrip-ico { color: #059669; }
+.cp-taskstrip-steps li.t-bad .cp-taskstrip-ico, .cp-taskstrip-steps li.t-bad .cp-taskstrip-out { color: #dc2626; }
+.cp-taskstrip-steps li.t-warn .cp-taskstrip-ico, .cp-taskstrip-steps li.t-warn .cp-taskstrip-out { color: #b45309; }
+.cp-taskstrip-steps li.t-busy .cp-taskstrip-ico { color: #2563eb; }
+.cp-taskstrip-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.cp-taskstrip-actions:empty { display: none; }
+.cp-taskstrip-more { justify-self: start; }
+.agw-agent.s-failed .agw-dot { background: #ef4444; }
+.agw-agent.s-failed .agw-agent-state { color: #fca5a5; }
+.agw-agent.s-stopped .agw-dot { background: #94a3b8; }
+.agw-node-status.o-ok { color: #6ee7b7; }
+.agw-node-status.o-warn { color: #fcd34d; }
+.agw-node-status.o-bad { color: #fca5a5; }
+.agw-node-status.o-busy { color: #67e8f9; }
+.agw-log { background: var(--agw-card); border: 1px solid var(--agw-line); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; }
+.agw-log summary { cursor: pointer; color: var(--agw-sub); }
+.agw-log[open] { background: var(--surface, #fff); color: var(--text, #0f172a); }
+.agw-log[open] summary { color: var(--muted, #64748b); margin-bottom: 8px; }
