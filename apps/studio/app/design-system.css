@@ -843,7 +843,8 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .ar-divider { cursor: col-resize; background: transparent; position: relative; z-index: 2; }
 .ar-divider:hover, .ar-divider:active { background: var(--c-primary-100); }
 .ar-pane-head {
-  display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 38px; flex: none;
+  /* a minimum, not a fixed height: a head with more controls than fit wraps onto a second line instead of clipping or overlapping them */
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 4px 12px; min-height: 38px; flex: none;
   border-bottom: 1px solid var(--c-border); background: var(--c-surface-2);
 }
 .ar-pane-title { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-3); }

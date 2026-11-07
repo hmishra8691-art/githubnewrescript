@@ -53,6 +53,8 @@ export function Workspace(p: {
   spec: ChartSpec | null; onSpec: (s: ChartSpec) => void;
   /** the All view tells the shell which analyses are on screen, so they are computed */
   onVisible: (analysisId: string, visible: boolean) => void;
+  /** open a table large (the shell's dialog) */
+  onExpandTable?: (analysisId: string, tableId?: string) => void;
 }) {
   const c = p.catalogue;
   const focused = c && p.selection.focus ? c.all.find((e) => e.key === p.selection.focus) ?? null : null;
@@ -77,7 +79,7 @@ export function Workspace(p: {
   return (
     <div className="axa-work" data-testid="axa-focus">
       {!focused && <div className="axa-empty"><b>Nothing in focus.</b><p className="muted">Click an entry in the Explorer to open it here — its chart and table together, or one of them, or the details behind it.</p></div>}
-      {focused && <FocusBody api={p.api} nonce={p.nonce} entry={focused} focusView={p.focusView} charts={p.charts} results={p.results} retry={p.retry} themes={p.themes} theme={theme} spec={p.spec} onSpec={p.onSpec} onOpenInBuilder={p.onOpenInBuilder} canEdit={p.canEdit} catalogue={c!} onFocus={p.onFocus} />}
+      {focused && <FocusBody onExpandTable={p.onExpandTable} api={p.api} nonce={p.nonce} entry={focused} focusView={p.focusView} charts={p.charts} results={p.results} retry={p.retry} themes={p.themes} theme={theme} spec={p.spec} onSpec={p.onSpec} onOpenInBuilder={p.onOpenInBuilder} canEdit={p.canEdit} catalogue={c!} onFocus={p.onFocus} />}
     </div>
   );
 }
@@ -124,17 +126,24 @@ function AllSection(p: { index: number; entry: CatalogueEntry; charts: Row[]; re
 /* ------------------------------------------------------------ the Combined presentation */
 
 /** the chart and the table together; a crosstab adds its heatmap — one result, synchronized */
-function Combined(p: { entry: CatalogueEntry; result: RunResult; spec: ChartSpec; theme: (id: string | null | undefined) => ReportTheme | null; compact?: boolean; onSpec?: (s: ChartSpec) => void }) {
+function Combined(p: { entry: CatalogueEntry; result: RunResult; spec: ChartSpec; theme: (id: string | null | undefined) => ReportTheme | null; compact?: boolean; onSpec?: (s: ChartSpec) => void; onExpand?: (tableId?: string) => void }) {
   const r = p.result;
-  const heat = HEAT[r.kind];
+  /* a heatmap only where there is a matrix to colour: a crosstab, or a correlation of three or more variables (one pair has nothing to draw) */
+  const heat = r.kind === "correlation" && (r.tables[0]?.rows.length ?? 0) < 2 ? undefined : HEAT[r.kind];
   const [picture, setPicture] = React.useState<"chart" | "heatmap">("chart");
   const shownSpec: ChartSpec = picture === "heatmap" && heat ? { ...p.spec, type: heat } : p.spec;
   const h = p.compact ? 240 : 340;
   return (
     <div className={`axa-combined ${p.compact ? "compact" : ""}`} data-testid="axa-combined-view">
       <div className="axa-combined-table">
-        <ProTable table={r.tables[0]} formatting={{ dense: !!p.compact, heat: !p.compact && r.kind === "crosstab" }} />
-        {!p.compact && r.tables.length > 1 && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{r.tables.length - 1} more table{r.tables.length === 2 ? "" : "s"} in the Table view.</div>}
+        <ProTable table={r.tables[0]} formatting={{ dense: !!p.compact, heat: !p.compact && r.kind === "crosstab" }} maxHeight={p.compact ? 300 : 460} />
+        {(p.onExpand || r.tables.length > 1) && (
+          <div className="ax-tv-foot">
+            {r.tables.length > 1 && <span className="muted">{r.tables.length - 1} more table{r.tables.length === 2 ? "" : "s"}{p.compact ? "" : " in the Table view"}</span>}
+            <span className="grow" />
+            {p.onExpand && r.tables.length > 0 && <button type="button" className="btn small" onClick={() => p.onExpand!(r.tables[0].id)} data-testid="axa-table-expand">Expand table ⤢</button>}
+          </div>
+        )}
       </div>
       <div className="axa-combined-side">
         {heat && (
@@ -154,7 +163,7 @@ function Combined(p: { entry: CatalogueEntry; result: RunResult; spec: ChartSpec
 
 /* ------------------------------------------------------------ Focus */
 
-function FocusBody(p: { api: AxApi; nonce: string; entry: CatalogueEntry; focusView: FocusView; charts: Row[]; results: ResultsState; retry: (id: string) => void; themes: { id: string; name: string; theme: ReportTheme }[]; theme: (id: string | null | undefined) => ReportTheme | null; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; onOpenInBuilder: (id: string) => void; canEdit: boolean; catalogue: AnalysisCatalogue; onFocus: (key: string) => void }) {
+function FocusBody(p: { onExpandTable?: (analysisId: string, tableId?: string) => void; api: AxApi; nonce: string; entry: CatalogueEntry; focusView: FocusView; charts: Row[]; results: ResultsState; retry: (id: string) => void; themes: { id: string; name: string; theme: ReportTheme }[]; theme: (id: string | null | undefined) => ReportTheme | null; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; onOpenInBuilder: (id: string) => void; canEdit: boolean; catalogue: AnalysisCatalogue; onFocus: (key: string) => void }) {
   const e = p.entry;
   if (e.analysisId && isRenderable(e)) {
     const r = p.results.results[e.analysisId];
@@ -175,10 +184,10 @@ function FocusBody(p: { api: AxApi; nonce: string; entry: CatalogueEntry; focusV
           <>
             <div className="row" style={{ gap: 6, alignItems: "baseline", flexWrap: "wrap", marginBottom: 6 }}><BaseCaption result={r} style={{ fontSize: 13 }} /></div>
             <Warnings items={r.warnings} />
-            <Combined entry={e} result={r} spec={spec} theme={p.theme} onSpec={p.onSpec} />
+            <Combined entry={e} result={r} spec={spec} theme={p.theme} onSpec={p.onSpec} onExpand={p.onExpandTable ? (tableId) => p.onExpandTable!(e.analysisId!, tableId) : undefined} />
           </>
         )}
-        {p.focusView === "table" && <TablesOnly result={r} />}
+        {p.focusView === "table" && <TablesOnly result={r} onExpand={p.onExpandTable ? (tableId) => p.onExpandTable!(e.analysisId!, tableId) : undefined} />}
         {p.focusView === "chart" && <ResultView result={r} recommendations={r.recommendations} advice={r.advice} spec={spec} onSpec={p.onSpec} theme={p.theme(spec.themeId)} themes={p.themes} view="chart" />}
         {p.focusView === "details" && <Details entry={e} result={r} api={p.api} nonce={p.nonce} />}
       </div>
@@ -197,7 +206,7 @@ function FocusBody(p: { api: AxApi; nonce: string; entry: CatalogueEntry; focusV
   );
 }
 
-function TablesOnly({ result: r }: { result: RunResult }) {
+function TablesOnly({ result: r, onExpand }: { result: RunResult; onExpand?: (tableId: string) => void }) {
   const [f, setF] = React.useState<{ heat?: boolean; showCounts?: boolean; dense?: boolean; decimals?: number }>({ heat: r.kind === "crosstab" });
   return (
     <div className="axa-tables" data-testid="axa-tables">
@@ -207,7 +216,7 @@ function TablesOnly({ result: r }: { result: RunResult }) {
         <label className="ax-toggle"><input type="checkbox" checked={!!f.dense} onChange={(e) => setF({ ...f, dense: e.target.checked })} /> Dense</label>
         <label className="ax-toggle">Dec. <input className="input small" type="number" min={0} max={4} style={{ width: 52 }} value={f.decimals ?? ""} placeholder="1" onChange={(e) => setF({ ...f, decimals: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
       </div>
-      {r.tables.map((t) => <div key={t.id} className="card ax-table-card"><div className="card-title">{t.title}</div><ProTable table={t} formatting={f} /></div>)}
+      {r.tables.map((t) => <div key={t.id} className="card ax-table-card"><div className="card-title">{t.title}<span className="grow" />{onExpand && <button type="button" className="btn small" onClick={() => onExpand(t.id)}>Expand ⤢</button>}</div><ProTable table={t} formatting={f} maxHeight={520} /></div>)}
       {!r.tables.length && <div className="muted">This analysis produced no table.</div>}
     </div>
   );

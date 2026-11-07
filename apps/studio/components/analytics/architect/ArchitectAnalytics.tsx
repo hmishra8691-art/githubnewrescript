@@ -1,4 +1,5 @@
 "use client";
+import { TableDialog } from "../TableViews";
 import React from "react";
 import type { AnalysisDefinition, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
 import type { AxApi, CataloguePayload, Row } from "../api";
@@ -103,6 +104,13 @@ export function ArchitectAnalytics(p: {
     window.addEventListener("pointermove", onMove); window.addEventListener("pointerup", onUp);
   };
 
+  /* a table opened large (from Combined, the Table view or Properties) — one dialog for the shell */
+  const [tableOpen, setTableOpen] = React.useState<{ analysisId: string; tableId?: string } | null>(null);
+  const createTable = async (rows: string[], columns: string[], name: string) => {
+    const d = { name, kind: columns.length ? "crosstab" : "descriptive", dataset: p.dataset, variables: [...rows, ...columns], rows, columns, measure: "pct_col", options: { significance: true } } as unknown as AnalysisDefinition;
+    await p.api.create("analyses", { name, definition: d });
+    p.onChanged();
+  };
   const openInBuilder = (analysisId: string) => { const a = p.analyses.find((x) => x.id === analysisId); if (a) p.onOpenInBuilder(a); };
   /* a configuration saved from Properties: the builder's route, then the result again and the catalogue again */
   const saveDefinition = async (analysisId: string, d: AnalysisDefinition) => {
@@ -113,7 +121,7 @@ export function ArchitectAnalytics(p: {
   };
 
   return (
-    <div className="ar axa" data-testid="axa-view" style={{ gridTemplateColumns: `${panes.explorer}px 6px minmax(0, 1fr) 6px ${panes.properties}px` }}>
+    <div className="ar axa" data-testid="axa-view" style={{ gridTemplateColumns: `min(${panes.explorer}px, 24vw) 6px minmax(0, 1fr) 6px min(${panes.properties}px, 26vw)` }}>
       <aside className="ar-map axa-pane">
         <div className="ar-pane-head"><span className="ar-pane-title">Analysis Explorer</span><span className="ar-pane-meta">{catalogue ? `${catalogue.all.length} entries` : "…"}</span></div>
         <Explorer catalogue={catalogue} category={category} onCategory={setCategory} filter={filter} onFilter={setFilter} entries={entries} selection={selection}
@@ -133,23 +141,27 @@ export function ArchitectAnalytics(p: {
               {(["combined", "table", "chart", "details"] as const).filter((v) => level !== "simple" || v !== "details").map((v) => <button key={v} role="tab" aria-selected={focusView === v} className={`axa-seg-btn ${focusView === v ? "on" : ""}`} onClick={() => setFocusView(v)} data-testid={`axa-focus-${v}`}>{v[0].toUpperCase() + v.slice(1)}</button>)}
             </div>
           )}
-          <span className="muted" style={{ fontSize: 12.5 }} data-testid="axa-summary">{catalogue ? selectionSummary(catalogue, selection) : ""}</span>
+          <span className="axa-summary" data-testid="axa-summary">{catalogue ? selectionSummary(catalogue, selection) : ""}</span>
           <span className="grow" />
           {catalogue?.objective && <span className="axa-objective" title={catalogue.objective}>Objective: {catalogue.objective}</span>}
         </div>
         {error && <div className="ax-error" style={{ margin: 8 }}>{error}</div>}
         <div className="ar-work-body">
           <Workspace api={p.api} nonce={`${p.dataset.environment}:${p.dataset.dataset}:${p.refreshKey}`} catalogue={catalogue} charts={p.charts} selection={selection} view={view} focusView={focusView} shown={entries} results={results} retry={results.retry} themes={p.themes}
-            onFocus={focus} onOpenInBuilder={openInBuilder} canEdit={p.canEdit} spec={spec} onSpec={setSpec} onVisible={onVisible} />
+            onFocus={focus} onOpenInBuilder={openInBuilder} canEdit={p.canEdit} spec={spec} onSpec={setSpec} onVisible={onVisible} onExpandTable={(analysisId, tableId) => setTableOpen({ analysisId, ...(tableId ? { tableId } : {}) })} />
         </div>
       </main>
       <div className="ar-divider" onPointerDown={startDrag("properties")} role="separator" aria-orientation="vertical" data-testid="axa-divider-properties" />
       <aside className="ar-inspector axa-pane">
         <div className="ar-pane-head"><span className="ar-pane-title">Properties</span></div>
         <div className="ar-inspector-body">
-          <Properties entry={focused} result={focusedResult} analysis={focused?.analysisId ? p.analyses.find((a) => a.id === focused.analysisId) : undefined} spec={spec} onSpec={setSpec} canEdit={p.canEdit} onOpenInBuilder={openInBuilder} variables={p.variables} onSaveDefinition={saveDefinition} api={p.api} nonce={`${p.dataset.environment}:${p.dataset.dataset}:${p.refreshKey}`} />
+          <Properties onOpenTable={focused?.analysisId && focusedResult ? (tableId) => setTableOpen({ analysisId: focused.analysisId!, ...(tableId ? { tableId } : {}) }) : undefined} onCreateTable={p.canEdit ? createTable : undefined} entry={focused} result={focusedResult} analysis={focused?.analysisId ? p.analyses.find((a) => a.id === focused.analysisId) : undefined} spec={spec} onSpec={setSpec} canEdit={p.canEdit} onOpenInBuilder={openInBuilder} variables={p.variables} onSaveDefinition={saveDefinition} api={p.api} nonce={`${p.dataset.environment}:${p.dataset.dataset}:${p.refreshKey}`} />
         </div>
       </aside>
+      {tableOpen && results.results[tableOpen.analysisId] && (
+        <TableDialog title={catalogue?.all.find((e) => e.analysisId === tableOpen.analysisId)?.label ?? "Table"} result={results.results[tableOpen.analysisId]} initialTable={tableOpen.tableId} onClose={() => setTableOpen(null)}
+          actions={p.canEdit ? <button className="btn small" onClick={() => { const id = tableOpen.analysisId; setTableOpen(null); openInBuilder(id); }}>Edit in builder</button> : undefined} />
+      )}
     </div>
   );
 }

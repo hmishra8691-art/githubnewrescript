@@ -239,7 +239,9 @@ export interface ResultViewProps {
 export function ResultView(p: ResultViewProps) {
   const [tab, setTab] = React.useState<"chart" | "tables" | "tests" | "insights">("chart");
   const [customize, setCustomize] = React.useState(false);
-  const [segIdx, setSegIdx] = React.useState<number | null>(null);
+  /* the segments on screen — none is "all respondents"; several are shown side by side, never one replacing the other */
+  const [segSel, setSegSel] = React.useState<number[]>([]);
+  const segIdx = segSel.length === 1 ? segSel[0] : null;
   const [copied, setCopied] = React.useState<string | null>(null);
   const r = p.result;
   const view = p.view ?? "results";
@@ -248,7 +250,15 @@ export function ResultView(p: ResultViewProps) {
   const setF = (patch: TableFormatting) => p.onFormatting?.({ ...f, ...patch });
   const showChart = view === "chart" || tab === "chart";
   const copy = async (t: AnalysisResult["tables"][number]) => { try { await navigator.clipboard.writeText(tableToTsv(t, f.decimals)); setCopied(t.id); setTimeout(() => setCopied(null), 1500); } catch { /* clipboard unavailable */ } };
-  const segmentSwitch = r.segments?.length ? <select className="select small" value={segIdx ?? ""} onChange={(e) => setSegIdx(e.target.value === "" ? null : Number(e.target.value))} data-testid="ax-segment-switch"><option value="">All respondents</option>{r.segments.map((s, i) => <option key={i} value={i}>{s.name} (n = {s.n})</option>)}</select> : null;
+  const segmentSwitch = r.segments?.length ? (
+    <div className="ax-seg-chips" role="group" aria-label="Segments shown" data-testid="ax-segment-switch">
+      <button type="button" className={`ax-chip ${segSel.length === 0 ? "on" : ""}`} aria-pressed={segSel.length === 0} onClick={() => setSegSel([])}>All respondents</button>
+      {r.segments.map((s, i) => { const on = segSel.includes(i); return (
+        <button key={i} type="button" className={`ax-chip ${on ? "on" : ""}`} aria-pressed={on} onClick={() => setSegSel(on ? segSel.filter((x) => x !== i) : [...segSel, i].sort((a, b) => a - b))} title={on ? `Remove ${s.name}` : `Add ${s.name}`} data-testid="ax-segment-toggle">
+          {s.name} (n = {s.n}){on && <span aria-hidden="true" className="ax-chip-x">×</span>}
+        </button>); })}
+    </div>
+  ) : null;
   return (
     <div className="ax-result" data-testid="ax-result" data-view={view}>
       <div className="ax-result-head">
@@ -292,7 +302,15 @@ export function ResultView(p: ResultViewProps) {
       {showChart && (
         <div className="ax-chart-area">
           <div className="ax-chart-main">
-            <ChartFrame result={r} spec={spec} theme={p.theme} onSelect={p.onSelectCategory} selected={p.selected} name={spec.options.title ?? r.name} large={view === "chart"} />
+            {segSel.length > 1 ? (
+              <div className="ax-seg-multiples" data-testid="ax-segment-multiples">
+                {segSel.map((i) => { const s = r.segments![i]; return (
+                  <figure key={i} className="ax-seg-multiple">
+                    <figcaption><strong>{s.name}</strong> <span className="muted">n = {s.n}</span><span className="grow" /><button type="button" className="btn small ghost" onClick={() => setSegSel(segSel.filter((x) => x !== i))} aria-label={`Remove ${s.name}`}>×</button></figcaption>
+                    <ChartFrame result={r} spec={{ ...p.spec, options: { ...p.spec.options, segmentIndex: i } }} theme={p.theme} name={`${spec.options.title ?? r.name} — ${s.name}`} />
+                  </figure>); })}
+              </div>
+            ) : <ChartFrame result={r} spec={spec} theme={p.theme} onSelect={p.onSelectCategory} selected={p.selected} name={spec.options.title ?? r.name} large={view === "chart"} />}
             {p.advice && (
               <div className="ax-advice" data-testid="ax-chart-advice">
                 <div><strong>{p.spec.type === p.advice.type ? "Why this chart" : `Suggested: ${p.advice.type.replace(/_/g, " ")}`}</strong> — {p.advice.reason}.</div>

@@ -17,7 +17,7 @@
 import { chromium } from "./lib/playwright.mjs";
 import { navLabels } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
-import { buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages } from "../packages/analytics/dist/index.js";
+import { buildCatalogue, buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages } from "../packages/analytics/dist/index.js";
 import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { variableMetadata } from "../packages/analytics/dist/dataset.js";
@@ -61,6 +61,12 @@ async function fakeApi(route) {
   const path = url.pathname.replace(`/api/surveys/${SURVEY}/analytics`, "").replace(/^\//, "").split("/").filter(Boolean);
   const [head, itemId, action] = path;
   const coll = (k) => store[k];
+  /* the Architect's catalogue — the package's own builder over the saved analyses (no plan, no qual on this fake) */
+  if (head === "catalogue" && m === "GET") {
+    const analyses = store.analyses.filter((x) => !x.deleted_at).map((x) => ({ id: x.id, name: x.name, kind: x.kind ?? x.definition?.kind, version: x.version ?? 1, updated_at: x.updated_at ?? now(), folder: x.folder ?? null, definition: x.definition }));
+    const catalogue = buildCatalogue({ def, dictionary: variableMetadata(def).filter((v) => !v.hidden), analyses, charts: store.charts.filter((c) => !c.deleted_at).map((c) => ({ id: c.id, analysis_id: c.analysis_id, name: c.name, spec: c.spec, theme_id: c.theme_id ?? null, style_version: c.style_version ?? null })), planItems: [], hypotheses: [], findings: [], outputs: [], qualThemes: [], discoveries: [] });
+    return json(route, { catalogue, plan: { plan: null, items: [], hypotheses: [], run: null, overview: {} } });
+  }
   /* §36 — report templates, and laying one over a report */
   if (head === "report-templates") {
     if (m === "GET") return json(route, { templates: [...BUILT_IN_REPORT_TEMPLATES.map((t) => ({ ...t, kind: "report" })), ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates], available: true });
@@ -236,9 +242,9 @@ assert.match(await text('[data-testid="ax-survey"] option:checked'), /Synthetic 
 assert.match(await text('[data-testid="ax-dataset"] option:checked'), /Production responses \(400\)/);
 ok("Data Analytics page opens with survey and dataset selectors (400 production responses)");
 await page.waitForSelector('[data-testid="ax-home"]');
-assert.equal(await count('[data-testid^="ax-place-"]'), 5, "five places");
-assert.deepEqual(await page.$$eval('[data-testid^="ax-place-"]', (es) => es.map((e) => e.getAttribute("data-testid").replace("ax-place-", ""))), ["overview", "plan", "explore", "findings", "deliver"]);
-ok("home page with Recent analyses / Saved reports / Quick actions and the five places (Overview, Plan, Explore, Findings, Deliver)");
+assert.equal(await count('[data-testid^="ax-place-"]'), 4, "four places");
+assert.deepEqual(await page.$$eval('[data-testid^="ax-place-"]', (es) => es.map((e) => e.getAttribute("data-testid").replace("ax-place-", ""))), ["overview", "explore", "architect", "present"]);
+ok("home page and the four places (Overview, Explore, Architect, Present)");
 await shot("01-home");
 
 console.log("\n§2 ANALYSIS BUILDER — crosstab with significance");
@@ -760,11 +766,47 @@ const [dl3] = await Promise.all([page.waitForEvent("download"), page.click('[dat
 assert.match(dl3.suggestedFilename(), /\.xlsx$/); assert.equal(store.lastExport.format, "xlsx");
 ok("Export dialog (format / theme / include / Excel formatting) generates a workbook");
 await axTab(page, "tables");
-await page.selectOption('[data-testid="ax-table-analysis"]', { label: "Satisfaction by gender (crosstab)" });
+await page.waitForSelector('[data-testid="ax-table-grid"]');
+assert.ok((await page.locator('[data-testid="ax-table-card"]').count()) >= 1, "saved analyses are cards, not a dropdown");
+assert.equal(await page.locator('[data-testid="ax-table-analysis"]').count(), 0);
+await page.click('[data-testid="ax-table-card"][data-name="Satisfaction by gender"] [data-testid="ax-table-card-open"]');
+await page.waitForSelector('[data-testid="ax-table-card"][data-name="Satisfaction by gender"][aria-current="true"]');
 await page.waitForSelector('[data-testid="ax-builder-table"]');
+await page.click('[data-testid="ax-table-active-expand"]'); await page.waitForSelector('[data-testid="ax-table-dialog"]');
+await page.click('[data-testid="ax-table-dialog-close"]'); await page.waitForSelector('[data-testid="ax-table-dialog"]', { state: "detached" });
 await page.click('[data-testid="ax-builder-table"] th >> nth=1');
 assert.match(await text('[data-testid="ax-builder-table"] th >> nth=1'), /↓/);
 ok("Table Builder shows the crosstab with sortable columns");
+await shot("09-tables-cards");
+
+console.log("\n§9h ARCHITECT — pane heads that wrap, a table that expands, tables in Properties");
+const overlaps = async (sel) => page.$$eval(sel, (es) => {
+  const r = es.filter((e) => e.offsetParent).map((e) => e.getBoundingClientRect());
+  for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) if (r[i].left < r[j].right - 1 && r[j].left < r[i].right - 1 && r[i].top < r[j].bottom - 1 && r[j].top < r[i].bottom - 1) return true;
+  return false;
+});
+for (const width of [1280, 1024]) {
+  await page.setViewportSize({ width, height: 860 });
+  await page.click('[data-testid="ax-place-architect"]');
+  await page.waitForSelector('[data-testid="axa-entry"]');
+  await page.click('[data-testid="axa-entry"] .axa-row-main');
+  await page.click('[data-testid="axa-view-focus"]');
+  await page.waitForSelector('[data-testid="axa-focus"]');
+  assert.equal(await overlaps('.axa .ar-work > .ar-pane-head > *'), false, `the workspace head's controls do not overlap at ${width}px`);
+  await shot(`09h-architect-${width}`);
+}
+await page.setViewportSize({ width: 1440, height: 900 });
+const ent = page.locator('[data-testid="axa-entry"]');
+for (let i = 0, n = await ent.count(); i < n && !(await page.$('[data-testid="axa-table-expand"]')); i++) { await ent.nth(i).locator(".axa-row-main").click(); await page.waitForTimeout(400); }
+if (await page.$('[data-testid="axa-table-expand"]')) {
+  await page.click('[data-testid="axa-table-expand"]'); await page.waitForSelector('[data-testid="ax-table-dialog"]');
+  await page.waitForTimeout(400); await shot("09h-architect-table-dialog");
+  await page.keyboard.press("Escape"); await page.waitForSelector('[data-testid="ax-table-dialog"]', { state: "detached" });
+  await page.waitForSelector('[data-testid="axa-prop-tables"]');
+  ok("Architect: Combined table expands into the large dialog; Properties lists the tables");
+}
+ok("Architect: Focus / view / summary / objective controls never overlap at 1280 and 1024 px");
+await page.setViewportSize({ width: 1440, height: 900 });
 await axTab(page, "themes");
 await page.click('[data-testid="ax-new-theme"]');
 await page.fill('[data-testid="ax-theme-name"]', "Client A Theme");

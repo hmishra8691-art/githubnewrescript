@@ -475,6 +475,13 @@ export function AnalysisBuilder(p: BuilderProps) {
             {section === 3 && (
               <div>
                 <div className="muted" style={{ marginBottom: 8 }}>Segments are compared side by side (and drive segment switching on charts). Create reusable segments in the Segments tab.</div>
+                {segmentsChosen.length > 0 && (
+                  <div className="ax-seg-selected" data-testid="ax-segments-selected">
+                    <div className="flabel">Selected ({segmentsChosen.length}) — compared side by side, in this order</div>
+                    <div className="ax-chips">{segmentsChosen.map((s) => <span key={s.id ?? s.name} className="ax-pill" style={s.color ? { borderColor: s.color } : undefined} data-testid="ax-segment-selected">{s.color && <span className="ax-seg-dot" style={{ background: s.color }} />}{s.name}<button type="button" onClick={() => update({ segments: segmentsChosen.filter((x) => x !== s) })} aria-label={`Remove ${s.name}`}>×</button></span>)}</div>
+                    <div className="flabel" style={{ marginTop: 10 }}>Add more</div>
+                  </div>
+                )}
                 <div className="ax-chips">{p.segments.filter((s) => s.kind !== "filter").map((s) => <button key={s.id} type="button" className={`ax-chip ${segmentsChosen.some((x) => x.id === s.id) ? "on" : ""}`} onClick={() => toggleSegment(s)} title={conditionText(s.condition as Condition, p.variables)} data-testid="ax-segment-chip">{s.name}</button>)}{!p.segments.filter((s) => s.kind !== "filter").length && <span className="muted">No saved segments yet.</span>}</div>
                 <div style={{ marginTop: 14 }}>
                   <div className="flabel">Weighting</div>

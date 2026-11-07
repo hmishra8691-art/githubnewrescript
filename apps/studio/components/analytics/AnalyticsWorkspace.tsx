@@ -1,4 +1,5 @@
 "use client";
+import { TableDialog, TablePreview } from "./TableViews";
 import { Warnings } from "./Warnings";
 import { AssessmentCard } from "./AssessmentCard";
 import React from "react";
@@ -372,26 +373,58 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
   );
 }
 
+/*
+ * TABLES (Analytics UX overhaul, 2026-11-07). Every saved analysis that makes a table is a CARD — its name, kind,
+ * base and a sized preview of its first table — laid out like the saved charts, computed a page at a time as the
+ * charts are. Clicking a card makes it the ACTIVE table (marked), shown above the grid full width with sorting,
+ * filtering, the table switcher, Excel, "Edit definition" and "Expand" (the large dialog). No dropdown stands between
+ * a researcher and their tables.
+ */
+const TABLE_KINDS = ["crosstab", "descriptive", "topbox", "segmentation", "test", "nps", "csat", "ranking", "allocation", "turf", "brand", "conjoint", "maxdiff", "quality", "weighting", "correlation"];
+const TABLE_PAGE = 12;
 function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses: Row[]; onOpen: (a: Row) => void; onNew: () => void }) {
+  const tableAnalyses = React.useMemo(() => analyses.filter((a) => TABLE_KINDS.includes(a.kind)), [analyses]);
   const [sel, setSel] = React.useState<string>("");
-  const [res, setRes] = React.useState<RunResult | null>(null);
+  const [find, setFind] = React.useState("");
+  const [pages, setPages] = React.useState(1);
+  const [results, setResults] = React.useState<Record<string, RunResult>>({});
+  const [status, setStatus] = React.useState<Record<string, "loading" | "error">>({});
+  const [errors, setErrors] = React.useState<Record<string, string>>({});
+  const [expanded, setExpanded] = React.useState<string | null>(null);
   const [tableId, setTableId] = React.useState<string>("");
   const [sort, setSort] = React.useState<{ key: string; dir: 1 | -1 } | null>(null);
   const [filterText, setFilterText] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-  const tableAnalyses = analyses.filter((a) => ["crosstab", "descriptive", "topbox", "segmentation", "test", "nps", "csat", "ranking", "allocation", "turf", "brand", "conjoint", "maxdiff", "quality", "weighting"].includes(a.kind));
-  const [tableError, setTableError] = React.useState<string | null>(null);
-  const selDef = React.useMemo(() => JSON.stringify(analyses.find((x) => x.id === sel)?.definition ?? null) + (analyses.find((x) => x.id === sel)?.name ?? ""), [analyses, sel]);
-  /* keyed on the selected analysis' own definition, not on the `analyses` array (a new array on every refresh re-ran every table); a late answer for a previous selection is dropped; a failure is shown, and the previous table is not left under the new title */
+  const inFlight = React.useRef(new Set<string>());
+  const defs = React.useRef(new Map<string, string>());
+  const analysesRef = React.useRef(tableAnalyses); analysesRef.current = tableAnalyses;
+  /* one computation per analysis definition: a refresh with the same definitions recomputes nothing; a changed definition recomputes that card */
+  const load = React.useCallback(async (id: string, force = false) => {
+    const a = analysesRef.current.find((x) => x.id === id); if (!a) return;
+    const key = JSON.stringify(a.definition) + a.name;
+    if (!force && (defs.current.get(id) === key || inFlight.current.has(id))) return;
+    inFlight.current.add(id); setStatus((st) => ({ ...st, [id]: "loading" }));
+    try {
+      const { result } = await api.run({ ...(a.definition as AnalysisDefinition), name: a.name });
+      defs.current.set(id, key); setResults((r) => ({ ...r, [id]: result }));
+      setStatus((st) => { const { [id]: _x, ...rest } = st; void _x; return rest; });
+    } catch (e) { setErrors((er) => ({ ...er, [id]: (e as Error).message })); setStatus((st) => ({ ...st, [id]: "error" })); }
+    finally { inFlight.current.delete(id); }
+  }, [api]);
+  const visible = React.useMemo(() => {
+    const q = find.trim().toLowerCase();
+    const list = q ? tableAnalyses.filter((a) => `${a.name} ${a.kind}`.toLowerCase().includes(q)) : tableAnalyses;
+    return { all: list, shown: list.slice(0, pages * TABLE_PAGE) };
+  }, [tableAnalyses, find, pages]);
   React.useEffect(() => {
-    if (!sel) return; const a = analyses.find((x) => x.id === sel); if (!a) return;
-    let cancelled = false; setBusy(true); setTableError(null); setRes(null);
-    api.run({ ...(a.definition as AnalysisDefinition), name: a.name })
-      .then(({ result }) => { if (cancelled) return; setRes(result); setTableId(result.tables[0]?.id ?? ""); })
-      .catch((e: Error) => { if (!cancelled) setTableError(e.message); })
-      .finally(() => { if (!cancelled) setBusy(false); });
+    let cancelled = false; let next = 0;
+    const ids = [...(sel ? [sel] : []), ...visible.shown.map((a) => a.id).filter((x) => x !== sel)];
+    const worker = async () => { while (!cancelled && next < ids.length) { const id = ids[next++]; await load(id); } };
+    void Promise.all([worker(), worker(), worker()]);
     return () => { cancelled = true; };
-  }, [sel, selDef, api]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visible.shown, sel, load]);
+  const active = sel ? tableAnalyses.find((a) => a.id === sel) ?? null : null;
+  const res = sel ? results[sel] ?? null : null;
+  React.useEffect(() => { setTableId(res?.tables[0]?.id ?? ""); setSort(null); setFilterText(""); }, [sel, res]);
   const table = res?.tables.find((t) => t.id === tableId) ?? res?.tables[0];
   const view = React.useMemo(() => {
     if (!table) return table;
@@ -400,30 +433,73 @@ function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses:
     if (sort) rows = [...rows].sort((a, b) => { const x = a[sort.key], y = b[sort.key]; return (typeof x === "number" && typeof y === "number" ? x - y : String(x ?? "").localeCompare(String(y ?? ""))) * sort.dir; });
     return { ...table, rows };
   }, [table, filterText, sort]);
+  const exp = expanded ? tableAnalyses.find((a) => a.id === expanded) : null;
   return (
     <div className="ax-panel" data-testid="ax-tables">
-      <div className="row" style={{ marginBottom: 10, flexWrap: "wrap" }}>
-        <h2 style={{ margin: 0 }}>Table builder</h2>
-        <select className="select" value={sel} onChange={(e) => setSel(e.target.value)} data-testid="ax-table-analysis"><option value="">Choose a saved analysis…</option>{tableAnalyses.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}</select>
-        {res && res.tables.length > 1 && <select className="select" value={tableId} onChange={(e) => setTableId(e.target.value)}>{res.tables.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>}
-        {table && <input className="input" placeholder="Filter rows…" value={filterText} onChange={(e) => setFilterText(e.target.value)} style={{ maxWidth: 200 }} />}
+      <div className="ax-tv-head">
+        <h2 style={{ margin: 0 }}>Tables</h2>
+        <span className="muted" style={{ fontSize: 13 }}>{tableAnalyses.length} saved analys{tableAnalyses.length === 1 ? "is" : "es"} with tables — pick one to work with it.</span>
         <span className="grow" />
-        <button className="btn small" onClick={onNew}>New crosstab</button>
-        {sel && <button className="btn small" onClick={() => onOpen(analyses.find((a) => a.id === sel)!)}>Edit definition</button>}
-        {sel && <button className="btn small" onClick={() => api.export({ format: "xlsx", analysisId: sel })}>Excel</button>}
+        <input className="input small" placeholder="Find a table…" value={find} onChange={(e) => { setFind(e.target.value); setPages(1); }} style={{ maxWidth: 220 }} data-testid="ax-table-find" aria-label="Find a table" />
+        <button className="btn small primary" onClick={onNew}>New crosstab</button>
       </div>
-      {busy && <div className="muted">Computing…</div>}
-      {tableError && !busy && <div className="ax-warn" data-testid="ax-table-failed">{tableError}</div>}
-      {view && (
-        <div className="card">
-          <div className="row" style={{ marginBottom: 6 }}><div className="card-title">{view.title}</div><span className="grow" /><span className="muted" style={{ fontSize: 13 }}>click a column header to sort</span></div>
-          <div className="ax-table-wrap"><table className="ax-table" data-testid="ax-builder-table"><thead><tr>{view.columns.map((c) => <th key={c.key} className={c.type && c.type !== "text" ? "num sortable" : "sortable"} onClick={() => setSort(sort?.key === c.key ? { key: c.key, dir: sort.dir === 1 ? -1 : 1 } : { key: c.key, dir: -1 })}>{c.label}{sort?.key === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}</th>)}</tr></thead>
-            <tbody>{view.rows.map((r, i) => <tr key={i}>{view.columns.map((c) => { const v = r[c.key]; const sig = r[`${c.key}__sig`]; const ct = (r.__format as string | undefined) ?? c.type; return <td key={c.key} className={typeof v === "number" ? "num" : ""}>{v == null ? "" : typeof v === "number" ? (ct === "pct" ? `${v.toFixed(c.decimals ?? 1)}%` : ct === "count" ? Math.round(v).toLocaleString(DEFAULT_NUMBER_LOCALE) : v.toLocaleString("en-US", { maximumFractionDigits: c.decimals ?? 2 })) : String(v)}{sig ? <sup className="ax-sig">{String(sig)}</sup> : null}</td>; })}</tr>)}</tbody></table></div>
-          <div className="ax-table-notes">{view.base ? `Base: n = ${view.base.n}${view.base.weightedN != null && view.base.weightedN !== view.base.n ? ` · weighted n = ${view.base.weightedN}` : ""}` : ""}{view.notes?.map((n, i) => <div key={i}>{n}</div>)}<Warnings items={res?.warnings ?? []} testId="ax-table-warnings" /></div>
-        </div>
+
+      {active && (
+        <section className="card ax-tv-active" data-testid="ax-table-active" aria-label={`Active table: ${active.name}`}>
+          <div className="ax-tv-active-head">
+            <div className="ax-tv-active-title"><span className="ax-tv-kind">{active.kind}</span><b>{active.name}</b></div>
+            <span className="grow" />
+            {res && res.tables.length > 1 && <select className="select small" value={tableId} onChange={(e) => setTableId(e.target.value)} aria-label="Which table">{res.tables.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>}
+            {table && <input className="input small" placeholder="Filter rows…" value={filterText} onChange={(e) => setFilterText(e.target.value)} style={{ maxWidth: 180 }} aria-label="Filter rows" />}
+            {res && <button className="btn small" onClick={() => setExpanded(active.id)} data-testid="ax-table-active-expand">Expand ⤢</button>}
+            <button className="btn small" onClick={() => onOpen(active)}>Edit definition</button>
+            <button className="btn small" onClick={() => api.export({ format: "xlsx", analysisId: active.id })}>Excel</button>
+            <button className="btn small ghost" onClick={() => setSel("")} aria-label="Close the active table">✕</button>
+          </div>
+          {status[active.id] === "loading" && !res && <div className="muted">Computing…</div>}
+          {status[active.id] === "error" && <div className="ax-warn" data-testid="ax-table-failed">{errors[active.id]} <button className="btn small" onClick={() => void load(active.id, true)}>Retry</button></div>}
+          {view && (
+            <>
+              <div className="ax-tv-sorthint muted">{view.title} · click a column header to sort</div>
+              <div className="ax-table-wrap ax-tv-active-table"><table className="ax-table" data-testid="ax-builder-table"><thead><tr>{view.columns.map((c) => <th key={c.key} className={c.type && c.type !== "text" ? "num sortable" : "sortable"} onClick={() => setSort(sort?.key === c.key ? { key: c.key, dir: sort.dir === 1 ? -1 : 1 } : { key: c.key, dir: -1 })}>{c.label}{sort?.key === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}</th>)}</tr></thead>
+                <tbody>{view.rows.map((r, i) => <tr key={i}>{view.columns.map((c) => { const v = r[c.key]; const sig = r[`${c.key}__sig`]; const ct = (r.__format as string | undefined) ?? c.type; return <td key={c.key} className={typeof v === "number" ? "num" : ""}>{v == null ? "" : typeof v === "number" ? (ct === "pct" ? `${v.toFixed(c.decimals ?? 1)}%` : ct === "count" ? Math.round(v).toLocaleString(DEFAULT_NUMBER_LOCALE) : v.toLocaleString("en-US", { maximumFractionDigits: c.decimals ?? 2 })) : String(v)}{sig ? <sup className="ax-sig">{String(sig)}</sup> : null}</td>; })}</tr>)}</tbody></table></div>
+              <div className="ax-table-notes">{view.base ? `Base: n = ${view.base.n}${view.base.weightedN != null && view.base.weightedN !== view.base.n ? ` · weighted n = ${view.base.weightedN}` : ""}` : ""}{view.notes?.map((n, i) => <div key={i}>{n}</div>)}<Warnings items={res?.warnings ?? []} testId="ax-table-warnings" /></div>
+            </>
+          )}
+          {res && !res.tables.length && <ResultTableView />}
+        </section>
       )}
-      {!sel && <div className="muted">Pick a saved analysis to build a frequency, crosstab, banner, means or significance table from it. Tables can be added to reports and exported to PowerPoint and Excel.</div>}
-      {sel && !busy && res && !res.tables.length && <ResultTableView />}
+
+      <div className="ax-tv-grid" role="list" data-testid="ax-table-grid">
+        {visible.shown.map((a) => {
+          const r = results[a.id]; const on = a.id === sel;
+          return (
+            <div key={a.id} role="listitem" className={`card ax-tv-card ${on ? "on" : ""}`} data-testid="ax-table-card" data-name={a.name} aria-current={on ? "true" : undefined}>
+              <button type="button" className="ax-tv-card-head" onClick={() => setSel(a.id)} title={`Work with ${a.name}`} data-testid="ax-table-card-open">
+                <span className="ax-tv-kind">{a.kind}</span>
+                <span className="ax-tv-card-name">{a.name}</span>
+                {r && <span className="muted ax-tv-n">n = {r.base.n.toLocaleString("en-US")}</span>}
+              </button>
+              {r ? <TablePreview result={r} maxHeight={220} onExpand={() => setExpanded(a.id)} testId="ax-table-card-preview" />
+                : status[a.id] === "error" ? <div className="ax-warn" style={{ padding: 10 }}>Could not compute. <button className="btn small" onClick={() => void load(a.id, true)}>Retry</button></div>
+                : <div className="muted ax-tv-placeholder">Computing…</div>}
+              <div className="card-actions ax-tv-card-actions">
+                <button className="btn small" onClick={() => setSel(a.id)} aria-pressed={on}>{on ? "Active" : "Work with it"}</button>
+                <button className="btn small" onClick={() => onOpen(a)}>Edit</button>
+              </div>
+            </div>
+          );
+        })}
+        {!tableAnalyses.length && <div className="muted">No saved analysis makes a table yet. Click “New crosstab”, or save an analysis from Explore.</div>}
+        {tableAnalyses.length > 0 && !visible.all.length && <div className="muted">No table matches “{find}”.</div>}
+      </div>
+      {visible.all.length > visible.shown.length && (
+        <div className="row" style={{ marginTop: 10 }}><button className="btn" onClick={() => setPages((n) => n + 1)} data-testid="ax-tables-more">Show {Math.min(TABLE_PAGE, visible.all.length - visible.shown.length)} more</button><span className="muted" style={{ fontSize: 13 }}>{visible.all.length - visible.shown.length} more — each is computed only when shown.</span></div>
+      )}
+      {exp && results[exp.id] && (
+        <TableDialog title={exp.name} result={results[exp.id]} onClose={() => setExpanded(null)}
+          actions={<><button className="btn small" onClick={() => { setExpanded(null); onOpen(exp); }}>Edit definition</button><button className="btn small" onClick={() => api.export({ format: "xlsx", analysisId: exp.id })}>Excel</button></>} />
+      )}
     </div>
   );
 }

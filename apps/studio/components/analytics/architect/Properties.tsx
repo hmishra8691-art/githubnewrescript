@@ -18,7 +18,7 @@ import { STATUS_WORD } from "./Explorer";
  *   Technical         the ids: question codes, variable names, the saved name, kind, method, analysis id, hash —
  *                     kept, never used as the label
  */
-export function Properties(p: { entry: CatalogueEntry | null; result: RunResult | undefined; analysis: Row | undefined; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; canEdit: boolean; onOpenInBuilder: (id: string) => void; variables: VariableMeta[]; onSaveDefinition: (analysisId: string, d: AnalysisDefinition) => Promise<void>; api: AxApi; /** bumps when the analysis was saved or the dataset changed */ nonce: string }) {
+export function Properties(p: { onOpenTable?: (tableId?: string) => void; onCreateTable?: (rows: string[], columns: string[], name: string) => Promise<void>; entry: CatalogueEntry | null; result: RunResult | undefined; analysis: Row | undefined; spec: ChartSpec | null; onSpec: (s: ChartSpec) => void; canEdit: boolean; onOpenInBuilder: (id: string) => void; variables: VariableMeta[]; onSaveDefinition: (analysisId: string, d: AnalysisDefinition) => Promise<void>; api: AxApi; /** bumps when the analysis was saved or the dataset changed */ nonce: string }) {
   const { level } = useDetail();
   const [tech, setTech] = React.useState(level === "advanced");
   React.useEffect(() => { setTech(level === "advanced"); }, [level]);
@@ -61,6 +61,19 @@ export function Properties(p: { entry: CatalogueEntry | null; result: RunResult 
           ))}
         </section>
       )}
+      {p.result && (p.result.tables.length > 0 || (p.canEdit && p.onCreateTable)) && (
+        <section className="axa-prop-sec" data-testid="axa-prop-tables">
+          <div className="eyebrow">Tables</div>
+          {p.result.tables.map((t) => (
+            <div key={t.id} className="axa-prop-table">
+              <span className="axa-prop-table-title" title={t.title}>{t.title}</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>{t.rows.length} rows</span>
+              {p.onOpenTable && <button className="btn small ghost" onClick={() => p.onOpenTable!(t.id)} data-testid="axa-prop-open-table">Open large</button>}
+            </div>
+          ))}
+          {p.canEdit && p.onCreateTable && <NewTableForm variables={p.variables} initialRows={def?.rows ?? e.technical.variables.slice(0, 1).map((v) => v.name)} initialCols={def?.columns ?? e.technical.variables.slice(1, 2).map((v) => v.name)} onCreate={p.onCreateTable} />}
+        </section>
+      )}
       {def && (
         <section className="axa-prop-sec" data-testid="axa-config">
           <div className="eyebrow" style={{ display: "flex", alignItems: "center", gap: 8 }}>Configuration<span className="grow" />{p.canEdit && e.analysisId && !editing && <button className="btn small ghost" onClick={() => setEditing(true)} data-testid="axa-config-edit">Edit</button>}</div>
@@ -100,6 +113,28 @@ export function Properties(p: { entry: CatalogueEntry | null; result: RunResult 
           </dl>
         )}
       </section>
+    </div>
+  );
+}
+
+/** a new crosstab from the Properties pane — rows × columns from the survey's variables, saved through the builder's route */
+function NewTableForm(p: { variables: VariableMeta[]; initialRows: string[]; initialCols: string[]; onCreate: (rows: string[], columns: string[], name: string) => Promise<void> }) {
+  const [open, setOpen] = React.useState(false);
+  const [rows, setRows] = React.useState(p.initialRows[0] ?? "");
+  const [cols, setCols] = React.useState(p.initialCols[0] ?? "");
+  const [busy, setBusy] = React.useState(false);
+  const [said, setSaid] = React.useState<string | null>(null);
+  const label = (n: string) => p.variables.find((v) => v.name === n)?.label ?? n;
+  if (!open) return <button className="btn small" onClick={() => { setOpen(true); setSaid(null); }} data-testid="axa-prop-new-table">+ New table</button>;
+  return (
+    <div className="axa-prop-newtable" data-testid="axa-prop-newtable">
+      <label className="f"><span>Rows</span><select className="select small" value={rows} onChange={(e) => setRows(e.target.value)}>{p.variables.map((v) => <option key={v.name} value={v.name}>{v.label ?? v.name}</option>)}</select></label>
+      <label className="f"><span>Columns</span><select className="select small" value={cols} onChange={(e) => setCols(e.target.value)}><option value="">(none — a frequency table)</option>{p.variables.filter((v) => v.name !== rows).map((v) => <option key={v.name} value={v.name}>{v.label ?? v.name}</option>)}</select></label>
+      <div className="row" style={{ gap: 6 }}>
+        <button className="btn small primary" disabled={!rows || busy} onClick={async () => { setBusy(true); try { await p.onCreate([rows], cols ? [cols] : [], cols ? `${label(rows)} by ${label(cols)}` : label(rows)); setSaid("Created — it is in the Explorer and in Explore → Tables."); setOpen(false); } catch (e) { setSaid((e as Error).message); } finally { setBusy(false); } }}>Create table</button>
+        <button className="btn small ghost" onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+      {said && <p className="muted" style={{ fontSize: 12 }}>{said}</p>}
     </div>
   );
 }

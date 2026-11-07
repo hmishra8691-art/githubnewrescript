@@ -2848,11 +2848,11 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .axa-verdict.supported { background: #dcfce7; color: #166534; } .axa-verdict.not_supported { background: #fee2e2; color: #991b1b; } .axa-verdict.mixed, .axa-verdict.inconclusive { background: #fef3c7; color: #92400e; }
 .axa-verdict.big { display: inline-block; font-size: 13px; padding: 3px 10px; margin: 4px 0 8px; }
 .axa-sig { font-size: 11px; color: #b45309; font-weight: 600; }
-.axa-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-left: 10px; }
+.axa-seg { display: inline-flex; flex: none; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .axa-seg-btn { border: 0; background: transparent; padding: 3px 10px; font-size: 12px; cursor: pointer; color: var(--subtle); }
 .axa-seg-btn.on { background: var(--panel2); color: var(--text); font-weight: 600; }
-.axa-objective { font-size: 12px; color: var(--subtle); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.axa-work { padding: 12px; overflow: auto; height: 100%; }
+.axa-objective { font-size: 12px; color: var(--subtle); min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.axa-work { padding: 0; }
 .axa-card-title { border: 0; background: transparent; font-weight: 600; font-size: 13.5px; cursor: pointer; text-align: left; color: var(--text); padding: 0; }
 .axa-chip { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--panel2); color: var(--subtle); }
 .axa-insight { font-size: 12.5px; margin: 6px 0 0; }
@@ -2960,8 +2960,8 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .axa-seg.small { margin: 0 0 6px; }
 .axa-combined { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, 1fr); gap: 12px; align-items: start; }
 .axa-combined.compact { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.axa-combined-table { min-width: 0; overflow: auto; max-height: 70vh; }
-.axa-combined.compact .axa-combined-table { max-height: 320px; }
+.axa-combined-table { min-width: 0; }
+
 .axa-combined-side { min-width: 0; position: sticky; top: 8px; }
 .axa-combined-heat { margin-top: 8px; }
 .axa-section { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 10px 12px; margin-bottom: 14px; scroll-margin-top: 12px; }
@@ -2979,7 +2979,8 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .axa-config-pick-list { max-height: 200px; overflow: auto; margin-top: 4px; }
 .axa-config-pick-row { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 3px 4px; font-size: 12.5px; cursor: pointer; color: var(--text); border-radius: 4px; }
 .axa-config-pick-row:hover { background: var(--panel); }
-@media (max-width: 1100px) { .axa-combined, .axa-combined.compact { grid-template-columns: 1fr; } .axa-combined-side { position: static; } }
+/* stacking follows the width of the workspace pane, not the window — a narrow pane between two wide ones stacks too */
+@container axwork (max-width: 980px) { .axa-combined, .axa-combined.compact { grid-template-columns: 1fr; } .axa-combined-side { position: static; } }
 
 /* ------------------------------------------------------------ INTERPRETATION (M5) */
 .ax-interp { font-size: 13px; }
@@ -3022,3 +3023,59 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .axa-attention-head { border: 0; background: transparent; cursor: pointer; font-weight: 600; font-size: 12.5px; color: #92400e; display: flex; align-items: center; gap: 6px; padding: 2px 0; width: 100%; text-align: left; }
 .axa-attention-list { margin: 4px 0 2px; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; color: #78350f; }
 .axa-link { border: 0; background: transparent; color: var(--c-primary, #4f46e5); cursor: pointer; padding: 0; font-size: 12px; text-decoration: underline; }
+
+/* ---------- Analytics UX overhaul (2026-11-07): pane heads that wrap, one scroller per table, tables as cards ---------- */
+.axa .ar-pane-head { height: auto; min-height: 38px; flex-wrap: wrap; row-gap: 6px; padding: 6px 12px; }
+.axa .ar-work-body { container: axwork / inline-size; }
+.axa-summary { font-size: 12.5px; color: var(--subtle); white-space: nowrap; }
+.axa .ar-pane-head .axa-objective { flex: 1 1 100%; order: 10; }
+.axa-prop-table { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.axa-prop-table-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.axa-prop-sec > .btn { margin-top: 8px; }
+.axa-prop-newtable { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.axa-prop-newtable .f { display: grid; gap: 3px; font-size: 12px; }
+.axa-prop-newtable select { width: 100%; }
+.ax-tv-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+.ax-tv-head h2 { margin: 0; }
+.ax-tv-active { margin-bottom: 16px; border: 1px solid var(--accent, var(--c-primary-500)); }
+.ax-tv-active-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.ax-tv-active-head h3 { margin: 0; font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
+.ax-tv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 14px; }
+.ax-tv-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; transition: box-shadow .12s, border-color .12s; }
+.ax-tv-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.06); }
+.ax-tv-card.on { border-color: var(--accent, var(--c-primary-500)); box-shadow: 0 0 0 2px var(--c-primary-100, rgba(80,110,250,.18)); }
+.ax-tv-card-head { appearance: none; border: 0; background: transparent; padding: 0; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 8px; min-width: 0; font: inherit; color: inherit; }
+.ax-tv-card-head:focus-visible { outline: 2px solid var(--accent, var(--c-primary-500)); outline-offset: 3px; border-radius: 4px; }
+.ax-tv-card-name { flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ax-tv-kind { flex: none; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; padding: 2px 6px; border-radius: 4px; background: var(--panel2); color: var(--subtle); }
+.ax-tv-n { flex: none; font-size: 11.5px; color: var(--subtle); }
+.ax-tv-card-actions { display: flex; gap: 6px; margin-top: auto; }
+.ax-tv-preview { min-width: 0; }
+.ax-tv-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; }
+.ax-tv-empty { padding: 14px 0; font-size: 12.5px; }
+.ax-tv-dialog { width: min(1400px, 94vw); max-height: min(92vh, 1000px); display: flex; flex-direction: column; background: var(--c-surface, #fff); color: var(--c-text-1, inherit); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.25); overflow: hidden; }
+.ax-tv-dhead { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.ax-tv-dhead h2 { margin: 0; font-size: 16px; min-width: 0; overflow-wrap: anywhere; }
+.ax-tv-dtools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.ax-tv-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.ax-tv-tab { appearance: none; border: 1px solid var(--border); background: transparent; border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; color: var(--subtle); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ax-tv-tab.on { background: var(--panel2); color: var(--text); font-weight: 600; border-color: var(--accent, var(--c-primary-500)); }
+.ax-tv-dbody { flex: 1 1 auto; min-height: 0; padding: 12px 16px; overflow: hidden; }
+.ax-tv-warn { margin: 8px 0 0; font-size: 12px; color: var(--subtle); }
+.ax-table-card .card-title { display: flex; align-items: center; gap: 8px; }
+.ax-tv-active-title { margin: 0; font-size: 15px; font-weight: 650; min-width: 0; overflow-wrap: anywhere; flex: 1 1 200px; }
+.ax-tv-placeholder { padding: 24px 0; font-size: 12.5px; text-align: center; }
+.ax-tv-sorthint { font-size: 11.5px; }
+.ax-tv-active-table { max-height: min(70vh, 720px); overflow: auto; }
+.ax-seg-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; min-width: 0; }
+.ax-seg-chips .ax-chip { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.ax-chip-x { font-weight: 700; opacity: .85; }
+.ax-seg-multiples { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 12px; }
+.ax-seg-multiple { margin: 0; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.ax-seg-multiple figcaption { display: flex; align-items: center; gap: 6px; font-size: 12.5px; margin-bottom: 4px; }
+.ax-seg-selected { margin-bottom: 8px; }
+.ax-seg-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.ax-tabs { flex-wrap: wrap; row-gap: 6px; }
+/* on a narrow workspace the view switches wrap and the summary wraps rather than running under the next pane */
+.axa .ar-pane-head .axa-seg { flex-wrap: wrap; max-width: 100%; }
+.axa .ar-pane-head .axa-summary { white-space: normal; min-width: 0; flex: 1 1 160px; }
