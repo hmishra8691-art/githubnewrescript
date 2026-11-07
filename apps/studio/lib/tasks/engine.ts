@@ -112,6 +112,8 @@ export function checkPlan(steps: TaskStepSpec[], hasHandler: (kind: string) => b
 export function taskKindOf(plannerId: string, request: string, survey: unknown): TaskKind {
   if (plannerId === "translation") return "translation";
   if (plannerId === "assessment") return "scored_exam";
+  if (plannerId === "analysis") return "analysis";
+  if (plannerId === "report" || plannerId === "decision") return "other";
   if (plannerId === "generation") {
     const req = readGenerationRequest(request, survey);
     if (req.kind === "methods") return req.method === "maxdiff" ? "maxdiff" : "conjoint";
@@ -157,6 +159,8 @@ export interface PlanTaskInput {
   /** absolute ms: the planner's one call may not run past this */
   deadline: number;
   signal?: AbortSignal;
+  /** structured options for the planner (the workspace launchers) */
+  options?: Record<string, unknown>;
 }
 
 export type PlanOutcome =
@@ -177,7 +181,7 @@ export async function createPlannedTask(deps: TaskEngineDeps, input: PlanTaskInp
   const ai = deps.aiFor({ task: { id: "__plan", surveyId: input.surveyId }, step: null, attempt: 0, deadline: input.deadline, signal: ctrl.signal, usage });
   let plan: Awaited<ReturnType<TaskPlanner["plan"]>>;
   try {
-    plan = await planner.plan({ message: input.message, survey: input.definition, ai });
+    plan = await planner.plan({ message: input.message, survey: input.definition, ai, ...(input.options ? { options: input.options } : {}) });
   } catch (e) {
     return { ok: false, reason: "planner_failed", message: String((e as Error)?.message ?? e).slice(0, 300), usage };
   }

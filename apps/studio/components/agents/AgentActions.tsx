@@ -4,6 +4,7 @@ import { applySurveyActions, type SurveyAction } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import type { ClientTask } from "../../lib/copilot/taskStore";
 import { LAUNCHERS, launchMessage, type Launcher } from "../../lib/agents/launch";
+import { ResearchOutput } from "./ResearchOutput";
 
 /**
  * WHAT A RESEARCHER CAN DO FROM THE AGENT WORKSPACE (ResLens agents, phase 1 — 2026-11-07).
@@ -156,7 +157,7 @@ export function TaskResultReview({ task, surveyId, def, canEdit, onApply }: { ta
   if (!actions) return <div className="agw-review muted">Reading the result…</div>;
   return (
     <div className="agw-review" data-testid="agw-review">
-      {actions.length === 0 ? <div><b>Finished.</b> <span className="muted">This task proposed no change to the questionnaire{data && Object.keys(data).length ? " — its output is shown below." : "."}</span></div> : preview && (
+      {actions.length === 0 ? (data && Object.keys(data).length ? <ResearchOutput data={data} surveyId={surveyId} /> : <div><b>Finished.</b> <span className="muted">This task proposed no change to the questionnaire.</span></div>) : preview && (
         <>
           <div className="row" style={{ gap: 8, alignItems: "baseline" }}>
             <b>{actions.length} change{actions.length === 1 ? "" : "s"} ready to review</b>

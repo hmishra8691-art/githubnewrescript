@@ -21,6 +21,7 @@ export interface Launcher {
 }
 
 const t = (s: string | undefined) => (s ?? "").trim();
+const DATASETS: [string, string][] = [["LIVE", "Production responses"], ["TEST", "Test responses"], ["ALL", "All responses"]];
 
 export const LAUNCHERS: Launcher[] = [
   { id: "build", agent: "writer", planner: "generation", title: "Write a questionnaire", blurb: "From a brief: design, blocks, questions, logic, quotas, then a final check",
@@ -44,6 +45,10 @@ export const LAUNCHERS: Launcher[] = [
       { key: "count", label: "Number of questions", required: true, placeholder: "25" },
     ],
     message: (f) => `Create a ${t(f.count)} question exam with an answer key on ${t(f.topic)}` },
+  { id: "analyse", agent: "analysis", planner: "analysis", title: "Run the analysis plan", blurb: "Check the plan, run every planned analysis on the data, verify the findings and verdicts",
+    fields: [{ key: "dataset", label: "Data", type: "select", options: DATASETS }, { key: "clean", label: "Responses", type: "select", options: [["all", "All completes"], ["clean", "Clean dataset (quality removals applied)"]] }],
+    message: (f) => `Run the analysis plan on the ${(DATASETS.find(([v]) => v === (f.dataset || "LIVE"))?.[1] ?? "production responses").toLowerCase()}${f.clean === "clean" ? " (clean dataset)" : ""}`,
+    options: (f) => ({ environment: f.dataset || "LIVE", dataset: f.clean === "clean" ? "clean" : "all" }) },
 ];
 
 export function launchMessage(l: Launcher, fields: Record<string, string>): string {

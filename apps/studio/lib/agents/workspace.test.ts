@@ -11,7 +11,7 @@ test("every step kind a registered handler runs belongs to exactly one agent —
   const dir = join(import.meta.dirname, "..", "tasks", "handlers");
   const kinds = new Set<string>();
   for (const f of readdirSync(dir).filter((x) => x.endsWith(".ts") && !x.includes(".test.") && !/Fake/i.test(x))) {
-    for (const m of readFileSync(join(dir, f), "utf8").matchAll(/kind: "((?:gen|translation|assessment|copilot)\.[a-z_]+)"/g)) kinds.add(m[1]);
+    for (const m of readFileSync(join(dir, f), "utf8").matchAll(/kind: "((?:gen|translation|assessment|copilot|analysis|report|decision)\.[a-z_]+)"/g)) kinds.add(m[1]);
   }
   assert.ok(kinds.size >= 15, `found ${kinds.size} kinds`);
   for (const k of kinds) {

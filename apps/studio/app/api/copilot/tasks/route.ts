@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SurveyDefinition } from "@rescript/schema";
-import { isFailure, requireUser } from "@/lib/guard";
+import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { aiProviderName } from "@rescript/ai";
 import { notFound, taskAccess } from "@/lib/tasks/access";
 import { planForRequest, tasksEnabled, viewOf } from "@/lib/tasks/service";
@@ -14,6 +14,8 @@ import { planForRequest, tasksEnabled, viewOf } from "@/lib/tasks/service";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 120;
+
+const RESEARCH_PLANNERS = new Set(["analysis", "report", "decision"]);
 
 export async function GET(req: NextRequest) {
   const authed = await requireUser(req);
@@ -35,7 +37,7 @@ export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
   /* signed out: refused here (only the fake provider's sandbox may continue — checked again, by survey id, in taskAccess) */
   if (isFailure(authed) && aiProviderName() !== "fake") return authed.response;
-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; planner?: unknown; aiOnce?: unknown };
+  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; planner?: unknown; aiOnce?: unknown; options?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const a = await taskAccess(authed, body.surveyId, "survey.edit", body.aiOnce === true ? "once" : undefined);
   if ("response" in a) return a.response;
@@ -44,7 +46,15 @@ export async function POST(req: NextRequest) {
   if (!message) return NextResponse.json({ error: "say what you want (message)" }, { status: 400 });
   const parsed = SurveyDefinition.safeParse(body.definition);
   if (!parsed.success) return NextResponse.json({ error: "send the survey as it is open in the editor (definition)" }, { status: 400 });
-  const plan = await planForRequest({ store: a.store, scope: a.scope, surveyId: a.surveyId, message, definition: parsed.data, ...(a.customerId ? { customerId: a.customerId } : {}), ...(a.userId ? { createdBy: a.userId } : {}), deadline: Date.now() + 90_000, signal: req.signal, ...(typeof body.planner === "string" ? { plannerId: body.planner } : {}) });
+  /* the research agents write the analytics tables (saved analyses, runs, reports): Data Analytics' edit right as well */
+  const planner = typeof body.planner === "string" ? body.planner : undefined;
+  if (planner && RESEARCH_PLANNERS.has(planner) && a.surveyId !== "sandbox") {
+    if (isFailure(authed)) return authed.response;
+    const ctx = await requireProjectFor(authed, a.surveyId, "analytics.edit");
+    if (isFailure(ctx)) return ctx.response;
+  }
+  const options = body.options && typeof body.options === "object" && !Array.isArray(body.options) ? Object.fromEntries(Object.entries(body.options as Record<string, unknown>).filter(([, v]) => ["string", "number", "boolean"].includes(typeof v)).slice(0, 20)) : undefined;
+  const plan = await planForRequest({ store: a.store, scope: a.scope, surveyId: a.surveyId, message, definition: parsed.data, ...(a.customerId ? { customerId: a.customerId } : {}), ...(a.userId ? { createdBy: a.userId } : {}), deadline: Date.now() + 90_000, signal: req.signal, ...(planner ? { plannerId: planner } : {}), ...(options ? { options } : {}) });
   if (!plan.ok) return plan.reason === "no_planner" ? notFound() : NextResponse.json({ ok: false, error: plan.message, code: plan.reason, errors: plan.errors ?? [] }, { status: 422 });
   return NextResponse.json({ ok: true, created: true, durable: a.store.durable, task: viewOf(plan.task), usage: { charge: plan.usage.charge } });
 }

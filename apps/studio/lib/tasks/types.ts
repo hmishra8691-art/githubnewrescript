@@ -75,5 +75,5 @@ export interface TaskPlanner {
   /** 0..1: how well this planner fits; deterministic, no model call */
   matches(input: { message: string; survey: unknown; activeTask?: unknown }): number;
   /** the plan for this request: steps + summary + completion criteria; may call the model once through `ai` for a plan skeleton */
-  plan(input: { message: string; survey: unknown; summary?: TaskSummary; ai: AiFn }): Promise<{ summary: TaskSummary; steps: TaskStepSpec[]; completion: string[] }>;
+  plan(input: { message: string; survey: unknown; summary?: TaskSummary; ai: AiFn; /** structured options the caller sent beside the sentence (the workspace launchers) — additive, 2026-11-07 */ options?: Record<string, unknown> }): Promise<{ summary: TaskSummary; steps: TaskStepSpec[]; completion: string[] }>;
 }

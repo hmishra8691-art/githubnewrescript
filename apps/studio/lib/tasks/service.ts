@@ -22,9 +22,12 @@ import { backgroundBuilderFor, loadDefinition } from "../copilot/backgroundBuild
 import { makeTaskAi, type TaskAiScope } from "./aiServer.ts";
 import { createPlannedTask, handlerBuildStep, taskCheck, taskResult, type PlanOutcome, type TaskEngineDeps, type TaskResult } from "./engine.ts";
 import { registerAllTaskHandlers } from "./handlers/index.ts";
+import { setResearchBackend } from "./handlers/research.ts";
+import { serverResearchBackend } from "./researchBackend";
 import { driveOf } from "../copilot/taskDrive.ts";
 
 registerAllTaskHandlers();
+setResearchBackend(serverResearchBackend());
 
 /** this process's worker id, for the log */
 const G = globalThis as unknown as { __rescriptTaskWorker?: string };
@@ -51,12 +54,12 @@ export function requestDeps(store: TaskStore, scope: TaskAiScope): TaskEngineDep
 
 export interface PlanForRequestInput {
   store: TaskStore; scope: TaskAiScope; surveyId: string; message: string; definition: SurveyDefinition;
-  customerId?: string; createdBy?: string; deadline: number; signal?: AbortSignal; plannerId?: string;
+  customerId?: string; createdBy?: string; deadline: number; signal?: AbortSignal; plannerId?: string; options?: Record<string, unknown>;
 }
 
 /** plan the request with the best registered planner under the request's meter; the planner's one call is paid by the request */
 export function planForRequest(i: PlanForRequestInput): Promise<PlanOutcome> {
-  return createPlannedTask(requestDeps(i.store, i.scope), { surveyId: i.surveyId, message: i.message, definition: i.definition, ...(i.customerId ? { customerId: i.customerId } : {}), ...(i.createdBy ? { createdBy: i.createdBy } : {}), deadline: i.deadline, ...(i.signal ? { signal: i.signal } : {}), ...(i.plannerId ? { plannerId: i.plannerId } : {}) });
+  return createPlannedTask(requestDeps(i.store, i.scope), { surveyId: i.surveyId, message: i.message, definition: i.definition, ...(i.customerId ? { customerId: i.customerId } : {}), ...(i.createdBy ? { createdBy: i.createdBy } : {}), deadline: i.deadline, ...(i.signal ? { signal: i.signal } : {}), ...(i.plannerId ? { plannerId: i.plannerId } : {}), ...(i.options ? { options: i.options } : {}) });
 }
 
 /* ------------------------------------------------------------ advancing */
