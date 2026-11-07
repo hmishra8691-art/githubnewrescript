@@ -1,4 +1,5 @@
 import type { FlowNode } from "@rescript/schema";
+import { nextBranchTitle } from "./branchLogic.js";
 
 /**
  * The Survey Flow tree: addressing, nesting rules, and moves.
@@ -407,6 +408,8 @@ export function insertFlowNode(
   if (!verdict.ok) return { flow, moved: false, reason: verdict.reason };
   const list = writableContainer(next, resolved.container);
   if (!list) return { flow, moved: false, reason: "that position no longer exists" };
+  /* a new branch is named at birth — "Branch N", unique in the survey (branchLogic.ts) — and stays renameable */
+  if (node.type === "branch" && !(node.title ?? "").trim()) node = { ...node, title: nextBranchTitle(next) };
   list.splice(Math.max(0, Math.min(resolved.index, list.length)), 0, node);
   return { flow: next, moved: true };
 }

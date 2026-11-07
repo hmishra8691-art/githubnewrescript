@@ -11,6 +11,7 @@ import {
 import { AutoPunchPanel } from "./AutoPunchEditor";
 import { useStudio, uid } from "./store";
 import { VariableNameInput } from "./VariableNameInput";
+import { InsertPipedText } from "./InsertPipedText";
 import { ConditionEditor, conditionToText, OptionalCondition } from "./ConditionBuilder";
 import { NamedExpressionsPanel } from "./NamedExpressionsPanel";
 import { LogicTracePanel } from "./LogicTracePanel";
@@ -309,8 +310,22 @@ export function CalculationCard({ index, error }: { index: number; error?: strin
     import("@rescript/engine").then(({ validateExpression }) => { if (live) setOwn(validateExpression(c.expression)); });
     return () => { live = false; };
   }, [error, c?.expression, c]);
+  const exprRef = React.useRef<HTMLInputElement>(null);
   if (!c) return null;
   const err = error === undefined ? own : error;
+  /* PIPING IN THE CALCULATION BUILDER (2026-11-07, Excel item 5): a question's answer, any of its stored values
+     (an option, a grid row or cell, a constant-sum amount), an embedded field or another calculation — inserted at
+     the cursor as the reference the calculation language reads, with no helper question in between */
+  const insertRef = (token: string) => {
+    const el = exprRef.current;
+    const cur = c.expression;
+    const at = el?.selectionStart ?? cur.length, end = el?.selectionEnd ?? at;
+    const pad = (x: string, left: boolean) => (left ? (x && !/[\s(+\-*/,]$/.test(x) ? " " : "") : (x && !/^[\s)+\-*/,]/.test(x) ? " " : ""));
+    const before = cur.slice(0, at), after = cur.slice(end);
+    const text = `${pad(before, true)}${token}${pad(after, false)}`;
+    s.update((d) => { d.calculations[index].expression = before + text + after; });
+    requestAnimationFrame(() => { if (!el) return; el.focus(); const pos = at + text.length; el.setSelectionRange(pos, pos); });
+  };
   return (
     <div className="card" style={{ padding: 12 }} data-testid={`calculation-${index}`}>
       <div className="row" style={{ marginBottom: 6 }}>
@@ -318,9 +333,10 @@ export function CalculationCard({ index, error }: { index: number; error?: strin
         <VariableNameInput name={c.targetVariable} testId="calc-target-name"
           placeholder="TARGET_VAR" style={{ width: 180 }} />
         <span className="muted">=</span>
-        <input className="input mono grow" value={c.expression}
-          placeholder="Q1 + Q2 + Q3"
+        <input ref={exprRef} className="input mono grow" value={c.expression} data-testid="calc-expression"
+          placeholder="Q1 + Q2 + ed.Embedded_Data_1"
           onChange={(e) => s.update((d) => { d.calculations[index].expression = e.target.value; })} />
+        <InsertPipedText def={s.def} syntax="calc" accept={c.dataType === "numeric" || !c.dataType ? "number" : "any"} label="⤓ Piping" testId="calc-piping" onInsert={insertRef} />
         <select className="select" style={{ width: 140 }} value={c.trigger}
           onChange={(e) => s.update((d) => { d.calculations[index].trigger = e.target.value as any; })}>
           <option value="on_change">on change</option>

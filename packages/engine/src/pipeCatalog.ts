@@ -1,6 +1,7 @@
 import type { SurveyDefinition, Question, FlowNode } from "@rescript/schema";
 import { embeddedCatalog, embeddedFieldName, isNamedEmbeddedField } from "./embedded.js";
 import { stripHtmlText } from "./html.js";
+import { questionVariables } from "./variables.js";
 import { detectValueType } from "./listValue.js";
 import { serializePipeToken, type RandomPersistence } from "./pipingTokens.js";
 import { DATE_SOURCE_KINDS, PIPE_DATE_FORMATS, formatDatePattern } from "./systemPipes.js";
@@ -79,6 +80,9 @@ const MATRIX = new Set(["matrix_single", "matrix_multi", "matrix_numeric", "matr
 const RANK = new Set(["ranking", "image_ranking"]);
 const NO_PIPE = new Set(["html", "conjoint_task", "maxdiff_task", "acbc_task", "annotation", "media_timeline", "upload", "video_interview", "custom_component", "custom_table", "repeating_group", "hotspot"]);
 
+/** the variables a question stores — the dictionary's own names */
+const variableLister = (q: Question) => questionVariables(q).filter((v) => !v.hidden);
+
 function questionOptions(q: Question, calc: boolean): PipeSourceItem[] {
   const code = q.code;
   const tok = (body: string) => `{{${body}}}`;
@@ -91,6 +95,17 @@ function questionOptions(q: Question, calc: boolean): PipeSourceItem[] {
     const t: PipeValueType = NUMBER_Q.has(q.type) || (SINGLE.has(q.type) && numericCodes) ? "number" : MULTI.has(q.type) ? "list" : "text";
     out.push({ id: `${q.id}:var`, label: "Answer value", detail: q.variableName, valueType: t, token: q.variableName });
     if (MULTI.has(q.type)) out.push({ id: `${q.id}:count`, label: "Number selected", detail: `count(${q.variableName})`, valueType: "number", token: `count(${q.variableName})` });
+    /*
+     * EVERY STORED VALUE OF THE QUESTION (2026-11-07, Excel item 5): one option's indicator, a grid row's answer,
+     * a matrix cell, a constant-sum amount — the variable names the dictionary documents, which are exactly the
+     * names the calculation language resolves. No helper question is needed to reach them any more.
+     */
+    if (variableLister) {
+      for (const v of variableLister(q).slice(0, 80)) {
+        if (v.name === q.variableName || out.some((x) => x.token === v.name)) continue;
+        out.push({ id: `${q.id}:v:${v.name}`, label: v.label || v.name, detail: v.name, valueType: v.dataType === "numeric" ? "number" : "text", token: v.name });
+      }
+    }
     return out;
   }
   if (q.type === "geo") return out; // offered under Geolocation

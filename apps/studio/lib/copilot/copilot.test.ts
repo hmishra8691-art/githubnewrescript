@@ -1,3 +1,4 @@
+import { COPILOT_FLOW_LOGIC_GUIDE } from "./flowLogicGuide.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
@@ -196,7 +197,7 @@ test("a revised proposal numbers the questions it made in order — and replays 
 
 import { SURVEY_ACTION_OPS, UX_ACTION_ALIASES } from "@rescript/engine";
 test("the model is told about every action the engine accepts — and only those", () => {
-  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE + COPILOT_QUOTA_GUIDE + COPILOT_LIST_FILL_GUIDE + COPILOT_METHODS_GUIDE + COPILOT_QUAL_GUIDE + COPILOT_AI_INTERVIEW_GUIDE + COPILOT_INTEGRATIONS_GUIDE + COPILOT_AUDIENCE_GUIDE + COPILOT_ASSESSMENT_GUIDE + COPILOT_QUALITY_GUIDE;
+  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE + COPILOT_QUOTA_GUIDE + COPILOT_LIST_FILL_GUIDE + COPILOT_METHODS_GUIDE + COPILOT_QUAL_GUIDE + COPILOT_AI_INTERVIEW_GUIDE + COPILOT_INTEGRATIONS_GUIDE + COPILOT_AUDIENCE_GUIDE + COPILOT_ASSESSMENT_GUIDE + COPILOT_QUALITY_GUIDE + COPILOT_FLOW_LOGIC_GUIDE;
   for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt, the UX guide or the analysis guide documents ${op}`);
   for (const op of ["create_style", "create_animation", "create_behavior", "attach_behavior_to_question", "create_responsive_rule"]) assert.ok(COPILOT_SYSTEM_PROMPT.includes(op), `the system prompt names ${op}, so the model never says the platform cannot style`);
   const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);

@@ -9,6 +9,7 @@ import { COPILOT_QUAL_SYNTHESIS_GUIDE, qualSynthesisIntent } from "./qualSynthes
 import { COPILOT_INTEGRATIONS_GUIDE, integrationsIntent } from "./integrationsGuide.ts";
 import { COPILOT_AUDIENCE_GUIDE, audienceIntent } from "./audienceGuide.ts";
 import { COPILOT_QUALITY_GUIDE, qualityIntent } from "./qualityGuide.ts";
+import { COPILOT_FLOW_LOGIC_GUIDE, flowLogicIntent } from "./flowLogicGuide.ts";
 import { COPILOT_ASSESSMENT_GUIDE, assessmentIntent } from "./assessmentGuide.ts";
 import { REPORTING_GUIDE } from "./reportingGuide.ts";
 /* production intents (2026-10-18): what speech-to-text writes for "Q1", "JavaScript", "popup", "in Marathi" */
@@ -568,6 +569,8 @@ export function copilotUserPrompt(input: {
   audience?: boolean;
   /** S5b: send the response-quality / paradata guide (absent: decided from the message) */
   quality?: boolean;
+  /** 2026-11-07: branches, existing blocks into paths, dynamic text / options (split_branch, set_dynamic_text…) — absent = read from the message */
+  flowLogic?: boolean;
   /** 2026-10-25 (K4, ported 2026-10-29): the assessment guide (set_answer_key, set_assessment) — absent = read from the message */
   assessment?: boolean;
   /** documents and reports — sent when the request names one (reportingIntent) */
@@ -621,6 +624,8 @@ export function copilotUserPrompt(input: {
     if (input.audience ?? audienceIntent(input.message)) parts.push(COPILOT_AUDIENCE_GUIDE);
     /* S5b (TE-12/13): the quality checks, the telemetry switches and read-only script timing (set_quality_settings) */
     if (input.quality ?? qualityIntent(input.message)) parts.push(COPILOT_QUALITY_GUIDE);
+    /* 2026-11-07: branches that name themselves, existing blocks into paths, ternary text / options */
+    if (input.flowLogic ?? flowLogicIntent(input.message)) parts.push(COPILOT_FLOW_LOGIC_GUIDE);
     /* 2026-10-25 (K4, ported 2026-10-29): scored tests — the answer key and the paper's marking; results are computed, never written */
     if (input.assessment ?? assessmentIntent(input.message)) parts.push(COPILOT_ASSESSMENT_GUIDE);
     /* 2026-10-22 (F2): writing up the coded data, double-coding, reels, text group sessions — the Studio's cards do it; the guide names the sentence */

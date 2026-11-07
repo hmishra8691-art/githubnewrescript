@@ -449,7 +449,7 @@ export function allowedValidationKinds(
  * and `zip` join the list because the specialised subtypes now seed a real
  * check of their own instead of a regex that only looked like one.
  */
-const VAL_TEXT = ["required", "min_length", "max_length", "pattern", "email", "phone", "url", "zip", "custom_expression"];
+const VAL_TEXT = ["required", "min_length", "max_length", "length_range", "pattern", "email", "phone", "url", "zip", "us_state", "date_format", "number_only", "text_only", "custom_expression"];
 const VAL_NUM = ["required", "min_value", "max_value", "integer", "custom_expression"];
 
 interface Fam {
@@ -835,6 +835,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     // sentence and is refused with "write a few sentences" has no idea why.
     defaults: { validation: [{ kind: "min_length", value: 100, message: "Please write at least 100 characters." }] },
     presetOf: "text.multi_line",
+  }),
+  /*
+   * PASSWORD (2026-11-07, Excel item 3): Single-Line Text whose characters are masked as they are typed. The
+   * Open-End family's picker (Studio, `OPEN_END_PICKER`) offers four types — Single-Line, Multiple-Line, Essay and
+   * Password; the content types (email, phone, US state, postal code, date, number, text only, URL) are Validation
+   * Rules → Content Type. The other text variants stay registered — every question that uses one, and Intelligent
+   * Mode's friendly names ("email", "address"), keep working exactly as before.
+   */
+  stable(F.text, "password", "Password", "Masked input — the characters are hidden as they are typed.", {
+    baseType: "open_text", responseModel: "text", validations: VAL_TEXT,
+    defaults: { settings: { masked: true } },
+    presetOf: "text.single_line",
   }),
   stable(F.text, "email", "Email", "Validated email address.", {
     baseType: "open_text", responseModel: "text",
@@ -2853,6 +2865,9 @@ export function variantsOf(family: string): QuestionVariantDef[] {
  * Planned entries are returned separately so the picker can still show what
  * is coming, greyed out, without a placeholder ever being mistaken for a type.
  */
+/** the Open-End family's picker: Single-Line, Multiple-Line, Essay, Password — the other text variants stay registered for the surveys and actions that use them */
+export const OPEN_END_PICKER = ["text.single_line", "text.multi_line", "text.essay", "text.password"] as const;
+
 export function pickerTypesOf(family: string): {
   types: { type: QuestionVariantDef; presets: QuestionVariantDef[] }[];
   /**
@@ -2864,6 +2879,13 @@ export function pickerTypesOf(family: string): {
    */
   crossPresets: { preset: QuestionVariantDef; parent: QuestionVariantDef }[];
 } {
+  /* THE OPEN-END FAMILY OFFERS FOUR TYPES (2026-11-07, Excel item 3) — formats are Validation Rules → Content Type */
+  if (family === "text") {
+    return {
+      types: OPEN_END_PICKER.map((id) => variantRegistry.get(id)).filter((v): v is QuestionVariantDef => !!v).map((type) => ({ type, presets: [] })),
+      crossPresets: [],
+    };
+  }
   const inFamily = variantsOf(family);
   const types = inFamily
     .filter((v) => isSelectableVariant(v) && !v.presetOf)

@@ -104,6 +104,8 @@ A token is `{{ … }}` in any question text, instruction, option label, HTML blo
 | `displayed` | Options displayed | yes |
 | `remaining` | Options not selected | yes |
 | `other` | “Other, specify” text |  |
+| `row` | Row label (grid) |  |
+| `pair` | Row – answer (grid) |  |
 
 ### Formats
 

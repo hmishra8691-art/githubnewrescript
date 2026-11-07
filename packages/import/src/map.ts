@@ -1,6 +1,6 @@
 import { SurveyDefinition, Localization, LanguageConfig, resolveVariant, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
 import { reconstruct, type Reconstruction } from "./reconstruct.js";
-import { runQualityCheck, listBlocks, constantCondition, recordTranslation, codeGate, gateReason } from "@rescript/engine";
+import { runQualityCheck, listBlocks, constantCondition, recordTranslation, codeGate, gateReason, ensureBranchNames } from "@rescript/engine";
 import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField, InventoryItem,
 } from "./canonical.js";
@@ -800,6 +800,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     return { def: null, mapping, issues: sortIssues(all), created: canonicalStats(c), confidence, merge, quality: null, inventory: [...(c.inventory ?? []).map(adjustJs), ...inventory], unresolved, jsMigrations };
   }
   const def = parsed.data;
+  /* 2026-11-07: every imported branch (a source's branch / splitter) gets a name and every path a label from its condition, unique in the survey — renameable afterwards like any other */
+  ensureBranchNames(def);
   /* 2026-11-02: every dynamic relationship checked against the runtime, corrected with native features where the first mapping cannot behave as the source intended, re-checked, explained (reconstruct.ts) */
   let reconstruction: Reconstruction | undefined;
   try { reconstruction = reconstruct(c, def, idOf); }

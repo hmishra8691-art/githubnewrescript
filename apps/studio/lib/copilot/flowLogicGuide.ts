@@ -1,0 +1,18 @@
+/**
+ * THE WORKFLOW-LOGIC GUIDE (2026-11-07) — branches that name themselves, existing blocks routed into branch paths,
+ * and dynamic question text / options by ternary logic (engine `flowLogicActions.ts`, the same functions the Studio's
+ * flow card and question editor call). Sent only when a request is about branches, paths or text / options that
+ * follow an earlier answer (`flowLogicIntent`), lifted into the cached system prefix like every guide; the system
+ * prompt is at its cap and is not touched. Every `{"op":…}` line is applied by the engine as written.
+ */
+export const COPILOT_FLOW_LOGIC_GUIDE = `WORKFLOW LOGIC — branches, branch paths, dynamic text and options. One engine for the Studio and you: every branch is named ("Branch N", unique; paths labelled from their conditions) and stays renameable; a path takes WHOLE existing blocks (moved with their questions and logic, never copied) — never one question out of a block: name its block; a block whose answers the branch reads cannot go under that branch. Dynamic text / options are calc-language ternaries (cond ? a : b, nestable; Q1 == "A" matches the option coded or labelled A; text may pipe {{Q1}}); codes never change, so stored answers and exports keep one meaning; an expression that reads an unknown name, a later question or names a code the question lacks is refused with the reason — fix it, never work around it.
+{"op":"split_branch","question":"Q1","blocks":{"A":["Product A block"],"B":["Product B block"]},"otherwise":["General block"]}   // one path per answer of Q1, each named "Q1 = <answer>"; whole EXISTING blocks go into paths (never a single question — name its block); branches are named automatically ("Branch N") and stay renameable
+{"op":"add_block_to_branch","branch":"By Q1","path":"Q1 = A","block":"Follow-up"}   // move an existing block into a path (path = its label, its number, or "otherwise"); refused for a question, or a block the branch's own conditions read
+{"op":"rename_branch","branch":"Branch 2","title":"Owners vs others","paths":{"Path 1":"Owners"}}
+{"op":"set_dynamic_text","target":"Q2","by":"Q1","cases":{"A":"What is your experience with Product A?","B":"What is your experience with Product B?"},"otherwise":"Please select an option."}   // the question's TEXT follows an earlier answer (a nested ternary, built and checked by the engine); or "expression":"Q1 == \"A\" ? \"…\" : …" directly (nestable, may pipe {{Q1}}); "expression":null removes it
+{"op":"set_dynamic_options","target":"Q3","by":"Q1","cases":{"A":[1,2,3],"B":[4,5]},"otherwise":[1,2,3,4,5]}   // which OPTIONS show follow an earlier answer — codes never change; "labels":{"1":"Q1 == \"A\" ? \"Great for A\" : \"\""} for dynamic option labels; an expression naming an unknown code or a later question is refused`;
+
+/** a request about branches / paths / routing, or about text or options that follow an earlier answer */
+export function flowLogicIntent(text: string): boolean {
+  return /\bbranch\w*|\bpaths?\b|\bsplit (?:by|on)\b|\broute\w*|\bternary\b|\bdynamic (?:question )?(?:text|wording|options?|labels?)\b|\b(?:text|wording|options?|labels?|answers?) (?:change|depend|vary|differ)\w*|\bdepend\w* on (?:the )?(?:answer|response|selection)|\bbased on (?:the |their )?(?:answer|response|selection)|\bif (?:they|respondents?|the respondent) (?:chose|choose|select|selected|picked)\b|\bsplit_branch\b|\bset_dynamic_(?:text|options)\b|\badd_block_to_branch\b|\brename_branch\b/i.test(text);
+}

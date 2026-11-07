@@ -35,6 +35,14 @@ const MULTI_TYPES = [
 ];
 
 /** Only offer properties that exist for the chosen source (req §7 spirit). */
+/** a grid's columns: matrix columns (by id) when it has them, else its scale options */
+function gridColumns(q: Question | undefined): { code: string; label: string }[] {
+  if (!q || !(q.rows?.length)) return [];
+  const cols = (q.columns ?? []) as { id?: string; code?: string; label?: string }[];
+  if (cols.length) return cols.map((c) => ({ code: String(c.id ?? c.code ?? ""), label: c.label ?? String(c.id ?? "") })).filter((c) => c.code);
+  return (q.options ?? []).map((o) => ({ code: String(o.code), label: o.label }));
+}
+
 export function propertiesForQuestion(q: Question | undefined) {
   if (!q) return PIPE_PROPERTIES;
   const isMulti = MULTI_TYPES.includes(q.type);
@@ -45,6 +53,8 @@ export function propertiesForQuestion(q: Question | undefined) {
     if (p.value === "rank") return q.type === "ranking" || q.type === "image_ranking";
     if (p.value === "displayed" || p.value === "remaining") return hasOptions;
     if (p.value === "other") return hasOther;
+    /* grid cells: a row's label, and "row – answer" (Excel item 4) */
+    if (p.value === "row" || p.value === "pair") return (q.rows?.length ?? 0) > 0;
     if (p.multiOnly) return isMulti;
     return true;
   });
@@ -65,6 +75,8 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
     questions.find((q) => q.id !== currentQuestionId)?.code ?? questions[0]?.code ?? "",
   );
   const [rowCode, setRowCode] = React.useState("");
+  /* grid cell piping: one column of the chosen row ("" = whatever was chosen in that row) */
+  const [colCode, setColCode] = React.useState("");
   const [property, setProperty] = React.useState<PipeProperty>("label");
   const [format, setFormat] = React.useState<PipeFormat>("comma");
   const [expr, setExpr] = React.useState("");
@@ -72,7 +84,8 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
   const [manual, setManual] = React.useState<string | null>(null);
   /* a URL carried in (a URL parameter, a calculation, an answer) can be shown as the picture it names — Prince 36 */
   const [asImage, setAsImage] = React.useState(false);
-  React.useEffect(() => { setManual(null); }, [kind, ref, rowCode, property, format, expr, asImage]);
+  React.useEffect(() => { setManual(null); }, [kind, ref, rowCode, colCode, property, format, expr, asImage]);
+  React.useEffect(() => { setColCode(""); }, [ref, rowCode]);
   const embeddedFields = React.useMemo(() => embeddedCatalog(s.def), [s.def]);
   /*
    * Changing the source changes what `ref` names: a question code means
@@ -123,7 +136,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
     kind === "expr"
       ? { kind: "expr", ref: expr, property: "value" }
       : kind === "question"
-        ? { kind, ref, rowCode: rowCode || undefined, property, format }
+        ? { kind, ref, rowCode: rowCode ? (colCode && property !== "row" && property !== "other" ? `${rowCode}:${colCode}` : rowCode) : undefined, property, format }
         : kind === "loop"
           ? { kind, ref, property: "value", format, scope: loopTarget || undefined }
           : { kind, ref, property: "value", format };
@@ -203,6 +216,14 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
                 {q!.rows.map((r) => (
                   <option key={String(r.code)} value={String(r.code)}>{stripHtmlText(r.label)}</option>
                 ))}
+              </select>
+            </label>
+          )}
+          {property !== "other" && property !== "row" && rowCode && gridColumns(q).length > 0 && (
+            <label className="f"><span>Column (optional)</span>
+              <select className="select" data-testid="pipe-column" value={colCode} onChange={(e) => setColCode(e.target.value)}>
+                <option value="">whatever was chosen in this row</option>
+                {gridColumns(q).map((c) => <option key={c.code} value={c.code}>{stripHtmlText(c.label)}</option>)}
               </select>
             </label>
           )}

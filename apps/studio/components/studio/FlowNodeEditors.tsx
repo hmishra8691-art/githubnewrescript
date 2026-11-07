@@ -8,6 +8,7 @@ import {
   EMBEDDED_TYPES, checkEmbeddedExpression, normalizeExpression,
   validateRedirectUrl, urlVariableCatalog, embeddedCatalog, stripHtmlText,
   lintEmbeddedPiping, describeDetectedType, type EmbeddedField,
+  nameBranch, newPathLabel, nextBranchTitle, splitBranchByQuestion, uniqueName, isGenericBranchTitle,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { Icon } from "@/components/ui/Icon";
@@ -527,8 +528,12 @@ type BranchNode = Extract<FlowNode, { type: "branch" }>;
  */
 function BranchPaths({ node, onChange, inWorkspace }: { node: BranchNode; onChange(n: BranchNode): void; inWorkspace?: boolean }) {
   const s = useStudio();
-  const setPath = (i: number, patch: Partial<BranchNode["branches"][number]>) =>
-    onChange({ ...node, branches: node.branches.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+  /* a path keeps a label a person typed; a generated one ("Path 2", or what its old condition said) follows its condition (engine nameBranch) */
+  const setPath = (i: number, patch: Partial<BranchNode["branches"][number]>) => {
+    const next: BranchNode = { ...node, branches: node.branches.map((x, j) => (j === i ? { ...x, ...patch } : x)) };
+    if (patch.when) { const copy = structuredClone(next); nameBranch(s.def, copy, { previous: node }); copy.title = node.title; onChange(copy); return; }
+    onChange(next);
+  };
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
     if (j < 0 || j >= node.branches.length) return;
@@ -566,10 +571,48 @@ function BranchPaths({ node, onChange, inWorkspace }: { node: BranchNode; onChan
         onClick={() => onChange({
           ...node,
           branches: [...node.branches, {
-            id: uid("br"), when: { type: "group", op: "and", children: [] }, children: [],
+            id: uid("br"), label: newPathLabel(node), when: { type: "group", op: "and", children: [] }, children: [],
           }],
         })}>+ add path</button>
     </div>
+  );
+}
+
+/**
+ * SPLIT BY A QUESTION (2026-11-07): one path per answer option, each named after its option ("Q1 = Product A"),
+ * through the engine's splitBranchByQuestion — the call Intelligent Mode makes for "branch on Q1". The new paths
+ * replace a branch that has only empty paths; otherwise they are added after the existing ones. Blocks already
+ * nested under a path stay where they are.
+ */
+function SplitByQuestion({ node, onChange }: { node: BranchNode; onChange(n: FlowNode): void }) {
+  const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const choices = s.def.questions.filter((q) => (q.options ?? []).length > 0 && (q.options ?? []).length <= 30);
+  if (!choices.length) return null;
+  return (
+    <span style={{ position: "relative" }}>
+      <button type="button" className="btn small" data-testid="branch-split-open" onClick={() => setOpen((v) => !v)}>Split by question…</button>
+      {open && (
+        <span className="ebp-pop" style={{ left: 0, right: "auto" }} data-testid="branch-split">
+          <span className="muted" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>One path per answer option, named after it.</span>
+          {choices.map((q) => (
+            <button key={q.id} type="button" className="ebp-pick" style={{ display: "block", padding: "4px 0" }} data-testid="branch-split-question"
+              onClick={() => {
+                const made = splitBranchByQuestion(s.def, q, (p) => uid(p));
+                if (typeof made === "string") { s.toast(made, "err"); return; }
+                const blank = node.branches.every((b) => !b.children.length && (b.when.type === "group" && !b.when.children.length));
+                const taken = blank ? [] : node.branches.map((b) => b.label ?? "");
+                const paths = made.branches.map((b) => ({ ...b, label: uniqueName(b.label ?? "", taken) }));
+                s.labelNextEdit?.(`split branch by ${q.code}`);
+                onChange({ ...node, title: isGenericBranchTitle(node.title) ? made.title : node.title, branches: blank ? paths : [...node.branches, ...paths] });
+                setOpen(false);
+              }}>
+              <span className="mono">{q.code}</span> — {q.text.replace(/<[^>]*>/g, "").slice(0, 60)} <span className="muted">({q.options.length} options)</span>
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -587,10 +630,13 @@ function BranchEditor({ node, onChange }: { node: BranchNode; onChange(n: FlowNo
     <div>
       <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
         <label className="f" style={{ marginBottom: 0 }}>
-          <span>Name (optional)</span>
-          <input className="input" style={{ maxWidth: 280 }} value={node.title ?? ""}
-            placeholder="Branch" onChange={(e) => onChange({ ...node, title: e.target.value || undefined })} />
+          <span>Name</span>
+          {/* named at creation ("Branch N", unique); rename freely — left empty, it takes the next generated name again */}
+          <input className="input" style={{ maxWidth: 280 }} value={node.title ?? ""} data-testid="branch-name"
+            placeholder={nextBranchTitle(s.def.flow as FlowNode[], node.id)} onChange={(e) => onChange({ ...node, title: e.target.value || undefined })}
+            onBlur={(e) => { if (!e.target.value.trim()) onChange({ ...node, title: nextBranchTitle(s.def.flow as FlowNode[], node.id) }); }} />
         </label>
+        <SplitByQuestion node={node} onChange={onChange} />
         <span className="grow" />
         {!compact && <WorkspaceButton onClick={() => setOpen(true)} label="Edit all paths in workspace" testId="branch-workspace-open" />}
       </div>

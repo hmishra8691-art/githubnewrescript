@@ -143,6 +143,13 @@ export type PipeProperty =
    * reached one shared column, so all three sentences read "Apple".
    */
   | "other"
+  /*
+   * GRID CELLS (2026-11-07, Excel item 4). `{{Q1[r3].row}}` is row r3's label; `{{Q1[r3].pair}}` is
+   * "Brand C – Somewhat Familiar" (the row and the column chosen in it); `{{Q1[r3:c2]}}` addresses one
+   * cell — the column's label when it is the answer in that row (single or multi grid), the cell's own
+   * value in a text / numeric / dropdown matrix — and "" when that row is unanswered.
+   */
+  | "row" | "pair"
   // a `geo` answer's parts (piping.ts); the default for a geo question is the address or "lat,lng"
   | "lat" | "lng" | "address" | "city" | "country" | "radius";
 
@@ -207,6 +214,8 @@ export const PIPE_PROPERTIES: { value: PipeProperty; label: string; multiOnly?: 
    * is the single most asked-for follow-up in qualitative work.
    */
   { value: "other", label: "“Other, specify” text" },
+  { value: "row", label: "Row label (grid)" },
+  { value: "pair", label: "Row – answer (grid)" },
 ];
 
 export const PIPE_FORMATS: { value: PipeFormat; label: string; example: string }[] = [

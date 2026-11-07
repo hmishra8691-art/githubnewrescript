@@ -325,7 +325,7 @@ export function planEditBatches(survey: unknown, codes: readonly string[], polic
 /* ------------------------------------------------------------ the model's actions, made to fit */
 
 /** ops a content batch may write (the skeleton owns blocks; nothing is deleted or moved by a generation) */
-const CONTENT_FORBIDDEN = new Set(["create_block", "delete_block", "rename_block", "delete_question", "move_question", "create_randomizer", "create_branch", "create_loop", "create_quota", "delete_quota", "set_research", "propose_analysis_plan", "set_analysis_plan", "set_assessment", "add_language", "translate_questions"]);
+const CONTENT_FORBIDDEN = new Set(["create_block", "delete_block", "rename_block", "delete_question", "move_question", "create_randomizer", "create_branch", "split_branch", "add_block_to_branch", "rename_branch", "create_loop", "create_quota", "delete_quota", "set_research", "propose_analysis_plan", "set_analysis_plan", "set_assessment", "add_language", "translate_questions"]);
 
 export interface NormalizedBatch {
   actions: SurveyAction[];

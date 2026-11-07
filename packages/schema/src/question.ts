@@ -269,6 +269,12 @@ export const Option = z.object({
   defaultValue: z.any().optional(),
   /** The same for this option's "Other — specify" box, when it has one. */
   otherDefault: z.string().optional(),
+  /**
+   * DYNAMIC LABEL (2026-11-07): an expression whose result is this option's label for this respondent
+   * (nested ternaries over earlier answers). The code — what is stored — never changes. Empty / failing
+   * result = `label`.
+   */
+  labelExpression: z.string().max(2000).optional(),
 });
 export type Option = z.infer<typeof Option>;
 
@@ -307,6 +313,16 @@ export const ValidationRule = z.object({
      */
     "url",
     "zip",
+    /*
+     * OPEN-END CONTENT TYPES (2026-11-07, Excel item 3): a US state (name or USPS abbreviation), a date in the
+     * format `value` names ("MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"; default MM/DD/YYYY), a number, text only
+     * (letters, spaces and . , ' - — no digits or other symbols), and a character range (`value` = { min, max }).
+     */
+    "us_state",
+    "date_format",
+    "number_only",
+    "text_only",
+    "length_range",
     "date_min", // value is an ISO date (or a variable name resolving to one)
     "date_max",
     /**
@@ -920,6 +936,20 @@ const QuestionObject = z.object({
    *  untouched. The response model is owned by `type`, never by `variant`. */
   variant: z.string().optional(),
   text: z.string().default(""), // supports piping tokens + HTML
+  /**
+   * DYNAMIC QUESTION TEXT (2026-11-07): a calc-DSL expression — nested ternaries over earlier answers —
+   * whose result is the text shown: `Q1 == "A" ? "About Product A?" : Q1 == "B" ? "About Product B?" : "Please choose"`.
+   * The result may itself pipe (`{{Q2}}`). Empty / failing result = `text`, so `text` is always the fallback.
+   * Absent = exactly the old behaviour.
+   */
+  dynamicText: z.object({ expression: z.string().max(4000) }).optional(),
+  /**
+   * DYNAMIC OPTION SET (2026-11-07): an expression whose result names the option CODES shown —
+   * `Q1 == "A" ? "1,2,3" : Q1 == "B" ? "4,5" : "1,2,3,4,5"`. Codes never change, so stored answers,
+   * exports and validation keep one meaning; an option not named is hidden like any hidden option.
+   * Empty / failing result = every option (fail open, never an empty question).
+   */
+  dynamicOptions: z.object({ expression: z.string().max(4000) }).optional(),
   instruction: z.string().optional(),
   description: z.string().optional(),
 
@@ -1009,6 +1039,8 @@ const QuestionObject = z.object({
        */
       optionSearch: z.enum(["auto", "always", "never"]).optional(),
       placeholder: z.string().optional(),
+      /** PASSWORD (2026-11-07): the open end's characters are masked as they are typed (the answer is stored as typed) */
+      masked: z.boolean().optional(),
       /**
        * "I DON'T KNOW" beside an open-text or numeric answer (2026-11-02). Off unless the researcher turns it on for
        * this question. The choice is stored BESIDE the answer (`<answer key>__dk` = true, see the engine's
@@ -1046,7 +1078,8 @@ const QuestionObject = z.object({
        * THE AUTHOR'S OWN TEXT BESIDE A NUMBER (October 2026 review): any
        * word, unit or symbol — "kg", "years", "per month", "+", "%" — on
        * the left or the right, in every Numeric subtype. Quantity's older
-       * `unitLabel` is read as this when this is absent.
+       * `unitLabel` is read as this when this is absent. Open ends use the same pair as their Pre-Text / Post-Text
+       * (2026-11-07, Excel item 3): left = before the input ("https://www."), right = after it ("USD").
        */
       affixText: z.string().optional(),
       affixSide: z.enum(["left", "right"]).optional(),

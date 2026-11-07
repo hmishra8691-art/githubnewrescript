@@ -338,6 +338,10 @@ export function selectedOtherCodes(q: Question, answer: unknown): string[] {
   const take = (v: unknown) => { const s = String(v); if (codes.has(s)) hit.add(s); };
 
   if (Array.isArray(answer)) answer.forEach(take);
+  /* CONSTANT SUM (2026-11-07, Excel item 1): the answer is { optionCode: amount } — an option is "selected" when it holds an amount other than 0 */
+  else if (typeof answer === "object" && q.type === "allocation") {
+    for (const [k, v] of Object.entries(answer as Record<string, unknown>)) if (v != null && v !== "" && Number(v) !== 0) take(k);
+  }
   else if (typeof answer === "object") {
     // per-row grids: a row's value, or each of its values
     for (const v of Object.values(answer as Record<string, unknown>)) {

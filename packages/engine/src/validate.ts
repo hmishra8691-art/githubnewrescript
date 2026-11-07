@@ -341,6 +341,29 @@ export function checkScalarRules(
         if (problem) fail(ruleError(rule, problem));
         break;
       }
+      case "us_state":
+        if (!isEmpty(value) && !isUsState(String(value))) fail(ruleError(rule, "Please enter a US state (name or two-letter abbreviation)."));
+        break;
+      case "date_format": {
+        if (isEmpty(value)) break;
+        const fmt = typeof rule.value === "string" && rule.value.trim() ? rule.value.trim().toUpperCase() : "MM/DD/YYYY";
+        if (!matchesDateFormat(String(value).trim(), fmt)) fail(ruleError(rule, `Please enter a date as ${fmt}.`));
+        break;
+      }
+      case "number_only":
+        if (!isEmpty(value) && !/^[-+]?(?:\d+(?:[.,]\d+)?|[.,]\d+)$/.test(String(value).trim().replace(/(?<=\d)[ ,](?=\d{3}\b)/g, ""))) fail(ruleError(rule, "Please enter a number."));
+        break;
+      case "text_only":
+        if (!isEmpty(value) && !/^[\p{L}\p{M}\s.,'’\-]+$/u.test(String(value))) fail(ruleError(rule, "Please use letters only — no numbers or symbols."));
+        break;
+      case "length_range": {
+        if (isEmpty(value)) break;
+        const r = (rule.value ?? {}) as { min?: unknown; max?: unknown };
+        const n = String(value).length, lo = Number(r.min), hi = Number(r.max);
+        if ((Number.isFinite(lo) && n < lo) || (Number.isFinite(hi) && n > hi))
+          fail(ruleError(rule, Number.isFinite(lo) && Number.isFinite(hi) ? `Please enter between ${lo} and ${hi} characters.` : Number.isFinite(lo) ? `Please enter at least ${lo} characters.` : `Please enter at most ${hi} characters.`));
+        break;
+      }
       case "date_min": {
         const bound = dateBound(rule.value, ctx);
         const got = isEmpty(value) ? null : asDate(value);
@@ -1325,4 +1348,34 @@ export function validatePage(
     errors.push(...validateQuestion(def, q, value, ctx));
   }
   return errors;
+}
+
+/* ------------------------------------------------------------ open-end content types (2026-11-07) */
+
+const US_STATES: [string, string][] = [
+  ["AL", "Alabama"], ["AK", "Alaska"], ["AZ", "Arizona"], ["AR", "Arkansas"], ["CA", "California"], ["CO", "Colorado"], ["CT", "Connecticut"],
+  ["DE", "Delaware"], ["DC", "District of Columbia"], ["FL", "Florida"], ["GA", "Georgia"], ["HI", "Hawaii"], ["ID", "Idaho"], ["IL", "Illinois"],
+  ["IN", "Indiana"], ["IA", "Iowa"], ["KS", "Kansas"], ["KY", "Kentucky"], ["LA", "Louisiana"], ["ME", "Maine"], ["MD", "Maryland"],
+  ["MA", "Massachusetts"], ["MI", "Michigan"], ["MN", "Minnesota"], ["MS", "Mississippi"], ["MO", "Missouri"], ["MT", "Montana"], ["NE", "Nebraska"],
+  ["NV", "Nevada"], ["NH", "New Hampshire"], ["NJ", "New Jersey"], ["NM", "New Mexico"], ["NY", "New York"], ["NC", "North Carolina"],
+  ["ND", "North Dakota"], ["OH", "Ohio"], ["OK", "Oklahoma"], ["OR", "Oregon"], ["PA", "Pennsylvania"], ["RI", "Rhode Island"],
+  ["SC", "South Carolina"], ["SD", "South Dakota"], ["TN", "Tennessee"], ["TX", "Texas"], ["UT", "Utah"], ["VT", "Vermont"], ["VA", "Virginia"],
+  ["WA", "Washington"], ["WV", "West Virginia"], ["WI", "Wisconsin"], ["WY", "Wyoming"], ["PR", "Puerto Rico"], ["GU", "Guam"],
+  ["VI", "U.S. Virgin Islands"], ["AS", "American Samoa"], ["MP", "Northern Mariana Islands"],
+];
+const STATE_KEYS = new Set(US_STATES.flatMap(([a, n]) => [a.toLowerCase(), n.toLowerCase(), n.toLowerCase().replace(/\./g, "")]));
+export function isUsState(v: string): boolean {
+  return STATE_KEYS.has(v.trim().toLowerCase().replace(/\s+/g, " ").replace(/\.$/, ""));
+}
+
+/** does `v` read as a real date in `fmt` (tokens YYYY, MM, DD, any separator)? */
+export function matchesDateFormat(v: string, fmt: string): boolean {
+  const order: string[] = [];
+  const re = new RegExp("^" + fmt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/YYYY|MM|DD/g, (t) => { order.push(t); return t === "YYYY" ? "(\\d{4})" : "(\\d{1,2})"; }) + "$");
+  const m = re.exec(v);
+  if (!m || order.length !== 3) return false;
+  const get = (t: string) => Number(m[order.indexOf(t) + 1]);
+  const y = get("YYYY"), mo = get("MM"), d = get("DD");
+  if (mo < 1 || mo > 12 || d < 1) return false;
+  return d <= new Date(Date.UTC(y, mo, 0)).getUTCDate();
 }

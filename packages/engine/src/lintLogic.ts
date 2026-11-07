@@ -8,6 +8,7 @@ import type {
   SurveyDefinition,
 } from "@rescript/schema";
 import { questionTypeRegistry, BUILTIN_QUESTION_TYPES } from "@rescript/schema";
+import { lintDynamicLogic } from "./dynamicLogic.js";
 import { lintProbeQuestion } from "./probe.js";
 import type { ObjectKey } from "./dependencyIndex.js";
 import {
@@ -1227,12 +1228,18 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question, order: Reco
   });
   q.columns?.forEach((c, i) => {
     lintCondition(c.visibleIf, `columns[${i}].visibleIf`, ctx);
+    /* column-level logic (always show / hide, show / hide when) is option logic on a column (2026-11-07) */
+    if (c.logic) lintOptionLogic(c.logic, `columns[${i}].logic`, optCtx);
     c.options?.forEach((o, j) => lintOptionLogic(o.logic, `columns[${i}].options[${j}].logic`, optCtx));
   });
 
   lintPiping(q.text, "text", ctx);
   lintPiping(q.instruction, "instruction", ctx);
   lintPiping(q.description, "description", ctx);
+  /* dynamic text / option set / option labels (ternary logic, dynamicLogic.ts) — the same check the editor shows */
+  for (const p of lintDynamicLogic(ctx.def, q)) {
+    ctx.push({ level: p.severity === "error" ? "error" : "warning", path: p.field === "text" ? "dynamicText" : p.field === "options" ? "dynamicOptions" : `options[${q.options.findIndex((o) => String(o.code) === p.code)}].labelExpression`, message: `${p.field === "text" ? "Dynamic text" : p.field === "options" ? "Dynamic option set" : `Dynamic label of option ${p.code}`}: ${p.message}` });
+  }
 
   return issues;
 }

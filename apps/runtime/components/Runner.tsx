@@ -17,7 +17,7 @@ import {
   setAnswer,
   visibleQuestions,
   validatePage,
-  resolvePiping,
+  resolvePiping, questionTextTemplate,
   resolveAuthorHtml,
   runScripts as runScriptsRaw,
   allEmbeddedFields,
@@ -2503,7 +2503,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         <div className="rs-convo-transcript" data-testid="rs-convo-transcript" aria-label="Earlier questions and your answers">
           {transcript.map(({ q, loop, answer }) => (
             <div key={answerKey(q.id, loop)} className="rs-convo-turn" data-testid="rs-convo-turn" data-qid={q.id}>
-              <div className="rs-bubble rs-bubble-q" dangerouslySetInnerHTML={{ __html: resolvePiping(q.text, { ...ctx, loop }) }} />
+              <div className="rs-bubble rs-bubble-q" dangerouslySetInnerHTML={{ __html: resolvePiping(questionTextTemplate(q, { ...ctx, loop }), { ...ctx, loop }) }} />
               <div className={`rs-bubble rs-bubble-a${answer ? "" : " empty"}`}>{answer || "(no answer)"}</div>
             </div>
           ))}

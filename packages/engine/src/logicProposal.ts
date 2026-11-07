@@ -280,6 +280,11 @@ function ruleText(r: ValidationRule): string {
     case "phone": return "a phone number";
     case "url": return "a web address";
     case "zip": return "a postal code";
+    case "us_state": return "a US state";
+    case "date_format": return `a date as ${typeof v === "string" && v ? v : "MM/DD/YYYY"}`;
+    case "number_only": return "a number";
+    case "text_only": return "letters only";
+    case "length_range": { const o = (v ?? {}) as { min?: number; max?: number }; return `${o.min ?? 0}–${o.max ?? "∞"} characters`; }
     case "pattern": return `matching ${v}`;
     default: return `${ruleLabel(r.kind)}${v !== undefined && v !== null && v !== "" && typeof v !== "object" ? ` ${v}` : ""}`;
   }

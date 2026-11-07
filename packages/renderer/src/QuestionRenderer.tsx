@@ -9,7 +9,7 @@ import {
   resolveQuestionMedia, questionMediaList,
   designRowsFor,
   shuffleAlternatives,
-  resolvePiping,
+  resolvePiping, questionTextTemplate,
   resolveAuthorHtml,
   codeGate,
   gateReason,
@@ -347,6 +347,8 @@ const OWN_OTHER_BOX_RENDERERS = new Set(["buttons", "cards"]);
 const OWN_OTHER_BOX_TYPES = new Set(["single_select", "multi_select", "dropdown"]);
 
 export function rendersOwnOtherBox(q: Question, renderer: string | undefined): boolean {
+  /* the constant-sum renderer draws each option's box under its own row */
+  if (q.type === "allocation" && (!renderer || renderer === "allocation")) return true;
   return renderer ? OWN_OTHER_BOX_RENDERERS.has(renderer) : OWN_OTHER_BOX_TYPES.has(q.type);
 }
 
@@ -1001,21 +1003,34 @@ export function TextInput(p: QRProps) {
         readOnly={p.q.settings.readOnly} placeholder={p.q.settings.placeholder} />
     );
   }
+  const masked = !!p.q.settings.masked;
   return (
     <div className="rs-textfield">
+      <span className="rs-affixrow">
+      <TextAffix q={p.q} side="left" />
       <input
         ref={ref}
         className="rs-input"
-        type="text"
+        type={masked ? "password" : "text"}
+        autoComplete={masked ? "off" : undefined}
         value={text}
         placeholder={p.q.settings.placeholder}
         readOnly={p.q.settings.readOnly}
         onChange={(e) => p.onChange(e.target.value)}
       />
-      {/* `speech_input`, on by default: dictation writes into the SAME value, through the same onChange (the control decides whether it belongs here) */}
-      <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} target={ref} />
+      <TextAffix q={p.q} side="right" />
+      </span>
+      {/* `speech_input`, on by default: dictation writes into the SAME value, through the same onChange (the control decides whether it belongs here) — never into a masked field */}
+      {!masked && <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} target={ref} />}
     </div>
   );
+}
+
+/** PRE-TEXT / POST-TEXT beside an open end (Excel item 3): the author's text, never part of the answer */
+function TextAffix({ q, side }: { q: Question; side: "left" | "right" }) {
+  const t = q.settings.affixText;
+  if (!t || (q.settings.affixSide ?? "left") !== side) return null;
+  return <span className={`rs-affix rs-affix-${side === "left" ? "pre" : "post"}`} data-testid={`text-affix-${side === "left" ? "pre" : "post"}`}>{t}</span>;
 }
 
 export function LongText(p: QRProps) {
@@ -1029,6 +1044,7 @@ export function LongText(p: QRProps) {
   const ref = React.useRef<HTMLTextAreaElement>(null);
   return (
     <div>
+      {p.q.settings.affixText && (p.q.settings.affixSide ?? "left") === "left" && <div className="rs-affix rs-affix-pre rs-affix-block" data-testid="text-affix-pre">{p.q.settings.affixText}</div>}
       <textarea
         ref={ref}
         className="rs-textarea"
@@ -1038,6 +1054,7 @@ export function LongText(p: QRProps) {
         maxLength={Number.isFinite(Number(maxLen)) ? Number(maxLen) : undefined}
         onChange={(e) => p.onChange(e.target.value)}
       />
+      {p.q.settings.affixText && p.q.settings.affixSide === "right" && <div className="rs-affix rs-affix-post rs-affix-block" data-testid="text-affix-post">{p.q.settings.affixText}</div>}
       <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} target={ref} />
       {(Number.isFinite(min) || Number.isFinite(Number(maxLen))) && (
         <div className={`rs-counter ${short ? "short" : ""}`} data-testid="char-counter">
@@ -1555,6 +1572,8 @@ export function Allocation(p: QRProps) {
             onChange={(n) => p.onChange({ ...vals, [String(o.code)]: n })}
           />
           {p.q.settings.sumUnit && <span style={{ color: "var(--rs-subtle)" }}>{p.q.settings.sumUnit}</span>}
+          {/* "Other, specify" on a constant-sum option (Excel item 1): its box once the option holds an amount; the text never enters the total */}
+          {OTHER(o) && vals[String(o.code)] != null && Number(vals[String(o.code)]) !== 0 && <OtherInput {...p} option={o} below />}
         </div>
       ))}
       <div className={`rs-alloc-total ${target != null ? (total === target ? "ok" : "bad") : ""}`}>
@@ -2997,7 +3016,7 @@ function QuestionRendererCard(props: QRProps) {
    */
   const textScope = `${p.q.id}-text`;
   const instructionScope = `${p.q.id}-instruction`;
-  const text = renderRichContent(resolvePiping(p.q.text, ctx), textScope, { allowFrames: p.q.type === "html" });
+  const text = renderRichContent(resolvePiping(questionTextTemplate(p.q, ctx), ctx), textScope, { allowFrames: p.q.type === "html" });
   const instruction = p.q.instruction ? renderRichContent(resolvePiping(p.q.instruction, ctx), instructionScope) : null;
   /*
    * A TEXT THAT CARRIES ITS OWN STYLESHEET IS A DOCUMENT, NOT A HEADING.

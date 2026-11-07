@@ -28,6 +28,7 @@ import { AiQuestionSection } from "./AiQuestionSection";
 import { AssessmentQuestionSection } from "./AssessmentQuestionSection";
 import { CodeEditor } from "./code/CodeEditor";
 import { useScriptTools } from "./code/ScriptTools";
+import { DynamicLogicEditor } from "./DynamicLogicEditor";
 import { ScriptHealthChip } from "./ScriptHealth";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
@@ -41,7 +42,7 @@ export function validationKindsFor(qtype: string): ValidationRule["kind"][] {
   if (["numeric", "slider", "nps", "matrix_numeric"].includes(qtype))
     return ["required", "min_value", "max_value", "integer", "custom_expression", "condition"];
   if (["open_text", "long_text", "text_list"].includes(qtype))
-    return ["required", "min_length", "max_length", "pattern", "email", "phone", "url", "zip", "custom_expression", "custom_script", "condition"];
+    return ["required", "min_length", "max_length", "length_range", "email", "phone", "us_state", "zip", "date_format", "number_only", "text_only", "url", "pattern", "custom_expression", "custom_script", "condition"];
   if (qtype === "numeric_list")
     return ["required", "min_value", "max_value", "integer", "custom_expression", "condition"];
   if (qtype === "allocation")
@@ -87,6 +88,12 @@ const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue
   { value: "phone", label: "phone number", hasValue: false },
   { value: "url", label: "web address", hasValue: false },
   { value: "zip", label: "postal code", hasValue: false },
+  /* open-end content types and the character range (2026-11-07, Excel item 3) */
+  { value: "us_state", label: "US state", hasValue: false },
+  { value: "date_format", label: "date format", hasValue: false },
+  { value: "number_only", label: "number", hasValue: false },
+  { value: "text_only", label: "text only", hasValue: false },
+  { value: "length_range", label: "character range", hasValue: false },
   { value: "date_min", label: "date on or after", hasValue: true },
   { value: "date_max", label: "date on or before", hasValue: true },
   { value: "column_sum_equals", label: "column total =", hasValue: true },
@@ -97,6 +104,19 @@ const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue
   { value: "custom_script", label: "script (by name)", hasValue: true },
   { value: "condition", label: "condition (visual/expression)", hasValue: false },
 ];
+
+/** the open-end rule menu, grouped as the Excel brief lists it (2026-11-07, item 3) */
+const TEXT_GROUPS: { label: string; kinds: ValidationRule["kind"][] }[] = [
+  { label: "Length", kinds: ["min_length", "max_length", "length_range"] },
+  { label: "Content type", kinds: ["email", "phone", "us_state", "zip", "date_format", "number_only", "text_only", "url"] },
+  { label: "Custom", kinds: ["pattern", "custom_expression", "custom_script", "condition", "required"] },
+];
+const TEXT_KIND_LABEL: Partial<Record<ValidationRule["kind"], string>> = {
+  min_length: "Minimum length", max_length: "Maximum length", length_range: "Character range",
+  email: "Email address", phone: "Phone number", us_state: "US state", zip: "Postal / ZIP code", date_format: "Date format",
+  number_only: "Number", text_only: "Text only", url: "URL", pattern: "Custom — regex pattern", custom_expression: "Custom — expression",
+  custom_script: "Custom — script", condition: "Custom — condition", required: "Required",
+};
 
 /** What the value box is asking for, per kind — a hint beats a guess. */
 const VALUE_HINT: Partial<Record<ValidationRule["kind"], string>> = {
@@ -273,7 +293,9 @@ function ValidationMessageModal({ value, questionId, onCancel, onSave }: {
 /** a validation rule in words, for the inline strip */
 function validationRuleText(v: ValidationRule, def: Parameters<typeof conditionSummary>[0]): string {
   const kind = VALIDATION_KINDS.find((k) => k.value === v.kind);
-  const base = kind?.hasValue ? `${kind.label} ${String(v.value ?? "")}`.trim() : (kind?.label ?? v.kind);
+  const base = v.kind === "length_range" ? `character range ${(v.value as { min?: number })?.min ?? 0}–${(v.value as { max?: number })?.max ?? "∞"}`
+    : v.kind === "date_format" ? `date as ${typeof v.value === "string" && v.value ? v.value : "MM/DD/YYYY"}`
+    : kind?.hasValue ? `${kind.label} ${String(v.value ?? "")}`.trim() : (kind?.label ?? v.kind);
   const check = v.kind === "condition" && v.check ? ` — invalid when ${conditionSummary(def, v.check)}` : "";
   const when = v.when ? ` (only when ${conditionSummary(def, v.when)})` : "";
   return `${base}${check}${when}${v.severity === "warning" ? " · warns" : ""}`;
@@ -284,6 +306,11 @@ function validationRulesProblem(rules: ValidationRule[]): string | null {
   for (let i = 0; i < rules.length; i++) {
     const kind = VALIDATION_KINDS.find((k) => k.value === rules[i].kind);
     if (kind?.hasValue && (rules[i].value === undefined || rules[i].value === "")) return `Rule ${i + 1}: “${kind.label}” needs a value`;
+    if (rules[i].kind === "length_range") {
+      const r = (rules[i].value ?? {}) as { min?: number; max?: number };
+      if (r.min == null && r.max == null) return `Rule ${i + 1}: a character range needs a minimum or a maximum`;
+      if (r.min != null && r.max != null && r.min > r.max) return `Rule ${i + 1}: the minimum is larger than the maximum`;
+    }
   }
   return null;
 }
@@ -370,6 +397,9 @@ function ValidationRulesList({ q, rules, onChange, inWorkspace }: {
    * checked on a date answer.
    */
   if (q.type === "date") allowed.push("date_min", "date_max");
+  /* open ends get the Excel brief's categories (TEXT_GROUPS), even when an older variant declares fewer kinds */
+  const textual = ["open_text", "long_text"].includes(q.type);
+  if (textual) for (const k of TEXT_GROUPS.flatMap((g) => g.kinds)) if (!allowed.includes(k)) allowed.push(k);
   const kinds = VALIDATION_KINDS.filter((k) => allowed.includes(k.value));
   /* a bound in the unit the answer is stored in */
   const hintFor = (kind: ValidationRule["kind"]): string =>
@@ -403,10 +433,35 @@ function ValidationRulesList({ q, rules, onChange, inWorkspace }: {
                   validation: q.validation.map((x, j) => (j === i ? { ...x, kind: e.target.value as any } : x)),
                 })}>
                 {/* keep an already-set kind visible even if not offered for this type */}
-                {(kinds.some((k) => k.value === v.kind) ? kinds : [kind!, ...kinds]).map((k) => (
+                {textual ? (
+                  /* open ends: the five categories of the Excel brief — length, character range, content type, custom */
+                  TEXT_GROUPS.map((g) => (
+                    <optgroup key={g.label} label={g.label}>
+                      {g.kinds.filter((k) => kinds.some((x) => x.value === k) || k === v.kind).map((k) => <option key={k} value={k}>{TEXT_KIND_LABEL[k] ?? VALIDATION_KINDS.find((x) => x.value === k)?.label ?? k}</option>)}
+                    </optgroup>
+                  ))
+                ) : (kinds.some((k) => k.value === v.kind) ? kinds : [kind!, ...kinds]).map((k) => (
                   <option key={k.value} value={k.value}>{k.label}</option>
                 ))}
               </select>
+              {v.kind === "length_range" && (
+                <span className="row" style={{ gap: 4 }} data-testid="validation-range">
+                  <input className="input" type="number" min={0} style={{ width: 80 }} placeholder="min" data-testid="validation-range-min"
+                    value={(v.value as { min?: number } | undefined)?.min ?? ""}
+                    onChange={(e) => patch({ validation: q.validation.map((x, j) => (j === i ? { ...x, value: { ...((x.value as object) ?? {}), min: e.target.value === "" ? undefined : Number(e.target.value) } } : x)) })} />
+                  <span className="muted">to</span>
+                  <input className="input" type="number" min={0} style={{ width: 80 }} placeholder="max" data-testid="validation-range-max"
+                    value={(v.value as { max?: number } | undefined)?.max ?? ""}
+                    onChange={(e) => patch({ validation: q.validation.map((x, j) => (j === i ? { ...x, value: { ...((x.value as object) ?? {}), max: e.target.value === "" ? undefined : Number(e.target.value) } } : x)) })} />
+                  <span className="muted">characters</span>
+                </span>
+              )}
+              {v.kind === "date_format" && (
+                <select className="select" style={{ width: 140 }} data-testid="validation-date-format" value={typeof v.value === "string" && v.value ? v.value : "MM/DD/YYYY"}
+                  onChange={(e) => patch({ validation: q.validation.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })}>
+                  {["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD", "DD.MM.YYYY", "MM-DD-YYYY"].map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
+              )}
               {kind?.hasValue && (
                 <input className="input grow mono"
                   /* A regex needs room to be read back. This shared box was
@@ -550,8 +605,19 @@ function ValidationRulesList({ q, rules, onChange, inWorkspace }: {
           </div>
         );
       })}
-      <button className="btn small" data-testid="validation-rule-add"
-        onClick={() => patch({ validation: [...q.validation, { kind: "required" }] })}>+ rule</button>
+      {textual ? (
+        /* Validation Rules → Add Logic → Select Validation Type (Excel item 3) */
+        <div className="row" style={{ gap: 6, flexWrap: "wrap" }} data-testid="validation-add-logic">
+          <span className="muted" style={{ fontSize: 12.5 }}>Add logic:</span>
+          {([["min_length", "Minimum length", 1], ["max_length", "Maximum length", 255], ["length_range", "Character range", { min: 1, max: 255 }], ["email", "Content type", undefined], ["pattern", "Custom", ""]] as const).map(([kind, label, value]) => (
+            <button key={kind} type="button" className="btn small" data-testid={`validation-add-${kind}`}
+              onClick={() => patch({ validation: [...q.validation, { kind: kind as ValidationRule["kind"], ...(value !== undefined ? { value } : {}) } as ValidationRule] })}>+ {label}</button>
+          ))}
+        </div>
+      ) : (
+        <button className="btn small" data-testid="validation-rule-add"
+          onClick={() => patch({ validation: [...q.validation, { kind: "required" }] })}>+ rule</button>
+      )}
     </div>
   );
 }
@@ -1451,6 +1517,13 @@ function PropertiesPanelBody() {
       {showSec("Skip logic") && (
       <CollapsibleSection id="skip-logic" title="Skip logic" active={(q.skipLogic?.length ?? 0) > 0}>
       <SkipLogicEditor q={q} patch={patch} />
+      </CollapsibleSection>
+      )}
+
+      {/* ternary logic over earlier answers: the text shown, the options shown, their labels (2026-11-07) */}
+      {q.type !== "html" && showSec("Dynamic text & options (ternary)") && (
+      <CollapsibleSection id="dynamic-logic" title="Dynamic text & options (ternary)" active={!!(q.dynamicText || q.dynamicOptions || q.options?.some((o) => o.labelExpression))}>
+      <DynamicLogicEditor q={q} patch={patch} />
       </CollapsibleSection>
       )}
 

@@ -155,6 +155,15 @@ export function calcOptionsFor(def: SurveyDefinition, state: ResponseState, loop
       }
       return undefined;
     },
+    /* the labels of a coded answer, so `Q1 == "Product A"` reads by label too (calc.ts textEq) */
+    labels: (n: string) => {
+      const q = getQuestionByCodeOrVar(def, n.replace(EMBEDDED_PREFIX, "") === n ? n : "");
+      if (!q || !q.options?.length) return undefined;
+      let v: unknown = loop ? loopScopedName(def, state, loop, n) : undefined;
+      if (v === undefined) v = n in flat ? flat[n] : flat[q.variableName] ?? state.answers[q.id];
+      const codes = (Array.isArray(v) ? v : v === undefined || v === null || v === "" ? [] : [v]).map(String);
+      return q.options.filter((o) => codes.includes(String(o.code)) || (o.value !== undefined && codes.includes(String(o.value)))).map((o) => o.label);
+    },
     names: () => [
       ...Object.keys(flat),
       ...Object.keys(state.calculated),

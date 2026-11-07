@@ -14,7 +14,7 @@
 import type { LoopContext, QuotaCounts, ListFillCounts, ValidationError } from "@rescript/engine";
 import {
   advance, answerKey, applyListFillDestinations, createResponseState, decideListFill, effectiveQuestion, listFillVariables,
-  pendingListFills, resolvePiping, runScripts, setAnswer, start, validatePage, visibleQuestions, designRowsFor,
+  pendingListFills, resolvePiping, questionTextTemplate, runScripts, setAnswer, start, validatePage, visibleQuestions, designRowsFor,
   normalizeAcbc, emptyAcbcAnswer, submitByo, submitScreen, answerRule, chooseInTournament,
 } from "@rescript/engine";
 import type { AcbcConfig, AcbcAnswer } from "@rescript/engine";
@@ -234,7 +234,7 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
     }
     visited.questionIds = visible.map((q) => q.id);
     // piped texts as the respondent would have seen them
-    for (const q of visible) visited.texts[q.id] = resolvePiping(q.text, { def, state, loop, quotaCounts });
+    for (const q of visible) visited.texts[q.id] = resolvePiping(questionTextTemplate(q, { def, state, loop, quotaCounts }), { def, state, loop, quotaCounts });
     out.pages.push(visited);
 
     const errors = validatePage(def, visible, { def, state, loop, quotaCounts });

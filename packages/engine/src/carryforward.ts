@@ -18,6 +18,7 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, conditionFires, isVacuousCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
 import { registerDisplayedCodesResolver } from "./displayedRegistry.js";
 import { getQuestion, getQuestionByCodeOrVar, lookupAnswer, loopKeySuffix } from "./state.js";
+import { applyDynamicOptions } from "./dynamicLogic.js";
 import { resolvePiping, registerDisplayedOptionsResolver, registerEffectiveRowsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { sanitizeHtml, stripHtmlText } from "./html.js";
@@ -1365,6 +1366,13 @@ function runOptions(
   //      are the flow interpreter's business, not the list's.
   if (q.punches?.some((r) => LIST_ACTIONS.has(r.action))) {
     options = applyListPunches(q, options, ctx, rec);
+  }
+
+  // 4d — the dynamic option set and dynamic labels (ternary logic over earlier answers, dynamicLogic.ts)
+  if (q.dynamicOptions?.expression || options.some((o) => o.labelExpression)) {
+    const before = options;
+    options = applyDynamicOptions(q, options, ctx);
+    if (q.dynamicOptions?.expression) record(rec, "dynamic", "Dynamic option set", before, options, new Map(before.map((o) => [String(o.code), "Not in the dynamic option set for this respondent"])));
   }
 
   // 5 — reusable list operations

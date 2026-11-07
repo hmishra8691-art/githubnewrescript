@@ -21,7 +21,7 @@ import {
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { InsertPipedText } from "./InsertPipedText";
 import { gridMove, insertAt } from "@/lib/flow/flowEd";
-import { lintEmbeddedPiping } from "@rescript/engine";
+import { lintEmbeddedPiping, branchBlockChoices, moveBlockIntoBranch } from "@rescript/engine";
 
 /* ==========================================================================
  * Survey Flow — one recursive tree over the canonical definition.
@@ -254,6 +254,8 @@ interface FlowOps {
   openQuestions(blockId: string): void;
   /** 1-based position of a block among ALL blocks, wherever they are nested. */
   blockNumber(id: string): number | null;
+  /** bring an EXISTING block into a branch path (engine moveBlockIntoBranch — blocks only, never a lone question) */
+  adoptBlock(blockId: string, branchId: string, slot: string): void;
 }
 const OpsCtx = React.createContext<FlowOps | null>(null);
 const useOps = () => {
@@ -557,6 +559,8 @@ function BranchCard({ node, depth }: { node: Extract<FlowNode, { type: "branch" 
                   <span className="flabel" style={{ margin: 0 }}>
                     IF {b.label || conditionToText(b.when, s.def) || "(no condition)"} THEN
                   </span>
+                  <span className="grow" />
+                  <ExistingBlockPicker branchId={node.id} slot={`branch:${b.id}`} pathName={b.label || "this path"} />
                 </InsideDropTarget>
                 <FlowChildren nodes={b.children} depth={depth + 1} what="path"
                   container={{ ownerId: node.id, slot: `branch:${b.id}` }} />
@@ -569,6 +573,8 @@ function BranchCard({ node, depth }: { node: Extract<FlowNode, { type: "branch" 
               <div className="branch-path" data-testid="branch-otherwise">
                 <InsideDropTarget zoneKey={zoneKey(inside)} target={inside} className="bp-head">
                   <span className="flabel" style={{ margin: 0 }}>OTHERWISE</span>
+                  <span className="grow" />
+                  <ExistingBlockPicker branchId={node.id} slot="otherwise" pathName="OTHERWISE" />
                 </InsideDropTarget>
                 <FlowChildren nodes={node.otherwise ?? []} depth={depth + 1} what="path"
                   container={{ ownerId: node.id, slot: "otherwise" }} />
@@ -578,6 +584,59 @@ function BranchCard({ node, depth }: { node: Extract<FlowNode, { type: "branch" 
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * SELECT AN EXISTING BLOCK FOR A BRANCH PATH (2026-11-07).
+ *
+ * Lists every block in the survey — selectable, or greyed with the reason (already here, read by this branch's own
+ * conditions, contains the branch) — and every question beneath its block, never selectable on its own: a branch
+ * routes whole blocks. Choosing one MOVES that block (pages, questions, logic) into the path; nothing is copied, so
+ * an answer is still stored once. Engine: branchBlockChoices / moveBlockIntoBranch, the same calls Intelligent Mode makes.
+ */
+function ExistingBlockPicker({ branchId, slot, pathName }: { branchId: string; slot: string; pathName: string }) {
+  const s = useStudio();
+  const ops = useOps();
+  const [open, setOpen] = React.useState(false);
+  const [find, setFind] = React.useState("");
+  const choices = React.useMemo(() => (open ? branchBlockChoices(s.def, branchId, slot) : null), [open, s.def, branchId, slot]);
+  const f = find.trim().toLowerCase();
+  const match = (t: string) => !f || t.toLowerCase().includes(f);
+  return (
+    <span className="ebp" onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="btn small ghost" data-testid="branch-existing-open" onClick={() => setOpen((v) => !v)} title="Bring a block that already exists into this path">+ Existing block</button>
+      {open && choices && (
+        <div className="ebp-pop" role="dialog" aria-label={`Existing blocks for ${pathName}`} data-testid="branch-existing-picker">
+          <div className="row" style={{ gap: 6, marginBottom: 6 }}>
+            <strong style={{ fontSize: 13 }}>Existing blocks → {pathName}</strong>
+            <span className="grow" />
+            <button type="button" className="btn small ghost" onClick={() => setOpen(false)} aria-label="Close">✕</button>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }} data-testid="branch-existing-note">{choices.note} The block is moved here with its questions and logic.</div>
+          <input className="input" placeholder="Find a block or question…" value={find} onChange={(e) => setFind(e.target.value)} style={{ marginBottom: 6 }} />
+          <div className="ebp-list">
+            {choices.blocks.filter((b) => match(b.title) || b.questionCodes.some(match)).map((b) => (
+              <div key={b.id} className={`ebp-block ${b.selectable ? "" : "off"}`} data-testid="branch-existing-block" data-selectable={b.selectable ? "1" : "0"}>
+                <button type="button" className="ebp-pick" disabled={!b.selectable} title={b.reason ?? `Move ${b.title} into ${pathName}`}
+                  onClick={() => { ops.adoptBlock(b.id, branchId, slot); setOpen(false); }}>
+                  <span className="badge neutral">BLOCK {b.number}</span> <strong>{b.title}</strong>
+                  <span className="muted"> · {b.questionCodes.length} question{b.questionCodes.length === 1 ? "" : "s"} · {b.where}</span>
+                </button>
+                {b.reason && <div className="ebp-reason">{b.reason}</div>}
+                <div className="ebp-qs">
+                  {choices.questions.filter((q) => q.blockId === b.id).map((q) => (
+                    <span key={q.id} className="ebp-q" title={q.reason} data-testid="branch-existing-question" aria-disabled="true">{q.code}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {!choices.blocks.length && <div className="muted">The survey has no blocks yet.</div>}
+          </div>
+          <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Questions are shown for reference — select the whole block; a question is not taken out of its block.</div>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -637,6 +696,10 @@ export function FlowPanel() {
       const node = findNode(flow, id);
       applyFlow(`move ${node ? summarizeFlowNode(node).label : "element"}`,
         (f) => moveFlowNode(f, id, target));
+    },
+    adoptBlock(blockId, branchId, slot) {
+      const b = listBlocks(flow as any[]).find((x) => x.id === blockId);
+      applyFlow(`move ${b?.title || "block"} into the branch`, () => moveBlockIntoBranch(s.def, blockId, branchId, slot));
     },
     insert(type, target) {
       applyFlow(`add ${ELEMENT_LABELS[type] ?? type}`, (f) => insertFlowNode(f, makeNode(type), target));

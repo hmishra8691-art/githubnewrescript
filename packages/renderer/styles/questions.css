@@ -1239,3 +1239,9 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-dk input { width: 18px; height: 18px; margin: 0; cursor: pointer; }
 .rs-dk input:disabled { cursor: default; }
 .rs-dk.on .rs-dk-label { font-weight: 600; }
+
+/* Pre-Text / Post-Text beside an open end (2026-11-07) */
+.rs-affixrow { display: flex; align-items: center; gap: 6px; }
+.rs-affixrow .rs-input { flex: 1 1 auto; min-width: 0; }
+.rs-affix { color: var(--rs-subtle, #64748b); white-space: nowrap; flex: none; }
+.rs-affix-block { margin: 4px 0; white-space: normal; }

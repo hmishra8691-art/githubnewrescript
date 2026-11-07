@@ -32,6 +32,7 @@ import { authoringQuestionView } from "./carryforward.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
 import { diffUx, type UxDiff } from "./ux.js";
 import { applyOptionAction, coerceOptionAction, describeOptionAction, isOptionOp, OPTION_ACTION_OPS, type OptionAction } from "./optionActions.js";
+import { applyFlowLogicAction, coerceFlowLogicAction, describeFlowLogicAction, isFlowLogicOp, nameCreatedBranch, FLOW_LOGIC_ACTION_OPS, type FlowLogicAction } from "./flowLogicActions.js";
 import { applyResearchAction, coerceResearchAction, describeResearchAction, isResearchOp, RESEARCH_ACTION_OPS, type ResearchAction } from "./researchActions.js";
 import { applyQualAction, coerceQualAction, describeQualAction, isQualOp, qualGuideDiff, qualSectionChanges, QUAL_ACTION_OPS, type QualAction } from "./qualActions.js";
 import { AI_INTERVIEW_ACTION_OPS, applyAiInterviewAction, coerceAiInterviewAction, describeAiInterviewAction, isAiInterviewOp, type AiInterviewAction } from "./aiInterviewActions.js";
@@ -170,7 +171,9 @@ export type SurveyAction =
   | IntegrationAction
   | RecruitmentAction
   /* assessments (K4 2026-10-25, ported 2026-10-29) — see assessmentActions.ts; they write question.assessment / def.assessment and nothing else */
-  | AssessmentAction;
+  | AssessmentAction
+  /* branches that name themselves, existing blocks into paths, dynamic text & options by ternary (2026-11-07) — see flowLogicActions.ts */
+  | FlowLogicAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
@@ -179,7 +182,7 @@ export const SURVEY_ACTION_OPS = [
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
-  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS, ...INTEGRATION_ACTION_OPS, ...RECRUITMENT_ACTION_OPS, ...ASSESSMENT_ACTION_OPS,
+  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS, ...INTEGRATION_ACTION_OPS, ...RECRUITMENT_ACTION_OPS, ...ASSESSMENT_ACTION_OPS, ...FLOW_LOGIC_ACTION_OPS,
 ] as const;
 
 /**
@@ -477,6 +480,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (oa !== null) return oa;
       const ra = op ? coerceResearchAction(op, o) : null;
       if (ra !== null) return ra;
+      const fla = op ? coerceFlowLogicAction(op, o) : null;
+      if (fla !== null) return fla;
       const qla = op ? coerceQualAction(op, o) : null;
       if (qla !== null) return qla;
       const aia = op ? coerceAiInterviewAction(op, o) : null;
@@ -1075,6 +1080,8 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       });
       const otherwise = (a.otherwise ?? []).map((b) => byId.get(resolveTop(ctx, b))!);
       const node = { type: "branch", id: ctx.ids("branch"), ...(a.title ? { title: a.title } : {}), branches, ...(otherwise.length ? { otherwise } : {}) } as unknown as FlowNode;
+      /* named like a branch made by hand: "Branch N" when untitled, paths labelled from their conditions (branchLogic.ts) */
+      nameCreatedBranch(def, node);
       flow.splice(sorted[0], sorted.length, node);
       const text = branches.map((b) => `${b.children.map((n) => `“${(n as { title?: string }).title ?? n.id}”`).join(", ")} when ${formatCondition(def, b.when)}`).join("; else ");
       return { description: `Branch: ${text}${otherwise.length ? `; otherwise ${otherwise.map((n) => `“${(n as { title?: string }).title ?? n.id}”`).join(", ")}` : ""}`, touched: allIds };
@@ -1272,6 +1279,11 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         return r;
       }
       // qualitative: an AI follow-up probe on an open end — question.probe only, every condition through the gate
+      if (isFlowLogicOp(a.op)) {
+        const r = applyFlowLogicAction(def, a as FlowLogicAction, { question: (x) => tryQuestion(ctx, x), block: (x) => tryBlock(ctx, x), ids: ctx.ids });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       if (isResearchOp(a.op)) {
         const r = applyResearchAction(def, a as ResearchAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)) });
         ctx.uxWarnings.push(...r.warnings);
@@ -1759,7 +1771,7 @@ export function describeAction(a: SurveyAction): string {
       const where = a.field ? `${a.target} ${a.field}` : a.target;
       return a.value === null ? `Remove the default value of ${where}` : `Default value of ${where}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
     }
-    default: return isAssessmentOp(a.op) ? describeAssessmentAction(a as AssessmentAction) : isIntegrationOp(a.op) ? describeIntegrationAction(a as IntegrationAction) : isRecruitmentOp(a.op) ? describeRecruitmentAction(a as RecruitmentAction) : isAiInterviewOp(a.op) ? describeAiInterviewAction(a as AiInterviewAction) : isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isFlowLogicOp(a.op) ? describeFlowLogicAction(a as FlowLogicAction) : isAssessmentOp(a.op) ? describeAssessmentAction(a as AssessmentAction) : isIntegrationOp(a.op) ? describeIntegrationAction(a as IntegrationAction) : isRecruitmentOp(a.op) ? describeRecruitmentAction(a as RecruitmentAction) : isAiInterviewOp(a.op) ? describeAiInterviewAction(a as AiInterviewAction) : isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 

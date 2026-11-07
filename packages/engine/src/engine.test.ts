@@ -629,6 +629,8 @@ test("variant catalog integrity (family/variant architecture)", async () => {
        the specialised text subtypes seed them instead of a regex that only
        looked like validation (see variants.ts) */
     "pattern", "email", "phone", "url", "zip",
+    /* open-end content types and the character range (2026-11-07, Excel item 3) */
+    "us_state", "date_format", "number_only", "text_only", "length_range",
     "integer", "custom_expression", "custom_script",
   ]);
 

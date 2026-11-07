@@ -1,3 +1,4 @@
+import { expressionNames } from "./exprNames.js";
 import type {
   Condition,
   ListOperation,
@@ -280,6 +281,11 @@ function listOpRefs(def: SurveyDefinition, ops: ListOperation[] | undefined, int
 export function pipingRefs(def: SurveyDefinition, text: string | undefined, into: Set<string>): void {
   if (!text || !text.includes("{{")) return;
   for (const t of pipeTokensIn(text)) {
+    /* `{{expr: Q1 + Q2}}` reads Q1 and Q2 — the graph used to skip it, so deleting Q1 did not warn and order checks missed it */
+    if (t.kind === "expr") {
+      for (const n of expressionNames(t.ref)) { const q = getQuestionByCodeOrVar(def, n.split(".")[0]); if (q) into.add(q.id); }
+      continue;
+    }
     if (t.kind !== "question") continue;
     const q = getQuestionByCodeOrVar(def, t.ref);
     if (q) into.add(q.id);
@@ -361,6 +367,10 @@ export function questionDependencies(def: SurveyDefinition, q: Question): Set<st
   pipingRefs(def, q.instruction, into);
   pipingRefs(def, q.description, into);
   pipingRefs(def, q.customHtml, into);
+  /* dynamic text / option set / option labels read earlier answers through the calc language (dynamicLogic.ts) */
+  for (const e of [q.dynamicText?.expression, q.dynamicOptions?.expression, ...(q.options ?? []).map((o) => o.labelExpression)]) {
+    if (e && e.trim()) pipingRefs(def, `{{expr: ${e}}}`, into);
+  }
 
   into.delete(q.id); // self-reference is not a dependency
   return into;

@@ -154,8 +154,10 @@ const ALL_FLAGS: { value: string; label: string }[] = [
 export function allowedFlagsFor(qtype: string): string[] {
   if (["single_select", "dropdown"].includes(qtype))
     return ["other_specify", "anchor_top", "anchor_bottom"];
-  if (["ranking", "image_ranking", "allocation"].includes(qtype))
+  if (["ranking", "image_ranking"].includes(qtype))
     return ["anchor_top", "anchor_bottom"];
+  /* constant sum: "Other, specify" per option (Excel item 1) — the box appears once the option holds an amount, and its text never counts toward the total */
+  if (qtype === "allocation") return ["other_specify", "anchor_top", "anchor_bottom"];
   return ALL_FLAGS.map((f) => f.value);
 }
 
@@ -742,6 +744,9 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
   const set = (i: number, patch: Partial<QuestionColumn>) =>
     onChange(cols.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   const colDef = useStudio().def;
+  /* COLUMN-LEVEL LOGIC (2026-11-07, Excel item 2): the option logic model on a column — always show / always hide /
+     show when / hide when — the same editor as an option's, run by the same eligibility stage (carryforward runColumns) */
+  const [logicOpen, setLogicOpen] = React.useState<string | null>(null);
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
     if (j < 0 || j >= cols.length) return;
@@ -771,10 +776,25 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
             <input className="input mono" style={{ width: 120 }} value={c.variableStem}
               title="variable stem — variables become STEM_<row>"
               onChange={(e) => set(i, { variableStem: e.target.value.toUpperCase() })} />
+            <button className={`btn small ${c.logic || c.visibleIf ? "primary" : ""}`} data-testid="column-logic-toggle"
+              title="Show / hide this column: always show, always hide, show when, hide when"
+              onClick={() => setLogicOpen(logicOpen === c.id ? null : c.id)}>
+              {c.logic?.visibility === "always_hide" ? "◌ hide" : c.logic?.visibility === "always_show" ? "● show" : c.logic || c.visibleIf ? "⑂ logic" : "⑂"}
+            </button>
             <button className="btn small" onClick={() => move(i, -1)}>↑</button>
             <button className="btn small" onClick={() => move(i, 1)}>↓</button>
             <button className="btn small danger" onClick={() => onChange(cols.filter((_, j) => j !== i))}>×</button>
           </div>
+          {logicOpen === c.id && (
+            <div data-testid="column-logic">
+              <OptionLogicEditor
+                title={`Logic for column “${c.label.replace(/<[^>]*>/g, "") || c.id}”`}
+                logic={c.logic}
+                visibleIf={c.visibleIf}
+                onChange={(patch) => set(i, patch as Partial<QuestionColumn>)} />
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>A hidden column takes no input and stores nothing; row logic and question logic still apply.</div>
+            </div>
+          )}
           {["single", "multi", "dropdown", "multi_dropdown"].includes(c.responseType) && (
             <OptionRows options={c.options} showFlags={false} enableLogic questionId={q.id}
               onChange={(opts) => set(i, { options: opts })} />
@@ -2062,7 +2082,8 @@ export function QuestionEditor({ q }: { q: Question }) {
         * in particular" stops the registry from re-tagging a question whose
         * wording looks like one of these.
         */}
-      {(q.type === "numeric" || q.type === "slider" || q.type === "open_text") && (
+      {/* open ends: what the answer is lives in Validation Rules → Content Type now (Excel item 3) */}
+      {(q.type === "numeric" || q.type === "slider") && (
         <label className="f" style={{ width: 260 }}><span>Treat the answer as</span>
           <select className="select" data-testid="semantic"
             value={q.settings.semantic ?? (inferSemantic(q) ? `~${inferSemantic(q)}` : "")}
@@ -2207,6 +2228,8 @@ export function QuestionEditor({ q }: { q: Question }) {
           )}
         </div>
       )}
+
+      {SCALAR_TEXT_TYPES.includes(q.type) && <OpenEndResponseField q={q} patchSettings={patchSettings} />}
 
       {SCALAR_TEXT_TYPES.includes(q.type) && (
         <label className="f" style={{ maxWidth: 420 }}><span>Placeholder</span>
@@ -3346,4 +3369,58 @@ export function flattenPages(flow: any[]): { id: string; questionIds: string[]; 
   };
   walk(flow);
   return out;
+}
+
+/**
+ * THE OPEN-END RESPONSE FIELD, IN THE BUILDER (2026-11-07, Excel item 3).
+ *
+ * The box the respondent will type into, drawn the way the chosen type draws it — one line, several lines, an essay
+ * area, a masked password field — with the Pre-Text / Post-Text beside it, and the field's piped starting value
+ * (with how many pipes it holds). The builder controls never reach the respondent: the runtime draws only the box,
+ * its placeholder and the author's text.
+ */
+function OpenEndResponseField({ q, patchSettings }: { q: Question; patchSettings(p: Record<string, unknown>): void }) {
+  const s = useStudio();
+  const essay = q.variant === "text.essay";
+  const masked = !!q.settings.masked;
+  const affixOn = q.settings.affixText != null;
+  const side = q.settings.affixSide ?? "left";
+  const pipes = (String(q.settings.defaultValue ?? "").match(/\{\{[^}]+\}\}/g) ?? []).length;
+  const box = q.type === "long_text"
+    ? <textarea className="ta" disabled rows={essay ? 6 : 3} placeholder={q.settings.placeholder ?? (essay ? "A detailed answer…" : "A longer answer…")} data-testid="oe-preview-input" style={{ width: "100%" }} />
+    : <input className="input" disabled type={masked ? "password" : "text"} value={masked ? "secret" : ""} placeholder={q.settings.placeholder ?? "A short answer…"} data-testid="oe-preview-input" style={{ flex: 1, minWidth: 120 }} />;
+  return (
+    <div className="card" style={{ padding: 10, margin: "6px 0 10px", maxWidth: 560 }} data-testid="oe-response-field">
+      <div className="flabel" style={{ marginTop: 0 }}>Response field{masked ? " · masked" : ""}{essay ? " · essay" : ""}</div>
+      <div className="row" style={{ gap: 6, alignItems: q.type === "long_text" ? "flex-start" : "center", flexDirection: q.type === "long_text" ? "column" : "row" }}>
+        {affixOn && side === "left" && <span className="chip" data-testid="oe-preview-pre">{q.settings.affixText || "pre-text"}</span>}
+        {box}
+        {affixOn && side === "right" && <span className="chip" data-testid="oe-preview-post">{q.settings.affixText || "post-text"}</span>}
+      </div>
+      <div className="row" style={{ gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 8 }}>
+        <label className="row" style={{ gap: 6, fontSize: 13 }}>
+          <input type="checkbox" data-testid="oe-affix-toggle" checked={affixOn}
+            onChange={(e) => patchSettings(e.target.checked ? { affixText: "", affixSide: undefined } : { affixText: undefined, affixSide: undefined })} />
+          Pre-Text / Post-Text
+        </label>
+        {affixOn && (
+          <>
+            <label className="f" style={{ width: 130, marginBottom: 0 }}><span>Position</span>
+              <select className="select" data-testid="oe-affix-position" value={side}
+                onChange={(e) => patchSettings({ affixSide: e.target.value === "right" ? "right" : undefined })}>
+                <option value="left">Pre-Text (before)</option>
+                <option value="right">Post-Text (after)</option>
+              </select></label>
+            <label className="f grow" style={{ minWidth: 160, marginBottom: 0 }}><span>Text</span>
+              <input className="input" data-testid="oe-affix-text" placeholder={side === "left" ? "https://www." : "USD"} value={q.settings.affixText ?? ""}
+                onChange={(e) => patchSettings({ affixText: e.target.value })} /></label>
+          </>
+        )}
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <DefaultValueBox def={s.def} q={q} value={q.settings.defaultValue} label={`Starting value (piping)${pipes ? ` · ${pipes} pipe${pipes === 1 ? "" : "s"}` : ""}`}
+          testId="oe-default-value" onChange={(next) => patchSettings({ defaultValue: next })} />
+      </div>
+    </div>
+  );
 }

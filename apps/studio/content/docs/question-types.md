@@ -53,7 +53,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 ## Variants by family
 
-178 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
+179 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
 
 ### Single Select (`single_select`)
 
@@ -102,9 +102,10 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 | variant | name | base type | capabilities | validations | notes |
 |---|---|---|---|---|---|
-| `text.single_line` | Single-Line Text | `open_text` | speech_input | required, min_length, max_length, pattern, email, phone, url, zip, custom_expression | — |
-| `text.multi_line` | Multi-Line Text | `long_text` | speech_input | required, min_length, max_length, pattern, email, phone, url, zip, custom_expression | — |
-| `text.essay` | Essay / Long Text | `long_text` | — | required, min_length, max_length, pattern, email, phone, url, zip, custom_expression | preset of text.multi_line |
+| `text.single_line` | Single-Line Text | `open_text` | speech_input | required, min_length, max_length, length_range, pattern, email, phone, url, zip, us_state, date_format, number_only, text_only, custom_expression | — |
+| `text.multi_line` | Multi-Line Text | `long_text` | speech_input | required, min_length, max_length, length_range, pattern, email, phone, url, zip, us_state, date_format, number_only, text_only, custom_expression | — |
+| `text.essay` | Essay / Long Text | `long_text` | — | required, min_length, max_length, length_range, pattern, email, phone, url, zip, us_state, date_format, number_only, text_only, custom_expression | preset of text.multi_line |
+| `text.password` | Password | `open_text` | — | required, min_length, max_length, length_range, pattern, email, phone, url, zip, us_state, date_format, number_only, text_only, custom_expression | preset of text.single_line |
 | `text.email` | Email | `open_text` | — | required, email | preset of text.single_line |
 | `text.phone` | Phone Number | `open_text` | — | required, phone | preset of text.single_line |
 | `text.url` | URL | `open_text` | — | required, url | preset of text.single_line |
@@ -112,7 +113,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 | `text.regex` | Masked / Regex Text | `open_text` | — | required, pattern, min_length, max_length | preset of text.single_line |
 | `text.name` | Name (First / Last) | `text_list` | fields, layout_columns | required | preset of list.text_list |
 | `text.address` | Address | `text_list` | fields, layout_columns | required | preset of list.text_list |
-| `text.company` | Company Name | `open_text` | — | required, min_length, max_length, pattern, email, phone, url, zip, custom_expression | preset of text.single_line |
+| `text.company` | Company Name | `open_text` | — | required, min_length, max_length, length_range, pattern, email, phone, url, zip, us_state, date_format, number_only, text_only, custom_expression | preset of text.single_line |
 | `text.rich_text` | Rich Text | `long_text` | — | required, min_length, max_length, custom_expression | renderer richtext |
 
 ### Numeric (`numeric`)
@@ -394,4 +395,4 @@ A capability names something the editor offers for the variant: `carry_forward`,
 
 ## Validation kinds
 
-Every question accepts the universal kinds `required`, `condition`, `custom_expression` and `custom_script`; a variant's own list adds the kinds its answer supports: `custom_expression`, `email`, `integer`, `max_length`, `max_selections`, `max_value`, `min_length`, `min_selections`, `min_value`, `pattern`, `phone`, `required`, `sum_equals`, `sum_max`, `sum_min`, `url`, `zip`.
+Every question accepts the universal kinds `required`, `condition`, `custom_expression` and `custom_script`; a variant's own list adds the kinds its answer supports: `custom_expression`, `date_format`, `email`, `integer`, `length_range`, `max_length`, `max_selections`, `max_value`, `min_length`, `min_selections`, `min_value`, `number_only`, `pattern`, `phone`, `required`, `sum_equals`, `sum_max`, `sum_min`, `text_only`, `url`, `us_state`, `zip`.

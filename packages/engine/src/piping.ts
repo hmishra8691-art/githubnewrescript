@@ -313,6 +313,21 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
     return escapeHtml(otherTextFor(ctx.state, q, code, ctx.loop ?? null));
   }
 
+  /* GRID CELLS (2026-11-07): `[row:column]`, `.row`, `.pair` — see pipingTokens.ts */
+  if (t.rowCode != null && (t.property === "row" || t.property === "pair" || t.rowCode.includes(":"))) {
+    const [rowKey, colKey] = t.rowCode.includes(":") ? [t.rowCode.slice(0, t.rowCode.indexOf(":")), t.rowCode.slice(t.rowCode.indexOf(":") + 1)] : [t.rowCode, undefined];
+    const rowLabel = escapeHtml(plainLabel(rowLabelFor(q, rowKey)));
+    if (t.property === "row") return rowLabel;
+    const cell = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[rowKey] : undefined;
+    let answer = "";
+    if (cell != null && cell !== "") {
+      if (colKey === undefined) answer = cellText(ctx.def, q, cell);
+      else if (isPlainObject(cell)) answer = cellText(ctx.def, q, (cell as Record<string, unknown>)[colKey]);
+      else if ((Array.isArray(cell) ? cell : [cell]).some((c) => String(c) === colKey)) answer = escapeHtml(plainLabel(columnLabelFor(q, colKey)));
+    }
+    if (t.property === "pair") return answer ? `${rowLabel} – ${answer}` : "";
+    return answer;
+  }
   if (t.rowCode != null && value && typeof value === "object" && !Array.isArray(value)) {
     value = (value as Record<string, unknown>)[t.rowCode];
   }
@@ -506,6 +521,14 @@ function labelFor(def: SurveyDefinition, q: Question, code: unknown): string {
  * piping the bare code (`a: 60` for what the respondent saw as `Apple`).
  * Columns are checked last, for a cell grid keyed the other way about.
  */
+/** a grid column's label: a matrix column (by id or code), else a scale option (the columns of a single / multi grid) */
+function columnLabelFor(q: Question, colKey: string): string {
+  const col = (q.columns as { id?: string; code?: string; label?: string }[] | undefined)?.find((c) => String(c.id) === colKey || String(c.code) === colKey);
+  if (col?.label) return col.label;
+  return q.options?.find((o) => String(o.code) === colKey)?.label ?? colKey;
+}
+const plainLabel = (s: string) => s.replace(/<[^>]*>/g, "").trim();
+
 function rowLabelFor(q: Question, rowCode: string): string {
   const row = q.rows?.find((r) => String(r.code) === rowCode);
   if (row) return row.label;

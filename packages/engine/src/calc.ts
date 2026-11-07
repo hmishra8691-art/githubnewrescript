@@ -23,7 +23,9 @@ type Tok =
   | { t: "op"; v: string }
   | { t: "lparen" }
   | { t: "rparen" }
-  | { t: "comma" };
+  | { t: "comma" }
+  | { t: "q" }
+  | { t: "colon" };
 
 function tokenize(src: string): Tok[] {
   const toks: Tok[] = [];
@@ -76,6 +78,9 @@ function tokenize(src: string): Tok[] {
     if (c === "(") { toks.push({ t: "lparen" }); i++; continue; }
     if (c === ")") { toks.push({ t: "rparen" }); i++; continue; }
     if (c === ",") { toks.push({ t: "comma" }); i++; continue; }
+    /* TERNARY (2026-11-07): `cond ? a : b`, nestable — dynamic question text and options */
+    if (c === "?") { toks.push({ t: "q" }); i++; continue; }
+    if (c === ":") { toks.push({ t: "colon" }); i++; continue; }
     const two = src.slice(i, i + 2);
     if (["==", "!=", ">=", "<=", "&&", "||"].includes(two)) {
       toks.push({ t: "op", v: two }); i += 2; continue;
@@ -92,7 +97,8 @@ type Node =
   | { k: "var"; name: string }
   | { k: "call"; name: string; args: Node[] }
   | { k: "un"; op: string; a: Node }
-  | { k: "bin"; op: string; a: Node; b: Node };
+  | { k: "bin"; op: string; a: Node; b: Node }
+  | { k: "tern"; c: Node; a: Node; b: Node };
 
 class Parser {
   private pos = 0;
@@ -106,9 +112,20 @@ class Parser {
   }
 
   parse(): Node {
-    const n = this.parseOr();
-    if (this.pos < this.toks.length) throw new Error("Unexpected trailing tokens");
+    const n = this.parseTernary();
+    if (this.pos < this.toks.length) throw new Error(this.toks[this.pos].t === "colon" ? "Unexpected \":\" — a \":\" needs a \"?\" before it" : "Unexpected trailing tokens");
     return n;
+  }
+  /** lowest precedence, right-associative: `a ? b : c ? d : e` is `a ? b : (c ? d : e)` */
+  private parseTernary(): Node {
+    const c = this.parseOr();
+    if (this.peek()?.t !== "q") return c;
+    this.next();
+    const a = this.parseTernary();
+    if (this.peek()?.t !== "colon") throw new Error("Expected \":\" in a ? b : c — every \"?\" needs its \":\" (the value when the condition is false)");
+    this.next();
+    const b = this.parseTernary();
+    return { k: "tern", c, a, b };
   }
   private parseOr(): Node {
     let a = this.parseAnd();
@@ -166,7 +183,7 @@ class Parser {
     if (tok.t === "num") return { k: "num", v: tok.v };
     if (tok.t === "str") return { k: "str", v: tok.v };
     if (tok.t === "lparen") {
-      const inner = this.parseOr();
+      const inner = this.parseTernary();
       this.expect("rparen");
       return inner;
     }
@@ -175,10 +192,10 @@ class Parser {
         this.next();
         const args: Node[] = [];
         if (this.peek()?.t !== "rparen") {
-          args.push(this.parseOr());
+          args.push(this.parseTernary());
           while (this.peek()?.t === "comma") {
             this.next();
-            args.push(this.parseOr());
+            args.push(this.parseTernary());
           }
         }
         this.expect("rparen");
@@ -225,6 +242,27 @@ function flattenArgs(vals: CalcValue[]): CalcValue[] {
   return out;
 }
 
+/**
+ * EQUALITY THAT KNOWS ANSWERS (2026-11-07). Numbers compare as numbers, text as text — as before —
+ * and then, only when that says "different" and one side is a reference compared with a text:
+ * a multi-select holds the text when ANY of its codes does, and a coded answer holds it when the
+ * option's label does (case and spacing ignored). So `Q1 == "A"` reads the way it is written
+ * whether A is the code or the label, and nothing that was equal before stops being equal.
+ */
+function textEq(n: { a: Node; b: Node }, a: CalcValue, b: CalcValue, o: CalcOptions): boolean {
+  const base = typeof a === "string" || typeof b === "string" ? String(a) === String(b) : toNum(a) === toNum(b);
+  if (base) return true;
+  const norm = (v: unknown) => String(v ?? "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const side = (ref: Node, val: CalcValue, other: CalcValue): boolean => {
+    if (ref.k !== "var" || other === null || other === undefined || Array.isArray(other)) return false;
+    const want = norm(other);
+    if (Array.isArray(val) && val.some((x) => norm(x) === want)) return true;
+    const labels = o.labels?.(ref.name);
+    return !!labels && labels.some((l) => norm(l) === want);
+  };
+  return side(n.a, a, b) || side(n.b, b, a);
+}
+
 function cmp(op: string, l: number, r: number): boolean {
   switch (op) {
     case ">": return l > r;
@@ -258,6 +296,11 @@ export class EmbeddedDataError extends Error {
 
 export interface CalcOptions {
   resolver: VarResolver;
+  /**
+   * The LABELS a name's answer shows (2026-11-07): `Q1 == "Product A"` holds when Q1's answer
+   * is the option labelled Product A, as well as when its code is "Product A". Absent = codes only.
+   */
+  labels?: (name: string) => string[] | undefined;
   /** enumerate names for wildcard patterns */
   names?: () => string[];
   /**
@@ -345,6 +388,7 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
       const v = o.resolver(n.name);
       return (v === undefined ? null : (v as CalcValue));
     }
+    case "tern": return truthy(ev(n.c)) ? ev(n.a, numeric) : ev(n.b, numeric);
     case "un": {
       const a = ev(n.a, n.op === "-");
       if (n.op === "-") return -toNum(a);
@@ -371,12 +415,8 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
           const d = toNum(b);
           return d === 0 ? null : toNum(a) % d;
         }
-        case "==": return typeof a === "string" || typeof b === "string"
-          ? String(a) === String(b)
-          : toNum(a) === toNum(b);
-        case "!=": return typeof a === "string" || typeof b === "string"
-          ? String(a) !== String(b)
-          : toNum(a) !== toNum(b);
+        case "==": return textEq(n, a, b, o);
+        case "!=": return !textEq(n, a, b, o);
         case ">": case "<": case ">=": case "<=":
           return cmp(n.op, toNum(a), toNum(b));
         default: throw new Error(`Unknown operator ${n.op}`);
