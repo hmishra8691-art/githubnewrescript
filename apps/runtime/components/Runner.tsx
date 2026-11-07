@@ -115,7 +115,7 @@ import {
   type PreparedLogicScript,
   type ScriptWriteResult,
   /* S4b: native timers and behaviour conditions */
-  pageTimers, timerParadata, timedOutSkips, advanceTimedOut, setBehavior, formatClock, timerKey,
+  pageTimers, timerParadata, timedOutSkips, advanceTimedOut, setBehavior, formatClock, timerKey, autoNextReady, effectiveQuestion,
 } from "@rescript/engine";
 
 /**
@@ -502,9 +502,6 @@ async function runListFills(
  * boundary cannot see because they happen inside an effect. Between them
  * there is no path that leaves the respondent on "Loading survey…" for ever.
  */
-/** single-choice types that may auto-advance (a dropdown and a multi-select never do: the respondent may still be choosing) */
-const AUTO_ADVANCE_TYPES = new Set(["single_select", "image_select", "nps", "yes_no"]);
-
 export function Runner(props: RunnerProps) {
   return (
     <RunnerBoundary diagnostic={props.mode !== "live"}>
@@ -2594,14 +2591,18 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
               scheduleOnChange(q.id);
               force();
               /*
-               * AUTO-ADVANCE (audit 2026-11-07, `branding.layout.autoAdvance`): the page's only answerable question
-               * is a single choice and an answer that opens no "Other" box was chosen → Next, after a short beat so
-               * the choice is seen. The ordinary Next path: validation, scripts, skips and the save all run.
+               * AUTO-NEXT (engine autoNext.ts): when every answerable question on the page takes one answer, is
+               * switched on (survey setting or the question's own) and is answered — and no "Other" box opened —
+               * the page moves on after a short beat, through the ordinary Next path (validation, scripts, skips,
+               * save). A multi-select, an open end or a number on the page means it waits for Next.
                */
-              if (b.layout.autoAdvance && v != null && !Array.isArray(v) && AUTO_ADVANCE_TYPES.has(q.type) && !q.options.some((o) => String(o.code) === String(v) && o.flags?.includes("other_specify"))
-                && questions.filter((x) => x.type !== "html" && !x.settings.hidden).length === 1) {
-                const at = state.stepIndex;
-                setTimeout(() => { if (state.stepIndex !== at || advancingRef.current) return; void nextRef.current?.(); }, 450);
+              {
+                const pageNow = visibleQuestions(def, pageStep, state, counts);
+                const loopNow = pageStep.loop ?? null;
+                if (autoNextReady(def, pageNow, (x) => lookupAnswer(state.answers, x.id, loopNow), (x) => effectiveQuestion(x, { ...ctx, loop: loopNow }).rows)) {
+                  const at = state.stepIndex;
+                  setTimeout(() => { if (state.stepIndex !== at || advancingRef.current) return; void nextRef.current?.(); }, 450);
+                }
               }
             }}
             onOtherChange={(t, code) => {

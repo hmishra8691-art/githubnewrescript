@@ -646,10 +646,10 @@ export function BrandingPanel() {
             onChange={(e) => set((x) => { x.layout.optionNumbering = e.target.value === "none" ? undefined : e.target.value as never; })}>
             <option value="none">plain</option><option value="letters">A. B. C.</option><option value="numbers">1. 2. 3.</option>
           </select></label>
-        <label className="row" style={{ gap: 6, fontSize: 13, alignSelf: "flex-end", marginBottom: 6 }} title="On a page whose only question is a single choice, choosing an answer moves on by itself">
+        <label className="row" style={{ gap: 6, fontSize: 13, alignSelf: "flex-end", marginBottom: 6 }} title="Single-answer questions (single choice, buttons, stars, NPS, a single-choice grid once every row is answered) move the page on when answered; multi-selects and open ends wait for Next. Each question can override this.">
           <input type="checkbox" data-testid="branding-auto-advance" checked={!!b.layout.autoAdvance}
             onChange={(e) => set((x) => { x.layout.autoAdvance = e.target.checked || undefined; })} />
-          Auto-advance single-choice pages
+          Auto-next on single-answer questions
         </label>
       </div>
 

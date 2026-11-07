@@ -10,6 +10,7 @@ import { honoursColumns, drawsOptionImages, honoursOrientation, readsCellColumns
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { DefaultValueBox } from "./DefaultValueBox";
+import { autoNextKind } from "@rescript/engine";
 
 /** Put the caret at the end of a label field — an input or a contentEditable line. */
 function focusLabel(el: HTMLElement | null | undefined) {
@@ -2229,6 +2230,18 @@ export function QuestionEditor({ q }: { q: Question }) {
         </div>
       )}
 
+      {/* AUTO-NEXT (engine autoNext.ts): single-answer questions only — a multi-select waits for Next by design */}
+      {autoNextKind(q) && (
+        <label className="f" style={{ maxWidth: 360 }} title="Choosing an answer moves the page on — when every question on the page takes one answer and is answered">
+          <span>Auto-next{autoNextKind(q) === "grid" ? " (when every row is answered)" : ""}</span>
+          <select className="select" data-testid="question-auto-next" value={q.settings.autoNext === undefined ? "" : q.settings.autoNext ? "on" : "off"}
+            onChange={(e) => patchSettings({ autoNext: e.target.value === "" ? undefined : e.target.value === "on" })}>
+            <option value="">Survey default ({s.def.branding?.layout?.autoAdvance ? "on" : "off"})</option>
+            <option value="on">On — move on when answered</option>
+            <option value="off">Off — wait for Next</option>
+          </select>
+        </label>
+      )}
       {SCALAR_TEXT_TYPES.includes(q.type) && <OpenEndResponseField q={q} patchSettings={patchSettings} />}
 
       {SCALAR_TEXT_TYPES.includes(q.type) && (

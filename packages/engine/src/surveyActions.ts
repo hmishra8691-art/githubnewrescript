@@ -1595,7 +1595,8 @@ function mirrorBounds(q: Question): void {
 function applyVariantSettings(q: Question, patch: Record<string, unknown>): string[] {
   const v = q.variant ? variantRegistry.get(q.variant) : undefined;
   /* S2b: the registry decides (capabilityRegistry.settingProblem) — declared, capability, family and universal keys, each value against the schema field and the bounds */
-  const bad = Object.keys(patch).filter((k) => !settableSettings(q.variant, q.type).includes(k));
+  /* autoNext is judged by settingProblem alone (one answer, or refused with the reason) — it is not in the per-variant catalogue */
+  const bad = Object.keys(patch).filter((k) => k !== "autoNext" && !settableSettings(q.variant, q.type).includes(k));
   if (bad.length) fail(`${q.code} (${v?.name ?? q.type}) has no setting ${bad.join(", ")} an action can set — its settings are ${settableSettings(q.variant, q.type).join(", ")}`);
   const done: string[] = [];
   const settings = (q.settings ??= {} as typeof q.settings) as Record<string, unknown>;

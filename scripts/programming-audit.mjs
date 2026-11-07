@@ -326,6 +326,18 @@ tryRun("AI", "Intelligent Mode switches on question numbers, option letters and 
   return { ok: !r.errors.length && l.questionNumbers === "sequence" && l.optionNumbering === "letters" && l.autoAdvance === true && E.questionNumberLabel(r.def, r.def.questions[2]) === "3.", detail: r.errors.join(" | ") || `numbers ${l.questionNumbers}, letters ${l.optionNumbering}, auto ${l.autoAdvance}; Q1 is “${E.questionNumberLabel(r.def, r.def.questions[2])}”` };
 });
 
+tryRun("AI", "Intelligent Mode sets auto-next per question (refused on a multi-select) and fills the answer × option grid", () => {
+  const r = E.applySurveyActions(study, E.coerceSurveyActions([
+    { op: "update_question", target: "S2", settings: { autoNext: true } },
+    { op: "set_dynamic_options", target: "C1", by: "S2", grid: { "1": { Female: "Yes, for her", Male: { hide: false } }, "2": { "*": "Not for me" } } },
+  ]).actions, { ids });
+  const bad = E.applySurveyActions(study, E.coerceSurveyActions([{ op: "update_question", target: "Q1", settings: { autoNext: true } }]).actions, { ids });
+  const c1 = r.def.questions.find((q) => q.id === "c1");
+  const st = E.createResponseState(r.def, { seed: 1 }); st.answers.s2 = 2;
+  const labels = E.effectiveQuestion(c1, { def: r.def, state: st, loop: null }).options.map((o) => o.label);
+  return { ok: !r.errors.length && r.def.questions.find((q) => q.id === "s2").settings.autoNext === true && bad.errors.length > 0 && labels.join() === "Yes, for her,Not for me", detail: `${r.errors.join(" | ") || "applied"}; multi refused: ${bad.errors[0]?.slice(0, 80)}; C1 for a woman: ${labels.join(" / ")}` };
+});
+
 /* ---------------------------------------------------------------- report */
 const byArea = {};
 for (const r of results) (byArea[r.area] ??= []).push(r);

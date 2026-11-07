@@ -2,7 +2,7 @@ import type { FlowNode, Question, SurveyDefinition } from "@rescript/schema";
 import { listBlocks } from "./blocks.js";
 import { insertFlowNode, locateNode } from "./flowTree.js";
 import { branchBlockChoices, moveBlockIntoBranch, nameBranch, splitBranchByQuestion, uniqueName } from "./branchLogic.js";
-import { buildTernary, dynamicOutcomes, lintDynamicLogic } from "./dynamicLogic.js";
+import { buildTernary, compileDynamicGrid, dynamicOutcomes, lintDynamicLogic, GRID_OTHERWISE, type DynamicGrid } from "./dynamicLogic.js";
 
 /**
  * BRANCHES AND DYNAMIC TEXT FOR INTELLIGENT MODE (2026-11-07).
@@ -23,7 +23,9 @@ export type FlowLogicAction =
   | { op: "rename_branch"; branch: string; title?: string; paths?: Record<string, string> }
   | { op: "add_block_to_branch"; branch: string; path: string; block: string }
   | { op: "set_dynamic_text"; target: string; expression?: string | null; by?: string; cases?: Record<string, string>; otherwise?: string }
-  | { op: "set_dynamic_options"; target: string; expression?: string | null; by?: string; cases?: Record<string, (string | number)[]>; otherwise?: (string | number)[]; labels?: Record<string, string | null> };
+  | { op: "set_dynamic_options"; target: string; expression?: string | null; by?: string; cases?: Record<string, (string | number)[]>; otherwise?: (string | number)[]; labels?: Record<string, string | null>;
+      /** the answer × option grid: { "<option code>": { "<answer code or label | *>": "text" | { text?, hide? } } } over `by` */
+      grid?: Record<string, Record<string, string | { text?: string; hide?: boolean }>> };
 
 export const FLOW_LOGIC_ACTION_OPS = ["split_branch", "rename_branch", "add_block_to_branch", "set_dynamic_text", "set_dynamic_options"] as const;
 const OPS = new Set<string>(FLOW_LOGIC_ACTION_OPS);
@@ -81,6 +83,9 @@ export function coerceFlowLogicAction(op: string, o: Record<string, unknown>): F
       const cases = record(o.cases, (x) => codeList(x));
       const by = str(o.by ?? o.source, 120);
       const labels = record(o.labels, (x) => (x === null ? null : str(x, 2000)));
+      const grid = record(o.grid, (row) => record(row, (c) => (typeof c === "string" ? c.slice(0, 400) : c && typeof c === "object" ? { ...(typeof (c as { text?: unknown }).text === "string" ? { text: String((c as { text: string }).text).slice(0, 400) } : {}), ...((c as { hide?: unknown }).hide === true ? { hide: true } : {}) } : undefined)));
+      if (grid && !by) return "set_dynamic_options: a grid needs by (the question whose answer the option texts follow)";
+      if (grid) return { op, target, by: by!, grid: grid as never };
       if (!expression && !(by && cases) && !labels) return "set_dynamic_options needs an expression, by + cases ({ answer: [codes] }), or labels ({ code: expression })";
       return { op, target, ...(expression ? { expression } : {}), ...(by ? { by } : {}), ...(cases ? { cases } : {}), ...(codeList(o.otherwise) ? { otherwise: codeList(o.otherwise) } : {}), ...(labels ? { labels } : {}) };
     }
@@ -237,7 +242,21 @@ export function applyFlowLogicAction(def: SurveyDefinition, a: FlowLogicAction, 
       const known = new Set(q.options.map((o) => String(o.code)));
       const check = (codes: (string | number)[]) => { const bad = codes.map(String).filter((c) => !known.has(c)); if (bad.length) fail(`${q.code} has no option ${bad.join(", ")} (codes: ${[...known].join(", ")})`); return codes.map(String).join(","); };
       try {
-        if (a.expression) q.dynamicOptions = { expression: a.expression };
+        if (a.grid && a.by) {
+          const src = env.question(a.by) ?? fail(`there is no question “${a.by}”`);
+          const keyOf = (k: string) => k === "*" || /^otherwise$/i.test(k) ? GRID_OTHERWISE : String((src.options ?? []).find((x) => String(x.code) === k || x.label.replace(/<[^>]*>/g, "").trim().toLowerCase() === k.toLowerCase())?.code ?? fail(`${src.code} has no answer “${k}”`));
+          const cells: DynamicGrid["cells"] = {};
+          for (const [oc, row] of Object.entries(a.grid)) {
+            if (!known.has(oc)) fail(`${q.code} has no option ${oc} (codes: ${[...known].join(", ")})`);
+            for (const [ak, c] of Object.entries(row)) (cells[oc] ??= {})[keyOf(ak)] = typeof c === "string" ? { text: c } : c;
+          }
+          const g: DynamicGrid = { source: src.id, cells };
+          const r = compileDynamicGrid(def, q, g);
+          if (r.problems.length) fail(r.problems.join("; "));
+          q.dynamicGrid = g as never;
+          for (const o of q.options) { const e = r.labels[String(o.code)]; if (e) o.labelExpression = e; else delete (o as { labelExpression?: unknown }).labelExpression; }
+          if (r.dynamicOptions) q.dynamicOptions = r.dynamicOptions; else delete (q as { dynamicOptions?: unknown }).dynamicOptions;
+        } else if (a.expression) q.dynamicOptions = { expression: a.expression };
         else if (a.by && a.cases) {
           const src = env.question(a.by) ?? fail(`there is no question “${a.by}”`);
           q.dynamicOptions = { expression: buildTernary(src.variableName || String(src.code), Object.entries(a.cases).map(([k, v]) => ({ equals: answerKey(src, k), result: check(v) })), a.otherwise ? check(a.otherwise) : [...known].join(",")) };

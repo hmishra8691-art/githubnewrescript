@@ -157,6 +157,47 @@ for (const [label, viewport] of [["desktop", { width: 1280, height: 900 }], ["ph
   await ctx.close();
 }
 
+/* ------------------------------------------------------------ 4. smart auto-next + the answer × option grid */
+{
+  const d = SurveyDefinition.parse({ meta: { id: "an2", code: "AN2", title: "n", version: "1" },
+    branding: { layout: { autoAdvance: true } },
+    questions: [
+      { id: "own", code: "OWN", variableName: "OWN", type: "single_select", text: "Do you own one?", required: true, options: opts(["Yes", "No"]) },
+      { id: "m", code: "M", variableName: "M", type: "multi_select", text: "Which features?", required: true, options: opts(["Camera", "Battery", "Screen"]) },
+      { id: "g", code: "G", variableName: "G", type: "matrix_single", text: "Rate", required: true, options: opts(["Bad", "OK", "Good"]), rows: [{ code: "r1", label: "Price" }, { code: "r2", label: "Speed" }] },
+      { id: "t1", code: "T1", variableName: "T1", type: "single_select", text: "First of two", options: opts(["A", "B"]) },
+      { id: "t2", code: "T2", variableName: "T2", type: "single_select", text: "Second of two", options: opts(["C", "D"]) },
+      { id: "f", code: "F", variableName: "F", type: "single_select", text: "How do you feel?", settings: { autoNext: false }, options: [{ code: 1, label: "Love it", labelExpression: 'OWN == 1 ? "Love my phone" : "I would love one"' }, { code: 2, label: "It is fine" }, { code: 3, label: "Would buy" }],
+        dynamicOptions: { expression: 'OWN == 1 ? "1,2" : "1,2,3"' } },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["own"] }, { type: "page", id: "p2", questionIds: ["m"] }, { type: "page", id: "p3", questionIds: ["g"] }, { type: "page", id: "p4", questionIds: ["t1", "t2"] }, { type: "page", id: "p5", questionIds: ["f"] }, { type: "end", id: "e", status: "complete" }] });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
+  await sendPreview(page, { definition: d }, { selector: "[data-qid]" });
+  const on = async () => page.$$eval("[data-qid]", (els) => els.map((e) => e.getAttribute("data-qid")).join("+"));
+  const pick = async (qid, label) => { await page.locator(`[data-qid="${qid}"]`).getByText(label, { exact: true }).first().click(); await page.waitForTimeout(1200); };
+  await pick("own", "Yes");
+  check("Auto-next", "single choice: answering moves on by itself", (await on()) === "m", `now ${await on()}`);
+  await pick("m", "Camera"); await pick("m", "Battery");
+  check("Auto-next", "multi-select waits for Next however many are ticked", (await on()) === "m", `still ${await on()}`);
+  await page.click('[data-testid="rs-next"]'); await page.waitForTimeout(900);
+  await page.locator('[data-qid="g"] tr', { hasText: "Price" }).locator("input[type=radio]").nth(1).check(); await page.waitForTimeout(900);
+  const gridWait = await on();
+  await page.locator('[data-qid="g"] tr', { hasText: "Speed" }).locator("input[type=radio]").nth(2).check(); await page.waitForTimeout(1200);
+  check("Auto-next", "single-choice grid waits until every row is answered, then moves on", gridWait === "g" && (await on()) === "t1+t2", `after one row ${gridWait}, after both ${await on()}`);
+  await pick("t1", "A");
+  const halfway = await on();
+  await pick("t2", "D");
+  const afterBoth = await on();
+  check("Auto-next", "a page of two single choices moves on only after both", halfway === "t1+t2" && afterBoth === "f", `after one ${halfway}, after both ${afterBoth}`);
+  const labels = await page.$$eval('[data-qid="f"] .rs-option .lbl', (els) => els.map((e) => e.textContent?.trim()));
+  check("Ternary", "option text and options follow the earlier answer in the runtime (Yes → “Love my phone”, “Would buy” hidden)", labels.join("|") === "Love my phone|It is fine", labels.join(" | "));
+  await pick("f", "It is fine");
+  check("Auto-next", "a question switched off waits for Next even when the survey's auto-next is on", (await on()) === "f", `still ${await on()}`);
+  await ctx.close();
+}
+
 await browser.close();
 const fails = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - fails}/${results.length} browser checks passed`);

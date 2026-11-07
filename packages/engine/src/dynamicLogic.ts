@@ -176,3 +176,40 @@ export function buildTernary(source: string, cases: { equals: string | number; r
   const q = (s: string | number) => (typeof s === "number" ? String(s) : `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
   return cases.reduceRight((acc, c) => `${source} == ${q(c.equals)} ? ${q(c.result)} : ${acc}`, q(fallback));
 }
+
+/* ------------------------------------------------------------------ the answer × option grid */
+
+export const GRID_OTHERWISE = "*";
+export interface DynamicGrid { source: string; cells: Record<string, Record<string, { text?: string; hide?: boolean }>> }
+
+/**
+ * Compile the grid into the expressions the runtime runs: for each option, `labelExpression` = a ternary over the
+ * source's answers (blank cells keep the option's own label); `dynamicOptions` = the codes shown per answer, only
+ * when some cell hides an option. `cells[optionCode][answerCode | "*"]`. Pure — the Studio and Intelligent Mode both
+ * call it, and `lintDynamicLogic` checks what it writes.
+ */
+export function compileDynamicGrid(def: SurveyDefinition, q: Question, grid: DynamicGrid): { dynamicOptions?: { expression: string }; labels: Record<string, string | undefined>; problems: string[] } {
+  const problems: string[] = [];
+  const src = getQuestionByCodeOrVar(def, grid.source) ?? def.questions.find((x) => x.id === grid.source);
+  if (!src) return { labels: {}, problems: [`there is no question “${grid.source}” to base the options on`] };
+  if (src.id === q.id) return { labels: {}, problems: ["the options cannot follow this question's own answer"] };
+  /* compared by CODE (unique, never edited by a translation or a relabel); numeric codes as numbers */
+  const answers = (src.options ?? []).map((o) => ({ code: String(o.code), key: typeof o.code === "number" || /^-?\d+$/.test(String(o.code)) ? Number(o.code) : String(o.code), label: o.label.replace(/<[^>]*>/g, "").trim() || String(o.code) }));
+  if (!answers.length) problems.push(`${src.code} has no options to base the grid on`);
+  const ref = src.variableName || String(src.code);
+  const labels: Record<string, string | undefined> = {};
+  for (const o of q.options ?? []) {
+    const row = grid.cells[String(o.code)] ?? {};
+    const cases = answers.filter((a) => (row[a.code]?.text ?? "").trim()).map((a) => ({ equals: a.key, result: row[a.code]!.text!.trim() }));
+    const other = (row[GRID_OTHERWISE]?.text ?? "").trim();
+    labels[String(o.code)] = cases.length || other ? buildTernary(ref, cases, other) : undefined;
+  }
+  const anyHidden = (q.options ?? []).some((o) => Object.values(grid.cells[String(o.code)] ?? {}).some((c) => c.hide));
+  let dynamicOptions: { expression: string } | undefined;
+  if (anyHidden) {
+    const shown = (key: string) => (q.options ?? []).filter((o) => !grid.cells[String(o.code)]?.[key]?.hide).map((o) => String(o.code));
+    for (const a of [...answers.map((x) => x.code), GRID_OTHERWISE]) if (!shown(a).length) problems.push(`${a === GRID_OTHERWISE ? "Otherwise" : `${src.code} = ${answers.find((x) => x.code === a)?.label}`}: every option is hidden — at least one must show`);
+    dynamicOptions = { expression: buildTernary(ref, answers.map((a) => ({ equals: a.key, result: shown(a.code).join(",") })), shown(GRID_OTHERWISE).join(",")) };
+  }
+  return { ...(dynamicOptions ? { dynamicOptions } : {}), labels, problems };
+}

@@ -950,6 +950,16 @@ const QuestionObject = z.object({
    * Empty / failing result = every option (fail open, never an empty question).
    */
   dynamicOptions: z.object({ expression: z.string().max(4000) }).optional(),
+  /**
+   * THE ANSWER × OPTION GRID (2026-11-07) the Studio edits — kept so the grid reopens as it was written: for each
+   * answer of `source` (and "otherwise"), each option's text (blank = its own label) and whether it shows. The
+   * runtime never reads it: saving compiles it into `dynamicOptions` and each option's `labelExpression`
+   * (engine `compileDynamicGrid`), so a hand-written expression and a grid run through the one evaluator.
+   */
+  dynamicGrid: z.object({
+    source: z.string(),
+    cells: z.record(z.string(), z.record(z.string(), z.object({ text: z.string().max(400).optional(), hide: z.boolean().optional() }))).default({}),
+  }).optional(),
   instruction: z.string().optional(),
   description: z.string().optional(),
 
@@ -1041,6 +1051,11 @@ const QuestionObject = z.object({
       placeholder: z.string().optional(),
       /** PASSWORD (2026-11-07): the open end's characters are masked as they are typed (the answer is stored as typed) */
       masked: z.boolean().optional(),
+      /**
+       * AUTO-NEXT FOR THIS QUESTION (2026-11-07): true / false override the survey's `branding.layout.autoAdvance`;
+       * absent = follow the survey. Only a question that takes ONE answer can move the page on (a multi-select waits).
+       */
+      autoNext: z.boolean().optional(),
       /**
        * "I DON'T KNOW" beside an open-text or numeric answer (2026-11-02). Off unless the researcher turns it on for
        * this question. The choice is stored BESIDE the answer (`<answer key>__dk` = true, see the engine's

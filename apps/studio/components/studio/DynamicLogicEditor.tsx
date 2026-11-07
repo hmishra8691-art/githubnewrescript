@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { Question } from "@rescript/schema";
-import { buildTernary, dynamicOutcomes, lintDynamicLogic, type DynamicProblem } from "@rescript/engine";
+import { buildTernary, compileDynamicGrid, dynamicOutcomes, lintDynamicLogic, GRID_OTHERWISE, type DynamicProblem, type DynamicGrid } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -46,6 +46,8 @@ export function DynamicLogicEditor({ q, patch }: { q: Question; patch(p: Partial
         {q.dynamicText && <button type="button" className="btn small ghost" onClick={() => patch({ dynamicText: undefined })}>Clear</button>}
       </div>
       {builder === "text" && <TernaryBuilder q={q} mode="text" onBuild={(expression) => { patch({ dynamicText: { expression } }); setBuilder(null); }} />}
+
+      {hasOptions && <OptionGrid q={q} patch={patch} />}
 
       {hasOptions && (
         <>
@@ -110,7 +112,7 @@ function TernaryBuilder({ q, mode, onBuild }: { q: Question; mode: "text" | "opt
   if (!sources.length) return <p className="muted" data-testid="ternary-builder">No earlier question with options to build from — type the expression instead.</p>;
   const build = () => {
     if (!src) return;
-    const cases = (src.options ?? []).filter((o) => (vals[String(o.code)] ?? "").trim()).map((o) => ({ equals: o.label.replace(/<[^>]*>/g, "").trim() || String(o.code), result: vals[String(o.code)].trim() }));
+    const cases = (src.options ?? []).filter((o) => (vals[String(o.code)] ?? "").trim()).map((o) => ({ equals: typeof o.code === "number" || /^-?\d+$/.test(String(o.code)) ? Number(o.code) : String(o.code), result: vals[String(o.code)].trim() })); // by code: unique, survives relabelling and translation
     if (!cases.length) return;
     onBuild(buildTernary(src.variableName || String(src.code), cases, fallback));
   };
@@ -146,6 +148,80 @@ function TernaryBuilder({ q, mode, onBuild }: { q: Question; mode: "text" | "opt
       <label className="f"><span>Otherwise (no match)</span>
         <input className="input" data-testid="ternary-fallback" value={fallback} onChange={(e) => setFallback(e.target.value)} /></label>
       <button type="button" className="btn small primary" data-testid="ternary-apply" onClick={build}>Write the expression</button>
+    </div>
+  );
+}
+
+/**
+ * OPTION TEXT BY ANSWER — THE GRID (2026-11-07). Rows are this question's options, columns the answers of an earlier
+ * question (and "Otherwise"). Type the text an option shows for that answer (blank keeps its own label) and untick
+ * "show" to hide it for that answer. Saving compiles the grid into each option's dynamic label and the dynamic option
+ * set (engine compileDynamicGrid) — the same expressions the fields below show, run by the same evaluator. Codes never
+ * change, so the data keeps one meaning whatever text a respondent saw.
+ */
+function OptionGrid({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
+  const s = useStudio();
+  const sources = s.def.questions.filter((x) => x.id !== q.id && (x.options ?? []).length > 0 && (x.options ?? []).length <= 12);
+  const saved = q.dynamicGrid as DynamicGrid | undefined;
+  const [open, setOpen] = React.useState(!!saved);
+  const [grid, setGrid] = React.useState<DynamicGrid>(() => saved ?? { source: sources[0]?.id ?? "", cells: {} });
+  const [said, setSaid] = React.useState<string | null>(null);
+  const src = sources.find((x) => x.id === grid.source || x.code === grid.source || x.variableName === grid.source);
+  if (!sources.length) return null;
+  const plain = (h: string) => h.replace(/<[^>]*>/g, "").trim();
+  const cell = (oc: string, ac: string) => grid.cells[oc]?.[ac] ?? {};
+  const setCell = (oc: string, ac: string, patchCell: { text?: string; hide?: boolean }) =>
+    setGrid((g) => ({ ...g, cells: { ...g.cells, [oc]: { ...(g.cells[oc] ?? {}), [ac]: { ...(g.cells[oc]?.[ac] ?? {}), ...patchCell } } } }));
+  const cols = [...(src?.options ?? []).map((o) => ({ code: String(o.code), label: plain(o.label) || String(o.code) })), { code: GRID_OTHERWISE, label: "Otherwise / not answered" }];
+  const apply = () => {
+    if (!src) return;
+    const g: DynamicGrid = { source: src.id, cells: grid.cells };
+    const r = compileDynamicGrid(s.def, q, g);
+    if (r.problems.length) { setSaid(r.problems.join(" · ")); return; }
+    s.labelNextEdit?.(`option text by ${src.code}`);
+    patch({
+      dynamicGrid: g,
+      options: q.options.map((o) => { const e = r.labels[String(o.code)]; const { labelExpression: _drop, ...rest } = o; return e ? { ...rest, labelExpression: e } : rest; }) as Question["options"],
+      dynamicOptions: r.dynamicOptions,
+    });
+    setSaid(`Saved — ${Object.values(r.labels).filter(Boolean).length} option text${Object.values(r.labels).filter(Boolean).length === 1 ? "" : "s"} vary by ${src.code}${r.dynamicOptions ? "; some options hidden per answer" : ""}. The preview table below shows each respondent's view.`);
+  };
+  const clear = () => {
+    patch({ dynamicGrid: undefined, dynamicOptions: undefined, options: q.options.map((o) => { const { labelExpression: _drop, ...rest } = o; return rest; }) as Question["options"] });
+    setGrid({ source: grid.source, cells: {} }); setSaid("Cleared — every option shows its own label again.");
+  };
+  if (!open) return <button type="button" className="btn small" data-testid="option-grid-open" style={{ marginBottom: 10 }} onClick={() => setOpen(true)}>Option text by answer (grid)…</button>;
+  return (
+    <div className="card" style={{ padding: 10, marginBottom: 12, overflowX: "auto" }} data-testid="option-grid">
+      <div className="row" style={{ gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 8 }}>
+        <label className="f" style={{ marginBottom: 0 }}><span>Option text depends on</span>
+          <select className="select" value={src?.id ?? ""} data-testid="option-grid-source" onChange={(e) => { setGrid({ source: e.target.value, cells: {} }); setSaid(null); }}>
+            {sources.map((x) => <option key={x.id} value={x.id}>{x.code} — {plain(x.text).slice(0, 50)}</option>)}
+          </select></label>
+        <span className="muted" style={{ fontSize: 12 }}>Blank = the option's own label · untick to hide it for that answer</span>
+      </div>
+      <table className="dl-grid">
+        <thead><tr><th>Option</th>{cols.map((c) => <th key={c.code}>{c.code === GRID_OTHERWISE ? c.label : `${src?.code} = ${c.label}`}</th>)}</tr></thead>
+        <tbody>
+          {q.options.map((o) => (
+            <tr key={String(o.code)}>
+              <td><span className="mono muted">{String(o.code)}</span> {plain(o.label)}</td>
+              {cols.map((c) => { const v = cell(String(o.code), c.code); return (
+                <td key={c.code}>
+                  <input className="input small" data-testid="option-grid-cell" data-option={String(o.code)} data-answer={c.code} value={v.text ?? ""} placeholder={plain(o.label)} disabled={!!v.hide}
+                    onChange={(e) => setCell(String(o.code), c.code, { text: e.target.value })} />
+                  <label className="row" style={{ gap: 3, fontSize: 11.5 }}><input type="checkbox" data-testid="option-grid-show" checked={!v.hide} onChange={(e) => setCell(String(o.code), c.code, { hide: !e.target.checked })} /> show</label>
+                </td>); })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="row" style={{ gap: 6, marginTop: 8 }}>
+        <button type="button" className="btn small primary" data-testid="option-grid-apply" onClick={apply}>Save grid</button>
+        {(saved || q.options.some((x) => x.labelExpression)) && <button type="button" className="btn small ghost" onClick={clear}>Clear</button>}
+        <button type="button" className="btn small ghost" onClick={() => setOpen(false)}>Close</button>
+      </div>
+      {said && <p className="muted" style={{ fontSize: 12.5 }} data-testid="option-grid-said">{said}</p>}
     </div>
   );
 }

@@ -284,3 +284,23 @@ test("Excel 3: open-end content types and the character range", () => {
   assert.ok(errs([{ kind: "us_state" }], "Atlantis") > 0);
   assert.ok(errs([{ kind: "date_format", value: "DD/MM/YYYY" }], "31/02/2026") > 0);
 });
+
+import { compileDynamicGrid } from "./index.js";
+
+test("answer × option grid: per-answer option texts and hidden options compile to expressions the runtime runs", () => {
+  const d = SurveyDefinition.parse({ meta: { id: "gr", code: "GR", title: "g", version: "1" }, questions: [
+    { id: "yn", code: "YN", variableName: "YN", type: "single_select", text: "Own one?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] },
+    { id: "f", code: "F", variableName: "F", type: "single_select", text: "Follow-up", options: [{ code: 1, label: "Love it" }, { code: 2, label: "It's fine" }, { code: 3, label: "Would buy" }] },
+  ], flow: [{ type: "page", id: "p1", questionIds: ["yn"] }, { type: "page", id: "p2", questionIds: ["f"] }] });
+  const f = d.questions[1];
+  const r = compileDynamicGrid(d, f, { source: "YN", cells: { "1": { "1": { text: "Love my one" }, "2": { text: "I'd love one" } }, "3": { "1": { hide: true } } } });
+  assert.deepEqual(r.problems, []);
+  f.options.forEach((o) => { const e = r.labels[String(o.code)]; if (e) o.labelExpression = e; });
+  if (r.dynamicOptions) f.dynamicOptions = r.dynamicOptions;
+  const yes = effectiveQuestion(f, ctxFor(d, { yn: 1 })).options, no = effectiveQuestion(f, ctxFor(d, { yn: 2 })).options;
+  assert.deepEqual(yes.map((o) => o.label), ["Love my one", "It's fine"]);
+  assert.deepEqual(no.map((o) => o.label), ["I'd love one", "It's fine", "Would buy"]);
+  assert.deepEqual(lintDynamicLogic(d, f), []);
+  const bad = compileDynamicGrid(d, f, { source: "YN", cells: { "1": { "1": { hide: true } }, "2": { "1": { hide: true } }, "3": { "1": { hide: true } } } });
+  assert.match(bad.problems.join(), /every option is hidden/);
+});

@@ -1,3 +1,4 @@
+import { autoNextKind } from "./autoNext.js";
 import { variantRegistry, questionSettingField, UNIVERSAL_VALIDATIONS, type QuestionVariantDef } from "@rescript/schema";
 import { DONT_KNOW_TYPES } from "./dontKnow.js";
 import type { UX_SCRIPT_API, UX_SCRIPT_EVENTS } from "./ux.js";
@@ -411,6 +412,12 @@ export function settableSettings(variantId: string | null | undefined, baseType?
  * this variant, the value must fit the schema's own field and the registry's bounds. Returns the reason, or null.
  */
 export function settingProblem(variantId: string | null | undefined, key: string, value: unknown, baseType?: string): string | null {
+  /* auto-next (autoNext.ts): on any question that takes ONE answer — kept out of the per-variant catalogue (it is one line in the flow guide) */
+  if (key === "autoNext") {
+    const base = baseType ?? (variantId ? variantRegistry.get(variantId)?.baseType : undefined);
+    if (!base || !autoNextKind({ type: base, variant: variantId ?? undefined, settings: {} } as never)) return "has no auto-next — only a question that takes one answer (single choice, a single-choice grid) moves the page on";
+    return typeof value === "boolean" ? null : "autoNext must be true or false";
+  }
   const allowed = settableSettings(variantId, baseType);
   if (!allowed.includes(key)) return `has no setting ${key} an action can set — its settings are ${allowed.join(", ")}`;
   const v = variantId ? variantRegistry.get(variantId) : undefined;
