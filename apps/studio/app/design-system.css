@@ -2328,3 +2328,6 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
   .project-spend .menubar-btn-label { display: none; }
   .project-spend::before { content: "Spend"; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-3); }
 }
+.tp-pages { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
+.tp-page { border: 1px solid var(--c-border); background: var(--c-surface); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 11.5px; cursor: pointer; color: var(--c-text-2, #475569); }
+.tp-page.on { border-color: var(--c-primary-500, #4f46e5); color: var(--c-primary-700, #3730a3); background: var(--c-primary-50, #eef2ff); font-weight: 600; }

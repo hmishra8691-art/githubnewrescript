@@ -169,19 +169,44 @@ const PREVIEW_DEF: SurveyDefinition = SurveyDefinition.parse({
       ],
     },
     {
-      id: "pv2", code: "Q2", variableName: "QTY", type: "numeric", text: "How many would you like?",
+      id: "pv4", code: "Q2", variableName: "LIKE", type: "multi_select", text: "What do you enjoy about it? Choose all that apply.",
+      options: [
+        { code: "1", label: "Design" },
+        { code: "2", label: "Price" },
+        { code: "3", label: "Ease of use" },
+        { code: "97", label: "Something else", flags: ["other_specify"] },
+      ],
+    },
+    {
+      id: "pv5", code: "Q3", variableName: "GRID", type: "matrix_single", text: "How do you rate each of these?",
+      rows: [{ code: "1", label: "Quality" }, { code: "2", label: "Value" }, { code: "3", label: "Service" }],
+      options: [{ code: "1", label: "Poor" }, { code: "2", label: "Fair" }, { code: "3", label: "Good" }, { code: "4", label: "Great" }],
+    },
+    {
+      id: "pv6", code: "Q4", variableName: "REC", type: "nps", text: "How likely are you to recommend us to a friend?",
+      settings: { npsLeftLabel: "Not at all likely", npsRightLabel: "Extremely likely" },
+    },
+    {
+      id: "pv7", code: "Q5", variableName: "FAV", type: "single_select", variant: "carousel.single", text: "Which look do you like most?",
+      options: [{ code: "1", label: "Classic" }, { code: "2", label: "Modern" }, { code: "3", label: "Bold" }],
+    },
+    {
+      id: "pv2", code: "Q6", variableName: "QTY", type: "numeric", text: "How many would you like?",
       instructions: "Enter a whole number.",
     },
     {
-      id: "pv3", code: "Q3", variableName: "NOTE", type: "open_text", text: "Anything else you'd like us to know?",
+      id: "pv3", code: "Q7", variableName: "NOTE", type: "open_text", text: "Anything else you'd like us to know?",
     },
   ],
   flow: [
-    { type: "page", id: "pv_p1", questionIds: ["pv1", "pv2", "pv3"] },
+    { type: "page", id: "pv_p1", questionIds: ["pv1", "pv4"] },
+    { type: "page", id: "pv_p2", questionIds: ["pv5", "pv6"] },
+    { type: "page", id: "pv_p3", questionIds: ["pv7", "pv2", "pv3"] },
     { type: "end", id: "pv_e1", status: "complete" },
   ],
 });
-
+/** the sample's pages: choices · grid and rating scale · carousel and open answers */
+const PREVIEW_PAGES = [["pv1", "pv4"], ["pv5", "pv6"], ["pv7", "pv2", "pv3"]];
 const PREVIEW_ERROR = { questionId: "pv2", message: "Please enter a value greater than 0." };
 
 /**
@@ -233,7 +258,10 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
   /* a group about a screen size (Phone & tablet) switches the preview to it */
   React.useEffect(() => { if (focus.device) setDevice(focus.device); }, [focus.device, focus.seq]);
   const [source, setSource] = React.useState<"sample" | "survey">("sample");
-  const [answers, setAnswers] = React.useState<Record<string, unknown>>({ pv1: "2" });
+  const [answers, setAnswers] = React.useState<Record<string, unknown>>({ pv1: "2", pv4: ["1", "3"] });
+  /* the sample is three pages a researcher can click through with the preview's own Back / Next */
+  const [samplePage, setSamplePage] = React.useState(0);
+  const paged = source === "sample";
 
   /*
    * WHAT IS PREVIEWED. "Sample" is the fixed page below (every element a theme touches, with a validation message
@@ -247,8 +275,8 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
         if (ids.length) return { def: { ...s.def, branding } as SurveyDefinition, ids, errors: [] as { questionId: string; message: string }[] };
       }
     }
-    return { def: { ...PREVIEW_DEF, branding } as SurveyDefinition, ids: ["pv1", "pv2", "pv3"], errors: [PREVIEW_ERROR] };
-  }, [source, s.def, branding]);
+    return { def: { ...PREVIEW_DEF, branding } as SurveyDefinition, ids: PREVIEW_PAGES[samplePage]!, errors: [PREVIEW_ERROR] };
+  }, [source, s.def, branding, samplePage]);
   const state = React.useMemo(() => {
     try {
       const st = createResponseState(page.def);
@@ -299,6 +327,13 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
           <button type="button" className={`btn small${source === "survey" ? " primary" : ""}`} onClick={() => setSource("survey")} data-testid="theme-preview-source-survey" title="The first page of this survey">This survey</button>
         </div>
       </div>
+      {paged && (
+        <div className="tp-pages" role="tablist" aria-label="Sample pages">
+          {["Choices", "Grid & rating", "Carousel & text"].map((l, i) => (
+            <button key={l} type="button" role="tab" aria-selected={samplePage === i} className={`tp-page${samplePage === i ? " on" : ""}`} data-testid={`theme-preview-page-${i + 1}`} onClick={() => setSamplePage(i)}>{i + 1}. {l}</button>
+          ))}
+        </div>
+      )}
       <div className="tp-status muted" aria-live="polite">
         {proposed ? <span data-testid="theme-preview-proposed">Showing a proposed look — not applied yet.</span>
           : region ? <span data-testid="theme-preview-pointing">Outlined: {label(region)}</span>
@@ -332,12 +367,13 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
           )}
           {/* D20: the runtime's own indicator — page 3 of 7 of the fixed preview; "bottom" is drawn after the buttons */}
           {branding.layout.progressBar === "top" && (
-            <ProgressIndicator position="top" style={branding.layout.progressStyle} current={3} total={7} testid="theme-preview-progress" />
+            <ProgressIndicator position="top" style={branding.layout.progressStyle} current={paged ? samplePage + 1 : 3} total={paged ? PREVIEW_PAGES.length : 7} testid="theme-preview-progress" />
           )}
           {page.ids.map((id, i) => {
             const q = page.def.questions.find((x) => x.id === id)!;
             return (
-              <div className="rs-card" key={id} data-testid={source === "sample" ? `theme-preview-q${i + 1}` : `theme-preview-survey-${q.code}`}>
+              /* QuestionRenderer draws its own card; this wrapper only carries the test id */
+              <div style={{ display: "contents" }} key={id} data-testid={source === "sample" ? (samplePage === 0 && id === "pv1" ? "theme-preview-q1" : `theme-preview-${q.code}`) : `theme-preview-survey-${q.code}`}>
                 <QuestionRenderer def={page.def} q={q} state={state} loop={null}
                   value={answers[id]} errors={page.errors.filter((e) => e.questionId === id)} onChange={(v) => setAnswers((a) => ({ ...a, [id]: v }))} />
               </div>
@@ -348,22 +384,24 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
           )}
           <div className="rs-nav">
             {branding.buttons.showBack && (
-              <button type="button" className={`rs-btn secondary ${branding.buttons.style}`} data-testid="theme-preview-back">
+              <button type="button" className={`rs-btn secondary ${branding.buttons.style}`} data-testid="theme-preview-back"
+                disabled={paged && samplePage === 0} onClick={() => paged && setSamplePage((n) => Math.max(0, n - 1))}>
                 {branding.buttons.backLabel}
               </button>
             )}
             <span />
-            <button type="button" className={`rs-btn ${branding.buttons.style}`} data-testid="theme-preview-next">
-              {branding.buttons.nextLabel}
+            <button type="button" className={`rs-btn ${branding.buttons.style}`} data-testid="theme-preview-next"
+              onClick={() => paged && setSamplePage((n) => (n + 1) % PREVIEW_PAGES.length)}>
+              {paged && samplePage === PREVIEW_PAGES.length - 1 ? branding.buttons.submitLabel : branding.buttons.nextLabel}
             </button>
           </div>
           {branding.layout.progressBar === "bottom" && (
-            <ProgressIndicator position="bottom" style={branding.layout.progressStyle} current={3} total={7} testid="theme-preview-progress" />
+            <ProgressIndicator position="bottom" style={branding.layout.progressStyle} current={paged ? samplePage + 1 : 3} total={paged ? PREVIEW_PAGES.length : 7} testid="theme-preview-progress" />
           )}
         </div>
       </div>
       <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
-        {source === "sample" ? <>A fixed sample page, not {s.def.meta.title || "this survey"} — switch to &ldquo;This survey&rdquo; to see its first page.</> : <>The first page of {s.def.meta.title || "this survey"}, with this look. Answers you click here are not saved.</>}
+        {source === "sample" ? <>A sample survey (page {samplePage + 1} of {PREVIEW_PAGES.length}: {["choices", "grid and rating scale", "carousel and open answers"][samplePage]}) — click answers, use Next / Back to move through it. &ldquo;This survey&rdquo; shows your own first page.</> : <>The first page of {s.def.meta.title || "this survey"}, with this look. Answers you click here are not saved.</>}
       </p>
     </div>
   );
@@ -623,7 +661,7 @@ const SECTIONS: SectionDef[] = [
   { id: "colors", label: "Colours", region: "buttons", desc: "Four colours set the whole look; fine-tune individual elements only if you need to.", keywords: "colour color primary secondary background surface text subtle border error accent heading link input button progress palette" },
   { id: "text", label: "Text", region: "text", desc: "The font and size respondents read in, and how question text is set.", keywords: "font family size typography heading weight line height letter spacing question size" },
   { id: "page", label: "Page & logo", region: "page", desc: "How wide the survey is, how questions are framed, and the logo at the top.", keywords: "width full contained max width align alignment card style flat line radius corner spacing logo position progress bar" },
-  { id: "answers", label: "Answers & inputs", region: "options", desc: "How answer choices, radio buttons, checkboxes and text boxes look.", keywords: "options look cards pills minimal radio checkbox inputs filled underline shadow padding border gap tint focus button radius progress height logo height" },
+  { id: "answers", label: "Style & answers", region: "options", desc: "The theme's style (decorations, motion) and how answer choices, grids, scales and text boxes look — selection cards (tiles) replace radio buttons and checkboxes.", keywords: "theme style motif peach kids robotics creative illustrations motion animation tiles selection cards options look cards pills minimal radio checkbox inputs filled underline shadow padding border gap tint focus button radius progress height logo height" },
   { id: "background", label: "Background", region: "page", desc: "An image or gradient behind the survey, with an overlay to keep text readable.", keywords: "background image gradient overlay fit cover contain repeat fixed scroll" },
   { id: "buttons", label: "Buttons & navigation", region: "buttons", desc: "The Next / Back / Submit buttons and how respondents move between sections.", keywords: "button next back submit label style solid outline pill navigation section visited free jump" },
   { id: "experience", label: "Respondent experience", region: "options", desc: "Behaviour respondents notice: moving on automatically, question numbers, answer letters, block headings.", keywords: "auto next advance automatic question numbers option labels letters numbering block names headings" },
@@ -684,13 +722,17 @@ function ContrastCheck({ b }: { b: Branding }) {
  * option letters). Merged one level down, it changes what it names and keeps the rest — except the colours, which
  * are one palette and are replaced together.
  */
+/** set as one piece by a preset: a palette, a type system, a background */
+const WHOLE = new Set(["colors", "typography", "background"]);
 function withPreset(b: Branding, preset: Partial<Branding>): Branding {
   const out: Record<string, unknown> = { ...b };
   for (const [k, v] of Object.entries(preset)) {
     const cur = (b as unknown as Record<string, unknown>)[k];
     /* colours are a palette: a preset replaces it whole, so a fine-tuned heading or button colour from the old look does not survive on the new background */
-    out[k] = k !== "colors" && v && typeof v === "object" && !Array.isArray(v) && cur && typeof cur === "object" ? { ...(cur as object), ...(v as object) } : v;
+    out[k] = !WHOLE.has(k) && v && typeof v === "object" && !Array.isArray(v) && cur && typeof cur === "object" ? { ...(cur as object), ...(v as object) } : v;
   }
+  /* a preset with no background means none: the previous theme's gradient does not linger behind the new one */
+  if (!("background" in preset)) delete out.background;
   return Branding.parse(out);
 }
 

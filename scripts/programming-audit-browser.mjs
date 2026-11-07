@@ -202,6 +202,44 @@ for (const [label, viewport] of [["desktop", { width: 1280, height: 900 }], ["ph
   await ctx.close();
 }
 
+/* ------------------------------------------------------------ 5. themes with their own identity: selection tiles, grids, motifs */
+for (const motif of ["peach", "kids", "robotics", "creative"]) {
+  for (const [label, viewport] of [["desktop", { width: 1280, height: 900 }], ["phone", { width: 390, height: 844 }]]) {
+    const d = SurveyDefinition.parse({
+      meta: { id: `th_${motif}`, code: "TH", title: "Themes", version: "1" },
+      branding: { appearance: { optionStyle: "tiles", motif, motion: "lively" }, colors: motif === "robotics" ? { primary: "#22d3ee", background: "#060b18", surface: "#0d1528", text: "#e6f1ff", subtleText: "#8aa0c2", border: "#1f2c4a" } : {} },
+      questions: [
+        { id: "s", code: "S", variableName: "S", type: "single_select", text: "Pick one", options: opts(["Alpha", "Beta", "Gamma"]) },
+        { id: "m", code: "M", variableName: "M", type: "multi_select", text: "Pick some", options: opts(["Red", "Blue", { code: 97, label: "Other", flags: ["other_specify"] }]) },
+        { id: "g", code: "G", variableName: "G", type: "matrix_single", text: "Rate", rows: opts(["Price", "Speed"]), options: opts(["Low", "Mid", "High"]) },
+      ],
+      flow: [{ type: "page", id: "p", questionIds: ["s", "m", "g"] }],
+    });
+    const ctx = await browser.newContext({ viewport, ...(label === "phone" ? { isMobile: true, hasTouch: true, deviceScaleFactor: 1 } : {}) });
+    const page = await ctx.newPage();
+    const errors = []; page.on("pageerror", (e) => errors.push(e.message.slice(0, 120)));
+    await page.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
+    await sendPreview(page, { definition: d }, { selector: "[data-qid]" });
+    await page.waitForTimeout(600);
+    const shellCls = await page.$eval(".rs-shell", (e) => e.className);
+    const radioHidden = await page.$eval('[data-qid="s"] .rs-option input[type=radio]', (e) => getComputedStyle(e).opacity === "0");
+    await page.locator('[data-qid="s"]').getByText("Beta", { exact: true }).click();
+    const tileSelected = await page.$eval('[data-qid="s"] .rs-option.selected .lbl', (e) => e.textContent?.trim()).catch(() => null);
+    await page.focus('[data-qid="s"] .rs-option input[value="3"]'); await page.keyboard.press("Space");
+    const byKey = await page.$eval('[data-qid="s"] .rs-option.selected .lbl', (e) => e.textContent?.trim()).catch(() => null);
+    await page.locator('[data-qid="m"]').getByText("Other", { exact: true }).click(); await page.waitForTimeout(250);
+    const otherBox = await page.isVisible('[data-qid="m"] [data-testid="rs-other-input"]');
+    const cell = page.locator('[data-qid="g"] tr', { hasText: "Price" }).locator(".rs-mcell").nth(2);
+    await cell.click(); await page.waitForTimeout(200);
+    const cellOn = await page.locator('[data-qid="g"] tr', { hasText: "Price" }).locator("input[type=radio]").nth(2).isChecked();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
+    check("Themes", `${motif} · ${label}: selection tiles (no visible radio), click + keyboard select, Other opens a box, grid boxes, no overflow`,
+      shellCls.includes(`rs-motif-${motif}`) && shellCls.includes("rs-opt-tiles") && radioHidden && tileSelected === "Beta" && byKey === "Gamma" && otherBox && cellOn && !overflow && !errors.length,
+      `class ok ${shellCls.includes(`rs-motif-${motif}`)}; radio hidden ${radioHidden}; click → ${tileSelected}; Space → ${byKey}; other box ${otherBox}; grid cell ${cellOn}; overflow ${overflow}${errors.length ? `; errors ${errors.join(" | ")}` : ""}`);
+    await ctx.close();
+  }
+}
+
 await browser.close();
 const fails = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - fails}/${results.length} browser checks passed`);

@@ -158,7 +158,8 @@ export function backgroundLayers(b: Branding): string | null {
 export function brandingClasses(b: Branding, opts: { pageBackground?: boolean } = {}): string {
   const a = b.appearance;
   // the runtime paints the background on the page itself; a preview frame paints it on the shell
-  return ["rs-themed", a?.optionStyle && a.optionStyle !== "default" ? `rs-opt-${a.optionStyle}` : "", a?.controlStyle === "custom" ? "rs-ctl-custom" : "", a?.inputStyle && a.inputStyle !== "outlined" ? `rs-input-${a.inputStyle}` : "", backgroundLayers(b) && !opts.pageBackground ? "rs-has-bg" : ""].filter(Boolean).join(" ");
+  return ["rs-themed", a?.optionStyle && a.optionStyle !== "default" ? `rs-opt-${a.optionStyle}` : "", a?.controlStyle === "custom" ? "rs-ctl-custom" : "", a?.inputStyle && a.inputStyle !== "outlined" ? `rs-input-${a.inputStyle}` : "", backgroundLayers(b) && !opts.pageBackground ? "rs-has-bg" : "",
+    a?.motif ? `rs-motif rs-motif-${a.motif}` : "", a?.motif && a.illustrations !== false ? "rs-illus" : "", a?.motion ? `rs-motion-${a.motion}` : ""].filter(Boolean).join(" ");
 }
 
 /**

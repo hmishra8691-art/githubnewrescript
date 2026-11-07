@@ -81,7 +81,14 @@ export function AppearanceSection({ b, set }: { b: Branding; set: Set }) {
   const patch = (fn: (x: NonNullable<Branding["appearance"]>) => void) => set((x) => { x.appearance = x.appearance ?? {}; fn(x.appearance); if (!Object.values(x.appearance).some((v) => v !== undefined)) delete x.appearance; });
   return (
     <div className="row" style={{ flexWrap: "wrap" }} data-testid="branding-appearance">
-      <Field label="Options look like" width={130}><Pick value={a.optionStyle} options={["cards", "pills", "minimal"] as const} dflt="bordered rows" testId="branding-option-style" onChange={(v) => patch((x) => { x.optionStyle = v; })} /></Field>
+      <Field label="Theme style" width={150}><Pick value={a.motif} options={["peach", "kids", "robotics", "creative"] as const} dflt="plain" testId="branding-motif" onChange={(v) => patch((x) => { x.motif = v; })} /></Field>
+      {a.motif && (
+        <label className="row" style={{ gap: 6, alignSelf: "flex-end", marginBottom: 8, fontSize: 13 }}>
+          <input type="checkbox" data-testid="branding-illustrations" checked={a.illustrations !== false} onChange={(e) => patch((x) => { x.illustrations = e.target.checked ? undefined : false; })} /> illustrations
+        </label>
+      )}
+      <Field label="Motion" width={120}><Pick value={a.motion} options={["none", "subtle", "lively"] as const} dflt="standard" testId="branding-motion" onChange={(v) => patch((x) => { x.motion = v; })} /></Field>
+      <Field label="Options look like" width={150}><Pick value={a.optionStyle} options={["tiles", "cards", "pills", "minimal"] as const} dflt="bordered rows" testId="branding-option-style" onChange={(v) => patch((x) => { x.optionStyle = v; })} /></Field>
       <Field label="Radio buttons & checkboxes" width={170}><Pick value={a.controlStyle} options={["custom"] as const} dflt="browser's own" testId="branding-control-style" onChange={(v) => patch((x) => { x.controlStyle = v; })} /></Field>
       <Field label="Inputs" width={120}><Pick value={a.inputStyle} options={["filled", "underline"] as const} dflt="outlined" testId="branding-input-style" onChange={(v) => patch((x) => { x.inputStyle = v; })} /></Field>
       <Field label="Shadow" width={110}><Pick value={a.shadow} options={["none", "soft", "medium", "strong"] as const} dflt="none" testId="branding-shadow" onChange={(v) => patch((x) => { x.shadow = v; })} /></Field>

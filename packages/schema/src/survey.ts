@@ -340,8 +340,22 @@ export const BrandingAppearance = z.object({
   shadow: z.enum(["none", "soft", "medium", "strong"]).optional(),
   cardPadding: z.string().optional(),
   borderWidth: z.string().optional(),
-  /** how answer options are drawn: bordered rows (default), raised cards, pills, or minimal */
-  optionStyle: z.enum(["default", "cards", "pills", "minimal"]).optional(),
+  /**
+   * how answer options are drawn: bordered rows (default), raised cards, pills, minimal — or "tiles": selection
+   * cards with no visible radio button / checkbox (a check badge marks the choice), grids as selectable boxes. The
+   * input stays in the page for keyboards and screen readers; the stored answer is the same.
+   */
+  optionStyle: z.enum(["default", "cards", "pills", "minimal", "tiles"]).optional(),
+  /**
+   * THE THEME'S IDENTITY (2026-11-07): beyond colours — typography accents, backgrounds, decorations, how selection
+   * looks and moves. peach (signature, premium), kids (playful, cartoon), robotics (futuristic, glowing), creative
+   * (gradients, SaaS). Absent = the plain look every existing survey has.
+   */
+  motif: z.enum(["peach", "kids", "robotics", "creative"]).optional(),
+  /** the motif's illustrations (original artwork drawn in CSS / SVG); default on when a motif is set */
+  illustrations: z.boolean().optional(),
+  /** transitions and selection feedback: none, subtle (default), lively (a small pop on selection) */
+  motion: z.enum(["none", "subtle", "lively"]).optional(),
   /** radio buttons and checkboxes: the browser's own, or drawn in the theme's colours */
   controlStyle: z.enum(["native", "custom"]).optional(),
   optionGap: z.string().optional(),
