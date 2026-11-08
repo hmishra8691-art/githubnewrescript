@@ -55,3 +55,14 @@ test("completedOf reads the view's progress, 0 when absent", () => {
   assert.equal(completedOf(null), 0);
   assert.equal(completedOf({}), 0);
 });
+
+test("runnableNow: only waiting steps whose dependencies are done — the lanes a page may drive side by side", async () => {
+  const { runnableNow } = await import("./taskDrive.ts");
+  const v = { steps: [
+    { stepId: "sk", status: "completed", dependsOn: [] },
+    { stepId: "b1", status: "pending", dependsOn: ["sk"] }, { stepId: "b2", status: "pending", dependsOn: ["sk"] }, { stepId: "b3", status: "retrying", dependsOn: ["sk"] },
+    { stepId: "logic", status: "pending", dependsOn: ["b1", "b2", "b3"] },
+  ] };
+  assert.equal(runnableNow(v), 3);
+  assert.equal(runnableNow(null), 0);
+});

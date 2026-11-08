@@ -31,7 +31,7 @@
     },
     {
       "path": "/api/cron/intelligent-tasks",
-      "schedule": "*/5 * * * *"
+      "schedule": "* * * * *"
     },
     {
       "path": "/api/cron/fraud-intelligence",

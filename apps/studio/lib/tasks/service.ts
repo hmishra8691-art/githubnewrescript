@@ -15,15 +15,16 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import type { SurveyDefinition } from "@rescript/schema";
 import type { DeliverableReport, ExecTask } from "@rescript/engine";
-import { runSlice, type BuildStep, type RunnerSink, type SliceResult } from "../copilot/runner.ts";
+import { runSlice, splitPlan, tombstonesOf, type BuildStep, type RunnerSink, type SliceResult } from "../copilot/runner.ts";
 import { redactForClient, taskStoreFor, type ClientTask, type TaskStore } from "../copilot/taskStore.ts";
 import { backgroundContextFor, isRefused, refusalMessage } from "../copilot/background.ts";
 import { backgroundBuilderFor, loadDefinition } from "../copilot/backgroundBuild.ts";
 import { makeTaskAi, type TaskAiScope } from "./aiServer.ts";
-import { createPlannedTask, handlerBuildStep, taskCheck, taskResult, type PlanOutcome, type TaskEngineDeps, type TaskResult } from "./engine.ts";
+import { createPlannedTask, handlerBuildStep, specToSeed, taskCheck, taskResult, type PlanOutcome, type TaskEngineDeps, type TaskResult } from "./engine.ts";
 import { registerAllTaskHandlers } from "./handlers/index.ts";
 import { setResearchBackend } from "./handlers/research.ts";
 import { SLICE_BUDGET_MS } from "./timing.ts";
+import { conflictMessage, findConflicts, stepsToRedo, type StepConflict } from "./conflicts.ts";
 import { serverResearchBackend } from "./researchBackend";
 import { driveOf } from "../copilot/taskDrive.ts";
 
@@ -81,10 +82,51 @@ export async function advanceForRequest(i: AdvanceInput): Promise<SliceResult> {
     task = (await i.store.load(task.id)) ?? task;
   }
   const buildStep = builderFor(deps, task);
-  return runSlice(task.id, {
-    budgetMs: Math.max(5_000, Math.min(i.budgetMs ?? ADVANCE_BUDGET_MS, 90_000)), store: i.store, buildStep,
+  const r = await runSlice(task.id, {
+    budgetMs: Math.max(5_000, Math.min(i.budgetMs ?? ADVANCE_BUDGET_MS, ADVANCE_BUDGET_MS)), store: i.store, buildStep,
     check: (t) => taskCheck(deps, t), ...(i.signal ? { signal: i.signal } : {}), ...(i.sink ? { sink: i.sink } : {}), ...(i.maxSteps != null ? { maxSteps: i.maxSteps } : {}),
   });
+  await raiseConflicts(i.store, task.id);
+  return r;
+}
+
+/**
+ * AGENTS DO NOT OVERWRITE EACH OTHER SILENTLY (2026-11-07). After every slice — this page's, another lane's, the
+ * background runner's — the task's completed steps are compared; a conflict pauses the task at once, before
+ * anything builds on it, with the question the researcher answers. Nothing is applied to the survey meanwhile.
+ */
+export async function raiseConflicts(store: TaskStore, taskId: string): Promise<StepConflict[]> {
+  const t = await store.load(taskId);
+  if (!t || t.status === "completed" || t.status === "cancelled" || t.status === "failed") return [];
+  const cs = findConflicts(t.steps);
+  if (cs.length && !(t.status === "needs_attention" && t.blocked?.message?.startsWith("Conflict") )) {
+    await store.pause(taskId, { reason: "user_input", message: conflictMessage(cs) });
+  }
+  return cs;
+}
+
+/**
+ * The researcher kept one step's version: every other step in that conflict is tombstoned and redone — a fresh row
+ * with the same work, now depending on the kept step, so it runs on top of it (a plan revision, like a split).
+ * Then the task carries on.
+ */
+export async function resolveConflict(store: TaskStore, task: ExecTask, key: string, keep: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const c = findConflicts(task.steps).find((x) => x.key === key);
+  if (!c) return { ok: false, error: "That conflict is no longer there — it may already have been resolved." };
+  if (!c.steps.some((x) => x.stepId === keep)) return { ok: false, error: "Choose one of the steps in the conflict." };
+  let cur = task;
+  for (const id of stepsToRedo(c, keep)) {
+    const old = cur.steps.find((s) => s.stepId === id);
+    if (!old) continue;
+    const n = Number(old.stepId.match(/_r(\d+)$/)?.[1] ?? "0") + 1;
+    const keptTitle = cur.steps.find((s) => s.stepId === keep)?.title ?? keep;
+    const seed = specToSeed(cur.surveyId, { id: `${old.stepId.replace(/_r\d+$/, "")}_r${n}`, kind: old.kind ?? "", title: `${(old.title ?? old.stepId).replace(/ \(redone around .*\)$/, "")} (redone around ${keptTitle})`, dependsOn: [...new Set([...old.dependsOn, keep])], input: old.input ?? {}, ...(old.parallelGroup ? { parallelGroup: old.parallelGroup } : {}), ...(old.modelTier ? { modelTier: old.modelTier } : {}) }, cur.planVersion + 1);
+    cur = await store.revise(cur.id, cur.planVersion + 1, splitPlan(cur, id, [seed]), [id, ...tombstonesOf(cur)]);
+  }
+  const rest = findConflicts(cur.steps);
+  if (rest.length) await store.pause(cur.id, { reason: "user_input", message: conflictMessage(rest) });
+  else await store.pause(cur.id, null);
+  return { ok: true };
 }
 
 /** a task planned by a registered planner is built by its handlers; a plan-item task (no planner) is the item path's and cannot be driven here */
@@ -128,6 +170,8 @@ export async function backgroundCheck(task: ExecTask): Promise<DeliverableReport
 /* ------------------------------------------------------------ what a client sees */
 
 export interface TaskClientView extends ClientTask {
+  /** objects two steps both changed in ways that cannot both stand — the researcher decides (lib/tasks/conflicts.ts) */
+  conflicts?: StepConflict[];
   /** the result is ready to review: every step done, the deliverable check passed */
   resultReady: boolean;
   /** what the browser's drive loop does next, decided here so two pages agree */
@@ -137,7 +181,8 @@ export interface TaskClientView extends ClientTask {
 export function viewOf(task: ExecTask): TaskClientView {
   const c = redactForClient(task);
   /* "advance" only while a step can still be claimed — see driveOf (lib/copilot/taskDrive.ts) */
-  return { ...c, resultReady: task.status === "completed", drive: driveOf(task) };
+  const conflicts = findConflicts(task.steps);
+  return { ...c, resultReady: task.status === "completed", drive: driveOf(task), ...(conflicts.length ? { conflicts } : {}) };
 }
 
 /** the proposal a completed task hands to the ordinary review: every completed step's actions in plan order */

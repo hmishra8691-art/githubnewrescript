@@ -1,6 +1,8 @@
 "use client";
 import React from "react";
 import { executionView, type TaskView } from "../../lib/copilot/deliverable";
+import { ConflictCard } from "../agents/ConflictCard";
+import type { StepConflict } from "../../lib/tasks/conflicts";
 
 /**
  * THE PROGRAMMING PROGRESS STRIP (2026-11-07). The Intelligent mode's right panel is for REVIEW — Changes, Review,
@@ -12,12 +14,18 @@ import { executionView, type TaskView } from "../../lib/copilot/deliverable";
  * It shows only while the task is running, waiting for the researcher, or finished and ready to review — a cancelled
  * or failed task leaves the panel to the review tabs and says what happened in its own chat card.
  */
-export function TaskStrip({ task, onPause, onResume, onContinue, onCancel, onReview, onDetails }: {
-  task: TaskView & { id?: string; blocked?: { message?: string } };
+export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCancel, onReview, onDetails, onResolved }: {
+  task: TaskView & { id?: string; blocked?: { message?: string }; conflicts?: StepConflict[] };
+  surveyId?: string; onResolved?: () => void;
   onPause?: () => void; onResume?: () => void; onContinue?: () => void; onCancel?: () => void; onReview?: () => void; onDetails?: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
   const v = executionView(task);
+  /* what is running right now, and for how long — from the row's own start time, ticking once a second */
+  const running = (task.steps as readonly { stepId: string; status: string; title?: string; startedAt?: number; retryCount?: number }[]).filter((s) => s.status === "running");
+  const [, tick] = React.useState(0);
+  React.useEffect(() => { if (!running.length) return; const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, [running.length]);
+  const since = (ms?: number) => { if (!ms) return ""; const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; };
   if (task.status === "cancelled" || task.status === "failed") return null;
   const rows = v.rows.filter((r) => r.status !== "tombstoned");
   const shown = open ? rows : rows.slice(0, 4);
@@ -30,6 +38,8 @@ export function TaskStrip({ task, onPause, onResume, onContinue, onCancel, onRev
         <span className="grow" />
         {onDetails && <button type="button" className="iq-btn" onClick={onDetails} data-testid="iq-taskstrip-details" title="Every step, attempt and message, in the AI Agents workspace">Details</button>}
       </div>
+      {running.length > 0 && <div className="cp-taskstrip-now" data-testid="iq-taskstrip-now" aria-live="polite">Now: {running.map((r) => `${r.title ?? r.stepId}${r.retryCount ? ` (attempt ${r.retryCount + 1})` : ""}${r.startedAt ? ` · ${since(r.startedAt)}` : ""}`).join(" · ")}</div>}
+      {!running.length && (task.status === "running" || task.status === "pending") && v.completed < v.total && <div className="cp-taskstrip-now">Starting the next step…</div>}
       <ol className="cp-taskstrip-steps">
         {shown.map((r, i) => (
           <li key={r.stepId} className={`t-${r.tone}`} data-testid="iq-taskstrip-step" data-status={r.status}>
@@ -41,7 +51,7 @@ export function TaskStrip({ task, onPause, onResume, onContinue, onCancel, onRev
         ))}
       </ol>
       {rows.length > 4 && <button type="button" className="iq-btn cp-taskstrip-more" onClick={() => setOpen(!open)}>{open ? "Show fewer steps" : `Show all ${rows.length} steps`}</button>}
-      {task.status === "needs_attention" && task.blocked?.message && <p className="iqi-dim">{task.blocked.message}</p>}
+      {task.conflicts?.length && task.id && surveyId ? <ConflictCard compact taskId={task.id} surveyId={surveyId} conflicts={task.conflicts} onResolved={() => onResolved?.()} /> : task.status === "needs_attention" && task.blocked?.message && <p className="iqi-dim">{task.blocked.message}</p>}
       <div className="cp-taskstrip-actions">
         {task.status === "completed" && onReview && <button type="button" className="iq-btn primary" onClick={onReview} data-testid="iq-taskstrip-review">Review the result</button>}
         {(task.status === "running" || task.status === "pending") && onPause && <button type="button" className="iq-btn" onClick={onPause} data-testid="iq-taskstrip-pause">Pause</button>}

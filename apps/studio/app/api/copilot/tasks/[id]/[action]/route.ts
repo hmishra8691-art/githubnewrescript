@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isFailure, requireUser } from "@/lib/guard";
 import { aiProviderName } from "@rescript/ai";
 import { notFound, ownTask, taskAccess } from "@/lib/tasks/access";
-import { ADVANCE_BUDGET_MS, advanceForRequest, viewOf } from "@/lib/tasks/service";
+import { ADVANCE_BUDGET_MS, advanceForRequest, resolveConflict, viewOf } from "@/lib/tasks/service";
 
 /**
  * POST /api/copilot/tasks/<id>/<action> { surveyId, budgetMs?, stepId?, aiOnce? } — survey.edit on the project.
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const authed = await requireUser(req);
   /* signed out: refused here (only the fake provider's sandbox may continue — checked again, by survey id, in taskAccess) */
   if (isFailure(authed) && aiProviderName() !== "fake") return authed.response;
-  let body: { surveyId?: unknown; budgetMs?: unknown; stepId?: unknown; aiOnce?: unknown; maxSteps?: unknown } = {};
+  let body: { surveyId?: unknown; budgetMs?: unknown; stepId?: unknown; aiOnce?: unknown; maxSteps?: unknown; key?: unknown; keep?: unknown } = {};
   try { body = await req.json(); } catch { /* an empty body is fine for most actions */ }
   const a = await taskAccess(authed, body.surveyId ?? req.nextUrl.searchParams.get("surveyId"), "survey.edit", body.aiOnce === true ? "once" : undefined);
   if ("response" in a) return a.response;
@@ -52,6 +52,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       const revived = await a.store.retry(t.id, stepId || undefined);
       if (t.status === "failed" && revived.length) await a.store.setStatus(t.id, "running");
       else if (t.status === "needs_attention") await a.store.pause(t.id, null);
+      break;
+    }
+    case "resolve": {
+      /* a conflict between two steps: the researcher keeps one, the other is redone on top of it */
+      const key = typeof (body as { key?: unknown }).key === "string" ? (body as { key: string }).key : "";
+      const keep = typeof (body as { keep?: unknown }).keep === "string" ? (body as { keep: string }).keep : "";
+      if (!key || !keep) return NextResponse.json({ error: "say which conflict (key) and which step to keep (keep)" }, { status: 400 });
+      const r = await resolveConflict(a.store, t, key, keep);
+      if (!r.ok) return NextResponse.json({ error: r.error }, { status: 409 });
       break;
     }
     case "cancel": {

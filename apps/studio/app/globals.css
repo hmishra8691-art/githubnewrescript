@@ -3300,3 +3300,21 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .agw-feed ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 180px; overflow: auto; }
 .agw-feed time { color: var(--agw-sub); font-variant-numeric: tabular-nums; }
 .agw-feed li.f-ok b { color: #6ee7b7; } .agw-feed li.f-bad b { color: #fca5a5; } .agw-feed li.f-busy b { color: #67e8f9; }
+/* the progress strip in the narrow review panel: compact buttons, a wrapping head (2026-11-07) */
+.cp-taskstrip .iq-btn { height: auto; min-height: 0; flex: 0 0 auto; align-self: flex-start; padding: 4px 10px; line-height: 1.3; }
+.cp-taskstrip-head { flex-wrap: wrap; row-gap: 2px; }
+.cp-taskstrip-head .iqi-dim { white-space: nowrap; }
+.cp-taskstrip-actions { align-items: center; }
+.cp-taskstrip-steps li.t-busy .cp-taskstrip-ico { animation: agw-rec 1.2s ease-in-out infinite; }
+.cp-taskstrip-now { font-size: 12px; color: #1d4ed8; }
+@media (prefers-reduced-motion: reduce) { .cp-taskstrip-steps li.t-busy .cp-taskstrip-ico { animation: none; } }
+/* the review panel stacks: the progress strip on top, the Changes / Review / Findings tabs below (it was a row, which
+   squeezed the strip into a sliver beside the tabs and stretched its buttons to the panel's height) */
+.cp-panel-wrap { flex-direction: column; }
+.cp-panel-wrap > .cp-panel { min-height: 0; min-width: 0; }
+.cp-panel-wrap > .cp-taskstrip { flex: 0 0 auto; max-height: 45%; overflow: auto; }
+/* conflicts between agents */
+.agw-conflicts { border: 1px solid #f59e0b; background: #fffbeb; color: #78350f; border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; font-size: 13px; }
+.agw-conflicts.compact { font-size: 12px; padding: 8px; }
+.agw-conflict p { margin: 0 0 4px; }
+.agw-conflict ul { margin: 0 0 6px; padding-left: 18px; }

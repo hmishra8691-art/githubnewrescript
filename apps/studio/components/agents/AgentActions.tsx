@@ -5,6 +5,8 @@ import type { SurveyDefinition } from "@rescript/schema";
 import type { ClientTask } from "../../lib/copilot/taskStore";
 import { LAUNCHERS, launchMessage, type Launcher } from "../../lib/agents/launch";
 import { ResearchOutput } from "./ResearchOutput";
+import { PARALLEL_LANES } from "../../lib/tasks/timing";
+import { runnableNow } from "../../lib/copilot/taskDrive";
 import { VoiceButton, HeardNote } from "./VoiceButton";
 import { applyAnswer, type Understanding } from "../../lib/agents/understandShared";
 import type { HeardTranscript } from "../../lib/intelligent/voice";
@@ -174,11 +176,16 @@ export function TaskControls({ task, surveyId, canEdit, onTask }: { task: Client
   const run = async () => {
     setDriving(true); stop.current = false; setNote(null);
     let idle = 0;
+    let last: ClientTask | null = task;
     while (!stop.current) {
-      const r = await act("advance");
+      /* independent steps side by side (each request claims its own step); the workspace re-reads every 3 s meanwhile */
+      const lanes = Math.max(1, Math.min(PARALLEL_LANES, runnableNow(last)));
+      const rs = await Promise.all(Array.from({ length: lanes }, () => act("advance")));
+      const r = rs.reduce((best, x) => (Number((x.d?.task as ClientTask | undefined)?.progress?.completed ?? -1) >= Number((best.d?.task as ClientTask | undefined)?.progress?.completed ?? -1) && x.d?.task ? x : best), rs[0]);
       const t = r.d?.task as (ClientTask & { drive?: string }) | undefined;
+      if (t) last = t;
       if (r.status !== 200 || !t || t.status === "completed" || t.status === "failed" || t.status === "cancelled" || t.status === "needs_attention") break;
-      const built = Number((r.d?.slice as { built?: number } | null)?.built ?? 0);
+      const sb = (r.d?.slice as { built?: unknown } | null)?.built; const built = Array.isArray(sb) ? sb.length : Number(sb ?? 0) || 0;
       idle = built > 0 ? 0 : idle + 1;
       if (t.drive === "stop" || idle > 6) break;
       await new Promise((res) => setTimeout(res, built > 0 ? 200 : Math.min(15000, 1500 * idle)));

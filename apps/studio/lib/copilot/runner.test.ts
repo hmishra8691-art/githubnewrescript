@@ -418,16 +418,17 @@ test("a step's own clock: 5 minutes first, then ONE retry with the request's who
   assert.equal(store.rows()[0].status, "completed");
 });
 
-test("a slice keeps starting steps while a full step clock fits, then hands back at the soft stop — no step is ever cut to fit", async () => {
+test("a slice hands every step back to the page as it finishes (soft stop 20 s) — and never cuts a running step to do so", async () => {
   const clock = virtualClock();
-  const store = memoryStore(taskOf(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n"]), clock.now);
-  const s = scripted({ ms: 40_000, clock });
-  const r = await runSlice("t1", { budgetMs: 780_000, store, buildStep: s.build, now: clock.now, sleep: clock.sleep });
-  assert.ok(r.built.length >= 11 && r.built.length <= 12, `built ${r.built.length} 40 s steps before the 450 s soft stop`);
-  assert.ok(clock.now() <= 520_000);
-  assert.equal(r.budgetSpent, true);
-  assert.equal(taskProgress(store.raw()).completed, r.built.length);
+  const store = memoryStore(taskOf(["a", "b", "c", "d", "e", "f", "g", "h"]), clock.now);
+  const slow = scripted({ ms: 40_000, clock });
+  const r = await runSlice("t1", { budgetMs: 780_000, store, buildStep: slow.build, now: clock.now, sleep: clock.sleep });
+  assert.deepEqual(r.built, ["a"], "one 40 s step, then the slice answers so the page shows it done");
+  assert.equal(r.stoppedBy, "soft_stop");
   assert.ok(store.rows().every((x) => x.retryCount === 0), "nothing was cut");
+  const fast = scripted({ ms: 5_000, clock });
+  const r2 = await runSlice("t1", { budgetMs: 780_000, store, buildStep: fast.build, now: clock.now, sleep: clock.sleep });
+  assert.ok(r2.built.length >= 3 && r2.built.length <= 5, `short steps chain until 20 s of work (built ${r2.built.length})`);
 });
 
 test("a slice spends only its own budget and hands the rest back", async () => {
@@ -569,4 +570,18 @@ test("a `blocked` build pauses the task (needs_attention) and releases the step 
   const again = await runSlice("t1", { budgetMs: 60_000, store, buildStep: async () => ({ output: {} }), now: clock.now, sleep: clock.sleep, minStepMs: 10 });
   assert.equal(again.stoppedBy, "paused");
   assert.deepEqual(again.built, []);
+});
+
+test("agents side by side: three slices on one task each claim a different independent step, run at the same time, and nothing is built twice", async () => {
+  const store = memoryStore(taskOf(["a", "b", "c"]), Date.now);
+  const calls: string[] = [];
+  let open = 0, peak = 0;
+  const build: BuildStep = async (s) => { calls.push(s.stepId); open++; peak = Math.max(peak, open); await new Promise((r) => setTimeout(r, 150)); open--; return { output: { built: s.stepId } }; };
+  const t0 = Date.now();
+  const rs = await Promise.all([1, 2, 3].map(() => runSlice("t1", { budgetMs: 780_000, store, buildStep: build, maxSteps: 1, check: PASSES })));
+  assert.equal(peak, 3, "the three steps ran at the same time");
+  assert.ok(Date.now() - t0 < 400, "in about the time of one");
+  assert.deepEqual([...calls].sort(), ["a", "b", "c"], "each step was claimed by exactly one lane");
+  assert.deepEqual(rs.flatMap((r) => r.built).sort(), ["a", "b", "c"]);
+  assert.equal(store.deliveries.length, 3, "and committed once each");
 });

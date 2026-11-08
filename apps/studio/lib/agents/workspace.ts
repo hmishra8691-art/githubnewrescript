@@ -216,8 +216,11 @@ export function runPhases(task: Pick<ClientTask, "status" | "steps" | "planner">
   const stateOf = (set: typeof steps): { state: PhaseState; detail: string } => {
     if (!set.length) return { state: "skipped", detail: "No separate step" };
     const done = set.filter((s) => s.status === "completed").length;
-    const running = set.find((s) => s.status === "running" || s.status === "retrying");
+    const runningAll = set.filter((s) => s.status === "running");
+    const running = runningAll[0] ?? set.find((s) => s.status === "retrying");
     const failed = set.filter((s) => s.status === "failed" || s.status === "blocked").length;
+    /* several agents at once: say so, each with what it is doing */
+    if (runningAll.length > 1 && !closed) return { state: "active", detail: `${runningAll.length} agents at once — ${runningAll.map((r) => `${name(agentOf(r))}: ${r.title ?? r.kind ?? r.stepId}`).join("; ")} · ${done}/${set.length} done` };
     if (running && !closed) return { state: "active", detail: `${name(agentOf(running))}: ${running.title ?? running.kind ?? running.stepId} · ${done}/${set.length} done` };
     if (done === set.length) return { state: "done", detail: `${done}/${set.length} done` };
     if (failed && (closed || set.every((s) => s.status !== "pending"))) return { state: "failed", detail: `${done}/${set.length} done · ${failed} failed` };

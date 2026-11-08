@@ -1,9 +1,11 @@
 import "server-only";
 import { NextResponse } from "next/server";
-import { STEP_BUDGET_MS } from "@/lib/tasks/timing";
+import { IDLE_PICKUP_MS, MIN_STEP_START_MS, PARALLEL_LANES, STEP_BUDGET_MS } from "@/lib/tasks/timing";
+import { runnableNow } from "@/lib/copilot/taskDrive";
+import { raiseConflicts } from "@/lib/tasks/service";
 import { timingSafeEqual } from "node:crypto";
 import { taskStoreFor } from "@/lib/copilot/taskStore";
-import { runSlice, stepBuilderFor, RECLAIM_SECONDS } from "@/lib/copilot/runner";
+import { runSlice, stepBuilderFor } from "@/lib/copilot/runner";
 import type { ExecTask } from "@rescript/engine";
 import { backgroundContextFor, isRefused, refusalMessage } from "@/lib/copilot/background";
 import { checkDeliverable } from "@/lib/copilot/deliverable";
@@ -51,7 +53,7 @@ export const maxDuration = 800; // lib/tasks/timing.ts ROUTE_MAX_SECONDS
 
 const BUDGET_MS = 760_000; // 2026-11-07: the run lives 800 s; a slow step is not cut at 45 s any more
 /** a task is only this job's business once no worker has touched it for a reclaim window */
-const STALE_MS = RECLAIM_SECONDS * 1000;
+const STALE_MS = IDLE_PICKUP_MS; // 90 s idle, not a 15-minute lease: a running step stays leased, so nothing is run twice
 /** a task's slice: at least one first-attempt step clock (5 min), more when the run has it — a step is never cut to fit */
 const SLICE_MS = STEP_BUDGET_MS + 20_000;
 const TASKS = 10;
@@ -125,14 +127,29 @@ async function run(req: Request): Promise<NextResponse> {
          * deliverable is about could not be read.
          */
         const def = handlerTask ? null : await loadDefinition(t.surveyId);
-        const r = await runSlice(t.id, {
-          budgetMs: Math.max(SLICE_MS, BUDGET_MS - (Date.now() - startedAt)), store, buildStep,
-          ...(handlerTask ? { check: (cur: ExecTask) => backgroundCheck(cur) } : def ? { check: async (cur: ExecTask) => checkDeliverable(cur.deliverable, def) } : {}),
-        });
-        advanced++;
-        built += r.built.length;
+        /*
+         * AGENTS SIDE BY SIDE, WITH THE PAGE CLOSED TOO (2026-11-07). The task's independent steps run in up to
+         * PARALLEL_LANES slices at once (each claims a different step under its lease; the draft replay makes them
+         * order-independent), and the task keeps going slice after slice while this run has time — a slice answers
+         * after each step past 20 s so its progress is committed and visible, not so the work stops.
+         */
+        const check = handlerTask ? { check: (cur: ExecTask) => backgroundCheck(cur) } : def ? { check: async (cur: ExecTask) => checkDeliverable(cur.deliverable, def) } : {};
+        let cur = task;
+        let retryAfter = false;
+        while (BUDGET_MS - (Date.now() - startedAt) > MIN_STEP_START_MS) {
+          const lanes = Math.max(1, Math.min(PARALLEL_LANES, runnableNow(cur)));
+          const rs = await Promise.all(Array.from({ length: lanes }, () => runSlice(t.id, { budgetMs: Math.max(SLICE_MS, BUDGET_MS - (Date.now() - startedAt)), store, buildStep, ...check })));
+          advanced++;
+          const now = rs.reduce((n, r) => n + r.built.length, 0);
+          built += now;
+          if (rs.some((r) => r.retryAfterMs)) { retryAfter = true; break; }
+          /* agents side by side must not overwrite each other: a conflict pauses the task for the researcher */
+          if ((await raiseConflicts(store, t.id)).length) break;
+          cur = (await store.load(t.id)) ?? cur;
+          if ((cur.status !== "running" && cur.status !== "pending") || (!now && !rs.some((r) => r.failed.length))) break;
+        }
         /* the provider asked us to come back: the next task would meet the same wall, so the rest is the next run's */
-        if (r.retryAfterMs) { more = true; break; }
+        if (retryAfter) { more = true; break; }
       } catch (e) {
         problems.push({ task: t.id, error: ((e as Error)?.message ?? "").slice(0, 200) });
       }

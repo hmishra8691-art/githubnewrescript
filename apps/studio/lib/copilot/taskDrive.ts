@@ -64,3 +64,13 @@ export function completedOf(view: { progress?: { completed?: number } } | null |
   const n = Number(view?.progress?.completed);
   return Number.isFinite(n) ? n : 0;
 }
+
+/**
+ * Steps that could start right now: waiting (or due a retry) with every dependency done. The drive loop runs that
+ * many requests side by side (up to its lane cap), so a plan's independent batches are not built one after another.
+ */
+export function runnableNow(view: { steps?: readonly { stepId: string; status: string; dependsOn?: readonly string[] }[] } | null | undefined): number {
+  const steps = view?.steps ?? [];
+  const done = new Set(steps.filter((s) => s.status === "completed" || s.status === "tombstoned").map((s) => s.stepId));
+  return steps.filter((s) => (s.status === "pending" || s.status === "retrying") && (s.dependsOn ?? []).every((d) => done.has(d) || !steps.some((x) => x.stepId === d))).length;
+}

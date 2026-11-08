@@ -8,6 +8,8 @@ import { moduleStates } from "../../lib/projectOverview";
 import type { SurveyDefinition } from "@rescript/schema";
 import { AgentLauncher, TaskControls, TaskResultReview, type LaunchPhase } from "./AgentActions";
 import { ExecutionPanel } from "../intelligent/ExecutionPanel";
+import { ConflictCard } from "./ConflictCard";
+import type { StepConflict } from "../../lib/tasks/conflicts";
 import { stepOutcome, taskOutcome } from "../../lib/copilot/stepOutcome";
 import { LAUNCHERS, type Launcher } from "../../lib/agents/launch";
 
@@ -177,6 +179,7 @@ export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply 
             </div>
           )}
           {(current || launchPhase) && <RunPhases task={launchPhase ? null : current} launch={launchPhase} />}
+          {current && (current as ClientTask & { conflicts?: StepConflict[] }).conflicts?.length ? <ConflictCard taskId={current.id} surveyId={surveyId} conflicts={(current as ClientTask & { conflicts: StepConflict[] }).conflicts} onResolved={(t) => { if (t) upsert(t as ClientTask); void load(); }} /> : null}
           {current && <TaskControls task={current} surveyId={surveyId} canEdit={canEdit} onTask={upsert} />}
           {current && graph && <TaskMap task={current} graph={graph} selected={node} onSelect={setNode} />}
           {picked && current && <NodeDetail node={picked} taskStatus={current.status} onClose={() => setNode(null)} />}

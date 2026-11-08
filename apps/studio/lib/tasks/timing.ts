@@ -39,10 +39,21 @@ export const SLICE_BUDGET_MS = envInt("COPILOT_TASK_ADVANCE_MS", 780_000, 5_000,
 export const STEP_BUDGET_MS = envInt("COPILOT_STEP_BUDGET_MS", 300_000, 10_000, 790_000);
 /** a step's clock on its one retry — as long as the request may run */
 export const RETRY_STEP_BUDGET_MS = envInt("COPILOT_RETRY_STEP_BUDGET_MS", 760_000, 10_000, 790_000);
-/** after this, a slice starts no new step (it returns so the page updates; the next slice carries on) — 5× 90 s */
-export const SLICE_SOFT_STOP_MS = 450_000;
+/**
+ * After this, a slice starts no new step and RETURNS, so the page sees every step the moment it is done. It never
+ * cuts a running step (a step keeps its own clock); it only stops the slice from chaining the next one.
+ *
+ * 2026-11-07, second pass: this was raised to 450 s with the step clocks, and that was the "stuck at 0 of 14" bug —
+ * a slice ran seven minutes of steps before answering, so the page showed nothing done while work was being
+ * committed. Progress now reaches the page after every step that ends past 20 s of work.
+ */
+export const SLICE_SOFT_STOP_MS = 20_000;
 /** the least time worth starting a step with — 5× 30 s */
 export const MIN_STEP_START_MS = 150_000;
+/** the background runner picks up a task nobody has touched for this long (it used to wait a whole lease — 15 minutes) */
+export const IDLE_PICKUP_MS = 90_000;
+/** steps a page drives side by side when the plan has independent ones (each its own request; leases keep them apart) */
+export const PARALLEL_LANES = 3;
 /** automatic retries per step: ONE */
 export const STEP_RETRIES = 1;
 /** a running step's lease: longer than its longest clock, so nobody reclaims a step that is still working */

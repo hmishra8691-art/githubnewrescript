@@ -1066,7 +1066,7 @@ export function IntelligentView() {
               * running, waiting or ready to review; every row, attempt and message is in the AI Agents workspace.
               */}
             {copilot.activeTask
-              ? <TaskStrip task={copilot.activeTask.task}
+              ? <TaskStrip task={copilot.activeTask.task} surveyId={s.surveyDbId} onResolved={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}
                   onPause={() => void copilot.taskAction(copilot.activeTask!.entryId, "pause")}
                   onResume={() => void copilot.taskAction(copilot.activeTask!.entryId, "resume")}
                   onContinue={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}

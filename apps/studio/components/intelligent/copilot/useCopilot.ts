@@ -37,7 +37,8 @@ import { themeTurn, themeWithModel, applyThemeTurn, saveThemeTurn, type ThemeCar
 import { qualTurn, runQualCard, type QualCard } from "./qualTurn";
 import type { QualRequest } from "@rescript/engine";
 import type { TaskClientView } from "../../../lib/tasks/service";
-import { completedOf, driveWait } from "../../../lib/copilot/taskDrive";
+import { PARALLEL_LANES } from "../../../lib/tasks/timing";
+import { completedOf, driveWait, runnableNow } from "../../../lib/copilot/taskDrive";
 
 /**
  * THE COPILOT'S STATE AND ITS REQUESTS, for IntelligentView.
@@ -972,12 +973,38 @@ export function useCopilot(opts: {
     /* slices in a row that completed nothing: the wait grows (2 s → 15 s) instead of asking four times a second (driveWait) */
     let idle = 0;
     let lastCompleted = -1;
+    let lastView: TaskClientView | null = null;
     try {
       while (!h.stop) {
         const drive = taskDriveRef.current;
-        const r = drive ? await taskCall(`/api/copilot/tasks/${taskId}/advance`, { ...(taskBudgetRef.current ? { budgetMs: taskBudgetRef.current } : {}) }) : await taskCall(`/api/copilot/tasks/${taskId}?${taskQuery}`);
+        /*
+         * SIDE BY SIDE, AND VISIBLE WHILE IT RUNS (2026-11-07). Independent steps (a plan's parallel batches) are
+         * driven in up to PARALLEL_LANES requests at once — each claims a different step under its lease — and
+         * while they run the page re-reads the task every 2.5 s, so a step shows Running the moment it is claimed
+         * and Done the moment it commits, not when the slowest request returns.
+         */
+        const lanes = drive ? Math.max(1, Math.min(PARALLEL_LANES, runnableNow(lastView))) : 1;
+        let inFlight = true;
+        const poller = (async () => {
+          while (inFlight && !h.stop) {
+            await new Promise((res) => setTimeout(res, 2500));
+            if (!inFlight || h.stop) break;
+            const p = await taskCall(`/api/copilot/tasks/${taskId}?${taskQuery}`);
+            const pv = p.d?.task as TaskClientView | undefined;
+            if (pv && inFlight && !h.stop) opts.patch(entryId, { task: pv, usage: { charge: Number(pv.spend?.charge) || 0 } });
+          }
+        })();
+        const calls = drive
+          ? Array.from({ length: lanes }, () => taskCall(`/api/copilot/tasks/${taskId}/advance`, { ...(taskBudgetRef.current ? { budgetMs: taskBudgetRef.current } : {}) }))
+          : [taskCall(`/api/copilot/tasks/${taskId}?${taskQuery}`)];
+        const results = await Promise.all(calls);
+        inFlight = false;
+        await poller;
         if (h.stop) break;
+        /* the answer that knows the most: the view with the most steps done (a lane that finished first knows less) */
+        const r = results.reduce((best, x) => (completedOf(x.d?.task as TaskClientView | undefined) >= completedOf(best.d?.task as TaskClientView | undefined) && x.d?.task ? x : best), results[0]);
         const v = r.d?.task as TaskClientView | undefined;
+        if (v) lastView = v;
         if (v) { opts.patch(entryId, { task: v, usage: { charge: Number(v.spend?.charge) || 0 } }); fails = 0; } else fails++;
         if (r.status === 404 || r.status === 401 || r.status === 403 || fails > 6) break;
         if (v && v.drive !== "advance") break;
