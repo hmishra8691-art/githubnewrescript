@@ -185,9 +185,16 @@ export function viewOf(task: ExecTask): TaskClientView {
   return { ...c, resultReady: task.status === "completed", drive: driveOf(task), ...(conflicts.length ? { conflicts } : {}) };
 }
 
-/** the proposal a completed task hands to the ordinary review: every completed step's actions in plan order */
+/**
+ * WHAT A TASK HAS MADE, FINISHED OR NOT (2026-11-07 — partial apply). A completed task hands its whole proposal; a
+ * task that stopped, was cancelled, failed a step or waits for the researcher hands every COMPLETED step's changes
+ * just the same, marked `partial`, with what is left named in `unresolved`. One failed step never makes the work of
+ * the others unusable. Null only while nothing has been completed.
+ */
 export function resultOf(task: ExecTask): TaskResult | null {
-  return task.status === "completed" ? taskResult(task) : null;
+  const r = taskResult(task);
+  if (task.status === "completed") return r;
+  return r.steps > 0 ? r : null;
 }
 
 /** test seam, fake provider outside production only: the persisted step rows with their outputs (what the suites verify) */

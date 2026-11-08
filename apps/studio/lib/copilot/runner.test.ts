@@ -585,3 +585,13 @@ test("agents side by side: three slices on one task each claim a different indep
   assert.deepEqual(rs.flatMap((r) => r.built).sort(), ["a", "b", "c"]);
   assert.equal(store.deliveries.length, 3, "and committed once each");
 });
+
+test("one step that cannot succeed does not stop the others: independent steps still run, then the task stops naming it", async () => {
+  const store = memoryStore(taskOf(["a", "b", "c"]), Date.now);
+  const build: BuildStep = async (s) => (s.stepId === "a" ? { error: { kind: "permanent", message: "the answer key could not be read" } } : { output: { built: s.stepId } });
+  const r = await runSlice("t1", { budgetMs: 780_000, store, buildStep: build, check: PASSES });
+  assert.deepEqual(r.built.sort(), ["b", "c"], "b and c ran although a failed");
+  assert.equal(store.rows().find((x) => x.stepId === "a")!.status, "failed");
+  assert.equal(store.raw().status, "failed", "nothing left that can run: the task stops instead of hanging");
+  assert.match(store.raw().report?.problems[0] ?? "", /could not be completed\. The 2 completed steps are kept/);
+});

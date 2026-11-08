@@ -42,7 +42,7 @@ export const AGENTS: AgentDef[] = [
   { id: "design", name: "Research design", role: "Turns the brief into a design: structure, blocks, method designs, rotation and quotas", stage: "design", availability: "active",
     kinds: ["gen.design", "gen.skeleton", "gen.methods_design", "gen.randomization", "gen.quotas"] },
   { id: "writer", name: "Questionnaire writer", role: "Writes and reworks questions in batches, and repairs what the final check finds", stage: "design", availability: "active",
-    kinds: ["gen.batch", "gen.edit_batch", "gen.repair", "copilot.generate", "copilot.rework", "copilot.turn", ""] },
+    kinds: ["gen.batch", "gen.batch_repair", "gen.edit_batch", "gen.repair", "copilot.generate", "copilot.rework", "copilot.turn", ""] },
   { id: "logic", name: "Logic", role: "Adds skip, display and branch logic over the questions written", stage: "design", availability: "active", kinds: ["gen.logic"] },
   { id: "translation", name: "Translation", role: "Translates the questionnaire into a target language, batch by batch", stage: "design", availability: "active", kinds: ["translation.prepare", "translation.batch"] },
   { id: "assessment", name: "Assessment", role: "Sets scoring and answer keys for exams and scored question sets", stage: "design", availability: "active", kinds: ["assessment.settings"] },

@@ -188,6 +188,27 @@ export function nextRunnableSteps(task: Pick<ExecTask, "steps">, limit?: number)
 }
 
 /** every step still carrying work, in plan order — what a checkpoint calls "remaining" */
+/**
+ * When every outstanding step is a failed one or waits (directly or not) on one, the sentence that says so; null
+ * while anything can still run.
+ */
+export function stuckOn(task: Pick<ExecTask, "steps">): string | null {
+  const live = task.steps.filter((s) => s.status !== "tombstoned");
+  const failedIds = new Set(live.filter((s) => s.status === "failed" || s.status === "blocked").map((s) => s.stepId));
+  if (!failedIds.size) return null;
+  if (live.some((s) => s.status === "running" || s.status === "retrying")) return null;
+  const by = new Map(live.map((s) => [s.stepId, s]));
+  const blockedBy = (id: string, seen = new Set<string>()): boolean => {
+    const s = by.get(id); if (!s || seen.has(id)) return false; seen.add(id);
+    return s.dependsOn.some((d) => failedIds.has(d) || blockedBy(d, seen));
+  };
+  const pending = live.filter((s) => s.status === "pending");
+  if (pending.some((s) => !blockedBy(s.stepId))) return null;
+  const names = live.filter((s) => failedIds.has(s.stepId)).map((s) => `“${s.title ?? s.stepId}”${s.failureMessage ? ` (${s.failureMessage})` : ""}`);
+  const done = live.filter((s) => s.status === "completed").length;
+  return `${names.join("; ")} could not be completed${pending.length ? `, and ${pending.length} step${pending.length === 1 ? "" : "s"} depending on it could not run` : ""}. The ${done} completed step${done === 1 ? " is" : "s are"} kept and can be reviewed and applied now; Retry runs only what failed.`;
+}
+
 export function outstandingStepIds(task: Pick<ExecTask, "steps">): string[] {
   return task.steps.filter(isOutstanding).map((s) => s.stepId);
 }
@@ -323,6 +344,19 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
     const outstanding = outstandingStepIds(task);
     let status: TaskStatus = task.status;
     let report: DeliverableReport | undefined = task.report;
+    /*
+     * NOTHING LEFT THAT CAN RUN. The only outstanding steps are failed ones and the steps that wait on them: the task
+     * stops (failed) and says exactly which step failed and what it held up — every completed step stays, ready to
+     * review and apply, and Retry runs only the failed one. It used to stay "running" with nothing to do.
+     */
+    if (outstanding.length && why === "drained" && status !== "failed" && status !== "cancelled" && status !== "needs_attention") {
+      const stuck = stuckOn(task);
+      if (stuck) {
+        status = "failed";
+        report = { ok: false, problems: [stuck], measured: task.report?.measured ?? {} } as DeliverableReport;
+        await store.setStatus(taskId, "failed", report);
+      }
+    }
     if (!outstanding.length && why !== "terminal" && status !== "failed" && status !== "cancelled") {
       /*
        * A MISSING CHECK IS NOT A PASS (audit H9, 2026-10-25).
@@ -455,6 +489,17 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
         const f = readFailure(r.error);
         if (f.retryAfterMs) retryAfterMs = Math.max(retryAfterMs ?? 0, f.retryAfterMs);
 
+        /*
+         * ONE STEP'S FAILURE IS NOT THE TASK'S (2026-11-07). A step that cannot succeed as written ("permanent") stops
+         * itself — its attempts are spent, its message kept — and the slice carries on with every step that does not
+         * depend on it. Only a failure of the whole run's footing (the provider key, the configuration) stops the task.
+         */
+        if (f.kind === "permanent") {
+          const said = f.message ?? stepFailureMessage(f.kind);
+          await store.fail(taskId, step.stepId, { kind: f.kind, message: said, retryable: false, maxAttempts: maxRetries + 1 });
+          failed.push({ id: step.stepId, kind: f.kind, message: said });
+          break;
+        }
         if (isTerminalFailure(f.kind)) {
           /* nothing a later slice can do: the STEP stops, the TASK and every output are preserved */
           const said = f.message ?? stepFailureMessage(f.kind);

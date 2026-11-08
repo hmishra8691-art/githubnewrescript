@@ -26,7 +26,7 @@ import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilo
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, onReviewTask, onShowTask, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents, verify, onApplyAnyway }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, onReviewTask, onShowTask, onRetryTask, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents, verify, onApplyAnyway }: {
   /** S2c: the open proposal's test session (only for the open proposal's card) */
   verify?: VerifyView | null;
   onApplyAnyway?(): void;
@@ -64,6 +64,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   /** a planned task: show the execution panel */
   /** the task's full record — every step, attempt and message — in the AI Agents workspace */
   onShowTask?(taskId: string): void;
+  /** run only the failed steps again (completed ones are kept) */
+  onRetryTask?(entryId: string): void;
   counts: { label: string; value: number }[] | null;
   canApply: boolean;
   /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
@@ -160,6 +162,9 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
             <div className="row" style={{ gap: 8 }}>
               {onShowTask && <button type="button" className="iq-btn" data-testid="cp-task-show" onClick={() => onShowTask(entry.task!.id)}>Details in AI Agents</button>}
               {entry.task.status === "completed" && onReviewTask && <button type="button" className="iq-btn primary" data-testid="cp-task-review" onClick={() => onReviewTask(entry.id)}>Review the result</button>}
+              {/* partial apply: what the finished steps made is usable now, whatever happened to the rest */}
+              {entry.task.status !== "completed" && entry.task.status !== "running" && entry.task.status !== "pending" && entry.task.progress.completed > 0 && onReviewTask && <button type="button" className="iq-btn primary" data-testid="cp-task-review-partial" onClick={() => onReviewTask(entry.id)}>Review &amp; apply what&apos;s done ({entry.task.progress.completed} step{entry.task.progress.completed === 1 ? "" : "s"})</button>}
+              {(entry.task.status === "failed" || entry.task.status === "needs_attention") && entry.task.progress.failed > 0 && onRetryTask && <button type="button" className="iq-btn" data-testid="cp-task-retry" onClick={() => onRetryTask(entry.id)} title="Runs only the failed steps again — everything finished is kept">Retry {entry.task.progress.failed === 1 ? "the failed step" : `${entry.task.progress.failed} failed steps`}</button>}
             </div>
           </div>
         )}

@@ -3318,3 +3318,16 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .agw-conflicts.compact { font-size: 12px; padding: 8px; }
 .agw-conflict p { margin: 0 0 4px; }
 .agw-conflict ul { margin: 0 0 6px; padding-left: 18px; }
+.cp-taskstrip.stopped { border-color: #f59e0b; }
+.cp-taskstrip-failed { margin: 0; padding-left: 16px; font-size: 12px; color: #92400e; }
+/* the workspace's controls on the dark canvas: readable, clearly separate, never looking disabled when they are not */
+.agw-ctl .btn { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; }
+.agw-ctl .btn:hover:not(:disabled) { background: #273449; }
+.agw-ctl .btn.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+.agw-ctl .btn.danger { background: transparent; color: #fca5a5; border-color: #7f1d1d; }
+.agw-ctl .btn:disabled { opacity: .45; }
+.agw-ctl-group { display: inline-flex; gap: 6px; align-items: center; padding-right: 10px; border-right: 1px solid var(--agw-line); }
+.agw-ctl-group:last-of-type { border-right: 0; }
+.agw-review-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.agw-review-steps label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.agw-unresolved { margin: 0; padding-left: 18px; color: #fcd34d; }

@@ -970,7 +970,7 @@ export function IntelligentView() {
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
                     onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); revealInspector(); }}
-                    onReviewTask={(id) => void copilot.openTaskResult(id).then(() => { revealInspector(); copilot.setTab("changes"); })} onShowTask={(id) => openAgents(id)}
+                    onReviewTask={(id) => void copilot.openTaskResult(id).then(() => { revealInspector(); copilot.setTab("changes"); })} onShowTask={(id) => openAgents(id)} onRetryTask={(id) => void copilot.taskAction(id, "retry")}
                     onExecutePlan={(id, items) => void copilot.executePlan(id, items)} onCancelPlan={(id) => copilot.cancelPlan(id)}
                     documents={documentActions}
                     onResume={(id) => void copilot.resume(id)} onReviewReady={(id) => void copilot.reviewReady(id)} onBuildRest={(id) => void copilot.buildRemaining(id)} onResumeNow={(id) => copilot.resumeNow(id)} onDiscard={(id) => copilot.discardWork(id)}
@@ -1066,7 +1066,7 @@ export function IntelligentView() {
               * running, waiting or ready to review; every row, attempt and message is in the AI Agents workspace.
               */}
             {copilot.activeTask
-              ? <TaskStrip task={copilot.activeTask.task} surveyId={s.surveyDbId} onResolved={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}
+              ? <TaskStrip task={copilot.activeTask.task} surveyId={s.surveyDbId} onRetry={() => void copilot.taskAction(copilot.activeTask!.entryId, "retry")} onResolved={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}
                   onPause={() => void copilot.taskAction(copilot.activeTask!.entryId, "pause")}
                   onResume={() => void copilot.taskAction(copilot.activeTask!.entryId, "resume")}
                   onContinue={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}

@@ -14,9 +14,9 @@ import type { StepConflict } from "../../lib/tasks/conflicts";
  * It shows only while the task is running, waiting for the researcher, or finished and ready to review — a cancelled
  * or failed task leaves the panel to the review tabs and says what happened in its own chat card.
  */
-export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCancel, onReview, onDetails, onResolved }: {
+export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCancel, onReview, onDetails, onResolved, onRetry }: {
   task: TaskView & { id?: string; blocked?: { message?: string }; conflicts?: StepConflict[] };
-  surveyId?: string; onResolved?: () => void;
+  surveyId?: string; onResolved?: () => void; onRetry?: () => void;
   onPause?: () => void; onResume?: () => void; onContinue?: () => void; onCancel?: () => void; onReview?: () => void; onDetails?: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -26,7 +26,25 @@ export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCan
   const [, tick] = React.useState(0);
   React.useEffect(() => { if (!running.length) return; const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, [running.length]);
   const since = (ms?: number) => { if (!ms) return ""; const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; };
-  if (task.status === "cancelled" || task.status === "failed") return null;
+  /*
+   * A STOPPED TASK STILL HANDS OVER ITS WORK (2026-11-07 — partial apply). What finished can be reviewed and applied
+   * now; what failed is named with its reason; Retry runs only the failed steps. A cancelled task with nothing done
+   * leaves the panel to the review tabs.
+   */
+  if (task.status === "cancelled" || task.status === "failed") {
+    const failedRows = (task.steps as readonly { stepId: string; status: string; title?: string; failureMessage?: string }[]).filter((s) => s.status === "failed" || s.status === "blocked");
+    if (!v.completed) return null;
+    return (
+      <section className="cp-taskstrip stopped" data-testid="iq-taskstrip" data-status={task.status} aria-label="Programming result">
+        <div className="cp-taskstrip-head"><b>{task.status === "cancelled" ? "Stopped" : "Partly done"}</b><span className="iqi-dim" data-testid="iq-taskstrip-line">{v.completed} of {v.total} steps done{failedRows.length ? ` · ${failedRows.length} failed` : ""}</span><span className="grow" />{onDetails && <button type="button" className="iq-btn" onClick={onDetails} data-testid="iq-taskstrip-details">Details</button>}</div>
+        {failedRows.length > 0 && <ul className="cp-taskstrip-failed">{failedRows.slice(0, 3).map((f) => <li key={f.stepId}><b>{f.title ?? f.stepId}</b>{f.failureMessage ? ` — ${f.failureMessage}` : ""}</li>)}</ul>}
+        <div className="cp-taskstrip-actions">
+          {onReview && <button type="button" className="iq-btn primary" onClick={onReview} data-testid="iq-taskstrip-review-partial">Review &amp; apply what&apos;s done</button>}
+          {failedRows.length > 0 && task.status === "failed" && onRetry && <button type="button" className="iq-btn" onClick={onRetry} data-testid="iq-taskstrip-retry" title="Runs only the failed steps again; everything finished is kept">Retry {failedRows.length === 1 ? "failed step" : `${failedRows.length} failed steps`}</button>}
+        </div>
+      </section>
+    );
+  }
   const rows = v.rows.filter((r) => r.status !== "tombstoned");
   const shown = open ? rows : rows.slice(0, 4);
   const icon = (tone: string) => (tone === "ok" ? "✓" : tone === "bad" ? "✕" : tone === "warn" ? "!" : tone === "busy" ? "●" : "○");

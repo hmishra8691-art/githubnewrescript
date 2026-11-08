@@ -263,7 +263,9 @@ export async function buildGenerationSteps(input: GenerationStepsInput): Promise
   const { keep, dropped } = criteriaKeptFor(def, wanted);
   if (dropped.length) summary.decisions.push(`Not judged (the survey already fails them): ${dropped.join(", ")}`);
   const slotBlocks: Record<string, string> = Object.fromEntries(sk.slots.map((s) => [s.code, s.block]));
-  steps.push({ id: `${P}validate`, kind: "gen.validate", title: "Final check", dependsOn: after, input: { criteria: keep, slotBlocks, assessment: !!exam }, estimate: { inputTokens: 0, outputTokens: 0, usd: 0 } });
+  /* what a targeted repair needs to write a missing question in its planned place: the slots and their sections */
+  const allSections = sk.blocks.map((blk, k) => ({ index: k, title: blk.title, ...sectionSpan(sk.slots, k), ...(outline!.sections[k]?.purpose ? { purpose: outline!.sections[k].purpose } : {}), ...(outline!.sections[k]?.types ? { types: outline!.sections[k].types } : {}), ...(outline!.sections[k]?.topic ? { topic: outline!.sections[k].topic } : {}) }));
+  steps.push({ id: `${P}validate`, kind: "gen.validate", title: "Final check", dependsOn: after, input: { criteria: keep, slotBlocks, assessment: !!exam, slots: sk.slots, sections: allSections, exam, total, round: 0 }, estimate: { inputTokens: 0, outputTokens: 0, usd: 0 } });
   return { steps, completion: keep, summary, outline };
 }
 
@@ -647,8 +649,71 @@ async function runValidate(ctx: StepContext): Promise<StepResult> {
   const baseline = new Set(input.baseline ?? []);
   const errors = rep.errors.filter((e) => !baseline.has(e.message));
   if (!errors.length) return ok(ordered.actions, { report: rep.stats, criteria: input.criteria, ...(ordered.actions.length ? { reordered: ordered.actions.length } : {}) }, rep.warnings.slice(0, 15));
+  /* a plan that carries its slots gets TARGETED repairs (2026-11-07); an older plan keeps the single repair step */
+  if (Array.isArray((input as { slots?: unknown }).slots)) {
+    const t = targetedRepairs(ctx, draft, errors, input as unknown as ValidateInput);
+    if (t) return t;
+  }
   const r = validationRepair(ctx, errors, { criteria: input.criteria ?? [], slotBlocks: input.slotBlocks ?? {}, baseline: input.baseline ?? [], round: 1 }, rep.stats);
   return r.status === "repair" ? { ...r, output: { ...r.output, actions: ordered.actions } } : r;
+}
+
+interface ValidateInput { criteria: string[]; slotBlocks: Record<string, string>; assessment?: boolean; baseline?: string[]; slots: SkeletonSlot[]; sections: BatchInput["sections"]; exam?: BatchInput["assessment"]; total?: number; round?: number }
+
+/** how many repair rounds the final check may order before it reports what is left (each round is small and targeted) */
+const MAX_VALIDATE_ROUNDS = 3;
+const MISSING_CHUNK = 5;
+const PROBLEM_CHUNK = 4;
+
+/**
+ * THE FINAL CHECK REPAIRS, IT DOES NOT ONLY REPORT (2026-11-07).
+ *
+ * The single repair step it used to order was handed everything at once — "6 questions missing" with no codes, three
+ * duplicate wordings, any broken rule — in ONE model answer. With no codes the model could not write the missing
+ * questions (the check stayed at 94 of 100), and the second round's answer outgrew the output limit and, being "a
+ * single unit", could not be split: six minutes, failed, and the steps after it never ran.
+ *
+ * Now the check turns what it found into small, independent repairs that run side by side:
+ *   missing questions   the planned codes that do not exist, written in their planned place by the batch writer —
+ *                       five at a time, each batch splittable if an answer is still too long
+ *   question problems   duplicate wording, broken logic, missing options… grouped four questions to a step, each
+ *                       step judged only on its own questions
+ * and then checks again (a fresh final check after them). Three rounds at most; what is still wrong after that is
+ * reported by name, and everything repaired stays — the task's completed steps can be applied without the rest.
+ */
+function targetedRepairs(ctx: StepContext, draft: Def, errors: DeliverableError[], input: ValidateInput): StepResult | null {
+  const round = input.round ?? 0;
+  if (round >= MAX_VALIDATE_ROUNDS) return { status: "failed", permanent: true, reason: `Still not fully valid after ${round} repair rounds — left for you to review: ${errors.slice(0, 4).map((e) => e.message).join("; ")}${errors.length > 4 ? ` (+${errors.length - 4} more)` : ""}. Everything that was repaired is kept and can be applied.` };
+  const have = new Set(draft.questions.map((q) => up(String(q.code))));
+  const missingSlots = (input.slots ?? []).filter((sl) => !have.has(up(sl.code)));
+  const missingCodes = new Set(missingSlots.map((sl) => up(sl.code)));
+  const repairable = errors.filter((e) => e.repair !== "none" && e.kind !== "count" && !(e.kind === "missing_code" && e.code && missingCodes.has(up(e.code))));
+  const base = ctx.step.id.replace(/(?:v\d+)?$/, "");
+  const children: TaskStepSpec[] = [];
+  for (let i = 0; i < missingSlots.length; i += MISSING_CHUNK) {
+    const chunk = missingSlots.slice(i, i + MISSING_CHUNK);
+    const secIdx = new Set(chunk.map((c) => c.section));
+    children.push({
+      id: `${base}m${round + 1}_${children.length + 1}`, kind: "gen.batch_repair", title: `Write the missing ${chunk.length === 1 ? "question" : "questions"} ${chunk[0].code}${chunk.length > 1 ? `–${chunk[chunk.length - 1].code}` : ""}`,
+      dependsOn: [], parallelGroup: "repair", modelTier: "standard",
+      input: { slots: chunk, sections: (input.sections ?? []).filter((sec) => secIdx.has(sec.index)), total: input.total ?? input.slots.length, guides: [], maxTokens: batchMaxTokens(chunk, !!input.exam), assessment: input.exam ?? null, round: 0, ...unitsOf(chunk.map((c) => c.code)) },
+    });
+  }
+  /* question problems, grouped by question, a few questions to a step */
+  const byCode = new Map<string, DeliverableError[]>();
+  const loose: DeliverableError[] = [];
+  for (const e of repairable) { if (e.code) byCode.set(up(e.code), [...(byCode.get(up(e.code)) ?? []), e]); else loose.push(e); }
+  const codes = [...byCode.keys()];
+  for (let i = 0; i < codes.length; i += PROBLEM_CHUNK) {
+    const cs = codes.slice(i, i + PROBLEM_CHUNK);
+    const probs = cs.flatMap((c) => byCode.get(c)!);
+    children.push({ id: `${base}f${round + 1}_${children.length + 1}`, kind: "gen.repair", title: `Fix ${cs.join(", ")} (${[...new Set(probs.map((p) => p.kind.replace(/_/g, " ")))].join(", ")})`, dependsOn: [], parallelGroup: "repair", modelTier: "standard", input: { problems: probs, criteria: input.criteria, slotBlocks: input.slotBlocks, baseline: input.baseline ?? [], round: 1, scoped: true } });
+  }
+  if (loose.length) children.push({ id: `${base}f${round + 1}_${children.length + 1}`, kind: "gen.repair", title: `Fix ${loose.length} survey-wide problem${loose.length === 1 ? "" : "s"}`, dependsOn: [], parallelGroup: "repair", modelTier: "standard", input: { problems: loose, criteria: input.criteria, slotBlocks: input.slotBlocks, baseline: input.baseline ?? [], round: 1, scoped: true } });
+  if (!children.length) return null;
+  const recheck: TaskStepSpec = { id: `${base}v${round + 1}`, kind: "gen.validate", title: `Final check (after repair round ${round + 1})`, dependsOn: children.map((c) => c.id), input: { ...input, round: round + 1 } };
+  const what = [missingSlots.length ? `${missingSlots.length} missing question${missingSlots.length === 1 ? "" : "s"}` : "", codes.length ? `problems on ${codes.length} question${codes.length === 1 ? "" : "s"}` : "", loose.length ? `${loose.length} survey-wide` : ""].filter(Boolean).join(", ");
+  return { status: "split", reason: `The final check found ${what}: ${children.length} targeted repair${children.length === 1 ? "" : "s"} side by side, then a fresh check`, replaceWith: [...children, recheck] };
 }
 
 /** move the planned questions back into the skeleton's order (no model call); the moves are this step's actions */
@@ -698,10 +763,21 @@ async function runRepair(ctx: StepContext): Promise<StepResult> {
   const baseline = new Set(input.baseline ?? []);
   const ordered = restoreOrder(ctx, chk.def, Object.keys(input.slotBlocks ?? {}));
   const after = validateSurveyDeliverable(ordered.def, criteria, assess ? { assessment: assess } : {});
-  const left = after.errors.filter((e) => !baseline.has(e.message));
+  const leftAll = after.errors.filter((e) => !baseline.has(e.message));
+  /* a SCOPED repair (one of the final check's targeted ones) is judged on its own problems only; the fresh check after it judges the rest */
+  const mine = new Set(problems.map((p) => (p.code ? up(p.code) : `msg:${p.message}`)));
+  const scoped = (input as { scoped?: boolean }).scoped === true;
+  const left = scoped ? leftAll.filter((e) => mine.has(e.code ? up(e.code) : `msg:${e.message}`) && e.kind !== "count") : leftAll;
   const beforeCount = problems.length;
   const kept = left.length < beforeCount ? [...chk.accepted, ...ordered.actions] : [];
-  if (!left.length) return ok(kept, { fixed: beforeCount }, [...n.notes, ...chk.warnings]);
+  if (!left.length) return ok(scoped ? [...chk.accepted, ...ordered.actions] : kept, { fixed: beforeCount }, [...n.notes, ...chk.warnings]);
+  if (scoped) {
+    /* keep whatever it did fix; say plainly what it could not, so the fresh check (or the researcher) takes it from here */
+    const fixedSome = left.length < beforeCount;
+    if (fixedSome) return { status: "completed", output: { actions: [...chk.accepted, ...ordered.actions], data: { fixed: beforeCount - left.length, left: left.length }, validation: { ok: true, errors: [], warnings: left.map((e) => `Not repaired yet: ${e.message}`) } } };
+    /* nothing fixed: no change is kept, and the step still ENDS (with the reason) so the fresh check after it runs and reports what is left */
+    return { status: "completed", output: { actions: [], data: { fixed: 0, left: left.length }, validation: { ok: true, errors: [], warnings: [`Could not repair: ${left.slice(0, 3).map((e) => e.message).join("; ")}${left.length > 3 ? ` (+${left.length - 3} more)` : ""} — left for the next check or for you.`] } } };
+  }
   if (input.round < MAX_REPAIR_ROUNDS) {
     const res = validationRepair(ctx, left, { criteria: input.criteria, slotBlocks: input.slotBlocks, baseline: input.baseline ?? [], round: input.round + 1 }, after.stats);
     if (res.status === "repair") return { ...res, output: { ...res.output, actions: kept } };

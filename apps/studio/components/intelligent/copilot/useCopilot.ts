@@ -1055,12 +1055,15 @@ export function useCopilot(opts: {
   const openTaskResult = React.useCallback(async (entryId: string): Promise<{ ok: boolean; reason?: string }> => {
     const e = (opts.entries as CopilotEntry[]).find((x) => x.id === entryId);
     const tid = e?.task?.id;
-    if (!tid || e.task?.status !== "completed") return { ok: false, reason: "The task has not completed." };
+    /* partial apply (2026-11-07): a stopped, cancelled or paused task hands over what its completed steps made */
+    if (!tid || !(e.task?.status === "completed" || (e.task && e.task.progress.completed > 0 && e.task.status !== "running" && e.task.status !== "pending"))) return { ok: false, reason: "Nothing is finished yet to review." };
     const r = await taskCall(`/api/copilot/tasks/${tid}?${taskQuery}&result=1`);
-    const res = r.d?.result as { actions?: SurveyAction[] } | null | undefined;
+    const res = r.d?.result as { actions?: SurveyAction[]; partial?: boolean; steps?: number; unresolved?: { title: string; reason: string }[] } | null | undefined;
     if (!res) return { ok: false, reason: "The result could not be read — try again." };
     const actions = Array.isArray(res.actions) ? res.actions : [];
-    const reply: CopilotReply = { kind: actions.length ? "proposal" : "answer", reply: actions.length ? `The task is complete: ${actions.length} change${actions.length === 1 ? "" : "s"} are ready to review.` : "The task is complete; it proposed no change.", plan: [], actions, rejected: [], findings: [], assumptions: [], questions: [], sources: [] };
+    const left = res.unresolved ?? [];
+    const partialLine = res.partial ? `${res.steps ?? 0} finished step${res.steps === 1 ? "" : "s"}: ${actions.length} change${actions.length === 1 ? "" : "s"} ready to review and apply now${left.length ? ` — still open: ${left.slice(0, 3).map((u) => `${u.title} (${u.reason})`).join("; ")}${left.length > 3 ? ` and ${left.length - 3} more` : ""}. Apply these, then Retry the rest or fix it by hand.` : "."}` : null;
+    const reply: CopilotReply = { kind: actions.length ? "proposal" : "answer", reply: partialLine ?? (actions.length ? `The task is complete: ${actions.length} change${actions.length === 1 ? "" : "s"} are ready to review.` : "The task is complete; it proposed no change."), plan: [], actions, rejected: [], findings: [], assumptions: [], questions: [], sources: [] };
     const opKey = actions.length ? recordProposal(e.text, actions, { source: "model", intent: { engine: "model", mode: "task", kind: "proposal" }, apiCalls: [{ route: "/api/copilot/tasks", mode: "task", charge: Number(e.task?.spend?.charge) || 0 }] }, session.openOp) : undefined;
     if (actions.length) {
       opts.patchAll((x) => (x.proposal === "open" ? { proposal: "superseded" } : null));

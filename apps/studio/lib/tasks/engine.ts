@@ -348,14 +348,27 @@ export async function taskCheck(deps: Pick<TaskEngineDeps, "baseFor">, task: Exe
 
 /* ------------------------------------------------------------ the result the researcher applies */
 
-export interface TaskResult { actions: unknown[]; data: Record<string, unknown>; steps: number; artifacts: { stepId: string; ref: string; title: string }[] }
+export interface TaskResult {
+  actions: unknown[]; data: Record<string, unknown>; steps: number; artifacts: { stepId: string; ref: string; title: string }[];
+  /** each completed step's own changes, in plan order — so a researcher can apply some steps and not others */
+  byStep: { stepId: string; title: string; actions: unknown[] }[];
+  /** the task is not finished: these are the completed steps' changes, and `unresolved` says what is left */
+  partial: boolean;
+  unresolved: { stepId?: string; title: string; reason: string }[];
+}
 
 /** every completed step's actions in plan order (one proposal), and the data the steps produced */
-export function taskResult(task: Pick<ExecTask, "steps">): TaskResult {
+export function taskResult(task: Pick<ExecTask, "steps"> & { status?: string }): TaskResult {
   const done = task.steps.filter((s) => s.status === "completed");
   const actionsOf = (o: unknown): unknown[] => (Array.isArray(o) ? o : o && typeof o === "object" && Array.isArray((o as { actions?: unknown }).actions) ? (o as { actions: unknown[] }).actions : []);
   return {
     actions: done.flatMap((s) => actionsOf(s.output)),
+    byStep: done.map((s) => ({ stepId: s.stepId, title: s.title ?? s.stepId, actions: actionsOf(s.output) })).filter((x) => x.actions.length),
+    partial: (task as { status?: string }).status !== undefined && (task as { status?: string }).status !== "completed",
+    unresolved: [
+      ...task.steps.filter((s) => s.status === "failed" || s.status === "blocked").map((s) => ({ stepId: s.stepId, title: s.title ?? s.stepId, reason: s.failureMessage ?? "failed" })),
+      ...task.steps.filter((s) => s.status === "pending" || s.status === "retrying").map((s) => ({ stepId: s.stepId, title: s.title ?? s.stepId, reason: "not run yet" })),
+    ],
     data: Object.fromEntries(done.filter((s) => s.output && typeof s.output === "object" && (s.output as { data?: unknown }).data !== undefined).map((s) => [s.stepId, (s.output as { data: unknown }).data])),
     steps: done.length,
     artifacts: done.filter((s) => typeof (s.output as { artifactRef?: unknown } | null)?.artifactRef === "string").map((s) => ({ stepId: s.stepId, ref: (s.output as { artifactRef: string }).artifactRef, title: s.title ?? s.stepId })),

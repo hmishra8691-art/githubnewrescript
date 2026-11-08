@@ -198,12 +198,24 @@ export function TaskControls({ task, surveyId, canEdit, onTask }: { task: Client
   const btn = (a: Ctl, label: string, show: boolean, onClick: () => void, primary = false) => show ? <button key={a} type="button" className={`btn small ${primary ? "primary" : ""}`} disabled={!canEdit || busy != null} onClick={async () => { setBusy(a); try { await onClick(); } finally { setBusy(null); } }} data-testid={`agw-ctl-${a}`}>{busy === a ? "…" : label}</button> : null;
   return (
     <div className="agw-ctl" data-testid="agw-controls">
-      {open && !driving && btn("advance", "Run", true, () => void run(), true)}
-      {driving && <button type="button" className="btn small" onClick={() => { stop.current = true; }} data-testid="agw-ctl-stop">Stop running here</button>}
-      {btn("pause", "Pause", open, () => { stop.current = true; return act("pause"); })}
-      {btn("resume", task.status === "failed" ? "Try again" : "Resume", task.status === "needs_attention" || task.status === "failed", () => act("resume"))}
-      {btn("retry", `Retry ${failed.length === 1 ? "failed step" : `${failed.length} failed steps`}`, failed.length > 0 && task.status !== "cancelled" && task.status !== "completed", () => act("retry"))}
-      {btn("cancel", "Cancel", task.status !== "completed" && task.status !== "cancelled", () => { stop.current = true; return act("cancel"); })}
+      {/*
+        * ONE CLEAR ACTION PER SITUATION (2026-11-07): running → Pause; paused → Resume; failed steps → Retry only
+        * those (and keep going); Cancel stops safely and keeps every finished step. "Try again" (a second name for
+        * retrying everything) is gone.
+        */}
+      <span className="agw-ctl-group">
+        {open && !driving && btn("advance", "Run", true, () => void run(), true)}
+        {driving && <button type="button" className="btn small" onClick={() => { stop.current = true; }} data-testid="agw-ctl-stop">Stop running here</button>}
+        {btn("pause", "Pause", open, () => { stop.current = true; return act("pause"); })}
+        {btn("resume", "Resume", task.status === "needs_attention" && !failed.length, () => act("resume").then(() => void run()), true)}
+      </span>
+      {failed.length > 0 && task.status !== "cancelled" && task.status !== "completed" && <span className="agw-ctl-group">
+        {btn("retry", `Retry ${failed.length === 1 ? "the failed step" : `${failed.length} failed steps`}`, true, () => act("retry").then(() => void run()), true)}
+        <span className="agw-ctl-note">Only {failed.length === 1 ? "it runs" : "they run"} again — finished steps are kept.</span>
+      </span>}
+      {task.status !== "completed" && task.status !== "cancelled" && task.status !== "failed" && <span className="agw-ctl-group">
+        <button type="button" className="btn small danger" disabled={!canEdit || busy != null} onClick={async () => { if (!window.confirm("Cancel this task? Every finished step is kept and can still be applied.")) return; setBusy("cancel"); stop.current = true; try { await act("cancel"); } finally { setBusy(null); } }} data-testid="agw-ctl-cancel">Cancel (keeps finished work)</button>
+      </span>}
       {driving && <span className="agw-ctl-note">Running from this page — leave it open, or let the Copilot or the background runner carry on.</span>}
       {note && <span className="agw-launch-err" role="alert">{note}</span>}
     </div>
@@ -216,40 +228,59 @@ export function TaskResultReview({ task, surveyId, def, canEdit, onApply }: { ta
   const [data, setData] = React.useState<Record<string, unknown> | null>(null);
   const [applied, setApplied] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
+  const [byStep, setByStep] = React.useState<{ stepId: string; title: string; actions: SurveyAction[] }[]>([]);
+  const [unresolved, setUnresolved] = React.useState<{ stepId?: string; title: string; reason: string }[]>([]);
+  const [partial, setPartial] = React.useState(false);
+  const [skip, setSkip] = React.useState<Set<string>>(new Set());
+  const reviewable = task.status === "completed" || (task.progress.completed > 0 && task.status !== "running" && task.status !== "pending");
   React.useEffect(() => {
     let off = false;
-    setActions(null); setApplied(false); setErr(null);
-    if (task.status !== "completed") return;
+    setActions(null); setApplied(false); setErr(null); setSkip(new Set());
+    if (!reviewable) return;
     (async () => {
       try {
         const r = await fetch(`/api/copilot/tasks/${encodeURIComponent(task.id)}?surveyId=${encodeURIComponent(surveyId)}&result=1`, { cache: "no-store" });
         const j = await r.json();
         if (off) return;
-        const res = j?.result as { actions?: SurveyAction[]; data?: Record<string, unknown> } | null;
+        const res = j?.result as { actions?: SurveyAction[]; data?: Record<string, unknown>; byStep?: { stepId: string; title: string; actions: SurveyAction[] }[]; unresolved?: { stepId?: string; title: string; reason: string }[]; partial?: boolean } | null;
         if (!res) { setErr("The result could not be read."); return; }
         setActions(Array.isArray(res.actions) ? res.actions : []);
+        setByStep(res.byStep ?? []); setUnresolved(res.unresolved ?? []); setPartial(!!res.partial);
         setData(res.data ?? null);
       } catch { if (!off) setErr("The result could not be read."); }
     })();
     return () => { off = true; };
-  }, [task.id, task.status, surveyId]);
-  const preview = React.useMemo(() => (actions && actions.length ? applySurveyActions(def, actions) : null), [actions, def]);
-  if (task.status !== "completed") return null;
+  }, [task.id, task.status, surveyId, reviewable]);
+  /* only the steps the researcher kept ticked, in plan order */
+  const chosen = React.useMemo(() => (byStep.length ? byStep.filter((b) => !skip.has(b.stepId)).flatMap((b) => b.actions) : actions ?? []), [byStep, skip, actions]);
+  const preview = React.useMemo(() => (chosen.length ? applySurveyActions(def, chosen) : null), [chosen, def]);
+  if (!reviewable) return null;
   if (err) return <div className="agw-review"><span className="agw-launch-err">{err}</span></div>;
   if (!actions) return <div className="agw-review muted">Reading the result…</div>;
   return (
     <div className="agw-review" data-testid="agw-review">
-      {actions.length === 0 ? (data && Object.keys(data).length ? <ResearchOutput data={data} surveyId={surveyId} /> : <div><b>Finished.</b> <span className="muted">This task proposed no change to the questionnaire.</span></div>) : preview && (
+      {partial && (
+        <div data-testid="agw-partial">
+          <b>Partial result — apply what is done now.</b> <span className="muted">{byStep.length} finished step{byStep.length === 1 ? "" : "s"} made changes; {unresolved.length} {unresolved.length === 1 ? "item is" : "items are"} still open.</span>
+          {unresolved.length > 0 && <ul className="agw-unresolved">{unresolved.slice(0, 8).map((u, i) => <li key={i}><b>{u.title}</b> — {u.reason}</li>)}</ul>}
+        </div>
+      )}
+      {byStep.length > 1 && (
+        <ul className="agw-review-steps" data-testid="agw-review-steps">{byStep.map((b) => (
+          <li key={b.stepId}><label><input type="checkbox" checked={!skip.has(b.stepId)} onChange={() => setSkip((x) => { const n = new Set(x); if (n.has(b.stepId)) n.delete(b.stepId); else n.add(b.stepId); return n; })} /> <span>{b.title}</span> <span className="muted">· {b.actions.length} change{b.actions.length === 1 ? "" : "s"}</span></label></li>
+        ))}</ul>
+      )}
+      {actions.length === 0 ? (data && Object.keys(data).length ? <ResearchOutput data={data} surveyId={surveyId} /> : <div><b>Finished.</b> <span className="muted">This task proposed no change to the questionnaire.</span></div>) : !preview ? <div className="muted">No step selected.</div> : preview && (
         <>
           <div className="row" style={{ gap: 8, alignItems: "baseline" }}>
-            <b>{actions.length} change{actions.length === 1 ? "" : "s"} ready to review</b>
+            <b>{chosen.length} change{chosen.length === 1 ? "" : "s"} ready to review</b>
             <span className="muted">{preview.results.filter((r) => r.ok).length} apply cleanly to the survey as it is now{preview.errors.length ? ` · ${preview.errors.length} refused` : ""}</span>
           </div>
           {preview.destructive.length > 0 && <div className="agw-warn">Removes or overwrites: {preview.destructive.slice(0, 5).join("; ")}{preview.destructive.length > 5 ? "…" : ""}</div>}
           {preview.errors.length > 0 && <details><summary>Refused ({preview.errors.length})</summary><ul>{preview.errors.slice(0, 20).map((e, i) => <li key={i}>{e}</li>)}</ul></details>}
           {preview.warnings.length > 0 && <details><summary>Quality check after applying ({preview.warnings.length})</summary><ul>{preview.warnings.slice(0, 20).map((e, i) => <li key={i}>{e}</li>)}</ul></details>}
           <div className="row" style={{ gap: 8 }}>
-            <button className="btn small primary" disabled={!canEdit || applied} onClick={() => { if (preview.destructive.length && !window.confirm(`This removes or overwrites ${preview.destructive.length} thing(s). Apply anyway? You can undo it.`)) return; onApply(preview.def, `Agent task: ${actions.length} changes`); setApplied(true); }} data-testid="agw-apply">{applied ? "Applied — undo with Ctrl+Z" : "Apply to survey"}</button>
+            <button className="btn small primary" disabled={!canEdit || applied} onClick={() => { if (preview.destructive.length && !window.confirm(`This removes or overwrites ${preview.destructive.length} thing(s). Apply anyway? You can undo it.`)) return; onApply(preview.def, `Agent task${partial ? " (partial)" : ""}: ${chosen.length} changes`); setApplied(true); }} data-testid="agw-apply">{applied ? "Applied — undo with Ctrl+Z" : "Apply to survey"}</button>
             <span className="muted" style={{ fontSize: 12.5 }}>One undoable edit. Review it in Questions before you save a version.</span>
           </div>
         </>
