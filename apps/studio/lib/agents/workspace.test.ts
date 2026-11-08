@@ -101,3 +101,18 @@ test("the newest task decides a finished agent's state: failures in a cancelled 
   assert.equal(s.validation, "stopped", "its step never ran because the task was cancelled");
   assert.equal(Object.fromEntries(agentStatuses([older]).map((a) => [a.id, a.state])).writer, "done");
 });
+
+test("run phases come from the launcher's own request, then from the step rows; the feed is the rows' own times", async () => {
+  const { runPhases, activityFeed } = await import("./workspace.ts");
+  assert.deepEqual(runPhases(null, { phase: "understanding", detail: "Reading" }).map((p) => p.state), ["active", "waiting", "waiting", "waiting", "waiting", "waiting"]);
+  assert.deepEqual(runPhases(null, { phase: "planning", detail: "Planning" }).slice(0, 2).map((p) => p.state), ["done", "active"]);
+  const running = { status: "running", planner: "generation", steps: [step("d", "gen.design", "completed", [], { startedAt: 1, finishedAt: 2 }), step("b1", "gen.batch", "running", ["d"], { startedAt: 3 }), step("v", "gen.validate", "pending", ["b1"])] } as never;
+  const ph = runPhases(running);
+  assert.deepEqual(ph.map((p) => [p.id, p.state]), [["understand", "done"], ["plan", "done"], ["agents", "done"], ["execute", "active"], ["validate", "waiting"], ["complete", "waiting"]]);
+  assert.match(ph[3].detail, /^Questionnaire writer: b1 · 1\/2 done$/);
+  assert.match(ph[2].detail, /Research design, Questionnaire writer, Validation/);
+  const cancelled = runPhases({ status: "cancelled", steps: [step("b1", "copilot.generate", "completed"), step("b2", "copilot.generate", "failed"), step("c", "copilot.check", "pending")] } as never);
+  assert.deepEqual(cancelled.slice(3).map((p) => p.state), ["failed", "failed", "failed"]);
+  const feed = activityFeed(running);
+  assert.deepEqual(feed.map((e) => [e.at, e.text]), [[3, "started b1"], [2, "finished d"], [1, "started d"]]);
+});

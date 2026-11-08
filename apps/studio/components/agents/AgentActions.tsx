@@ -5,6 +5,9 @@ import type { SurveyDefinition } from "@rescript/schema";
 import type { ClientTask } from "../../lib/copilot/taskStore";
 import { LAUNCHERS, launchMessage, type Launcher } from "../../lib/agents/launch";
 import { ResearchOutput } from "./ResearchOutput";
+import { VoiceButton, HeardNote } from "./VoiceButton";
+import { applyAnswer, type Understanding } from "../../lib/agents/understandShared";
+import type { HeardTranscript } from "../../lib/intelligent/voice";
 
 /**
  * WHAT A RESEARCHER CAN DO FROM THE AGENT WORKSPACE (ResLens agents, phase 1 — 2026-11-07).
@@ -27,29 +30,90 @@ async function post(path: string, body: Record<string, unknown>): Promise<{ stat
   } catch { return { status: 0, d: null }; }
 }
 
-export function AgentLauncher({ surveyId, def, canEdit, onStarted, requested }: { surveyId: string; def: SurveyDefinition; canEdit: boolean; onStarted: (task: ClientTask) => void; /** a launcher another part of the page asked for (the journey's stage shortcuts) */ requested?: { id: Launcher["id"]; at: number } | null }) {
+export function AgentLauncher({ surveyId, def, canEdit, onStarted, requested, onPhase }: { surveyId: string; def: SurveyDefinition; canEdit: boolean; onStarted: (task: ClientTask) => void; /** a launcher another part of the page asked for (the journey's stage shortcuts) */ requested?: { id: Launcher["id"]; at: number } | null; /** what the launcher is doing right now — understanding, planning — for the run's live phases */ onPhase?: (p: LaunchPhase | null) => void }) {
   const [open, setOpen] = React.useState<Launcher["id"] | null>(null);
   const box = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => { if (!requested) return; setOpen(requested.id); setMsg(null); box.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [requested]);
   const [fields, setFields] = React.useState<Record<string, string>>({});
+  const [heardFor, setHeardFor] = React.useState<Record<string, HeardTranscript>>({});
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
+  /* the free sentence: typed or spoken, read by /api/agents/understand */
+  const [said, setSaid] = React.useState("");
+  const [saidHeard, setSaidHeard] = React.useState<HeardTranscript | null>(null);
+  const [reading, setReading] = React.useState(false);
+  const [u, setU] = React.useState<(Understanding & { note?: string | null }) | null>(null);
+  const [answers, setAnswers] = React.useState<Record<string, string>>({});
+  React.useEffect(() => { if (!requested) return; setOpen(requested.id); setMsg(null); box.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [requested]);
   const L = LAUNCHERS.find((l) => l.id === open) ?? null;
   const message = L ? launchMessage(L, fields) : "";
   const missing = L ? L.fields.filter((f) => f.required && !(fields[f.key] ?? "").trim()) : [];
+  const unanswered = u && u.launcher === open ? u.questions.filter((q) => q.key !== "what") : [];
+
+  const read = async (text: string, heard?: HeardTranscript | null) => {
+    if (!text.trim()) return;
+    setReading(true); setMsg(null); onPhase?.({ phase: "understanding", detail: "Reading what you asked against this survey" });
+    const r = await post("/api/agents/understand", { surveyId, text, definition: def, ...(heard?.english ? { english: heard.english, language: heard.language } : heard?.language ? { language: heard.language } : {}) });
+    setReading(false); onPhase?.(null);
+    if (r.status !== 200 || !r.d?.understanding) { setMsg(String(r.d?.error ?? `That could not be read (${r.status || "network"}).`)); return; }
+    const und = r.d.understanding as Understanding;
+    setU({ ...und, note: (r.d.note as string | null) ?? null }); setAnswers({});
+    if (und.launcher) { setOpen(und.launcher); setFields(und.fields); setHeardFor({}); }
+  };
+  const answer = (key: string, value: string) => {
+    if (!u) return;
+    const next = applyAnswer(u, key, value);
+    if (next === u) { setAnswers({ ...answers, [key]: value }); return; }
+    setU({ ...next, note: u.note }); setFields(next.fields);
+  };
 
   const start = async () => {
     if (!L || missing.length) return;
-    setBusy(true); setMsg(null);
+    setBusy(true); setMsg(null); onPhase?.({ phase: "planning", detail: `${L.title}: planning the steps` });
     const r = await post("/api/copilot/tasks", { surveyId, message, definition: def, planner: L.planner, ...(L.options ? { options: L.options(fields) } : {}) });
-    setBusy(false);
-    if (r.status === 200 && r.d?.task) { onStarted(r.d.task as ClientTask); setOpen(null); setFields({}); return; }
+    setBusy(false); onPhase?.(null);
+    if (r.status === 200 && r.d?.task) { onStarted(r.d.task as ClientTask); setOpen(null); setFields({}); setU(null); setSaid(""); setSaidHeard(null); return; }
     setMsg(String(r.d?.error ?? (r.status === 404 ? "This agent could not plan that request — say a little more about what you want." : r.status === 403 ? "You need edit access to start an agent on this survey." : `The agent could not start (${r.status || "network"}).`)));
+  };
+  const appendHeard = (key: string, h: HeardTranscript) => {
+    const words = (h.english || h.text).trim();
+    setFields((f) => ({ ...f, [key]: `${(f[key] ?? "").trim()}${f[key]?.trim() ? " " : ""}${words}` }));
+    setHeardFor((x) => ({ ...x, [key]: h }));
   };
 
   return (
     <div className="agw-launch" data-testid="agw-launcher" ref={box}>
-      <div className="agw-launch-head"><b>Start an agent</b><span className="muted">The agent plans the work in steps you can watch, pause and review. Nothing changes the survey until you apply it.</span></div>
+      <div className="agw-launch-head"><b>Start an agent</b><span className="muted">Say or type what you need, or pick an agent. Nothing changes the survey until you apply it.</span></div>
+
+      <form className="agw-say" onSubmit={(e) => { e.preventDefault(); void read(said, saidHeard); }} data-testid="agw-say">
+        <textarea className="ta" rows={2} value={said} disabled={!canEdit} onChange={(e) => { setSaid(e.target.value); setSaidHeard(null); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void read(said, saidHeard); } }}
+          placeholder="Tell the agents what you need, in any language — “Create a questionnaire for a healthcare study targeting patients aged 25–45, with screening and a 10-minute LOI”" aria-label="Tell the agents what you need" data-testid="agw-say-text" />
+        <div className="agw-say-actions">
+          <VoiceButton surveyId={surveyId} disabled={!canEdit} label="Speak" onHeard={(h) => { const w = (h.english || h.text).trim(); setSaid(w); setSaidHeard(h); void read(h.text, h); }} />
+          <button type="submit" className="btn small primary" disabled={!canEdit || reading || !said.trim()} data-testid="agw-say-go">{reading ? "Reading…" : "Understand"}</button>
+        </div>
+        <HeardNote heard={saidHeard} />
+      </form>
+
+      {u && (
+        <div className={`agw-understood c-${u.confidence}`} data-testid="agw-understood" aria-live="polite">
+          <div className="row" style={{ gap: 8, alignItems: "baseline" }}><b>{u.launcher ? `${LAUNCHERS.find((l) => l.id === u.launcher)?.title}` : "Not sure yet"}</b><span className="muted">{u.confidence === "high" ? "understood" : u.confidence === "medium" ? "mostly understood — check the fields" : "needs a little more"}</span><span className="grow" /><button type="button" className="btn tiny ghost" onClick={() => setU(null)} aria-label="Dismiss">×</button></div>
+          {u.understood.length > 0 && <ul className="agw-understood-list">{u.understood.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+          {u.assumptions.length > 0 && <ul className="agw-understood-assume">{u.assumptions.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+          {u.note && <div className="muted">{u.note}</div>}
+          {u.questions.map((q) => (
+            <div key={q.key} className="agw-clarify" data-testid={`agw-clarify-${q.key}`}>
+              <span>{q.question}</span>
+              {q.key !== "what" && q.key !== "nothing" && <div className="row" style={{ gap: 4, flexWrap: "wrap" }}>
+                {(q.suggestions ?? []).map((sg) => <button key={sg} type="button" className="ax-chip" onClick={() => answer(q.key, sg)}>{sg}</button>)}
+                <input className="input small" value={answers[q.key] ?? ""} onChange={(e) => setAnswers({ ...answers, [q.key]: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); answer(q.key, answers[q.key] ?? ""); } }} placeholder="Your answer" style={{ width: 160 }} data-testid={`agw-clarify-input-${q.key}`} />
+              </div>}
+            </div>
+          ))}
+          {(u.alternatives.length > 0) && <div className="row" style={{ gap: 4, flexWrap: "wrap" }}><span className="muted">{u.launcher ? "Or:" : "Pick one:"}</span>{u.alternatives.map((id) => <button key={id} type="button" className="ax-chip" onClick={() => { setOpen(id); setFields(id === "build" ? { brief: said } : id === "edit" ? { goal: said } : {}); }}>{LAUNCHERS.find((l) => l.id === id)?.title}</button>)}</div>}
+        </div>
+      )}
+
       <div className="agw-launch-grid">
         {LAUNCHERS.map((l) => (
           <button key={l.id} type="button" className={`agw-launch-card a-${l.agent} ${open === l.id ? "on" : ""}`} disabled={!canEdit} onClick={() => { setOpen(open === l.id ? null : l.id); setMsg(null); }} data-testid={`agw-launch-${l.id}`} aria-expanded={open === l.id}>
@@ -61,24 +125,33 @@ export function AgentLauncher({ surveyId, def, canEdit, onStarted, requested }: 
       {L && (
         <form className="agw-launch-form" onSubmit={(e) => { e.preventDefault(); void start(); }} data-testid="agw-launch-form">
           {L.fields.map((f) => (
-            <label key={f.key} className="ax-field">
+            <div key={f.key} className="ax-field agw-field">
               <span>{f.label}{f.required ? " *" : ""}</span>
-              {f.type === "textarea" ? <textarea className="ta" rows={3} value={fields[f.key] ?? ""} placeholder={f.placeholder} onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} data-testid={`agw-field-${f.key}`} />
-                : f.type === "select" ? <select className="select small" value={fields[f.key] ?? f.options![0][0]} onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} data-testid={`agw-field-${f.key}`}>{f.options!.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select>
-                : <input className="input small" value={fields[f.key] ?? ""} placeholder={f.placeholder} onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} data-testid={`agw-field-${f.key}`} />}
-            </label>
+              <div className="agw-field-row">
+                {f.type === "textarea" ? <textarea className="ta" rows={3} value={fields[f.key] ?? ""} placeholder={f.placeholder} onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} data-testid={`agw-field-${f.key}`} aria-label={f.label} />
+                  : f.type === "select" ? <select className="select small" value={fields[f.key] ?? f.options![0][0]} onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} data-testid={`agw-field-${f.key}`} aria-label={f.label}>{f.options!.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select>
+                  : <input className="input small" value={fields[f.key] ?? ""} placeholder={f.placeholder} onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} data-testid={`agw-field-${f.key}`} aria-label={f.label} />}
+                {f.type !== "select" && <VoiceButton compact surveyId={surveyId} label={`Speak: ${f.label}`} onHeard={(h) => appendHeard(f.key, h)} />}
+              </div>
+              <HeardNote heard={heardFor[f.key] ?? null} onUseOriginal={() => { const h = heardFor[f.key]; if (!h) return; setFields((x) => ({ ...x, [f.key]: (x[f.key] ?? "").replace((h.english || "").trim(), h.text.trim()) })); setHeardFor((x) => { const { [f.key]: _drop, ...rest } = x; return rest; }); }} />
+            </div>
           ))}
           <div className="agw-launch-preview"><span className="muted">The agent is asked:</span> {message || "—"}</div>
+          {unanswered.length > 0 && <div className="agw-launch-err">Answer {unanswered.length === 1 ? "the question" : "the questions"} above first.</div>}
           <div className="row" style={{ gap: 8 }}>
-            <button className="btn primary small" type="submit" disabled={busy || missing.length > 0} data-testid="agw-start">{busy ? "Planning…" : "Plan and start"}</button>
+            <button className="btn primary small" type="submit" disabled={busy || missing.length > 0 || unanswered.length > 0} data-testid="agw-start">{busy ? "Planning…" : "Plan and start"}</button>
             <button className="btn small ghost" type="button" onClick={() => setOpen(null)}>Close</button>
             {msg && <span className="agw-launch-err" role="alert">{msg}</span>}
           </div>
         </form>
       )}
+      {!L && msg && <span className="agw-launch-err" role="alert">{msg}</span>}
     </div>
   );
 }
+
+/** what the launcher is doing before a task exists — real client work: reading the sentence, asking the planner */
+export interface LaunchPhase { phase: "understanding" | "planning"; detail: string }
 
 type Ctl = "advance" | "pause" | "resume" | "retry" | "cancel";
 

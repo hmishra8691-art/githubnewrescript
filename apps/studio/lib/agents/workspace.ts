@@ -187,3 +187,70 @@ export const isLive = (t: Pick<ClientTask, "status"> | null | undefined): boolea
 let requestedTask: string | null = null;
 export function requestAgentTask(id: string | null | undefined): void { requestedTask = id ?? null; }
 export function takeRequestedAgentTask(): string | null { const t = requestedTask; requestedTask = null; return t; }
+
+/* ------------------------------------------------------------ the run, as phases and as a feed */
+
+export type PhaseState = "done" | "active" | "waiting" | "failed" | "skipped";
+export interface RunPhase { id: "understand" | "plan" | "agents" | "execute" | "validate" | "complete"; label: string; state: PhaseState; detail: string }
+
+/**
+ * The run in the order a researcher thinks about it — understood, planned, agents chosen, executing, validating,
+ * complete — each phase's state taken from what really happened: the launcher's own request while it is reading or
+ * planning (`launch`), then the task's step rows. A phase with no rows behind it says so; nothing advances on a timer.
+ */
+export function runPhases(task: Pick<ClientTask, "status" | "steps" | "planner"> & { blocked?: { message?: string } } | null, launch?: { phase: "understanding" | "planning"; detail: string } | null): RunPhase[] {
+  const P = (id: RunPhase["id"], label: string, state: PhaseState, detail: string): RunPhase => ({ id, label, state, detail });
+  if (!task || launch) {
+    return [
+      P("understand", "Understand the instruction", launch?.phase === "understanding" ? "active" : launch ? "done" : "waiting", launch?.phase === "understanding" ? launch.detail : launch ? "Read" : "Say or type what you need"),
+      P("plan", "Plan the steps", launch?.phase === "planning" ? "active" : "waiting", launch?.phase === "planning" ? launch.detail : ""),
+      P("agents", "Assign agents", "waiting", ""), P("execute", "Execute", "waiting", ""), P("validate", "Validate", "waiting", ""), P("complete", "Complete", "waiting", ""),
+    ];
+  }
+  const steps = task.steps.filter((s) => s.status !== "tombstoned");
+  const name = (id: AgentId | null) => AGENTS.find((a) => a.id === id)?.name ?? "Other";
+  const agents = [...new Set(steps.map((s) => agentOf(s)))];
+  const work = steps.filter((s) => agentOf(s) !== "validation");
+  const checks = steps.filter((s) => agentOf(s) === "validation");
+  const closed = task.status === "cancelled" || task.status === "failed";
+  const stateOf = (set: typeof steps): { state: PhaseState; detail: string } => {
+    if (!set.length) return { state: "skipped", detail: "No separate step" };
+    const done = set.filter((s) => s.status === "completed").length;
+    const running = set.find((s) => s.status === "running" || s.status === "retrying");
+    const failed = set.filter((s) => s.status === "failed" || s.status === "blocked").length;
+    if (running && !closed) return { state: "active", detail: `${name(agentOf(running))}: ${running.title ?? running.kind ?? running.stepId} · ${done}/${set.length} done` };
+    if (done === set.length) return { state: "done", detail: `${done}/${set.length} done` };
+    if (failed && (closed || set.every((s) => s.status !== "pending"))) return { state: "failed", detail: `${done}/${set.length} done · ${failed} failed` };
+    if (closed) return { state: "failed", detail: `${done}/${set.length} done · stopped` };
+    return { state: done ? "active" : "waiting", detail: `${done}/${set.length} done${failed ? ` · ${failed} retrying` : ""}` };
+  };
+  const ex = stateOf(work), va = stateOf(checks);
+  const complete: RunPhase = task.status === "completed" ? P("complete", "Complete", "done", "Ready to review")
+    : task.status === "cancelled" ? P("complete", "Complete", "failed", "Cancelled — finished steps are kept")
+    : task.status === "failed" ? P("complete", "Complete", "failed", "Stopped")
+    : task.status === "needs_attention" ? P("complete", "Complete", "active", `Waiting for you${task.blocked?.message ? `: ${task.blocked.message}` : ""}`)
+    : P("complete", "Complete", "waiting", "");
+  return [
+    P("understand", "Understand the instruction", "done", "Read"),
+    P("plan", "Plan the steps", "done", `${steps.length} step${steps.length === 1 ? "" : "s"}${task.planner ? ` · ${task.planner} planner` : ""}`),
+    P("agents", "Assign agents", "done", agents.map(name).join(", ")),
+    P("execute", "Execute", ex.state, ex.detail),
+    P("validate", "Validate", va.state, va.detail),
+    complete,
+  ];
+}
+
+export interface ActivityEvent { at: number; agent: string; text: string; tone: "ok" | "bad" | "busy" }
+
+/** what happened, newest first — one event per step start and per step end, at the times the rows recorded */
+export function activityFeed(task: Pick<ClientTask, "status" | "steps">, limit = 14): ActivityEvent[] {
+  const name = (id: AgentId | null) => AGENTS.find((a) => a.id === id)?.name ?? "Other";
+  const out: ActivityEvent[] = [];
+  for (const s of task.steps) {
+    if (s.status === "tombstoned") continue;
+    const title = s.title ?? s.kind ?? s.stepId;
+    if (s.startedAt) out.push({ at: s.startedAt, agent: name(agentOf(s)), text: `started ${title}${s.retryCount ? ` (attempt ${s.retryCount + 1})` : ""}`, tone: "busy" });
+    if (s.finishedAt && (s.status === "completed" || s.status === "failed")) out.push({ at: s.finishedAt, agent: name(agentOf(s)), text: s.status === "completed" ? `finished ${title}${s.validation?.status === "invalid" ? " — its check failed" : ""}` : `failed ${title}${s.failureMessage ? ` — ${s.failureMessage}` : ""}`, tone: s.status === "completed" && s.validation?.status !== "invalid" ? "ok" : "bad" });
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, limit);
+}

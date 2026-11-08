@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { DictateButton } from "./DictateButton";
+import { VoiceButton } from "../agents/VoiceButton";
 import type { AskItem, AskOp, AskProposal, DatasetSpec, UndoRecord } from "@rescript/analytics";
 import { AxApi, type Row } from "./api";
 import { ReportBuilderDialog } from "./ReportBuilderDialog";
@@ -107,6 +108,8 @@ export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = n
         {whyChart && <button type="button" className={`ax-chip ${why ? "on" : ""}`} onClick={() => setWhy((w) => !w)} data-testid="ax-ask-why-chart">Why this chart?</button>}
         <span className="grow" />
         <DictateButton value={request} onChange={setRequest} disabled={!canEdit || busy !== null} onDone={(t) => { if (t.trim()) void propose(t); }} />
+        {/* any language: the Intelligent mode's transcription and English reading (the browser's dictation above is English, on-device) */}
+        <VoiceButton compact surveyId={api.surveyId} disabled={!canEdit || busy !== null} label="Speak in any language" onHeard={(h) => { const w = (h.english || h.text).trim(); setRequest(w); if (w) void propose(w); }} />
         <button className="btn primary" onClick={() => void propose()} disabled={!canEdit || !request.trim() || busy !== null} data-testid="ax-ask-propose">{busy === "propose" ? "Reading your request…" : "Propose"}</button>
       </div>
       {why && whyChart && (

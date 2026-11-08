@@ -1,12 +1,12 @@
 "use client";
 import React from "react";
 import type { ClientTask } from "../../lib/copilot/taskStore";
-import { AGENTS, STAGES, agentGraph, agentStatuses, isLive, takeRequestedAgentTask, type AgentId, type AgentNode, type AgentState, type Stage } from "../../lib/agents/workspace";
+import { AGENTS, STAGES, activityFeed, agentGraph, agentStatuses, isLive, runPhases, takeRequestedAgentTask, type AgentId, type AgentNode, type AgentState, type Stage } from "../../lib/agents/workspace";
 import { workflowStages, type StageView } from "../../lib/agents/workflow";
 import type { ModuleStatus } from "../../lib/projectOverview";
 import { moduleStates } from "../../lib/projectOverview";
 import type { SurveyDefinition } from "@rescript/schema";
-import { AgentLauncher, TaskControls, TaskResultReview } from "./AgentActions";
+import { AgentLauncher, TaskControls, TaskResultReview, type LaunchPhase } from "./AgentActions";
 import { ExecutionPanel } from "../intelligent/ExecutionPanel";
 import { stepOutcome, taskOutcome } from "../../lib/copilot/stepOutcome";
 import { LAUNCHERS, type Launcher } from "../../lib/agents/launch";
@@ -56,6 +56,7 @@ export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply 
   const [node, setNode] = React.useState<string | null>(null);
   const [modules, setModules] = React.useState<{ list: ModuleStatus[]; fromServer: boolean } | null>(null);
   const [readAt, setReadAt] = React.useState<number | null>(null);
+  const [launchPhase, setLaunchPhase] = React.useState<LaunchPhase | null>(null);
   const [requested, setRequested] = React.useState<{ id: Launcher["id"]; at: number } | null>(null);
 
   const load = React.useCallback(async () => {
@@ -134,7 +135,7 @@ export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply 
         ))}
       </section>
 
-      <AgentLauncher requested={requested} surveyId={surveyId} def={def} canEdit={canEdit} onStarted={(t) => { upsert(t); void load(); }} />
+      <AgentLauncher onPhase={setLaunchPhase} requested={requested} surveyId={surveyId} def={def} canEdit={canEdit} onStarted={(t) => { upsert(t); void load(); }} />
 
       <div className="agw-canvas">
         {/* the agents */}
@@ -175,15 +176,44 @@ export function AgentWorkspace({ surveyId, def, onTab, canEdit = false, onApply 
               <p>Agents run when you ask the Copilot for a substantial piece of work — writing a questionnaire from a brief, a translation, an exam with an answer key. Each step they take appears here as it happens.</p>
             </div>
           )}
+          {(current || launchPhase) && <RunPhases task={launchPhase ? null : current} launch={launchPhase} />}
           {current && <TaskControls task={current} surveyId={surveyId} canEdit={canEdit} onTask={upsert} />}
           {current && graph && <TaskMap task={current} graph={graph} selected={node} onSelect={setNode} />}
           {picked && current && <NodeDetail node={picked} taskStatus={current.status} onClose={() => setNode(null)} />}
           {current?.blocked && <div className="agw-error" role="status">Waiting for a person: {current.blocked.message}</div>}
+          {current && <ActivityFeed task={current} />}
           {current && <details className="agw-log" data-testid="agw-log"><summary>Execution log — every step, attempt and message</summary><ExecutionPanel task={current} durable={data?.durable !== false} /></details>}
           {current && onApply && <TaskResultReview task={current} surveyId={surveyId} def={def} canEdit={canEdit} onApply={onApply} />}
         </section>
       </div>
     </div>
+  );
+}
+
+/** the run as phases — understood, planned, agents, executing, validating, complete — from real state only */
+function RunPhases({ task, launch }: { task: ClientTask | null; launch: LaunchPhase | null }) {
+  const phases = runPhases(task, launch);
+  return (
+    <ol className="agw-phases" data-testid="agw-phases" aria-label="Run phases">
+      {phases.map((p) => (
+        <li key={p.id} className={`ph-${p.state}`} data-testid={`agw-phase-${p.id}`} data-state={p.state} aria-current={p.state === "active" ? "step" : undefined}>
+          <span className="agw-phase-ico" aria-hidden="true">{p.state === "done" ? "✓" : p.state === "failed" ? "✕" : p.state === "active" ? "●" : p.state === "skipped" ? "–" : "○"}</span>
+          <b>{p.label}</b>{p.detail && <span>{p.detail}</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** what happened, newest first, at the times the step rows recorded */
+function ActivityFeed({ task }: { task: ClientTask }) {
+  const feed = activityFeed(task);
+  if (!feed.length) return null;
+  return (
+    <section className="agw-feed" data-testid="agw-feed" aria-label="Activity">
+      <h4>Activity</h4>
+      <ul>{feed.map((e, i) => <li key={i} className={`f-${e.tone}`}><time>{new Date(e.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time> <b>{e.agent}</b> {e.text}</li>)}</ul>
+    </section>
   );
 }
 

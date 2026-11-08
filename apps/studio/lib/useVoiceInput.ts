@@ -56,6 +56,8 @@ export interface VoiceInput {
   resume(): void;
   /** idle → recording, recording / paused → stop and transcribe */
   toggle(): void;
+  /** stop and throw the recording away — nothing is sent or transcribed (2026-11-07) */
+  cancel(): void;
 }
 
 export function useVoiceInput(opts: VoiceInputOptions): VoiceInput {
@@ -67,6 +69,7 @@ export function useVoiceInput(opts: VoiceInputOptions): VoiceInput {
   const optsRef = React.useRef(opts);
   optsRef.current = opts;
   const maxMs = opts.maxMs ?? 45_000;
+  const discard = React.useRef(false);
 
   const send = React.useCallback(async (blob: Blob) => {
     setState("transcribing");
@@ -110,6 +113,7 @@ export function useVoiceInput(opts: VoiceInputOptions): VoiceInput {
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
         recorder.current = null;
+        if (discard.current) { discard.current = false; setState("idle"); return; }
         const blob = new Blob(chunks, { type: rec.mimeType || mimeType || "audio/webm" });
         if (blob.size === 0) { setState("idle"); setError("Nothing was recorded."); return; }
         void send(blob);
@@ -155,5 +159,7 @@ export function useVoiceInput(opts: VoiceInputOptions): VoiceInput {
     return () => { if (--mounted === 0) delete (window as unknown as { __rescriptVoiceHint?: unknown }).__rescriptVoiceHint; };
   }, []);
 
-  return { state, available, error, setError, canPause, start, stop, pause, resume, toggle };
+  const cancel = React.useCallback(() => { if (!recorder.current) return; discard.current = true; stop(); }, [stop]);
+
+  return { state, available, error, setError, canPause, start, stop, pause, resume, toggle, cancel };
 }
