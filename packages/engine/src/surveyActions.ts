@@ -1003,13 +1003,29 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     }
     case "create_embedded": {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(a.name)) fail(`${a.name} is not a valid variable name`);
+      /*
+       * IDEMPOTENT (2026-11-07): an embedded variable that already exists is not a refusal. The same definition is
+       * already there (nothing to do, said so); a different one UPDATES the existing field in place — never a second
+       * variable of the same name. A re-run repair, a partial apply applied twice, two agents writing the same answer
+       * key: all land on one variable.
+       */
+      const existing = findEmbeddedField(def, a.name);
+      if (existing) {
+        const want = { source: a.source ?? existing.source ?? "url", ...(a.value !== undefined ? { value: a.value } : {}) };
+        const same = (existing.source ?? "url") === want.source && (a.value === undefined || String(existing.value ?? "") === String(a.value));
+        if (same) return { description: `Embedded variable ${a.name} is already there as asked — kept`, touched: [] };
+        Object.assign(existing, want);
+        return { description: `Embedded variable ${a.name} updated (${want.source}${a.value !== undefined ? ` = ${a.value}` : ""})`, touched: [] };
+      }
       const r = addEmbeddedField(def, { name: a.name, source: a.source ?? "url", ...(a.value !== undefined ? { value: a.value } : {}) } as never, ctx.ids);
       if (!r.ok) fail(r.reason);
       return { description: `Embedded variable ${a.name} (${a.source ?? "url"}${a.value ? ` = ${a.value}` : ""})`, touched: [] };
     }
     case "create_calculation": {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(a.name)) fail(`${a.name} is not a valid variable name`);
-      if ((def.calculations ?? []).some((c) => c.targetVariable.toLowerCase() === a.name.toLowerCase()) || def.questions.some((q) => q.variableName.toLowerCase() === a.name.toLowerCase())) fail(`${a.name} is already a variable`);
+      if (def.questions.some((q) => q.variableName.toLowerCase() === a.name.toLowerCase())) fail(`${a.name} is already a question's variable`);
+      /* IDEMPOTENT (2026-11-07): an existing calculation of that name is UPDATED (or kept, when identical) — never refused, never doubled */
+      const prevCalc = (def.calculations ?? []).find((c) => c.targetVariable.toLowerCase() === a.name.toLowerCase());
       // the names it reads must exist: a calculation over a question that is not there computes nothing
       /* production intents (2026-10-18): `GRID.R1` and `IF … THEN … ELSE` have one meaning each — written the way the calculation engine reads them (calcRewrite.ts) */
       const norm = normalizeCalcExpression(def, withRefs(ctx, a.expression));
@@ -1018,6 +1034,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       const dict = new Set(buildVariableDictionary(def).map((v) => v.name));
       const unknown = identifiers(expression).filter((n) => !getQuestionByCodeOrVar(def, n) && !(def.calculations ?? []).some((c) => c.targetVariable === n) && !KNOWN_FUNCTIONS.has(n.toUpperCase()) && !dict.has(n) && questionCodeAlias(def, n, (k) => dict.has(k)) === undefined);
       if (unknown.length) fail(`the expression reads ${unknown.join(", ")}, which ${unknown.length === 1 ? "is" : "are"} not in the survey${calcNameHint(def, unknown)}`);
+      if (prevCalc) {
+        if (prevCalc.expression === expression) return { description: `Calculation ${prevCalc.targetVariable} is already there as asked — kept`, touched: [] };
+        const was = prevCalc.expression;
+        Object.assign(prevCalc, { expression, ...(a.label ? { label: a.label } : {}), ...(a.dataType ? { dataType: a.dataType } : {}) });
+        return { description: `Calculation ${prevCalc.targetVariable} updated: ${was} → ${expression}`, touched: [] };
+      }
       def.calculations = [...(def.calculations ?? []), { id: ctx.ids("calc"), targetVariable: a.name, expression, ...(a.label ? { label: a.label } : {}), trigger: "on_page_submit", dataType: a.dataType ?? "numeric" } as never];
       return { description: `Calculation ${a.name} = ${expression}${norm.rewrites.length ? ` (read as the calculation language writes it: ${norm.rewrites.join("; ")})` : ""}`, touched: [] };
     }
@@ -2092,4 +2114,19 @@ export function renumberNewQuestions(base: SurveyDefinition, after: SurveyDefini
   for (const q of out.questions) if (!old.has(q.id) && renamedVars.has(q.variableName)) q.variableName = renamedVars.get(q.variableName)!;
   if (renamedVars.size) for (const q of out.questions) if (!old.has(q.id)) q.text = q.text.replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)/g, (m, v: string) => (renamedVars.has(v) ? m.replace(v, renamedVars.get(v)!) : m));
   return out;
+}
+
+
+/** an embedded-data field by name, wherever its embedded-data element sits in the flow (for idempotent create_embedded) */
+function findEmbeddedField(def: SurveyDefinition, name: string): { name: string; source?: string; value?: unknown } | null {
+  const want = name.toLowerCase();
+  const walk = (nodes: unknown[]): { name: string; source?: string; value?: unknown } | null => {
+    for (const n of nodes ?? []) {
+      const x = n as { type?: string; fields?: { name: string; source?: string; value?: unknown }[]; children?: unknown[]; branches?: { children?: unknown[] }[] };
+      if (x?.type === "embedded_data") { const f = (x.fields ?? []).find((f) => String(f.name).toLowerCase() === want); if (f) return f; }
+      if (Array.isArray(x?.children)) { const r = walk(x.children); if (r) return r; }
+    }
+    return null;
+  };
+  return walk((def.flow as unknown[]) ?? []);
 }

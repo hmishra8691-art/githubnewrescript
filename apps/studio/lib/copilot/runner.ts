@@ -376,6 +376,16 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
         report = await opts.check(task);
         status = report.ok ? "completed" : "running";
         await store.setStatus(taskId, status, report);
+        /*
+         * EVERY STEP RAN, AND THE CHECK STILL FINDS PROBLEMS (2026-11-07). Nothing is left to run, so "running" would
+         * be a task that looks busy for ever. It waits for the researcher instead — with the problems named, the
+         * finished work applicable, and Retry / a new request to take the rest.
+         */
+        if (!report.ok && !task.steps.some((x) => x.status === "pending" || x.status === "running" || x.status === "retrying")) {
+          const n = report.problems?.length ?? 0;
+          await store.pause(taskId, { reason: "user_input", message: `Every step ran; ${n} problem${n === 1 ? " remains" : "s remain"} (${(report.problems ?? []).slice(0, 2).join("; ")}${n > 2 ? " …" : ""}). Review and apply what is done, then fix the rest by hand or ask again.` });
+          status = "needs_attention";
+        }
       } else {
         status = "running";
         await store.setStatus(taskId, status, task.report);
@@ -425,9 +435,12 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
     let batch = step.batchSize;
     let splits = 0;
     let stop: SliceStop | null = null;
+    /* when the current attempt started — the row's duration is its last attempt's, not the time since its first claim */
+    let attemptT0 = now();
 
     for (;;) {
       const t0 = now();
+      attemptT0 = t0;
       /*
        * THE BOUND THAT CLOSES THE FIRST-STEP HOLE. A step never runs past the
        * soft stop by more than one minimum step, and never past the slice's
@@ -461,7 +474,7 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
       if (r === OVERRUN) {
         ctrl.abort();
         /* out of time, not broken: the row goes back to `retrying`, keeps its count, and a later slice runs it */
-        await store.fail(taskId, step.stepId, { kind: "transient", message: stepFailureMessage("transient"), retryable: true, maxAttempts: maxRetries + 1 });
+        await store.fail(taskId, step.stepId, { kind: "transient", message: stepFailureMessage("transient"), retryable: true, maxAttempts: maxRetries + 1, attemptStartedAt: attemptT0 });
         stop = now() >= softStop ? "soft_stop" : "budget";
         break;
       }
@@ -496,14 +509,14 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
          */
         if (f.kind === "permanent") {
           const said = f.message ?? stepFailureMessage(f.kind);
-          await store.fail(taskId, step.stepId, { kind: f.kind, message: said, retryable: false, maxAttempts: maxRetries + 1 });
+          await store.fail(taskId, step.stepId, { kind: f.kind, message: said, retryable: false, maxAttempts: maxRetries + 1, attemptStartedAt: attemptT0 });
           failed.push({ id: step.stepId, kind: f.kind, message: said });
           break;
         }
         if (isTerminalFailure(f.kind)) {
           /* nothing a later slice can do: the STEP stops, the TASK and every output are preserved */
           const said = f.message ?? stepFailureMessage(f.kind);
-          await store.fail(taskId, step.stepId, { kind: f.kind, message: said, retryable: false, maxAttempts: maxRetries + 1 });
+          await store.fail(taskId, step.stepId, { kind: f.kind, message: said, retryable: false, maxAttempts: maxRetries + 1, attemptStartedAt: attemptT0 });
           failed.push({ id: step.stepId, kind: f.kind, message: said });
           await store.setStatus(taskId, "failed", { ok: false, problems: [said] });
           stop = "terminal";
@@ -515,14 +528,14 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
           const current = batch ?? step.batchSize;
           const next = current && current > 1 ? Math.max(1, Math.floor(current / 2)) : null;
           if (next && splits < MAX_SPLITS) { batch = next; splits++; continue; }
-          await store.fail(taskId, step.stepId, { kind: "permanent", message: stepFailureMessage("permanent"), retryable: false, maxAttempts: maxRetries + 1 });
+          await store.fail(taskId, step.stepId, { kind: "permanent", message: stepFailureMessage("permanent"), retryable: false, maxAttempts: maxRetries + 1, attemptStartedAt: attemptT0 });
           failed.push({ id: step.stepId, kind: "permanent", message: stepFailureMessage("permanent") });
           break;
         }
 
         /* BOUNDED retries: the count is on the row, so it survives the worker and a slice cannot reset it */
         attempt++;
-        await store.fail(taskId, step.stepId, { kind: f.kind, message: f.message ?? stepFailureMessage(f.kind), retryable: true, maxAttempts: maxRetries + 1 });
+        await store.fail(taskId, step.stepId, { kind: f.kind, message: f.message ?? stepFailureMessage(f.kind), retryable: true, maxAttempts: maxRetries + 1, attemptStartedAt: attemptT0 });
         if (attempt > maxRetries) {
           failed.push({ id: step.stepId, kind: f.kind, message: f.message ?? stepFailureMessage(f.kind) });
           break;
@@ -559,7 +572,7 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
       /* committed the moment it returns: a worker killed here still leaves this step durable */
       await store.commit(taskId, step.stepId, {
         output: r.output, usage: r.usage, validation: r.validation,
-        batchSizeUsed: r.batchSizeUsed ?? batch, idempotencyKey: step.idempotencyKey,
+        batchSizeUsed: r.batchSizeUsed ?? batch, idempotencyKey: step.idempotencyKey, attemptStartedAt: attemptT0,
       });
       built.push(step.stepId);
       sink?.checkpoint(step.stepId, r.output);

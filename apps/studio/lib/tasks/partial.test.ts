@@ -51,6 +51,23 @@ test("the final check repairs in small targeted steps side by side, then checks 
   assert.equal(recheck.input.round, 1);
   /* after three rounds it stops and names what is left, keeping everything repaired */
   const last = await validate.run({ ...(ctx as object), step: { ...(ctx as { step: object }).step, input: { ...((ctx as { step: { input: object } }).step.input), round: 3 } } } as never);
-  assert.equal(last.status, "failed");
-  assert.match((last as { reason: string }).reason, /Everything that was repaired is kept and can be applied/);
+  assert.equal(last.status, "completed", "the last round REPORTS, so the steps after the check (the answer-key check) still run");
+  const v = (last as { output: { validation: { ok: boolean; errors: string[] } } }).output.validation;
+  assert.equal(v.ok, false);
+  assert.match(v.errors[0], /Everything that was repaired is kept and can be applied/);
+});
+
+test("SELF-CORRECTION: an old-style repair that failed on the output limit is retried with a DIFFERENT strategy — re-checked and re-planned into small targeted repairs, never the same giant answer", async () => {
+  const qs = Array.from({ length: 4 }, (_, i) => ({ id: `q${i + 1}`, code: `Q${i + 1}`, variableName: `Q${i + 1}`, type: "single_select", text: `Question number ${i + 1}?`, options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] }));
+  const draft = SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "S", version: "1" }, questions: qs, flow: [{ id: "b1", type: "block", title: "Main", children: [{ id: "p1", type: "page", questionIds: qs.map((q) => q.id) }] }] });
+  const slotBlocks = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`Q${i + 1}`, "Main"]));
+  const repair = GENERATION_HANDLERS.find((h) => h.kind === "gen.repair")!;
+  let modelCalls = 0;
+  const ctx = { taskId: "t", planVersion: 1, surveyId: "s", attempt: 1, step: { id: "g_repair", kind: "gen.repair", title: "Repair 1 problem", dependsOn: ["g_validate"], input: { problems: [{ kind: "count", message: "6 missing" }], criteria: ["questions>=10"], slotBlocks, round: 1 }, status: "running" }, deps: {}, draft, summary: { goal: "g", deliverables: [], constraints: [], decisions: [], sourceTurnIds: [] }, ai: async () => { modelCalls++; return { ok: false, kind: "output_limit", message: "" }; }, deadlineMs: Date.now() + 1e4, signal: new AbortController().signal } as never;
+  const r = await repair.run(ctx);
+  assert.equal(modelCalls, 0, "the failing giant prompt is not sent again");
+  assert.equal(r.status, "split", JSON.stringify(r).slice(0, 300));
+  const kids = (r as { replaceWith: { kind: string; title: string; input: Record<string, unknown> }[] }).replaceWith;
+  assert.deepEqual(kids.filter((k) => k.kind === "gen.batch_repair").map((k) => k.title), ["Write the missing questions Q5–Q9", "Write the missing question Q10"], "the six missing questions are named and written five at a time");
+  assert.ok(kids.some((k) => k.kind === "gen.validate"), "and checked again afterwards");
 });

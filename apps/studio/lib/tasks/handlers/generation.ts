@@ -71,7 +71,19 @@ function onAiFailure(ctx: StepContext, f: AiFailure, split?: () => StepResult | 
   switch (f.kind) {
     case "output_limit": case "context_limit": {
       const s = split?.();
-      return s ?? { status: "failed", reason: `${f.message} — this step is already a single unit and cannot be made smaller`, permanent: true };
+      if (s) return s;
+      /*
+       * SELF-CORRECTION, NOT A REPEAT (2026-11-07). A single unit that is too long for one answer used to fail at
+       * once ("cannot be made smaller") — or, retried, fail again the same way. The strategy changes instead: ONE
+       * revised attempt with the largest output budget the provider allows and an instruction to write only the
+       * changed fields of the named items. If that is still too long, it stops and says so.
+       */
+      const inp = ctx.step.input as { maxTokens?: number; concise?: boolean };
+      if (f.kind === "output_limit" && !inp.concise) {
+        const bigger = Math.min(MAX_OUTPUT_TOKENS, Math.max(8000, (inp.maxTokens ?? 8000) * 2));
+        return { status: "split", reason: `the answer was longer than the output limit — retrying once with a ${bigger}-token budget and only the changed fields`, replaceWith: [{ ...ctxSpecOf(ctx), id: `${ctx.step.id}x`, title: `${ctx.step.title} (shorter answer, larger budget)`, input: { ...ctx.step.input, maxTokens: bigger, concise: true } }] };
+      }
+      return { status: "failed", reason: `${f.message} Tried: a larger output budget and changed-fields-only answers. The item is still too large for one answer — split it by hand or simplify the request.`, permanent: true };
     }
     case "rate_limit": case "provider_outage": case "unknown": case "network": {
       if (timedOut && ctx.attempt >= 1) { const s = split?.(); if (s) return s; }
@@ -85,6 +97,12 @@ function onAiFailure(ctx: StepContext, f: AiFailure, split?: () => StepResult | 
     default: return { status: "failed", reason: f.message, permanent: false };
   }
 }
+
+/** the instruction a self-corrected step adds after an answer that was too long */
+const conciseNote = (ctx: StepContext): string => ((ctx.step.input as { concise?: boolean }).concise ? "\n\nYOUR PREVIOUS ANSWER WAS TOO LONG. Write ONLY the actions needed, with ONLY the fields that change — no explanations, no restating unchanged text or options, no extra actions." : "");
+/** the largest answer the providers in use allow for one call (the budget a self-corrected step asks for) */
+const MAX_OUTPUT_TOKENS = 32000;
+const ctxSpecOf = (ctx: StepContext): TaskStepSpec => ({ id: ctx.step.id, kind: ctx.step.kind, title: ctx.step.title, dependsOn: ctx.step.dependsOn.filter((d) => d !== ctx.step.id), input: ctx.step.input, ...(ctx.step.parallelGroup ? { parallelGroup: ctx.step.parallelGroup } : {}), ...(ctx.step.modelTier ? { modelTier: ctx.step.modelTier } : {}) });
 
 const ok = (actions: unknown[], data: unknown, warnings: string[] = []): StepResult => ({ status: "completed", output: { actions, data, validation: { ok: true, errors: [], warnings: [...new Set(warnings)].slice(0, 20) } } });
 const actionsOf = (v: unknown): unknown[] => (Array.isArray(v) ? v : v && typeof v === "object" && Array.isArray((v as { actions?: unknown }).actions) ? (v as { actions: unknown[] }).actions : []);
@@ -418,7 +436,7 @@ async function runBatch(ctx: StepContext): Promise<StepResult> {
   const sameCodes = listBlocks((draft.flow ?? []) as unknown[]).filter((b) => blockTitles.has((b.title ?? "").toLowerCase())).flatMap((b) => b.pages.flatMap((p) => p.node.questionIds)).map((id) => draft.questions.find((q) => q.id === id)?.code).filter((c): c is string => !!c && (!planned.has(up(c)) || kept.has(up(c))));
   const sameSection = questionDigest(draft, sameCodes.slice(-30), 30);
   const exam = input.assessment ?? null;
-  const prompt = batchPrompt(ctx.summary, { slots, sections: input.sections ?? [], total: input.total ?? slots.length, assessment: exam, sameSection, round: input.round ?? 0, errors: input.errors });
+  const prompt = batchPrompt(ctx.summary, { slots, sections: input.sections ?? [], total: input.total ?? slots.length, assessment: exam, sameSection, round: input.round ?? 0, errors: input.errors }) + conciseNote(ctx);
   const r = await ctx.ai({ purpose: "gen.batch", system: COPILOT_SYSTEM_PROMPT, prompt, schema: COPILOT_REPLY_SCHEMA, maxTokens: input.maxTokens ?? batchMaxTokens(slots, !!exam), tier: ctx.step.modelTier ?? "standard", guides: input.guides ?? [] });
   const split = (): StepResult | null => {
     const halves = splitSlots(slots);
@@ -649,8 +667,8 @@ async function runValidate(ctx: StepContext): Promise<StepResult> {
   const baseline = new Set(input.baseline ?? []);
   const errors = rep.errors.filter((e) => !baseline.has(e.message));
   if (!errors.length) return ok(ordered.actions, { report: rep.stats, criteria: input.criteria, ...(ordered.actions.length ? { reordered: ordered.actions.length } : {}) }, rep.warnings.slice(0, 15));
-  /* a plan that carries its slots gets TARGETED repairs (2026-11-07); an older plan keeps the single repair step */
-  if (Array.isArray((input as { slots?: unknown }).slots)) {
+  /* TARGETED repairs (2026-11-07) — for older plans too: their planned codes and blocks are on the step */
+  {
     const t = targetedRepairs(ctx, draft, errors, input as unknown as ValidateInput);
     if (t) return t;
   }
@@ -658,7 +676,7 @@ async function runValidate(ctx: StepContext): Promise<StepResult> {
   return r.status === "repair" ? { ...r, output: { ...r.output, actions: ordered.actions } } : r;
 }
 
-interface ValidateInput { criteria: string[]; slotBlocks: Record<string, string>; assessment?: boolean; baseline?: string[]; slots: SkeletonSlot[]; sections: BatchInput["sections"]; exam?: BatchInput["assessment"]; total?: number; round?: number }
+interface ValidateInput { criteria: string[]; slotBlocks: Record<string, string>; assessment?: boolean; baseline?: string[]; slots?: SkeletonSlot[]; sections: BatchInput["sections"]; exam?: BatchInput["assessment"]; total?: number; round?: number }
 
 /** how many repair rounds the final check may order before it reports what is left (each round is small and targeted) */
 const MAX_VALIDATE_ROUNDS = 3;
@@ -683,9 +701,12 @@ const PROBLEM_CHUNK = 4;
  */
 function targetedRepairs(ctx: StepContext, draft: Def, errors: DeliverableError[], input: ValidateInput): StepResult | null {
   const round = input.round ?? 0;
-  if (round >= MAX_VALIDATE_ROUNDS) return { status: "failed", permanent: true, reason: `Still not fully valid after ${round} repair rounds — left for you to review: ${errors.slice(0, 4).map((e) => e.message).join("; ")}${errors.length > 4 ? ` (+${errors.length - 4} more)` : ""}. Everything that was repaired is kept and can be applied.` };
+  /* the last round REPORTS (the check completes with what is left) — so the steps after it (the answer-key check) still run and the final report is complete */
+  if (round >= MAX_VALIDATE_ROUNDS) return { status: "completed", output: { actions: [], data: { unresolved: errors.map((e) => e.message) }, validation: { ok: false, errors: [`Still not fully valid after ${round} repair rounds — left for you to review: ${errors.slice(0, 4).map((e) => e.message).join("; ")}${errors.length > 4 ? ` (+${errors.length - 4} more)` : ""}. Everything that was repaired is kept and can be applied.`, ...errors.map((e) => e.message).slice(0, 30)], warnings: [] } } };
   const have = new Set(draft.questions.map((q) => up(String(q.code))));
-  const missingSlots = (input.slots ?? []).filter((sl) => !have.has(up(sl.code)));
+  /* a plan made before the slots were carried still has every planned code and its block */
+  const slotsAll: SkeletonSlot[] = input.slots?.length ? input.slots : Object.entries(input.slotBlocks ?? {}).map(([code, block], i) => ({ n: i + 1, code, variable: code, block, section: 0, complexity: "simple" as const }));
+  const missingSlots = slotsAll.filter((sl) => !have.has(up(sl.code)));
   const missingCodes = new Set(missingSlots.map((sl) => up(sl.code)));
   const repairable = errors.filter((e) => e.repair !== "none" && e.kind !== "count" && !(e.kind === "missing_code" && e.code && missingCodes.has(up(e.code))));
   const base = ctx.step.id.replace(/(?:v\d+)?$/, "");
@@ -696,7 +717,7 @@ function targetedRepairs(ctx: StepContext, draft: Def, errors: DeliverableError[
     children.push({
       id: `${base}m${round + 1}_${children.length + 1}`, kind: "gen.batch_repair", title: `Write the missing ${chunk.length === 1 ? "question" : "questions"} ${chunk[0].code}${chunk.length > 1 ? `–${chunk[chunk.length - 1].code}` : ""}`,
       dependsOn: [], parallelGroup: "repair", modelTier: "standard",
-      input: { slots: chunk, sections: (input.sections ?? []).filter((sec) => secIdx.has(sec.index)), total: input.total ?? input.slots.length, guides: [], maxTokens: batchMaxTokens(chunk, !!input.exam), assessment: input.exam ?? null, round: 0, ...unitsOf(chunk.map((c) => c.code)) },
+      input: { slots: chunk, sections: (input.sections ?? []).filter((sec) => secIdx.has(sec.index)), total: input.total ?? slotsAll.length, guides: [], maxTokens: batchMaxTokens(chunk, !!input.exam), assessment: input.exam ?? (input.assessment ? { perQuestion: true, optionsCount: 4 } : null), round: 0, targeted: true, ...unitsOf(chunk.map((c) => c.code)) },
     });
   }
   /* question problems, grouped by question, a few questions to a step */
@@ -743,12 +764,25 @@ async function runRepair(ctx: StepContext): Promise<StepResult> {
   const input = ctx.step.input as { problems: DeliverableError[]; criteria: string[]; slotBlocks: Record<string, string>; baseline?: string[]; round: number };
   const draft = ctx.draft as Def;
   const problems = input.problems ?? [];
+  /*
+   * AN OLD-STYLE REPAIR RE-PLANS ITSELF (2026-11-07). A repair made before targeted repairs existed carries every
+   * problem at once (and "N missing" without codes). Run as it is, it fails the same way every time; so on any
+   * attempt it re-checks the survey as it is NOW and turns into the small targeted repairs and a fresh check —
+   * which also rescues a task stopped on such a step: Retry runs this.
+   */
+  if (!(ctx.step.input as { scoped?: boolean }).scoped) {
+    const assessNow = assessmentCheck();
+    const nowErrors = validateSurveyDeliverable(draft, parseCompletionCriteria(input.criteria ?? []), assessNow ? { assessment: assessNow } : {}).errors.filter((e) => !(input.baseline ?? []).includes(e.message));
+    if (!nowErrors.length) return ok([], { fixed: problems.length, note: "already resolved by the steps before it" });
+    const t = targetedRepairs(ctx, draft, nowErrors, { criteria: input.criteria, slotBlocks: input.slotBlocks, baseline: input.baseline, round: Math.max(0, (input.round ?? 1) - 1) } as ValidateInput);
+    if (t) return t;
+  }
   const missing = problems.filter((p) => p.kind === "missing_code" && p.code && input.slotBlocks?.[p.code]).map((p) => ({ code: p.code!, block: input.slotBlocks[p.code!] }));
   const involved = [...new Set(problems.map((p) => p.code).filter((c): c is string => !!c))];
   const existing = involved.filter((c) => draft.questions.some((q) => up(String(q.code)) === up(c)));
   const digest = questionDigest(draft, existing, 60);
   const guides: GuideId[] = [...(problems.some((p) => p.kind === "design") ? ["methods" as GuideId] : []), ...(problems.some((p) => p.kind === "quota") ? ["quota" as GuideId] : [])];
-  const r = await ctx.ai({ purpose: "gen.repair", system: COPILOT_SYSTEM_PROMPT, prompt: repairPrompt(ctx.summary, { problems, digest, missing, round: input.round }), schema: COPILOT_REPLY_SCHEMA, maxTokens: Math.min(12000, 800 + 320 * Math.max(1, involved.length)), tier: "standard", guides });
+  const r = await ctx.ai({ purpose: "gen.repair", system: COPILOT_SYSTEM_PROMPT, prompt: repairPrompt(ctx.summary, { problems, digest, missing, round: input.round }) + conciseNote(ctx), schema: COPILOT_REPLY_SCHEMA, maxTokens: (ctx.step.input as { maxTokens?: number }).maxTokens ?? Math.min(12000, 800 + 320 * Math.max(1, involved.length)), tier: "standard", guides });
   if (!r.ok) return onAiFailure(ctx, r);
   const slots: SkeletonSlot[] = missing.map((m, i) => ({ n: i + 1, code: m.code, variable: m.code, block: m.block, section: 0, complexity: "simple" }));
   const FORBIDDEN = new Set(["delete_question", "delete_block", "create_block", "move_question", "create_randomizer", "create_branch", "create_loop", "set_research", "set_assessment"]);
@@ -811,9 +845,19 @@ function registerDesignSupport(): void {
 }
 
 const handler = (kind: string, run: (ctx: StepContext) => Promise<StepResult>): StepHandler => ({ kind, run });
+/**
+ * A TARGETED repair (one the final check ordered) that cannot succeed ENDS with its reason instead of failing the
+ * run — so the fresh check after it still runs and reports the survey as it really is. Its failure is kept as the
+ * step's validation message, never hidden.
+ */
+const softWhenTargeted = (run: (ctx: StepContext) => Promise<StepResult>) => async (ctx: StepContext): Promise<StepResult> => {
+  const r = await run(ctx);
+  if (r.status !== "failed" || (ctx.step.input as { targeted?: boolean }).targeted !== true || !r.permanent) return r;
+  return { status: "completed", output: { actions: [], data: { failed: r.reason }, validation: { ok: true, errors: [], warnings: [`Not written: ${r.reason}`] } } };
+};
 export const GENERATION_HANDLERS: StepHandler[] = [
   handler("gen.design", runDesign), handler("gen.skeleton", runSkeleton),
-  handler("gen.batch", runBatch), handler("gen.batch_repair", runBatch),
+  handler("gen.batch", runBatch), handler("gen.batch_repair", softWhenTargeted(runBatch)),
   handler("gen.logic", runLogic), handler("gen.logic_repair", runLogic),
   handler("gen.quotas", runQuotas), handler("gen.quotas_repair", runQuotas),
   handler("gen.randomization", runRandomization),

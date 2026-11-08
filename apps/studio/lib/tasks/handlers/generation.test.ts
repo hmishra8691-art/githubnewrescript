@@ -109,7 +109,16 @@ test("handler: an output limit splits the batch in two (never a retry of the sam
   assert.deepEqual(parts.map((p) => p.id), [`${b1.id}a`, `${b1.id}b`]);
   assert.deepEqual(parts.flatMap((p) => (p.input.slots as { code: string }[]).map((s) => s.code)), (b1.input.slots as { code: string }[]).map((s) => s.code));
   const one = { ...b1, input: { ...b1.input, slots: (b1.input.slots as unknown[]).slice(0, 1) } };
-  assert.equal((await getStepHandler("gen.batch")!.run(ctxFor(one, draft, limit))).status, "failed");
+  /* a single question cannot be split: the strategy CHANGES once (bigger budget, changed fields only) — then it stops */
+  const once = await getStepHandler("gen.batch")!.run(ctxFor(one, draft, limit));
+  assert.equal(once.status, "split");
+  const redo = (once as { replaceWith: TaskStepSpec[] }).replaceWith;
+  assert.equal(redo.length, 1);
+  assert.equal(redo[0].input.concise, true);
+  assert.ok((redo[0].input.maxTokens as number) > ((one.input as { maxTokens?: number }).maxTokens ?? 0));
+  const again = await getStepHandler("gen.batch")!.run(ctxFor({ ...one, input: redo[0].input }, draft, limit));
+  assert.equal(again.status, "failed", "the same failure after the changed strategy is reported, not retried for ever");
+  assert.match((again as { reason: string }).reason, /Tried: a larger output budget/);
   const auth: AiFn = async () => ({ ok: false, kind: "auth", message: "key refused" });
   assert.deepEqual(await getStepHandler("gen.batch")!.run(ctxFor(b1, draft, auth)), { status: "blocked", reason: "key refused", needs: "auth" });
   const rl: AiFn = async () => ({ ok: false, kind: "rate_limit", message: "429", retryAfterMs: 7000 });

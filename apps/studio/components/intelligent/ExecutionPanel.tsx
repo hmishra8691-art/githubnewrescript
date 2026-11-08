@@ -199,7 +199,7 @@ export function ExecutionPanel({
               <td>{r.title}{r.inputRef ? <span className="iqi-dim"> · {r.inputRef}</span> : null}</td>
               <td><span className={`cp-sev v-${r.tone === "bad" ? "critical" : r.tone === "ok" ? "suggestion" : "warning"}`} title={STEP_WORD[r.status]} data-testid="ex-step-outcome">{r.outcome}</span></td>
               <td className="iqi-dim">{r.sizeUsed != null && r.size != null && r.sizeUsed !== r.size ? `${num(r.sizeUsed)} of ${num(r.size)}` : r.size != null ? num(r.size) : ""}</td>
-              <td className="iqi-dim">{r.retryCount > 0 ? `${num(r.retryCount)} earlier attempt${r.retryCount === 1 ? "" : "s"} failed` : ""}</td>
+              <td className="iqi-dim">{r.retryCount > 0 ? (r.status === "failed" ? `${num(r.retryCount)} attempt${r.retryCount === 1 ? "" : "s"}, all failed` : r.status === "completed" ? `succeeded after ${num(r.retryCount)} failed attempt${r.retryCount === 1 ? "" : "s"}` : `${num(r.retryCount)} attempt${r.retryCount === 1 ? "" : "s"} failed so far`) : ""}</td>
               <td className="iqi-dim">{r.seconds != null ? `${r.seconds}s` : ""}</td>
               <td className="iqi-dim">{r.validation === "invalid" ? (r.problems[0] ?? "did not validate") : r.failureMessage ?? ""}</td>
             </tr>

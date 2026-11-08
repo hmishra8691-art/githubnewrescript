@@ -81,6 +81,8 @@ export interface StepFailureInput {
   hint?: "invalid_output" | "context_limit" | "permanent";
   /** the caller's own retry budget, so the store does not overrule it with MAX_ATTEMPTS (audit M4) */
   maxAttempts?: number;
+  /** when THIS attempt started — so a row's duration is its last attempt's, not the time since its first claim (2026-11-07) */
+  attemptStartedAt?: number;
 }
 
 export interface CommitInput {
@@ -89,6 +91,8 @@ export interface CommitInput {
   validation?: ExecStep["validation"];
   batchSizeUsed?: number;
   idempotencyKey: string;
+  /** when the successful attempt started (the row's startedAt becomes this, so its duration is the real one) */
+  attemptStartedAt?: number;
 }
 
 export interface TaskStore {
@@ -567,6 +571,7 @@ export class MemoryTaskStore implements TaskStore {
     }
     t.committed.set(out.idempotencyKey, stepId);
     s.status = "completed";
+    if (out.attemptStartedAt) s.startedAt = out.attemptStartedAt;
     s.output = out.output;
     s.usage = out.usage ? { ...out.usage } : s.usage;
     s.validation = out.validation ?? s.validation;
@@ -591,6 +596,7 @@ export class MemoryTaskStore implements TaskStore {
     s.failureKind = kind;
     s.failureMessage = scrubSecrets(failure.message);
     s.status = failure.retryable && !isTerminalFailure(kind) && s.retryCount < (failure.maxAttempts ?? MAX_ATTEMPTS) ? "retrying" : "failed";
+    if (failure.attemptStartedAt) s.startedAt = failure.attemptStartedAt;
     s.finishedAt = Date.now();
     t.claimedAt.delete(stepId);
     t.updatedAt = Date.now();
@@ -919,6 +925,7 @@ class SupabaseTaskStore implements TaskStore {
       model: out.usage?.model ?? null,
       failure_kind: null, failure_message: null, claimed_at: null,
       finished_at: new Date().toISOString(),
+      ...(out.attemptStartedAt ? { started_at: new Date(out.attemptStartedAt).toISOString() } : {}),
     };
     const { data, error } = await db.from(STEPS).update(patch).eq("task_id", taskId).eq("step_id", stepId).neq("status", "completed").select("*").maybeSingle();
     if (error) throw new Error(error.message);
@@ -976,6 +983,7 @@ class SupabaseTaskStore implements TaskStore {
     const { data, error } = await db.from(STEPS).update({
       status, failure_kind: kind, failure_message: scrubSecrets(failure.message),
       retry_count: retryCount, claimed_at: null, finished_at: new Date().toISOString(),
+      ...(failure.attemptStartedAt ? { started_at: new Date(failure.attemptStartedAt).toISOString() } : {}),
     }).eq("task_id", taskId).eq("step_id", stepId).select("*").maybeSingle();
     if (error) throw new Error(error.message);
     if (!data) throw new Error("taskStore: no such step");

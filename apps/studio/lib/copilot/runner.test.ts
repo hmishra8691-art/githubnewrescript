@@ -102,12 +102,15 @@ function memoryStore(task: ExecTask, now: () => number): MemStore {
       row.usage = out.usage;
       row.validation = out.validation;
       if (out.batchSizeUsed != null) row.batchSizeUsed = out.batchSizeUsed;
+      if (out.attemptStartedAt) row.startedAt = out.attemptStartedAt;
       row.finishedAt = now();
       leases.delete(stepId);
       return clone(row);
     },
-    async fail(_id: string, stepId: string, f: { kind: StepFailureKind; message: string; retryable: boolean }) {
+    async fail(_id: string, stepId: string, f: { kind: StepFailureKind; message: string; retryable: boolean; attemptStartedAt?: number }) {
       const row = find(stepId);
+      if (f.attemptStartedAt) row.startedAt = f.attemptStartedAt;
+      row.finishedAt = now();
       row.failureKind = f.kind;
       row.failureMessage = f.message;
       row.retryCount = (row.retryCount ?? 0) + (f.retryable ? 1 : 0);
@@ -456,9 +459,10 @@ test("the deliverable spec is the only gate on `completed`", async () => {
     budgetMs: 300_000, store, buildStep: s.build, now: clock.now, sleep: clock.sleep, minStepMs: 10,
     check: () => ({ ok: false, problems: ["64 of 100 questions"], measured: { questions: 64, required: 100 } }),
   });
-  assert.equal(r.status, "running", "every step done is not the same as the request delivered");
+  assert.equal(r.status, "needs_attention", "every step done is not the same as the request delivered — and nothing is left to run, so it waits for the researcher instead of looking busy for ever");
+  assert.notEqual(store.raw().status, "completed");
   assert.deepEqual(r.report?.problems, ["64 of 100 questions"]);
-  assert.equal(store.raw().status, "running");
+  assert.match(store.raw().blocked?.message ?? "", /Every step ran; 1 problem remains \(64 of 100 questions\)/);
 });
 
 test("the model is told a persisted summary and a tier, never the whole brief again", async () => {
@@ -594,4 +598,18 @@ test("one step that cannot succeed does not stop the others: independent steps s
   assert.equal(store.rows().find((x) => x.stepId === "a")!.status, "failed");
   assert.equal(store.raw().status, "failed", "nothing left that can run: the task stops instead of hanging");
   assert.match(store.raw().report?.problems[0] ?? "", /could not be completed\. The 2 completed steps are kept/);
+});
+
+test("EXECUTION LOGS TELL THE TRUTH: a step's duration is its last attempt, not the time since it was first claimed", async () => {
+  const clock = virtualClock();
+  const store = memoryStore(taskOf(["a"]), clock.now);
+  let n = 0;
+  const build: BuildStep = async () => { n++; await clock.sleep(n === 1 ? 400_000 : 40_000); return { output: { built: "a" } }; };
+  await runSlice("t1", { budgetMs: 780_000, store, buildStep: build, now: clock.now, sleep: clock.sleep });
+  await clock.sleep(1_000_000); /* the task sat for a long while before the retry was picked up */
+  await runSlice("t1", { budgetMs: 780_000, store, buildStep: build, now: clock.now, sleep: clock.sleep, check: PASSES });
+  const row = store.rows()[0];
+  assert.equal(row.status, "completed");
+  const secs = Math.round(((row.finishedAt ?? 0) - (row.startedAt ?? 0)) / 1000);
+  assert.ok(secs >= 39 && secs <= 45, `the logged duration is the 40 s retry (got ${secs} s), not ~1340 s since the first claim`);
 });
