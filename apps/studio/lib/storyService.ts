@@ -52,7 +52,7 @@ export function storyDeps(db: SupabaseClient, opts: { userId?: string | null; su
         if (!(await aiReadyFor({ userId: opts.userId!, customerId: ctx.customerId }, opts.surveyId, "report_design"))) return null;
         /* the request's words and the current look — no report content, no data */
         const user = `Current design: ${describeDesign(current)}\nRequest: ${text.slice(0, 600)}`;
-        const m = await meteredAi(getMeter(), ctx, "AI_REQUEST", { estimateText: DESIGN_PATCH_INSTRUCTIONS + user, maxTokens: 300, operation: "report_design" }, () => completeJson(DESIGN_PATCH_INSTRUCTIONS, user, 300, { timeoutMs: 15_000 }));
+        const m = await meteredAi(getMeter(), ctx, "AI_REQUEST", { estimateText: DESIGN_PATCH_INSTRUCTIONS + user, maxTokens: 300, operation: "report_design" }, () => completeJson(DESIGN_PATCH_INSTRUCTIONS, user, 300, { timeoutMs: 75_000 }));
         return m.ok && m.value ? sanitizeDesignPatch(m.value) : null;
       },
     } : {}),

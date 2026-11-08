@@ -77,7 +77,7 @@ function onAiFailure(ctx: StepContext, f: AiFailure, split?: () => StepResult | 
       if (timedOut && ctx.attempt >= 1) { const s = split?.(); if (s) return s; }
       return { status: "retry", reason: f.message, ...(f.retryAfterMs ? { retryAfterMs: f.retryAfterMs } : {}) };
     }
-    case "invalid_output": return ctx.attempt < 2 ? { status: "retry", reason: f.message } : { status: "failed", reason: `the model's answer could not be read twice: ${f.message}`, permanent: false };
+    case "invalid_output": return ctx.attempt < 1 ? { status: "retry", reason: f.message } : { status: "failed", reason: `the model's answer could not be read twice: ${f.message}`, permanent: false };
     case "auth": return { status: "blocked", reason: f.message, needs: "auth" };
     case "config": return { status: "blocked", reason: f.message, needs: "config" };
     case "budget": return { status: "blocked", reason: f.message, needs: "budget" };

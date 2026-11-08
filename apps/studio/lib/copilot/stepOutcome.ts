@@ -18,8 +18,8 @@
 export type StepTone = "ok" | "warn" | "bad" | "busy" | "idle";
 export interface StepOutcome { label: string; tone: StepTone; final: boolean }
 
-/** the runner's attempt budget (lib/copilot/taskStore.ts MAX_ATTEMPTS) — kept here so this file has no server imports */
-export const ATTEMPTS = 3;
+/** automatic retries a step gets (lib/tasks/timing.ts STEP_RETRIES — one) — kept here so this file has no server imports */
+export const ATTEMPTS = 1;
 
 interface StepLike { status: string; retryCount?: number; validation?: { status?: string } | null | undefined }
 
@@ -30,10 +30,14 @@ export function stepOutcome(s: StepLike, taskStatus: string): StepOutcome {
     case "completed":
       if (s.validation?.status === "invalid") return { label: "Done — check failed", tone: "warn", final: true };
       return (s.retryCount ?? 0) > 0 ? { label: `Done — retry successful (${tries} attempts)`, tone: "ok", final: true } : { label: "Done", tone: "ok", final: true };
-    case "failed":
-      if (open && (s.retryCount ?? 0) < ATTEMPTS) return { label: `Failed attempt ${tries} — will retry`, tone: "warn", final: false };
-      return { label: `Failed after ${tries} attempt${tries === 1 ? "" : "s"}`, tone: "bad", final: true };
-    case "retrying": return open ? { label: `Retrying — attempt ${tries + 1}`, tone: "busy", final: false } : { label: `Stopped while retrying (${tries} attempts)`, tone: "bad", final: true };
+    case "failed": {
+      /* a failed row counts its failed attempts in retryCount (the store increments it on every failure) */
+      const failedTries = Math.max(1, s.retryCount ?? 0);
+      if (open && failedTries <= ATTEMPTS && (s.retryCount ?? 0) === 0) return { label: "Failed attempt 1 — will retry", tone: "warn", final: false };
+      return { label: `Failed after ${failedTries} attempt${failedTries === 1 ? "" : "s"}`, tone: "bad", final: true };
+    }
+    /* a retrying row has failed retryCount times; the next attempt is retryCount + 1 */
+    case "retrying": return open ? { label: `Retrying — attempt ${(s.retryCount ?? 0) + 1}`, tone: "busy", final: false } : { label: `Stopped while retrying (${Math.max(1, s.retryCount ?? 0)} failed attempt${(s.retryCount ?? 0) === 1 ? "" : "s"})`, tone: "bad", final: true };
     case "running": return open ? { label: "Running", tone: "busy", final: false } : { label: "Stopped while running", tone: "bad", final: true };
     case "blocked": return { label: "Blocked — waiting for you", tone: "warn", final: false };
     case "tombstoned": return { label: "Replaced by a revised plan", tone: "idle", final: true };

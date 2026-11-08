@@ -76,7 +76,7 @@ export function makeTaskAi(scope: TaskAiScope, a: MakeAiArgs): AiFn {
         ...(scope.consent ? { consent: scope.consent } : {}),
         estimateText: system.join("\n\n") + call.prompt, maxTokens: Math.min(call.maxTokens, 16_000), operation, tier, idempotencyKey: idem,
         meta: () => ({ workflowId: a.task.id, taskId: a.task.id, stepId, attempt: a.attempt, purpose: call.purpose.slice(0, 80), latencyMs: Date.now() - t0 }),
-      }, () => completeJson(system, call.prompt, call.maxTokens, { timeoutMs: Math.min(300_000, left - 500), deadline: a.deadline - 250, ...(call.schema ? { schema: call.schema as never } : {}), tier, continuations: 3, retries: 1, operation }));
+      }, () => completeJson(system, call.prompt, call.maxTokens, { timeoutMs: Math.max(1_000, left - 500), deadline: a.deadline - 250, ...(call.schema ? { schema: call.schema as never } : {}), tier, continuations: 3, retries: 1, operation }));
     } catch (e) {
       const f = classifyAiError(e);
       return fail(f.kind, f.message, f.retryAfterMs);

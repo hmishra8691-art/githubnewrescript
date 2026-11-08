@@ -15,6 +15,7 @@ import { getMeter, meteredAi } from "@/lib/metering";
 import { savedThemes, saveTheme, loadSelection, applySelection, resolveTheme, readStructure, brandOf } from "@/lib/reportThemesStore";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // 2026-11-07: 5× the old limit — no AI request fails at an arbitrary 60 s
 
 /**
  * REPORT THEMES (2026-10-18, docs/ARTIFACTS-AND-REPORT-THEMES-2026-10-18.md) —
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         let raw: unknown = fake;
         if (!raw) {
           const { data: s } = await db.from("surveys").select("customer_id").eq("id", params.id).maybeSingle();
-          const m = await meteredAi(getMeter(), { customerId: (s?.customer_id as string | null) ?? ctx.user.customerId ?? "", surveyId: params.id, userId: ctx.user.userId, environment: "TEST" }, "AI_REQUEST", { estimateText: THEME_PATCH_INSTRUCTIONS + user, maxTokens: 400, operation: "report_design" }, () => completeJson(THEME_PATCH_INSTRUCTIONS, user, 400, { timeoutMs: 15_000 })).catch((e: unknown) => ({ ok: false as const, message: e instanceof Error ? e.message : "the model call failed" }));
+          const m = await meteredAi(getMeter(), { customerId: (s?.customer_id as string | null) ?? ctx.user.customerId ?? "", surveyId: params.id, userId: ctx.user.userId, environment: "TEST" }, "AI_REQUEST", { estimateText: THEME_PATCH_INSTRUCTIONS + user, maxTokens: 400, operation: "report_design" }, () => completeJson(THEME_PATCH_INSTRUCTIONS, user, 400, { timeoutMs: 75_000 })).catch((e: unknown) => ({ ok: false as const, message: e instanceof Error ? e.message : "the model call failed" }));
           if (m.ok) raw = m.value; else model = { status: "failed", detail: m.message };
         }
         if (raw) {

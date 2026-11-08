@@ -66,7 +66,7 @@ export async function modelInterpretation(user: AuthedUser | null, surveyId: str
     else {
       const billing = await billingProjectFor(user, surveyId, "analytics.edit");
       if ("response" in billing) return { interpretation: null, status: "nothing", detail: "The workspace could not be charged for the model call, so no interpretation was written." };
-      const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 1500, operation: "analytics_interpretation" }, () => completeJson("You interpret survey results for a research team. Answer with JSON only.", prompt, 1500, { timeoutMs: 45_000 })).catch((e: unknown) => { failure = e instanceof Error ? e.message : "the model call failed"; return null; });
+      const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 1500, operation: "analytics_interpretation" }, () => completeJson("You interpret survey results for a research team. Answer with JSON only.", prompt, 1500, { timeoutMs: 225_000 })).catch((e: unknown) => { failure = e instanceof Error ? e.message : "the model call failed"; return null; });
       if (m && !m.ok) { if (m.reason === "ai_off") return { interpretation: null, status: "ai_off", detail: m.message }; failure = m.message; }
       if (m && m.ok) { raw = m.value; charge = m.event?.customerCharge ?? 0; await keepReply(opts.db, surveyId, key, raw); }
     }

@@ -144,9 +144,9 @@ export interface TaskStore {
 }
 
 /** the default reclaim window, in seconds — longer than the 165s route budget, so a live slice is never stolen from */
-export const STALE_SECONDS = 180;
+export const STALE_SECONDS = 900; // a step's lease outlives its longest clock (lib/tasks/timing.ts LEASE_SECONDS)
 /** how many times one step may be claimed before the claim stops offering it */
-export const MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = 2; // the first attempt and ONE automatic retry (lib/tasks/timing.ts STEP_RETRIES)
 /*
  * `fail()` decides `retrying` vs `failed` by comparing the row's count with a
  * bound. It used to use MAX_ATTEMPTS unconditionally, so a caller running

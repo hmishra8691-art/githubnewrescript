@@ -1,5 +1,6 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import { STEP_BUDGET_MS } from "@/lib/tasks/timing";
 import { timingSafeEqual } from "node:crypto";
 import { taskStoreFor } from "@/lib/copilot/taskStore";
 import { runSlice, stepBuilderFor, RECLAIM_SECONDS } from "@/lib/copilot/runner";
@@ -21,7 +22,7 @@ import { backgroundBuilderForTask, backgroundCheck, isHandlerTask } from "@/lib/
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 800; // lib/tasks/timing.ts ROUTE_MAX_SECONDS
 
 /**
  * A CONTINUATION PATH THAT IS NOT THE BROWSER.
@@ -48,11 +49,11 @@ export const maxDuration = 60;
  * reports that it skipped, and never pretends to have done work.
  */
 
-const BUDGET_MS = 45_000;
+const BUDGET_MS = 760_000; // 2026-11-07: the run lives 800 s; a slow step is not cut at 45 s any more
 /** a task is only this job's business once no worker has touched it for a reclaim window */
 const STALE_MS = RECLAIM_SECONDS * 1000;
-/** one task's slice, well inside BUDGET_MS so a second task still gets a turn */
-const SLICE_MS = 20_000;
+/** a task's slice: at least one first-attempt step clock (5 min), more when the run has it — a step is never cut to fit */
+const SLICE_MS = STEP_BUDGET_MS + 20_000;
 const TASKS = 10;
 
 function authorised(req: Request): boolean {
@@ -125,7 +126,7 @@ async function run(req: Request): Promise<NextResponse> {
          */
         const def = handlerTask ? null : await loadDefinition(t.surveyId);
         const r = await runSlice(t.id, {
-          budgetMs: SLICE_MS, store, buildStep,
+          budgetMs: Math.max(SLICE_MS, BUDGET_MS - (Date.now() - startedAt)), store, buildStep,
           ...(handlerTask ? { check: (cur: ExecTask) => backgroundCheck(cur) } : def ? { check: async (cur: ExecTask) => checkDeliverable(cur.deliverable, def) } : {}),
         });
         advanced++;

@@ -8,6 +8,7 @@ import { NORMALISE_SYSTEM_PROMPT, normaliseUserPrompt, coerceNormalised } from "
 import { understand } from "@/lib/agents/understand";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // 2026-11-07: 5× the old limit — no AI request fails at an arbitrary 60 s
 
 /**
  * POST /api/agents/understand { surveyId, text, english?, language?, definition } — what the researcher's sentence
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
         const billing = await billingProjectFor(authed, surveyId, "project.read");
         if (!("response" in billing)) {
           const prompt = normaliseUserPrompt(text, language ?? null);
-          const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: NORMALISE_SYSTEM_PROMPT + prompt, maxTokens: 300, operation: "intelligent_voice_normalise" }, () => completeJson(NORMALISE_SYSTEM_PROMPT, prompt, 300, { timeoutMs: 20_000 }));
+          const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: NORMALISE_SYSTEM_PROMPT + prompt, maxTokens: 300, operation: "intelligent_voice_normalise" }, () => completeJson(NORMALISE_SYSTEM_PROMPT, prompt, 300, { timeoutMs: 100_000 }));
           const n = m.ok ? coerceNormalised(m.value) : null;
           if (n) { english = n.english; if (n.language && n.language !== "und") language = n.language; }
         }

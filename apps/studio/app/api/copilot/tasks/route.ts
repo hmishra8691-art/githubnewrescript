@@ -4,6 +4,7 @@ import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { aiProviderName } from "@rescript/ai";
 import { notFound, taskAccess } from "@/lib/tasks/access";
 import { planForRequest, tasksEnabled, viewOf } from "@/lib/tasks/service";
+import { PLAN_BUDGET_MS } from "@/lib/tasks/timing";
 
 /**
  * THE EXECUTION ENGINE'S TASKS (2026-10-29 — docs/EXECUTION-ENGINE-2026-10-29.md).
@@ -13,7 +14,7 @@ import { planForRequest, tasksEnabled, viewOf } from "@/lib/tasks/service";
  */
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 800; // lib/tasks/timing.ts ROUTE_MAX_SECONDS
 
 const RESEARCH_PLANNERS = new Set(["analysis", "report", "decision"]);
 
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
     if (isFailure(ctx)) return ctx.response;
   }
   const options = body.options && typeof body.options === "object" && !Array.isArray(body.options) ? Object.fromEntries(Object.entries(body.options as Record<string, unknown>).filter(([, v]) => ["string", "number", "boolean"].includes(typeof v)).slice(0, 20)) : undefined;
-  const plan = await planForRequest({ store: a.store, scope: a.scope, surveyId: a.surveyId, message, definition: parsed.data, ...(a.customerId ? { customerId: a.customerId } : {}), ...(a.userId ? { createdBy: a.userId } : {}), deadline: Date.now() + 90_000, signal: req.signal, ...(planner ? { plannerId: planner } : {}), ...(options ? { options } : {}) });
+  const plan = await planForRequest({ store: a.store, scope: a.scope, surveyId: a.surveyId, message, definition: parsed.data, ...(a.customerId ? { customerId: a.customerId } : {}), ...(a.userId ? { createdBy: a.userId } : {}), deadline: Date.now() + PLAN_BUDGET_MS, signal: req.signal, ...(planner ? { plannerId: planner } : {}), ...(options ? { options } : {}) });
   if (!plan.ok) return plan.reason === "no_planner" ? notFound() : NextResponse.json({ ok: false, error: plan.message, code: plan.reason, errors: plan.errors ?? [] }, { status: 422 });
   return NextResponse.json({ ok: true, created: true, durable: a.store.durable, task: viewOf(plan.task), usage: { charge: plan.usage.charge } });
 }

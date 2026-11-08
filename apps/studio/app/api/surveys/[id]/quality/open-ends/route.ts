@@ -10,7 +10,7 @@ import { aiReadyFor } from "@/lib/byok/connect";
 import { billingProjectFor, meteredAi } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 600; // 2026-11-07: 5× the old limit — no AI request fails at an arbitrary 60 s
 
 /**
  * A LANGUAGE MODEL READS THE OPEN ENDS — AS EVIDENCE (Intelligent Mode IM6, 2026-11-06).
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const billing = await billingProjectFor(gate.user, params.id, "responses.manage");
   if ("response" in billing) return billing.response;
   const prompt = openEndPrompt(items, randomBytes(6).toString("hex"));
-  const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 120 * items.length + 200, operation }, () => completeJson("You check survey data quality. Answer with JSON only.", prompt, 160 * items.length + 400, { timeoutMs: 90_000 }))
+  const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 120 * items.length + 200, operation }, () => completeJson("You check survey data quality. Answer with JSON only.", prompt, 160 * items.length + 400, { timeoutMs: 450_000 }))
     .catch((e: unknown) => ({ ok: false as const, message: e instanceof Error ? e.message : "the model call failed" }));
   if (!m.ok) return NextResponse.json({ error: `The model could not read the answers: ${(m as { message?: string }).message ?? "refused"}` }, { status: 502 });
   const model = aiModelName("large");

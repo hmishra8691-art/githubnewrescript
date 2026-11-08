@@ -66,7 +66,7 @@ export async function propose(db: SupabaseClient, user: AuthedUser | null, surve
     const billing = await billingProjectFor(user, surveyId, "analytics.edit");
     if ("response" in billing) return { ...p, model: { status: "nothing", detail: "The workspace could not be charged for the model call." } };
     const prompt = `${ASK_INSTRUCTIONS}\n\n${askBrief(p.unread.join("\n"), ctx.variables)}`;
-    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 800, operation: "analytics_ask", tier: "small" }, () => completeJson("You translate analysis requests into a closed set of operations. Answer with JSON only.", prompt, 800, { timeoutMs: 30_000, tier: "small" })).catch(() => null);
+    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 800, operation: "analytics_ask", tier: "small" }, () => completeJson("You translate analysis requests into a closed set of operations. Answer with JSON only.", prompt, 800, { timeoutMs: 150_000, tier: "small" })).catch(() => null);
     /* the project's AI switch said no: say so, and let the rules' proposal stand (audit A-2) */
     if (m && !m.ok && m.reason === "ai_off") return { ...p, model: { status: "ai_off", detail: m.message } };
     raw = m && m.ok ? m.value : null;

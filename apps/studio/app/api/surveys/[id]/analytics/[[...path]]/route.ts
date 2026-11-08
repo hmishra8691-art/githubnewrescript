@@ -36,7 +36,7 @@ function environmentOf(envs: (string | null | undefined)[]): Environment {
 }
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300; // 2026-11-07: 5× the old limit — no AI request fails at an arbitrary 60 s
 
 /**
  * THE ANALYTICS API — one router for the module (§32, §33, §38).

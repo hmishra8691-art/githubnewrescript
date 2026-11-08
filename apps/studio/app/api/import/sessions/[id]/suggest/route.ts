@@ -8,7 +8,7 @@ import { importSessionStore } from "@/lib/import/sessionsServer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300; // 2026-11-07: 5× the old limit — no AI request fails at an arbitrary 60 s
 
 /**
  * AI SUGGESTIONS FOR AN IMPORT'S OPEN QUESTIONS (I6). Body: `{ surveyId }` (the project the call is billed to,
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const system = `${SUGGEST_SYSTEM_PROMPT}\n\n${UNTRUSTED_DATA_RULE}`;
   try {
     const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: system + user, maxTokens: 900, operation: "import_suggest" },
-      async () => aiProviderName() === "fake" ? fakeSuggest(canonical, open) : completeJson(system, user, 900, { timeoutMs: 45_000 }));
+      async () => aiProviderName() === "fake" ? fakeSuggest(canonical, open) : completeJson(system, user, 900, { timeoutMs: 225_000 }));
     if (!m.ok) return refusalResponse(m);
     const sug = coerceSuggestions(m.value, open);
     return NextResponse.json({ ok: true, clarifications: withSuggestions(asks, sug), suggested: sug.length, asked: open.length });

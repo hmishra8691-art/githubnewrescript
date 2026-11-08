@@ -60,7 +60,7 @@ registerPlanReadinessGate();
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 180;
+export const maxDuration = 800; // lib/tasks/timing.ts ROUTE_MAX_SECONDS
 
 /**
  * ONE COPILOT TURN (the copilot brief §15): reasoning → structured actions →
@@ -92,7 +92,7 @@ const CACHE = new Map<string, { at: number; value: unknown }>();
 const TTL = 15 * 60_000;
 
 /*
- * THE TIME THIS REQUEST HAS. The route may run 180 s (maxDuration); past that
+ * THE TIME THIS REQUEST HAS. The route may run 800 s (maxDuration; it was 180 s until 2026-11-07); past that
  * the platform answers for us with an error page that is not JSON — which is
  * how a long generation used to end in "the provider refused the request"
  * with nothing in it, and every item already built was lost. The route now
@@ -101,11 +101,11 @@ const TTL = 15 * 60_000;
  * is handed back as PENDING, with what is done, so the browser carries on in
  * the next request. Nothing is lost to a clock.
  */
-const ROUTE_BUDGET_MS = 165_000;
+const ROUTE_BUDGET_MS = 780_000; // 2026-11-07: 5× the old limits, inside the 800 s route (lib/tasks/timing.ts)
 /** the gate and the proposal need a few seconds after the last item */
 const GATE_RESERVE_MS = 15_000;
 /** the fewest ms left that justify starting another item (the slowest item so far, 1.5×, if more) */
-const MIN_ITEM_MS = 30_000;
+const MIN_ITEM_MS = 150_000;
 /*
  * ONE STAGE PER REQUEST, NOT ONE GENERATION PER REQUEST (2026-10-17). A build used to keep going while the
  * 165 s clock allowed, so a single HTTP request could stay open, silent, for almost three minutes — long
@@ -113,7 +113,7 @@ const MIN_ITEM_MS = 30_000;
  * with loops ended on "the connection was interrupted" with nothing kept). Past this many ms no new item is
  * started: what is built is handed back as a checkpoint and the browser asks for the next batch at once.
  */
-const STAGE_SOFT_MS = 90_000;
+const STAGE_SOFT_MS = 450_000;
 
 /** the first question a non-plan answer asked (a clarify reply's, or a plan's) — the ONE question a brief may get back */
 function firstQuestion(...raws: unknown[]): string | null {
@@ -306,7 +306,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
    * through to the single-turn path unchanged. The theme assistant, `stage: "plan" / "execute"`, `task: false`
    * and a scripted fake reply never come here (turnTask.ts).
    */
-  const asTask = await taskForTurn({ body, message, def, surveyId, scope: { meter, ctx, ...consent }, ...(ctx.customerId && ctx.customerId !== "sandbox" ? { customerId: ctx.customerId } : {}), ...(ctx.userId ? { userId: ctx.userId } : {}), deadline: startedAt + Math.min(ROUTE_BUDGET_MS, 90_000), signal: req.signal, mode }).catch((e: unknown) => {
+  const asTask = await taskForTurn({ body, message, def, surveyId, scope: { meter, ctx, ...consent }, ...(ctx.customerId && ctx.customerId !== "sandbox" ? { customerId: ctx.customerId } : {}), ...(ctx.userId ? { userId: ctx.userId } : {}), deadline: startedAt + Math.min(ROUTE_BUDGET_MS, 450_000), signal: req.signal, mode }).catch((e: unknown) => {
     console.warn("[rescript:copilot]", JSON.stringify({ event: "plan-first task failed; single-turn path", surveyId, error: ((e as Error)?.message ?? "").slice(0, 200) }));
     return null;
   });

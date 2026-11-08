@@ -23,6 +23,7 @@ import { makeTaskAi, type TaskAiScope } from "./aiServer.ts";
 import { createPlannedTask, handlerBuildStep, taskCheck, taskResult, type PlanOutcome, type TaskEngineDeps, type TaskResult } from "./engine.ts";
 import { registerAllTaskHandlers } from "./handlers/index.ts";
 import { setResearchBackend } from "./handlers/research.ts";
+import { SLICE_BUDGET_MS } from "./timing.ts";
 import { serverResearchBackend } from "./researchBackend";
 import { driveOf } from "../copilot/taskDrive.ts";
 
@@ -35,7 +36,7 @@ export const WORKER_ID = (G.__rescriptTaskWorker ??= `w-${randomBytes(4).toStrin
 
 const envInt = (name: string, dflt: number, min: number, max: number) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? Math.max(min, Math.min(max, Math.round(n))) : dflt; };
 /** how long one page-driven advance runs for (the page calls again; the cron carries on when nobody watches). Never the route's whole budget: a slice is one or two steps. */
-export const ADVANCE_BUDGET_MS = envInt("COPILOT_TASK_ADVANCE_MS", 60_000, 5_000, 90_000);
+export const ADVANCE_BUDGET_MS = SLICE_BUDGET_MS; // lib/tasks/timing.ts: 780 s of an 800 s request; a step keeps its own clock
 /** plan-first routing of non-trivial requests is on unless switched off */
 export const tasksEnabled = (env: Record<string, string | undefined> = process.env): boolean => (env.COPILOT_TASKS ?? "").trim().toLowerCase() !== "off";
 

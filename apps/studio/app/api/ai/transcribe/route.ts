@@ -7,7 +7,7 @@ import { NORMALISE_SYSTEM_PROMPT, normaliseUserPrompt, coerceNormalised, tidyTra
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 600; // 2026-11-07: 5× the old limit — no AI request fails at an arbitrary 60 s
 
 /**
  * A SPOKEN INSTRUCTION → TEXT → ENGLISH, for the Intelligent mode (UI upgrade §18–§21).
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
 
   /* 1. speech → text */
   const metered = await meteredSttCall(billing.meter, billing.ctx, "intelligent_voice", seconds, () =>
-    transcribe(bytes, { language: languageHint || undefined, fileName, mimeType, durationSeconds: seconds, timeoutMs: 60_000 }));
+    transcribe(bytes, { language: languageHint || undefined, fileName, mimeType, durationSeconds: seconds, timeoutMs: 300_000 }));
   if (!metered.ok) return refusalResponse(metered);
   const heard = { value: metered.value };
   if (!heard.value.ok) return NextResponse.json({ error: heard.value.reason, code: "stt_failed" }, { status: heard.value.status && heard.value.status >= 400 && heard.value.status < 600 ? 502 : 500 });
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
     try {
       const user = normaliseUserPrompt(text, language);
       const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: NORMALISE_SYSTEM_PROMPT + user, maxTokens: 300, operation: "intelligent_voice_normalise" },
-        () => completeJson(NORMALISE_SYSTEM_PROMPT, user, 300, { timeoutMs: 20_000 }));
+        () => completeJson(NORMALISE_SYSTEM_PROMPT, user, 300, { timeoutMs: 100_000 }));
       if (!m.ok) return refusalResponse(m);
       const n = coerceNormalised(m.value);
       if (n) { english = n.english; if (n.language && n.language !== "und") language = n.language; }

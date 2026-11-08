@@ -5,6 +5,7 @@ import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
 import { LOGIC_SYSTEM_PROMPT, coerceIntent, logicUserPrompt } from "@/lib/intelligent/ai";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // 2026-11-07: 5× the old limit — no AI request fails at an arbitrary 60 s
 
 /**
  * A SENTENCE ABOUT THE SURVEY → A STRUCTURED INTENT, for the programmer to review.
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
   const user = logicUserPrompt(context, text, selected);
   try {
     const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: LOGIC_SYSTEM_PROMPT + user, maxTokens: 300, operation: "logic_intent" },
-      () => completeJson(LOGIC_SYSTEM_PROMPT, user, 300, { timeoutMs: 20_000 }));
+      () => completeJson(LOGIC_SYSTEM_PROMPT, user, 300, { timeoutMs: 100_000 }));
     if (!m.ok) return refusalResponse(m);
     return NextResponse.json({ ok: true, intent: coerceIntent(m.value), usage: m.event ? { charge: m.event.customerCharge, tokens: m.event.quantity } : null });
   } catch (e) {

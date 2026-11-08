@@ -5,6 +5,7 @@ import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
 import { CUSTOM_LOGIC_SYSTEM_PROMPT, customLogicUserPrompt, coerceCustomLogic, guardCustomLogic, type CustomLogicItem } from "@/lib/import/customLogic";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // 2026-11-07: 5× the old limit — no AI request fails at an arbitrary 60 s
 
 /**
  * DEEP CUSTOM LOGIC ANALYSIS of one imported item (the import brief §9–§12,
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
   const system = `${CUSTOM_LOGIC_SYSTEM_PROMPT}\n\n${UNTRUSTED_DATA_RULE}`;
   try {
     const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: system + user, maxTokens: 700, operation: "import_custom_logic" },
-      () => completeJson(system, user, 700, { timeoutMs: 45_000 }));
+      () => completeJson(system, user, 700, { timeoutMs: 225_000 }));
     if (!m.ok) return refusalResponse(m);
     const g = guardCustomLogic(coerceCustomLogic(m.value), item);
     return NextResponse.json({ ok: true, analysis: g.analysis, ...(g.flagged ? { injection: { flagged: true, notice: "This code contains text that looks like instructions to the AI; it was treated as data and no rebuild is proposed from it." } } : {}), usage: m.event ? { charge: m.event.customerCharge } : null });

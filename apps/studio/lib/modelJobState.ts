@@ -9,10 +9,10 @@
  * and releases the lease. The chain state never leaves the server.
  */
 
-/** time one request spends advancing the chains — maxDuration is 60 s, the rest is loading the dataset and saving */
-export const CHUNK_MS = 40_000;
+/** time one request spends advancing the chains — the analytics route may run 300 s (2026-11-07, 5× the old 60 s); the rest is loading the dataset and saving */
+export const CHUNK_MS = 200_000;
 /** a lease outlives one request, so a crashed request's lease expires on its own */
-export const LEASE_MS = 65_000;
+export const LEASE_MS = 325_000;
 
 export type ModelJobStatus = "running" | "done" | "failed" | "refused" | "cancelled";
 

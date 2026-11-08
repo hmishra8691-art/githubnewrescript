@@ -443,7 +443,7 @@ test("no estimate where one is not defensible, and no spend claimed where the us
 test("a failed batch shows recovering or needs attention — never success", () => {
   const retrying = executionView(task([
     step({ stepId: "a", status: "completed" }),
-    step({ stepId: "b", status: "failed", failureKind: "rate_limited", failureMessage: "the provider asked us to slow down", retryCount: 1 }),
+    step({ stepId: "b", status: "retrying", failureKind: "rate_limited", failureMessage: "the provider asked us to slow down", retryCount: 1 }),
     step({ stepId: "c", status: "pending" }),
   ]));
   assert.equal(retrying.phase, "recovering");

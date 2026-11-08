@@ -388,36 +388,46 @@ test("a terminal failure stops the step, preserves the task, and says something 
   assert.equal(store.raw().report?.problems.length, 1);
 });
 
-test("a SLOW FIRST STEP returns a checkpoint instead of running to the route budget", async () => {
+test("a SLOW STEP IS NOT CUT AT AN ARBITRARY LIMIT: a 150 s step finishes (it used to be stopped at 90 s and retried forever)", async () => {
   const clock = virtualClock();
   const store = memoryStore(taskOf(["a", "b", "c"]), clock.now);
-  let aborted = false;
-  const build: BuildStep = async (_s, ctx) => {
-    ctx.signal?.addEventListener("abort", () => { aborted = true; });
-    await clock.sleep(150_000);          // the item that sat open to ~160 s on main
-    return { output: { built: "a" } };
-  };
-  const r = await runSlice("t1", { budgetMs: 165_000, store, buildStep: build, now: clock.now, sleep: clock.sleep });
-  assert.ok(clock.now() <= 90_000, `the slice ended at ${clock.now()}ms, at the 90 s cap — not at the route budget`);
-  assert.equal(r.stoppedBy, "soft_stop");
-  assert.equal(r.budgetSpent, true);
-  assert.deepEqual(r.built, [], "nothing was built — and that is said, not hidden");
-  assert.deepEqual(r.remaining, ["a", "b", "c"], "a checkpoint: everything is still to do, nothing is lost");
-  assert.equal(aborted, true, "the build was told to stop paying for itself");
-  assert.equal(store.rows()[0].status, "retrying", "the step is kept for the next slice");
-  assert.equal(store.rows()[0].retryCount, 1);
+  const build: BuildStep = async () => { await clock.sleep(150_000); return { output: { built: "x" } }; };
+  const r = await runSlice("t1", { budgetMs: 780_000, store, buildStep: build, now: clock.now, sleep: clock.sleep });
+  assert.ok(r.built.includes("a"), "the slow step completed");
+  assert.equal(store.rows()[0].status, "completed");
+  assert.equal(store.rows()[0].retryCount, 0, "no attempt was spent on a clock");
 });
 
-test("no single step may outlast the stage cap, whatever it is the first or the third", async () => {
+test("a step's own clock: 5 minutes first, then ONE retry with the request's whole lifetime — the retry completes a 400 s step", async () => {
   const clock = virtualClock();
-  const store = memoryStore(taskOf(["a", "b", "c", "d"]), clock.now);
+  const store = memoryStore(taskOf(["a"]), clock.now);
+  let aborted = 0;
+  const build: BuildStep = async (_s, ctx) => {
+    ctx.signal?.addEventListener("abort", () => { aborted++; });
+    await clock.sleep(400_000);
+    return { output: { built: "a" } };
+  };
+  const first = await runSlice("t1", { budgetMs: 780_000, store, buildStep: build, now: clock.now, sleep: clock.sleep });
+  assert.ok(clock.now() <= 301_000, `the first attempt was given its 300 s clock (ended at ${clock.now()} ms)`);
+  assert.equal(aborted, 1, "the overrun build was told to stop");
+  assert.deepEqual(first.built, []);
+  assert.equal(store.rows()[0].status, "retrying");
+  assert.equal(store.rows()[0].retryCount, 1);
+  const second = await runSlice("t1", { budgetMs: 780_000, store, buildStep: build, now: clock.now, sleep: clock.sleep, check: PASSES });
+  assert.deepEqual(second.built, ["a"], "the retry had the long clock and finished");
+  assert.equal(store.rows()[0].status, "completed");
+});
+
+test("a slice keeps starting steps while a full step clock fits, then hands back at the soft stop — no step is ever cut to fit", async () => {
+  const clock = virtualClock();
+  const store = memoryStore(taskOf(["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n"]), clock.now);
   const s = scripted({ ms: 40_000, clock });
-  const r = await runSlice("t1", { budgetMs: 165_000, store, buildStep: s.build, now: clock.now, sleep: clock.sleep });
-  assert.deepEqual(r.built, ["a", "b"], "two 40 s steps fit inside the 90 s cap");
-  assert.ok(clock.now() < 165_000, `ended at ${clock.now()}ms, well inside the route budget`);
+  const r = await runSlice("t1", { budgetMs: 780_000, store, buildStep: s.build, now: clock.now, sleep: clock.sleep });
+  assert.ok(r.built.length >= 11 && r.built.length <= 12, `built ${r.built.length} 40 s steps before the 450 s soft stop`);
+  assert.ok(clock.now() <= 520_000);
   assert.equal(r.budgetSpent, true);
-  assert.ok(r.remaining.length >= 2);
-  assert.equal(taskProgress(store.raw()).completed, 2);
+  assert.equal(taskProgress(store.raw()).completed, r.built.length);
+  assert.ok(store.rows().every((x) => x.retryCount === 0), "nothing was cut");
 });
 
 test("a slice spends only its own budget and hands the rest back", async () => {

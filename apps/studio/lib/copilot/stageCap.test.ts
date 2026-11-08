@@ -50,12 +50,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const route = readFileSync(join(here, "..", "..", "app", "api", "copilot", "turn", "route.ts"), "utf8");
 const loop = route.slice(route.indexOf("if (!finalize) for (let i = 0"), route.indexOf("const failedIds"));
 
-test("the budgets are unchanged: 165 s route, 90 s stage, 15 s gate reserve, 30 s minimum item", () => {
-  assert.match(route, /const ROUTE_BUDGET_MS = 165_000;/, "the route clock is not raised");
-  assert.match(route, /const STAGE_SOFT_MS = 90_000;/, "the stage cap is still 90 s");
+test("the budgets are 5× the old ones (2026-11-07): 780 s route inside an 800 s function, 450 s stage, 15 s gate reserve, 150 s minimum item", () => {
+  assert.match(route, /const ROUTE_BUDGET_MS = 780_000;/, "the route clock was raised 5× (from 165 s)");
+  assert.match(route, /const STAGE_SOFT_MS = 450_000;/, "the stage cap is 5× 90 s");
   assert.match(route, /const GATE_RESERVE_MS = 15_000;/);
-  assert.match(route, /const MIN_ITEM_MS = 30_000;/);
-  assert.match(route, /export const maxDuration = 180;/);
+  assert.match(route, /const MIN_ITEM_MS = 150_000;/);
+  assert.match(route, /export const maxDuration = 800;/);
 });
 
 test("the stop test is ONE statement and stays behind `newlyBuilt.length`", () => {

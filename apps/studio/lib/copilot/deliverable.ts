@@ -830,7 +830,9 @@ export function executionView(
         ? `${terminal[0].title ?? terminal[0].stepId}: ${terminal[0].failureMessage ?? "this step cannot succeed as written"}`
         : failedSteps.length
           ? `${failedSteps[0].title ?? failedSteps[0].stepId}: ${failedSteps[0].failureMessage ?? "failed"} — retrying.`
-          : null,
+          : retrying.length
+            ? `${retrying[0].title ?? retrying[0].stepId}: ${retrying[0].failureMessage ?? "the first attempt failed"} — its one retry runs next, with a longer clock.`
+            : null,
     },
     spend: { ...spendRaw, real: spendReal },
     estimate,

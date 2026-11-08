@@ -24,9 +24,9 @@ import { advancedTick } from "@/lib/advancedModels";
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300; // 2026-11-07: 5× the old 60 s
 
-const BUDGET_MS = 45_000;
+const BUDGET_MS = 260_000;
 const MAX_SURVEYS = 200;
 
 function authorised(req: Request): boolean {

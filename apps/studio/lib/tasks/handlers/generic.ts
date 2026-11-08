@@ -128,7 +128,7 @@ async function batchCall(ctx: StepContext, purpose: string, prompt: string, maxT
   const r = await ctx.ai({ purpose, prompt, schema: COPILOT_REPLY_SCHEMA, maxTokens, tier: ctx.step.modelTier ?? "standard" });
   if (r.ok) return { value: r.value };
   if ((r.kind === "output_limit" || r.kind === "context_limit") ) { const parts = splitInto(); if (parts) return { status: "split", replaceWith: parts, reason: `${r.kind}: ${r.message}` }; }
-  if (r.kind === "invalid_output" && ctx.attempt < 2) return { status: "retry", reason: `invalid_output: ${r.message}`, retryAfterMs: 500 };
+  if (r.kind === "invalid_output" && ctx.attempt < 1) return { status: "retry", reason: `invalid_output: ${r.message}`, retryAfterMs: 500 };
   return resultForFailure(r);
 }
 
@@ -162,9 +162,9 @@ export const generateHandler = {
     /* a code the model renamed is still a question made: count by number, and name the difference as a warning */
     const missing = codes.filter((x) => !made.has(x)).slice(0, Math.max(0, codes.length - made.size));
     const renamed = made.size >= codes.length ? codes.filter((x) => !made.has(x)) : [];
-    if (!c.actions.length) return ctx.attempt < 2 ? { status: "retry", reason: "invalid_output: the answer had no usable question", retryAfterMs: 500 } : { status: "failed", reason: `invalid_output: no usable question for ${codes[0]}–${codes.at(-1)} (${c.errors.slice(0, 2).join("; ")})`, permanent: false };
+    if (!c.actions.length) return ctx.attempt < 1 ? { status: "retry", reason: "invalid_output: the answer had no usable question", retryAfterMs: 500 } : { status: "failed", reason: `invalid_output: no usable question for ${codes[0]}–${codes.at(-1)} (${c.errors.slice(0, 2).join("; ")})`, permanent: false };
     /* nothing made at all is not a completed step, whatever else the answer did */
-    if (!made.size) return ctx.attempt < 2 ? { status: "retry", reason: `invalid_output: no question was created (${c.errors.slice(0, 2).join("; ") || "the answer made none"})`, retryAfterMs: 500 } : { status: "failed", reason: `invalid_output: no question created for ${codes[0]}–${codes.at(-1)} (${c.errors.slice(0, 2).join("; ")})`, permanent: false };
+    if (!made.size) return ctx.attempt < 1 ? { status: "retry", reason: `invalid_output: no question was created (${c.errors.slice(0, 2).join("; ") || "the answer made none"})`, retryAfterMs: 500 } : { status: "failed", reason: `invalid_output: no question created for ${codes[0]}–${codes.at(-1)} (${c.errors.slice(0, 2).join("; ")})`, permanent: false };
     return { status: "completed", output: { actions: c.actions, validation: { ok: missing.length === 0, errors: missing.length ? [`missing ${missing.join(", ")}`] : [], warnings: [...(renamed.length ? [`codes differ from the plan: ${renamed.join(", ")} were written under other codes`] : []), ...c.errors.slice(0, 5)] } } };
   },
 };
@@ -192,7 +192,7 @@ export const reworkHandler = {
     });
     if (!("value" in r)) return r;
     const c = actionsChecked(r.value, ctx.draft);
-    if (!c.actions.length) return ctx.attempt < 2 ? { status: "retry", reason: "invalid_output: the model answered in words, not changes", retryAfterMs: 500 } : { status: "failed", reason: "invalid_output: the model answered in words, not changes", permanent: false };
+    if (!c.actions.length) return ctx.attempt < 1 ? { status: "retry", reason: "invalid_output: the model answered in words, not changes", retryAfterMs: 500 } : { status: "failed", reason: "invalid_output: the model answered in words, not changes", permanent: false };
     const touched = new Set(c.actions.map((a) => String((a as { target?: unknown; code?: unknown }).target ?? (a as { code?: unknown }).code ?? "")));
     const untouched = qs.map((q) => q.code).filter((x) => !touched.has(x));
     return { status: "completed", output: { actions: c.actions, validation: { ok: true, errors: [], warnings: [...(untouched.length ? [`not changed: ${untouched.join(", ")}`] : []), ...c.errors.slice(0, 5)] } } };

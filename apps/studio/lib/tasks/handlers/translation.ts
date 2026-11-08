@@ -269,7 +269,7 @@ function failureResult(ctx: StepContext, f: NonNullable<TranslateOutcome["failur
   };
   switch (f.kind) {
     case "output_limit": case "context_limit": return keys.length > 1 ? half() : { status: "failed", reason: `${f.kind}: one string is longer than the model can translate in one answer`, permanent: true };
-    case "invalid_output": return ctx.attempt >= 2 && keys.length > 8 ? half() : { status: "retry", reason: `invalid_output: ${f.message}` };
+    case "invalid_output": return ctx.attempt >= 1 && keys.length > 8 ? half() : { status: "retry", reason: `invalid_output: ${f.message}` };
     case "auth": return { status: "blocked", reason: f.message, needs: "auth" };
     case "config": return { status: "blocked", reason: f.message, needs: "config" };
     case "budget": return { status: "blocked", reason: f.message, needs: "budget" };

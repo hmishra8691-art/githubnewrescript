@@ -116,13 +116,25 @@ test("repair: an invalid output is kept and a targeted repair step follows it; t
 
 test("retry: a transient answer is retried on the same row with its count kept, committed once, Retry-After honoured", async () => {
   let n = 0;
-  synthetic({ b: async () => (++n < 3 ? { status: "retry", reason: "rate_limit: slow down", retryAfterMs: 5 } : done([q("Q2")])) });
+  /* ONE automatic retry (lib/tasks/timing.ts): the second attempt succeeds */
+  synthetic({ b: async () => (++n < 2 ? { status: "retry", reason: "rate_limit: slow down", retryAfterMs: 5 } : done([q("Q2")])) });
   const r = await runTaskInProcess({ message: "synthetic", definition: empty() });
   assert.equal(r.task.status, "completed", JSON.stringify({ report: r.task.report, steps: r.task.steps.map((s) => [s.stepId, s.status, s.retryCount, s.failureMessage]), slices: r.slices.map((x) => [x.stoppedBy, x.built]) }));
   const b = r.task.steps.find((s) => s.stepId === "b")!;
-  assert.equal(b.retryCount, 2);
-  assert.equal(n, 3);
+  assert.equal(b.retryCount, 1);
+  assert.equal(n, 2);
   assert.equal(r.task.steps.filter((s) => s.stepId === "b").length, 1, "one row, never a second");
+});
+
+test("one retry, not three: a step that fails twice stops after its second attempt and says so — never retried forever", async () => {
+  let n = 0;
+  synthetic({ b: async () => { n++; return { status: "retry", reason: "rate_limit: slow down", retryAfterMs: 5 }; } });
+  const r = await runTaskInProcess({ message: "synthetic", definition: empty() });
+  const b = r.task.steps.find((s) => s.stepId === "b")!;
+  assert.equal(n, 2, "the first attempt and one retry");
+  assert.equal(b.status, "failed");
+  assert.equal(b.retryCount, 2, "the row counts its failed attempts: two");
+  assert.equal(r.task.steps.find((s) => s.stepId === "a")!.status, "completed", "what was built is kept");
 });
 
 test("failed (permanent): the step stops with the handler's own sentence, the task fails and everything built is preserved", async () => {
@@ -168,14 +180,14 @@ test("a killed slice resumes from the earliest incomplete step: nothing complete
   assert.ok(plan.ok);
   const task = plan.ok ? plan.task : null!;
   /* the first slice builds one step and is "killed" (maxSteps) */
-  const first = await runSlice(task.id, { budgetMs: 60_000, store, buildStep: handlerBuildStep(deps, task), check: (t) => taskCheck(deps, t), maxSteps: 1, sleep: quickSleep, deadlineSleep: guardSleep });
+  const first = await runSlice(task.id, { budgetMs: 780_000, store, buildStep: handlerBuildStep(deps, task), check: (t) => taskCheck(deps, t), maxSteps: 1, sleep: quickSleep, deadlineSleep: guardSleep });
   assert.deepEqual(first.built, ["a"]);
   assert.deepEqual(first.remaining, ["b", "c"]);
   assert.equal(first.stoppedBy, "max_steps");
   const chargeAfterFirst = taskSpend((await store.load(task.id))!).charge;
   assert.equal(chargeAfterFirst, 0.5);
   /* a second worker (another process, the cron) picks up at b */
-  const second = await runSlice(task.id, { budgetMs: 60_000, store, buildStep: handlerBuildStep(deps, (await store.load(task.id))!), check: (t) => taskCheck(deps, t), sleep: quickSleep, deadlineSleep: guardSleep });
+  const second = await runSlice(task.id, { budgetMs: 780_000, store, buildStep: handlerBuildStep(deps, (await store.load(task.id))!), check: (t) => taskCheck(deps, t), sleep: quickSleep, deadlineSleep: guardSleep });
   assert.deepEqual(second.built, ["b", "c"]);
   assert.equal(second.status, "completed");
   assert.deepEqual(calls, ["a", "b", "c"], "a was built exactly once");

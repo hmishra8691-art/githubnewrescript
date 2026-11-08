@@ -39,17 +39,17 @@ test("5–6. a cancelled task keeps its finished steps Done; the steps it never 
   assert.match(v.headline, /^Cancelled — 1 of 4 steps done, 2 failed; what the finished steps built is kept$/);
   assert.ok(!/retrying/.test(v.recovery.message ?? ""), v.recovery.message ?? "");
   assert.match(v.recovery.message ?? "", /Before the task was cancelled, 2 steps had failed/);
-  assert.deepEqual(v.rows.map((r) => r.outcome), ["Done — retry successful (3 attempts)", "Failed after 5 attempts", "Failed after 2 attempts", "Not run — task cancelled"]);
+  assert.deepEqual(v.rows.map((r) => r.outcome), ["Done — retry successful (3 attempts)", "Failed after 4 attempts", "Failed after 1 attempt", "Not run — task cancelled"]);
   assert.equal(v.currentStep, null, "a stopped task has no current step");
 });
 
-test("7. parallel steps each keep their own state; 8. a step out of attempts needs attention, not 'recovering'", () => {
-  const open = executionView({ status: "running", steps: [step("a", "running"), step("b", "running"), step("c", "failed", { retryCount: 1, failureKind: "invalid_output" })] } as never);
-  assert.equal(open.phase, "recovering", "one attempt failed, attempts remain");
-  assert.equal(open.rows[2].outcome, "Failed attempt 2 — will retry");
+test("7. parallel steps each keep their own state; 8. a step out of its one retry needs attention, not 'recovering'", () => {
+  const open = executionView({ status: "running", steps: [step("a", "running"), step("b", "running"), step("c", "retrying", { retryCount: 1, failureKind: "invalid_output" })] } as never);
+  assert.equal(open.phase, "recovering", "one attempt failed, its one retry is coming");
+  assert.equal(open.rows[2].outcome, "Retrying — attempt 2");
   const spent = executionView({ status: "running", steps: [step("a", "completed"), step("c", "failed", { retryCount: 3, failureKind: "invalid_output", failureMessage: "x" })] } as never);
   assert.equal(spent.phase, "needs attention");
-  assert.equal(spent.rows[1].outcome, "Failed after 4 attempts");
+  assert.equal(spent.rows[1].outcome, "Failed after 3 attempts");
 });
 
 test("a paused task's queued steps wait for the person; a stopped task's running step is not 'Running'", () => {

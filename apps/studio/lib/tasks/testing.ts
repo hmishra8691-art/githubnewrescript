@@ -58,7 +58,7 @@ export async function runTaskInProcess(o: InProcessOptions): Promise<InProcessRe
   const max = o.maxSlices ?? 60;
   let task = plan.task;
   for (let i = 0; i < max; i++) {
-    const r = await runSlice(task.id, { budgetMs: o.budgetMs ?? 60_000, store, buildStep: handlerBuildStep(deps, task), check: (t) => taskCheck(deps, t), sleep: quickSleep, deadlineSleep: guardSleep, ...(o.slice ?? {}) });
+    const r = await runSlice(task.id, { budgetMs: o.budgetMs ?? 780_000, store, buildStep: handlerBuildStep(deps, task), check: (t) => taskCheck(deps, t), sleep: quickSleep, deadlineSleep: guardSleep, ...(o.slice ?? {}) });
     slices.push(r);
     task = (await store.load(task.id))!;
     if (task.status !== "running" && task.status !== "pending") break;
@@ -73,5 +73,5 @@ export async function sliceInProcess(store: TaskStore, taskId: string, extra: Pa
   registerAllTaskHandlers();
   const deps = testDeps(store, zeroAttemptUsage(), charge);
   const task = (await store.load(taskId))!;
-  return runSlice(taskId, { budgetMs: 60_000, store, buildStep: handlerBuildStep(deps, task), check: (t) => taskCheck(deps, t), sleep: quickSleep, deadlineSleep: guardSleep, ...extra });
+  return runSlice(taskId, { budgetMs: 780_000, store, buildStep: handlerBuildStep(deps, task), check: (t) => taskCheck(deps, t), sleep: quickSleep, deadlineSleep: guardSleep, ...extra });
 }

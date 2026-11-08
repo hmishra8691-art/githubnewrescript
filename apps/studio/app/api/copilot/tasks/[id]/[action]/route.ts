@@ -16,7 +16,7 @@ import { ADVANCE_BUDGET_MS, advanceForRequest, viewOf } from "@/lib/tasks/servic
  */
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 800; // lib/tasks/timing.ts ROUTE_MAX_SECONDS: a slice runs up to 780 s, a step keeps its own clock
 
 export async function POST(req: NextRequest, { params }: { params: { id: string; action: string } }) {
   const authed = await requireUser(req);

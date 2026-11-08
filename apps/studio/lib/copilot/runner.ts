@@ -24,6 +24,7 @@
  * checkpoint with nothing built and everything remaining, instead of eating
  * the route's whole budget.
  */
+import { LEASE_SECONDS, MIN_STEP_START_MS, SLICE_SOFT_STOP_MS, STEP_RETRIES, stepClock } from "../tasks/timing.ts";
 import {
   classifyStepFailure, dependenciesMet, isOutstanding, isTerminalFailure, taskProgress, taskSpend,
   type ExecStep, type ExecTask, type StepFailureKind, type StepUsage, type TaskStatus, type DeliverableReport, type TaskBlocked,
@@ -34,15 +35,15 @@ import { waitBeforeRetry } from "./resume.ts";
 /* --------------------------------------------------------- the clock */
 
 /** the stage cap the turn route uses, and the longest any single step may hold the slice */
-export const STAGE_SOFT_MS = 90_000;
+export const STAGE_SOFT_MS = SLICE_SOFT_STOP_MS;
 /** the least time a step is worth starting with — the route's MIN_ITEM_MS */
-export const MIN_STEP_MS = 30_000;
+export const MIN_STEP_MS = MIN_STEP_START_MS;
 /** how many times one step is built again before it is left for a later slice — NEVER unbounded */
-export const MAX_STEP_RETRIES = 3;
+export const MAX_STEP_RETRIES = STEP_RETRIES;
 /** how many times a `context_limit` failure may halve a step's batch before the step is called too big to run */
 export const MAX_SPLITS = 4;
 /** a step claimed by a worker that never came back is claimable again after this */
-export const RECLAIM_SECONDS = 180;
+export const RECLAIM_SECONDS = LEASE_SECONDS;
 
 /* ----------------------------------------------------- the two seams */
 
@@ -159,6 +160,8 @@ export interface RunSliceOptions {
   softStopMs?: number;
   minStepMs?: number;
   maxRetries?: number;
+  /** test seam: a fixed clock for every step instead of the timing module's per-attempt clock */
+  stepBudgetMs?: number;
   staleSeconds?: number;
 }
 
@@ -397,7 +400,9 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
        * own deadline. A build that ignores it is abandoned by the watchdog
        * and the slice returns a checkpoint.
        */
-      const stepDeadline = Math.min(sliceDeadline, Math.max(t0 + minStepMs, softStop));
+      /* THE STEP'S OWN CLOCK (lib/tasks/timing.ts): 5 minutes on its first attempt, the request's whole lifetime on its
+         one retry — never just what the slice happens to have left; the slice only decides whether a step may start */
+      const stepDeadline = opts.stepBudgetMs != null ? Math.min(sliceDeadline, t0 + opts.stepBudgetMs) : stepClock(attempt, t0, sliceDeadline);
       const ctrl = new AbortController();
       /*
        * A THROW IS A FAILED STEP, NOT A FAILED SLICE (audit M3, 2026-10-25).
