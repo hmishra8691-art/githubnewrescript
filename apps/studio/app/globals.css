@@ -3336,3 +3336,10 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .hx-drawer-head strong { flex: 1; }
 .hx-drawer .hx { flex: 1; min-height: 0; }
 @media (max-width: 760px) { .hx { grid-template-columns: minmax(0, 1fr); padding: 8px 16px 16px; } .hx-side { display: none; } .hx-q { max-width: 92%; } }
+/* Help: the microphone beside Ask (2026-11-09) */
+.hx-input { flex-wrap: wrap; align-items: flex-start; }
+.hx-voice { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* while listening (Stop / Pause / Cancel) or showing an error, the controls take their own row under the box */
+.hx-voice:has(.agw-voice.on), .hx-voice:has(.agw-voice-err), .hx-voice:has(.ax-dictate-interim), .hx-voice:has(.ax-dictate-problem) { order: 3; flex-basis: 100%; }
+.hx-voice .agw-voice-err, .hx-voice .ax-dictate-problem, .hx-voice .ax-dictate-interim { font-size: 12px; }
+.hx-main > .agw-heard { margin: 0 12px; font-size: 12.5px; }

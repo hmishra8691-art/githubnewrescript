@@ -8,6 +8,8 @@ import { registerBuiltinDesignGenerators } from "@rescript/designs";
 import { runSimulation } from "@rescript/templates";
 import { useStudio } from "./store";
 import { takePendingMethodology } from "../../lib/intelligent/methodologyRequest";
+import { HeardNote, VoiceButton } from "../intelligent/VoiceButton";
+import type { HeardTranscript } from "../../lib/intelligent/voice";
 
 registerBuiltinDesignGenerators();
 
@@ -48,6 +50,8 @@ export function StudyDesignPanel() {
   const s = useStudio();
   const pending = React.useMemo(() => takePendingMethodology(), []);
   const [objective, setObjective] = React.useState(pending?.objective ?? "");
+  /* what was heard when it was not English: the original beside the English reading the engine uses */
+  const [heard, setHeard] = React.useState<HeardTranscript | null>(null);
   const [rec, setRec] = React.useState<MethodologyRecommendation | null>(pending ? recommendMethodology(pending.objective) : null);
   const [methodId, setMethodId] = React.useState<string>(rec?.recommended.id ?? "van_westendorp");
   const [fields, setFields] = React.useState<Fields>({});
@@ -96,8 +100,18 @@ export function StudyDesignPanel() {
 
       <section className="sd-step">
         <b>1. The objective</b>
-        <textarea className="ta" rows={3} data-testid="sd-objective" value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="We are launching a premium subscription and need to know how much customers would pay and which features justify the price." />
-        <div className="row" style={{ gap: 8 }}><button type="button" className="btn primary small" data-testid="sd-recommend" disabled={objective.trim().length < 8} onClick={recommend}>Recommend a methodology</button></div>
+        <textarea className="ta" rows={3} data-testid="sd-objective" value={objective} onChange={(e) => { setObjective(e.target.value); setHeard(null); }} placeholder="We are launching a premium subscription and need to know how much customers would pay and which features justify the price." />
+        <HeardNote heard={heard} onUseOriginal={heard ? () => { setObjective((o) => o.replace(heard.english ?? "", heard.text)); setHeard(null); } : undefined} />
+        <div className="row" style={{ gap: 8 }}>
+          <button type="button" className="btn primary small" data-testid="sd-recommend" disabled={objective.trim().length < 8} onClick={recommend}>Recommend a methodology</button>
+          {/* 2026-11-09: say it instead — the objective, context, audience, problem, hypotheses; the words land above to edit before recommending */}
+          <VoiceButton surveyId={s.surveyDbId} label="Speak instead" refusedMessage="Microphone access was refused — allow it in the browser to describe your research by voice." onHeard={(h) => {
+            const words = (h.english || h.text).trim();
+            if (!words) return;
+            setObjective((o) => `${o.trim()}${o.trim() ? "\n" : ""}${words}`);
+            setHeard(h.english && h.language !== "en" ? h : null);
+          }} />
+        </div>
       </section>
 
       {objective.trim().length >= 8 && rec === null && <p className="muted" data-testid="sd-none">No methodology could be read from that — say what decision the research should inform, or pick a method below.</p>}

@@ -3,6 +3,9 @@ import React from "react";
 import { renderMarkdown } from "@/lib/docs/markdown";
 import { safeHref, type HelpAnswer, type HelpContext } from "@/lib/help/compose";
 import { POPULAR, topicsFor } from "@/lib/help/suggestions";
+import { HeardNote, VoiceButton } from "@/components/intelligent/VoiceButton";
+import { DictateButton } from "@/components/analytics/DictateButton";
+import type { HeardTranscript } from "@/lib/intelligent/voice";
 
 /**
  * THE HELP ASSISTANT (2026-11-09) — the Help page and the Studio's Help drawer. Ask in your own words; the answer
@@ -38,6 +41,8 @@ export function HelpAssistant({ surface, surveyId, getContext, onIntelligent, co
   const [storedNote, setStoredNote] = React.useState<string | null>(null);
   const [article, setArticle] = React.useState<{ id: string; title: string; markdown: string } | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  /* a spoken question that was not English: the original words beside the English reading in the box */
+  const [heard, setHeard] = React.useState<HeardTranscript | null>(null);
   const endRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
   const tab = getContext?.().tab;
@@ -70,6 +75,7 @@ export function HelpAssistant({ surface, surveyId, getContext, onIntelligent, co
     if (!q || busy) return;
     setError(null);
     setInput("");
+    setHeard(null);
     const prior = turns;
     setTurns([...prior, { role: "user", text: q }]);
     setBusy(true);
@@ -153,9 +159,22 @@ export function HelpAssistant({ surface, surveyId, getContext, onIntelligent, co
             <div ref={endRef} />
           </div>
         )}
+        <HeardNote heard={heard} onUseOriginal={heard ? () => { setInput((t) => t.replace(heard.english ?? "", heard.text)); setHeard(null); } : undefined} />
         <form className="hx-input" onSubmit={(e) => { e.preventDefault(); void ask(input); }}>
           <textarea ref={inputRef} value={input} rows={compact ? 2 : 2} placeholder="Ask anything about ResLens.ai..." aria-label="Ask anything about ResLens.ai"
-            onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }} data-testid="help-input" />
+            onChange={(e) => { setInput(e.target.value); setHeard(null); }} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }} data-testid="help-input" />
+          {/*
+           * VOICE (2026-11-09): speak the question instead. In a project the platform's voice pipeline transcribes it
+           * (any language, billed to the project like other speech); on the Help page without a project, the browser's
+           * own dictation (on the device, no charge). Either way the words land in the box to edit — nothing is sent
+           * until Ask.
+           */}
+          <span className="hx-voice">
+            {surveyId
+              ? <VoiceButton compact surveyId={surveyId} label="Speak your question" disabled={busy} refusedMessage="Microphone access was refused — allow it in the browser to ask by voice."
+                  onHeard={(h) => { const words = (h.english || h.text).trim(); if (!words) return; setInput((t) => `${t.trim()}${t.trim() ? " " : ""}${words}`); setHeard(h.english && h.language !== "en" ? h : null); inputRef.current?.focus(); }} />
+              : <DictateButton value={input} onChange={(t) => { setInput(t); inputRef.current?.focus(); }} disabled={busy} />}
+          </span>
           <button className="btn primary" type="submit" disabled={busy || input.trim().length < 2} data-testid="help-send">Ask</button>
         </form>
       </section>

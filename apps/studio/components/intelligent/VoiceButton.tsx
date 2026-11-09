@@ -12,8 +12,8 @@ import { languageName, type HeardTranscript } from "../../lib/intelligent/voice"
  * for the researcher to edit before anything is sent. A non-English recording keeps what was said beside the English
  * reading, with a one-click switch to the original words. Cancel throws the recording away; nothing is sent.
  */
-export function VoiceButton({ surveyId, onHeard, label = "Speak", disabled, compact }: { surveyId: string; onHeard: (heard: HeardTranscript) => void; label?: string; disabled?: boolean; compact?: boolean }) {
-  const v = useVoiceInput({ surveyId, onTranscript: (h) => onHeard(h), refusedMessage: "Microphone access was refused — allow it in the browser to speak to the agents." });
+export function VoiceButton({ surveyId, onHeard, label = "Speak", disabled, compact, refusedMessage }: { surveyId: string; onHeard: (heard: HeardTranscript) => void; label?: string; disabled?: boolean; compact?: boolean; /** what to say when the browser refuses the microphone (defaults to the agents' wording) */ refusedMessage?: string }) {
+  const v = useVoiceInput({ surveyId, onTranscript: (h) => onHeard(h), refusedMessage: refusedMessage ?? "Microphone access was refused — allow it in the browser to speak to the agents." });
   const rec = v.state === "recording" || v.state === "paused";
   return (
     <span className={`agw-voice${rec ? " on" : ""}`} data-testid="agw-voice" data-state={v.state}>

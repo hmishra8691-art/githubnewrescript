@@ -70,7 +70,7 @@ export const STUDY_METHODOLOGIES: Methodology[] = [
   /* ---- pricing ---- */
   { id: "van_westendorp", name: "Van Westendorp Price Sensitivity Meter", category: "pricing",
     fit: "the acceptable price range for one product or concept, early in pricing", strengths: ["four short questions", "a readable acceptable range and an optimal point", "works without a competitive set"], tradeoffs: ["stated, not chosen — no competitive context", "no demand or revenue curve without the NMS purchase-likelihood pair"],
-    signals: [[/\b(?:price range|acceptable price|price sensitivity|too (?:cheap|expensive)|what (?:price|should we charge)|how much (?:to|should we) charge|price point|pricing)\b/, 2], [/\bnew (?:product|service|subscription|plan)\b/, 1], [/\bhow much (?:would|will|do|are)\b.{0,40}\bpay\b/, 2], [/\bvan ?westendorp|psm\b/, 4]],
+    signals: [[/\b(?:price range|acceptable price|price sensitivity|too (?:cheap|expensive)|what (?:price|should we charge)|how much (?:to|should we) charge|price point|pricing)\b/, 2], [/\bnew (?:product|service|subscription|plan)\b/, 1], [/\bhow much (?:\w+ ){0,3}?(?:would|will|do|are|might|could)\b.{0,40}\bpay\b|\bwilling(?:ness)? to pay\b|\bwhat (?:\w+ ){0,3}would pay\b/, 2], [/\bvan ?westendorp|psm\b/, 4]],
     inputs: [{ key: "product", label: "What is being priced", kind: "text", required: true, example: "the Premium plan" }, { key: "currency", label: "Currency symbol", kind: "text", example: "$" }],
     sample: { min: 200, note: "about 200 completes for a stable range; 100+ per subgroup you will compare" }, loi: "≈ 2 minutes",
     analysis: ["PSM curves: point of marginal cheapness / expensiveness, optimal and indifference price points", "NMS demand and revenue curves from the purchase-likelihood pair"],

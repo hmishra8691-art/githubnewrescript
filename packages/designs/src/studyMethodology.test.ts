@@ -47,6 +47,18 @@ test("the objective decides the category and method — with reasons, alternativ
   assert.ok(recommendMethodology("Find the acceptable price range for our new product")!.missing.some((m) => /Who the respondents are/.test(m)));
 });
 
+test("spoken, natural phrasings of a pricing objective are recognised (2026-11-09, voice input)", () => {
+  for (const t of [
+    "We are launching a premium subscription and need to know how much customers would pay for it",
+    "how much our users might be willing to pay for the new plan",
+    "what customers would pay for a premium tier",
+  ]) {
+    const r = recommendMethodology(t);
+    assert.ok(r, t);
+    assert.equal(r!.category, "pricing", t);
+  }
+});
+
 test("a proposed method that does not answer the objective is flagged, with a better one", () => {
   const r = recommendMethodology("I want to use MaxDiff to find out how much customers would pay for our new plan")!;
   assert.equal(r.proposed?.method.id, "maxdiff");
