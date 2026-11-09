@@ -8,6 +8,7 @@ import { CanvasProvider } from "../canvas/CanvasContext";
 import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
 import { FlowPanel } from "./FlowPanel";
 import { TestsPanel } from "./TestsPanel";
+import { StudyDesignPanel } from "./StudyDesignPanel";
 import { LogicPanel, CalcPanel } from "./LogicPanel";
 import { VariablesPanel } from "./VariablesPanel";
 import { QuotaDashboard } from "./QuotaDashboard";
@@ -50,7 +51,7 @@ import { ModeChooser } from "./ModeChooser";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "data" | "fieldwork" | "recruitment"
+  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "studydesign" | "data" | "fieldwork" | "recruitment"
   | "distribution" | "project" | "usage" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -82,6 +83,8 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
   { key: "calculations", label: "Calculations", icon: "calc", group: "Programming" },
   { key: "quotas", label: "Quotas", icon: "quotas", group: "Programming" },
   { key: "listfill", label: "List Fill", icon: "listfill", group: "Programming" },
+  /* 2026-11-09: the research methodology engine — objective → method → study (questions, design, plan, simulation) */
+  { key: "studydesign", label: "Study design", icon: "designs", group: "Research tools" },
   { key: "designs", label: "Design Generators", icon: "designs", group: "Research tools" },
   /*
    * Qualitative research (2026-10-18): the interview / focus-group guide, session records and
@@ -1102,6 +1105,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "calculations" && <CalcPanel />}
           {tab === "quotas" && <QuotaDashboard />}
           {tab === "listfill" && <ListFillPanel />}
+          {tab === "studydesign" && <StudyDesignPanel />}
           {tab === "designs" && <DesignsPanel />}
           {tab === "qualitative" && <QualPanel />}
           {tab === "branding" && <BrandingPanel />}

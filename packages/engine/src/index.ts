@@ -226,6 +226,7 @@ export * from "./aiInterviewVoice.js";
 export * from "./aiInterviewTurnTaking.js";
 export * from "./aiInterviewMessagesExtra.js";
 export * from "./qualPlanning.js";
+export * from "./studyMethodology.js";
 export * from "./aiInterviewRealtime.js";
 export * from "./researchSuitability.js";
 export * from "./researchTraceability.js";

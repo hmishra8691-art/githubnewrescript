@@ -33,6 +33,7 @@ import { TaskStrip } from "./TaskStrip";
 import { researchRequest } from "../../lib/intelligent/researchRequest";
 import { setPendingSimulation, simulationAnswer, simulationRequest } from "../../lib/intelligent/simulationRequest";
 import { runSimulation } from "@rescript/templates";
+import { methodologyAnswer, methodologyQuestion, setPendingMethodology } from "../../lib/intelligent/methodologyRequest";
 import type { ClientTask } from "@/lib/copilot/taskStore";
 import { StructurePane } from "./copilot/StructurePane";
 import { paneLayout, splitterKey, readPaneWidths, PANE_LIMITS } from "../../lib/intelligent/paneLayout";
@@ -358,6 +359,14 @@ export function IntelligentView() {
      * engine here, in the browser — nothing saved — and the answer says what broke. The full report (journeys,
      * downloads, saving as TEST data) is waiting in Research tools → Tests.
      */
+    /* "which method should I use to …?" — the methodology engine answers; Study design opens with the objective (2026-11-09) */
+    const method = methodologyQuestion(t);
+    if (method) {
+      setPendingMethodology({ objective: t });
+      const a = methodologyAnswer(method);
+      copilot.local(t, { kind: "answer", category: "research_design", understood: `Which research methodology fits: ${method.categoryName}`, answer: a.answer, sections: a.sections, detected: [{ what: "category", value: method.categoryName }, { what: "recommended", value: method.recommended.name }] }, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     const sim = simulationRequest(t, s.def);
     if (sim) {
       try {

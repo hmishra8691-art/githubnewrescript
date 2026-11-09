@@ -3222,3 +3222,21 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .sim-journey pre { max-height: 240px; overflow: auto; font-size: 11.5px; }
 .sim-stored { margin-top: 10px; font-size: 12.5px; }
 .sim-stored ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+/* 2026-11-09 — Study design (research methodology engine) */
+.sd { display: grid; gap: 12px; max-width: 1100px; }
+.sd-step { display: grid; gap: 6px; }
+.sd-rec { border: 1px solid #c7d2fe; background: #eef2ff; border-radius: 12px; padding: 10px 14px; display: grid; gap: 6px; }
+.sd-rec ul, .sd-pros ul, .sd-preview ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.sd-rec-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.sd-alts, .sd-missing { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12.5px; }
+.sd-warn { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; border-radius: 8px; padding: 6px 10px; font-size: 12.5px; }
+.sd-fit { font-size: 12.5px; margin: 0; }
+.sd-pros { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; font-size: 12.5px; }
+.sd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 14px; }
+.sd-grid .f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.sd-advice { background: var(--panel2, #f8fafc); border-radius: 10px; padding: 8px 12px; }
+.sd-advice p { margin: 2px 0; font-size: 13px; }
+.sd-preview { border-radius: 12px; padding: 10px 14px; border: 1px solid; display: grid; gap: 6px; font-size: 13px; }
+.sd-preview.ok { background: #ecfdf5; border-color: #a7f3d0; }
+.sd-preview.bad { background: #fef2f2; border-color: #fecaca; }
+.sd-preview p { margin: 0; }
