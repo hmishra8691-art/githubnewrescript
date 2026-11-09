@@ -119,3 +119,16 @@ test("the registry does not refuse AI interviews on an installation without a da
   assert.ok(!capabilitiesMentioned("run this guide as AI moderated interviews").some((c) => c.id === "qualitative:moderated"));
   assert.ok(capabilitiesMentioned("run moderated focus groups next week").some((c) => c.id === "qualitative:moderated"));
 });
+
+test("2026-11-08: the interview format, follow-up cap, exploring and turn-taking patience are configured through the gate", () => {
+  const r = run(base(), [GUIDE, { op: "configure_ai_interviews", format: "hybrid", maxFollowUps: 2, exploreBeyondGuide: false, patience: "patient" }]);
+  assert.deepEqual(r.errors, []);
+  const m = r.def.qualStudy!.aiModeration!;
+  assert.equal(m.format, "hybrid");
+  assert.deepEqual(m.modes, ["text", "voice"], "a hybrid study offers typing and speaking");
+  assert.ok(m.voiceStyles?.includes("conversation"), "spoken answers are hands-free by default");
+  assert.equal(m.maxFollowUps, 2); assert.equal(m.exploreBeyondGuide, false); assert.equal(m.patience, "patient");
+  const chat = run(base(), [GUIDE, { op: "configure_ai_interviews", format: "chatbot" }]);
+  assert.deepEqual(chat.def.qualStudy!.aiModeration!.modes, ["text"]);
+  assert.match(coerceAiInterviewAction("configure_ai_interviews", { format: "carrier pigeon" }) as string, /format is voice, chat or hybrid/);
+});

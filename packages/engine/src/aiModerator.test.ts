@@ -339,3 +339,52 @@ test("the transcript as a qualitative source: speakers with roles and the segmen
   assert.deepEqual(t.meta.media.t2, { audio: "m1" });
   assert.equal(t.char_count, turns.reduce((n, x) => n + x.text.length, 0));
 });
+
+/* ------------------------------------------------------------ 2026-11-08: natural moderation */
+import { buildModeratorPlan as _plan, initialState as _init, prepareTurn as _prep, startInterview as _start } from "./aiModerator.js";
+test("'that's all' (in the participant's language) closes the question: no probe, the next step — and the model is told", () => {
+  const study = { kind: "interview", title: "Banking", objectives: ["Understand why people switch banks"], sections: [{ id: "s1", title: "Main", kind: "core", questions: [{ id: "q1", text: "Why did you switch banks?", probes: ["Can you give an example?"], conditionalProbes: [] }, { id: "q2", text: "What would make you switch again?", probes: [], conditionalProbes: [] }], stimuli: [] }], aiModeration: { defaultProbing: "deep" } } as never;
+  const plan = _plan(study);
+  const opened = _start(plan, { now: 0, modelAvailable: false });
+  const st = opened.kind === "final" ? opened.state : opened.fallbackState;
+  for (const say of ["Fees. That's all.", "फीस। बस इतना ही", "Las comisiones, eso es todo"]) {
+    const r = _prep(plan, st, { kind: "answer", text: say }, { now: 1000, modelAvailable: false });
+    assert.equal(r.kind, "final");
+    assert.notEqual((r as { reply: { intent: string } }).reply.intent, "probe", say);
+    assert.equal((r as { state: { step: number } }).state.step, 1, `${say}: moved to the next question`);
+    const m = _prep(plan, st, { kind: "answer", text: say }, { now: 1000, modelAvailable: true });
+    assert.equal(m.kind, "model");
+    const req = (m as { request: { user: string } }).request.user;
+    assert.match(req, /DONE SIGNAL/);
+    assert.match(req, /ALLOWED INTENTS: next \| check_in/);
+  }
+  /* without the signal, a thin answer is probed */
+  const thin = _prep(plan, st, { kind: "answer", text: "Fees" }, { now: 1000, modelAvailable: false });
+  assert.equal((thin as { reply: { intent: string } }).reply.intent, "probe");
+  void _init;
+});
+
+test("the moderator remembers earlier answers (masked) so it does not ask again and can spot contradictions; exploring follows the setting", () => {
+  const study = { kind: "interview", title: "Banking", objectives: [], sections: [{ id: "s1", title: "Main", kind: "core", questions: [{ id: "q1", text: "Which bank do you use?", probes: [], conditionalProbes: [] }, { id: "q2", text: "How do you feel about it?", probes: [], conditionalProbes: [] }], stimuli: [] }], aiModeration: { defaultProbing: "none", exploreBeyondGuide: false, maxFollowUps: 2 } } as never;
+  const plan = _plan(study);
+  assert.equal(plan.explore, false);
+  const opened = _start(plan, { now: 0, modelAvailable: false });
+  const st = opened.kind === "final" ? opened.state : opened.fallbackState;
+  const a1 = _prep(plan, st, { kind: "answer", text: "I have been with Acme Bank for ten years, mail me at jo@example.com" }, { now: 1000, modelAvailable: false });
+  const st2 = (a1 as { state: typeof st }).state;
+  assert.equal(st2.history?.length, 1);
+  assert.match(st2.history![0].a, /Acme Bank/);
+  assert.doesNotMatch(st2.history![0].a, /jo@example\.com/, "contact details never reach the model's memory");
+  const m = _prep(plan, st2, { kind: "answer", text: "I love it, though I am thinking of leaving" }, { now: 2000, modelAvailable: true });
+  const user = (m as { request: { user: string } }).request.user;
+  assert.match(user, /EARLIER IN THE INTERVIEW/);
+  assert.match(user, /Acme Bank/);
+  assert.match(user, /EXPLORING: not allowed/);
+});
+
+test("a global follow-up cap applies to probed questions; a question's own rule still wins", () => {
+  const mk = (extra: Record<string, unknown>) => _plan({ kind: "interview", title: "T", objectives: [], sections: [{ id: "s1", title: "Main", kind: "core", questions: [{ id: "q1", text: "Why?", probes: [], conditionalProbes: [] }, { id: "q2", text: "How?", probes: [], conditionalProbes: [] }], stimuli: [] }], aiModeration: { defaultProbing: "deep", ...extra } } as never);
+  assert.equal(mk({}).steps[0].maxFollowUps, 3);
+  assert.equal(mk({ maxFollowUps: 1 }).steps[0].maxFollowUps, 1);
+  assert.equal(mk({ maxFollowUps: 1, probing: [{ questionId: "q2", depth: "deep", maxFollowUps: 4 }] }).steps[1].maxFollowUps, 4);
+});

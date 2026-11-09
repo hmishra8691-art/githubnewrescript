@@ -3,13 +3,15 @@ import React from "react";
 import "./aiInterview.css";
 import { RecordingUploader } from "@rescript/storage/uploader";
 import {
-  BUILTIN_INTERVIEW_LANGUAGES, formatMessage, isRtlLanguage, nativeLanguageName, parseAcceptLanguage, participantMessages, pickInterviewLanguage, realtimeVerbatimInstructions,
+  BUILTIN_INTERVIEW_LANGUAGES, endOfTurn, formatMessage, interviewExtraMessages, isRtlLanguage, nativeLanguageName, parseAcceptLanguage, participantMessages, pickInterviewLanguage, realtimeVerbatimInstructions,
   type LocalizedPublicText, type ParticipantMessages,
 } from "@rescript/engine";
 import { readNdjson } from "@/lib/aiInterview/ndjson";
 import { conversationSupport, DuplexController } from "@/lib/voice/duplex";
 import type { DuplexPhase } from "@/lib/voice/bargeIn";
 import { RealtimeClient } from "@/lib/voice/realtimeClient";
+import { TurnHold, type HoldView, type Verdict } from "@/lib/voice/turnHold";
+import { joinWavs } from "@/lib/voice/wav";
 
 /**
  * THE PARTICIPANT'S SIDE OF AN AI-MODERATED INTERVIEW (2026-10-22).
@@ -33,6 +35,17 @@ import { RealtimeClient } from "@/lib/voice/realtimeClient";
  *                nudge; Stop ends politely at any time.
  *   access       a live log region (aria-live), labelled controls, keyboard only works, phone layout.
  *
+ *   turn-taking  (2026-11-08) a pause is not the end of an answer: in the hands-free conversation each piece of
+ *                speech is transcribed at once but HELD (lib/voice/turnHold.ts); the answer is sent when the
+ *                turn-taking engine — and, when unsure, the model (/api/ai-interview/listen) — says the participant
+ *                has finished, after a silence that adapts to what they said ("that's all" sends at once, "um…"
+ *                or "because…" waits long). Speaking again cancels the wait; "I'm done" sends now.
+ *   formats      (2026-11-08) chat: type, or dictate any answer with the microphone; voice: spoken; hybrid: both in one
+ *                interview — typing while the conversation listens pauses the microphone and takes over the answer
+ *                held so far, "Talk instead" / "Type instead" switch at any moment; the transcript is one conversation.
+ *   privacy      what the platform actually does with the answers, before consent (masked contact details, recording
+ *                only when ticked, the transcript), in the participant's language.
+ *
  * Test seam (fake provider only, honoured by the server): `window.__aiInterviewScript = [reply | "fail", …]`
  * — each request takes the next as the stand-in model's reply.
  */
@@ -42,7 +55,7 @@ type Choice = "text" | "voice" | "conversation" | "realtime" | "video";
 type Style = "turn_based" | "conversation" | "realtime";
 interface Stimulus { name: string; kind: "image" | "video" | "text"; url?: string; text?: string; alt?: string }
 interface Turn { seq: number; speaker: "moderator" | "participant"; text: string; stimuli?: Stimulus[] }
-interface Info { title: string; persona: string; modes: Mode[]; languages: string[]; targetMinutes: number; consent: { statement: string; recordingDisclosure?: string; dataUse?: string }; recordingConsent: "optional" | "required"; screener: { id: string; text: string; kind: "single" | "multi" | "number"; options: string[] }[]; incentive?: string; silenceSeconds: number; voiceStyles?: Style[] }
+interface Info { title: string; persona: string; modes: Mode[]; languages: string[]; targetMinutes: number; consent: { statement: string; recordingDisclosure?: string; dataUse?: string }; recordingConsent: "optional" | "required"; screener: { id: string; text: string; kind: "single" | "multi" | "number"; options: string[] }[]; incentive?: string; silenceSeconds: number; voiceStyles?: Style[]; format?: "voice" | "chat" | "hybrid"; dictation?: boolean; patience?: "quick" | "balanced" | "patient"; purpose?: string; invitedBecause?: string }
 interface Interview { participant: string; mode: Mode; language: string; status: string; done: boolean; turns: Turn[]; redirect: string | null; lastSeq: number; silenceSeconds: number; recording: boolean; note?: string; code?: string | null; voice?: Style }
 interface I18n { guideLanguage: string; texts: Record<string, LocalizedPublicText>; builtin: string[] }
 type EventSink = (e: Record<string, unknown>) => void;
@@ -51,6 +64,8 @@ const storeKey = (token: string) => `rescript.aiInterview.${token}`;
 const safeGet = (k: string) => { try { return window.localStorage.getItem(k); } catch { return null; } };
 const safeSet = (k: string, v: string | null) => { try { if (v === null) window.localStorage.removeItem(k); else window.localStorage.setItem(k, v); } catch { /* private window */ } };
 const takeScript = (): unknown => { const w = window as unknown as { __aiInterviewScript?: unknown[] }; return Array.isArray(w.__aiInterviewScript) && w.__aiInterviewScript.length ? w.__aiInterviewScript.shift() : undefined; };
+/* test seam (fake provider only): the turn-taking model's verdicts, e.g. ["continuing", "complete"] */
+const takeListenScript = (): unknown => { const w = window as unknown as { __aiListenScript?: unknown[] }; return Array.isArray(w.__aiListenScript) && w.__aiListenScript.length ? { state: w.__aiListenScript.shift() } : undefined; };
 const pickMime = (video: boolean) => { const MR = (window as unknown as { MediaRecorder?: { isTypeSupported?: (t: string) => boolean } }).MediaRecorder; const list = video ? ["video/webm;codecs=vp8,opus", "video/webm", "video/mp4"] : ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"]; return list.find((t) => MR?.isTypeSupported?.(t)) ?? ""; };
 /* G1: a server error's code → the participant's language */
 const ERROR_KEY: Record<string, keyof ParticipantMessages> = { consent_required: "errConsent", recording_consent: "errRecording", closed: "notTaking", unknown_link: "notActive" };
@@ -100,11 +115,21 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
   const duplexRef = React.useRef<DuplexController | null>(null);
   const pendingVoice = React.useRef<{ interrupted?: { heardChars: number }; latencyMs?: number; fallback?: { reason: string; to: Style } }>({});
   const rtRef = React.useRef<{ client: RealtimeClient; expectVerbatim: boolean; lastVerbatim: string | null; pending: string | null } | null>(null);
+  /* 2026-11-08: the answer being held through pauses (hands-free), its audio pieces, and the realtime equivalent */
+  const [hold, setHold] = React.useState<HoldView | null>(null);
+  const holdRef = React.useRef<TurnHold | null>(null);
+  const pieceWavs = React.useRef<Uint8Array[]>([]);
+  const pieceChain = React.useRef<Promise<void>>(Promise.resolve());
+  const typingPaused = React.useRef(false);
+  const rtHold = React.useRef<{ text: string; timer: ReturnType<typeof setTimeout> | null } | null>(null);
 
   /* G1: the page's language — the chosen interview language, else the one picked from the study and the browser */
   const lang = (phase === "chat" && iv?.language) || form.language || forcedLanguage || "en";
   const t = React.useMemo(() => participantMessages(lang, i18n?.texts?.[lang]?.ui), [lang, i18n]);
   const local = i18n?.texts?.[lang] ?? {};
+  const x = React.useMemo(() => interviewExtraMessages(lang, i18n?.texts?.[lang]?.ui as Record<string, string> | undefined), [lang, i18n]);
+  /** the question the participant is answering now (the moderator's last words) */
+  const lastQuestion = () => [...(ivRef.current?.turns ?? [])].reverse().find((y) => y.speaker === "moderator")?.text ?? "";
   const dir = isRtlLanguage(lang) ? "rtl" : "ltr";
 
   /* load: a stored resume token carries on; otherwise the study's consent screen */
@@ -162,7 +187,7 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
   React.useEffect(() => {
     if (phase !== "chat" || !iv || iv.done) return;
     const tm = setInterval(() => {
-      if (busy || rec !== "idle" || draft.trim()) return;
+      if (busy || rec !== "idle" || draft.trim() || holdRef.current?.holding) return;
       if (conv.on && conv.phase !== "listening") { lastActivity.current = Date.now(); return; }
       if (Date.now() - lastActivity.current > (iv.silenceSeconds || 120) * 1000) { lastActivity.current = Date.now(); void send({ kind: "silence" }); }
     }, 1000);
@@ -175,7 +200,7 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
     if (!sup.ok) { const f = { reason: sup.reason, to: "turn_based" as Style }; setFallback(f); pendingVoice.current.fallback = f; return false; }
     const d = new DuplexController({
       onUtterance: (wav, inf) => { void onUtterance(wav, inf); },
-      onPhase: (p) => { lastActivity.current = Date.now(); setConv((c) => ({ ...c, phase: p })); },
+      onPhase: (p) => { lastActivity.current = Date.now(); if (p === "userSpeaking") holdRef.current?.speechStart(); setConv((c) => ({ ...c, phase: p })); },
       onLatency: (ms) => { pendingVoice.current.latencyMs = ms; setConv((c) => ({ ...c, latencyMs: ms })); },
       onInterrupted: (x) => { pendingVoice.current.interrupted = { heardChars: x.heardChars }; setConv((c) => ({ ...c, interruptions: c.interruptions + 1 })); },
     }, { language });
@@ -183,6 +208,14 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
     catch { const f = { reason: "no_mic", to: "turn_based" as Style }; setFallback(f); pendingVoice.current.fallback = f; d.stop(); return false; }
     d.muted = muted;
     duplexRef.current = d;
+    holdRef.current?.reset();
+    holdRef.current = new TurnHold({
+      patience: info?.patience,
+      question: lastQuestion,
+      consult: async (answer): Promise<Verdict> => { const tok = tokenRef.current; if (!tok) return "unclear"; const r = await call("/api/ai-interview/listen", { sessionToken: tok, answer, script: takeListenScript() }); const v = String(r.body?.state ?? ""); return v === "complete" || v === "continuing" ? v : "unclear"; },
+      commit: (text, inf) => { void commitHeld(text, inf); },
+      onView: (v) => setHold(v.holding ? v : null),
+    });
     setConv((c) => ({ ...c, on: true, phase: d.phase }));
     return true;
   };
@@ -191,24 +224,54 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
     if (e.type === "speak") d.speakChunk(Number(e.i), String(e.text ?? ""));
     else if (e.type === "audio") d.audioChunk(Number(e.i), e.none || !e.b64 ? null : { mime: String(e.mime ?? "audio/mpeg"), b64: String(e.b64) });
   };
-  const onUtterance = async (wav: Uint8Array, inf: { durationMs: number; endAt: number }) => {
+  /*
+   * A PIECE OF SPEECH, NOT A TURN (2026-11-08). The detector cut the speech at a pause: transcribe the piece now
+   * (in order, while they may already be talking again) and hold it; TurnHold decides when the answer is finished.
+   */
+  const onUtterance = (wav: Uint8Array, inf: { durationMs: number; endAt: number }) => {
+    const d = duplexRef.current;
+    if (!d) return;
+    d.take();
+    /* the detector reports the end a hang-over after the last word: the silence so far is about that long */
+    const endAt = Date.now() - 800;
+    lastActivity.current = Date.now();
+    pieceChain.current = pieceChain.current.then(async () => {
+      const tok = tokenRef.current, cur = ivRef.current;
+      if (!tok || !cur || cur.done) return;
+      const res = await fetch("/api/ai-interview/transcribe", { method: "POST", headers: { "content-type": "audio/wav", "x-session-token": tok, "x-duration-ms": String(Math.min(inf.durationMs, 120_000)) }, body: new Blob([new Uint8Array(wav)], { type: "audio/wav" }) }).catch(() => null);
+      const j = res ? await res.json().catch(() => null) : null;
+      const text = res?.status === 200 && j?.text ? String(j.text).trim() : "";
+      if (text) { setVoiceNote(null); pieceWavs.current.push(wav); }
+      else if (!holdRef.current?.holding) setVoiceNote(res && [501, 502, 402].includes(res.status) ? t.voiceUnavailable : t.notHeard);
+      holdRef.current?.piece(text, inf.durationMs, endAt);
+    }).catch(() => {});
+  };
+  /** the held answer is finished: one turn, with the consented recording of all its pieces */
+  const commitHeld = async (text: string, inf: { durationMs: number }) => {
     const d = duplexRef.current, tok = tokenRef.current, cur = ivRef.current;
     if (!d || !tok || !cur || cur.done) return;
+    const wavs = pieceWavs.current; pieceWavs.current = [];
     d.sent();
-    lastActivity.current = Date.now();
-    const blob = new Blob([new Uint8Array(wav)], { type: "audio/wav" });
-    /* the consented recording uploads while speech-to-text runs; it is named on the turn if it is ready by then */
     let mediaId: string | null = null;
-    const upload = cur.recording ? (async () => { try { const up = new RecordingUploader({ endpoints: { begin: "/api/ai-interview/media/ticket", parts: "/api/ai-interview/media/parts", complete: "/api/ai-interview/media/confirm" }, mimeType: "audio/wav", estimatedBytes: blob.size, beginExtra: { sessionToken: tok, kind: "audio", durationSeconds: Math.max(1, Math.round(inf.durationMs / 1000)) }, completeExtra: { sessionToken: tok }, onState: () => {} }); await up.begin(); up.push(blob); const done = await up.finish(Math.round(inf.durationMs / 1000)); if (done.ok) mediaId = done.mediaId; } catch { /* the words are the answer */ } })() : null;
-    const res = await fetch("/api/ai-interview/transcribe", { method: "POST", headers: { "content-type": "audio/wav", "x-session-token": tok, "x-duration-ms": String(Math.min(inf.durationMs, 120_000)) }, body: blob }).catch(() => null);
-    const j = res ? await res.json().catch(() => null) : null;
-    const text = res?.status === 200 && j?.text ? String(j.text).trim() : "";
-    if (!text) { d.replyDone(false); setVoiceNote(res && [501, 502, 402].includes(res.status) ? t.voiceUnavailable : t.notHeard); return; }
-    setVoiceNote(null);
-    if (upload) await Promise.race([upload, new Promise((r) => setTimeout(r, 50))]);
+    const joined = cur.recording ? joinWavs(wavs) : null;
+    if (joined) {
+      const blob = new Blob([new Uint8Array(joined)], { type: "audio/wav" });
+      const upload = (async () => { try { const up = new RecordingUploader({ endpoints: { begin: "/api/ai-interview/media/ticket", parts: "/api/ai-interview/media/parts", complete: "/api/ai-interview/media/confirm" }, mimeType: "audio/wav", estimatedBytes: blob.size, beginExtra: { sessionToken: tok, kind: "audio", durationSeconds: Math.max(1, Math.round(inf.durationMs / 1000)) }, completeExtra: { sessionToken: tok }, onState: () => {} }); await up.begin(); up.push(blob); const done = await up.finish(Math.round(inf.durationMs / 1000)); if (done.ok) mediaId = done.mediaId; } catch { /* the words are the answer */ } })();
+      await Promise.race([upload, new Promise((r) => setTimeout(r, 1500))]);
+    }
     const ok = await send({ kind: "answer", text }, { original: text, durationMs: inf.durationMs, sentByDuplex: true, ...(mediaId ? { audioMediaId: mediaId } : {}) }, d);
     if (!ok) d.replyDone(false);
   };
+  /** hybrid: the participant starts typing while the conversation listens — the microphone pauses and what they said so far moves into the box */
+  const beginTyping = (value: string): string => {
+    const d = duplexRef.current;
+    if (!d || typingPaused.current || !conv.on) return value;
+    if (d.phase === "listening" || d.phase === "userSpeaking") { d.pause(); typingPaused.current = true; }
+    const held = holdRef.current?.reset() ?? "";
+    pieceWavs.current = [];
+    return held ? `${held} ${value}`.trim() : value;
+  };
+  const resumeAfterTyping = () => { if (typingPaused.current) { typingPaused.current = false; duplexRef.current?.resume(); } };
 
   /* ---------------------------------------------------------------- G1: the realtime voice */
   const startRealtime = async (tok: string, opening: Interview): Promise<boolean> => {
@@ -217,7 +280,17 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
     const s = await call("/api/ai-interview/realtime/session", { sessionToken: tok });
     if (s.status !== 200 || !s.body?.clientSecret) { setRtState("off"); return false; }
     const client = new RealtimeClient({
-      onUserTranscript: (text) => { void realtimeTurn(text); },
+      /* 2026-11-08: an unfinished realtime utterance ("because…", "um") is held and joined with the next one */
+      onUserTranscript: (text) => {
+        const h = rtHold.current ?? { text: "", timer: null };
+        if (h.timer) clearTimeout(h.timer);
+        h.text = h.text ? `${h.text} ${text}` : text;
+        rtHold.current = h;
+        const dcs = endOfTurn({ answer: h.text, question: lastQuestion(), patience: info?.patience });
+        const wait = dcs.signal === "thinking" || dcs.signal === "incomplete" ? Math.max(0, dcs.waitMs - 1100) : 0;
+        h.timer = setTimeout(() => { const all = h.text; rtHold.current = null; void realtimeTurn(all); }, wait);
+      },
+      onUserSpeech: () => { const h = rtHold.current; if (h?.timer) { clearTimeout(h.timer); h.timer = null; } },
       onResponseDone: (transcript, fnCall) => { void realtimeSpoken(transcript, fnCall); },
       onSpeaking: () => { lastActivity.current = Date.now(); },
       onError: () => { /* recorded by the turns; the participant can still type */ },
@@ -297,14 +370,14 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
     setIv({ ...cur, turns: [...cur.turns, ...pending] });
     setLive("");
     const orig = extra.original ?? original;
-    const meta = input.kind === "answer" ? { typingMs: typing.current.start ? Date.now() - typing.current.start : undefined, pasted: typing.current.pasted, spoken: cur.mode !== "text" && orig !== null } : undefined;
+    const meta = input.kind === "answer" ? { typingMs: typing.current.start ? Date.now() - typing.current.start : undefined, pasted: typing.current.pasted, spoken: orig !== null && orig !== undefined } : undefined;
     /* G1: the conversation's voice bookkeeping rides with the turn (what was cut short, the last reply's latency, a fallback) */
     const pv = pendingVoice.current; pendingVoice.current = {};
     const d = duplex;
-    const voice = cur.mode !== "text" && (d || pv.fallback || pv.interrupted || pv.latencyMs !== undefined) ? { ...(d ? { speak: true } : {}), ...(pv.interrupted ? { interrupted: pv.interrupted } : {}), ...(pv.latencyMs !== undefined ? { latencyMs: pv.latencyMs } : {}), ...(pv.fallback ? { style: pv.fallback.to, fallback: pv.fallback.reason } : {}) } : undefined;
+    const voice = (cur.mode !== "text" || d) && (d || pv.fallback || pv.interrupted || pv.latencyMs !== undefined) ? { ...(d ? { speak: true } : {}), ...(pv.interrupted ? { interrupted: pv.interrupted } : {}), ...(pv.latencyMs !== undefined ? { latencyMs: pv.latencyMs } : {}), ...(pv.fallback ? { style: pv.fallback.to, fallback: pv.fallback.reason } : {}) } : undefined;
     const body = { sessionToken: tok, afterSeq: cur.lastSeq, input: { ...input, ...(meta ? { meta } : {}) }, ...(orig !== null && orig !== undefined && input.kind === "answer" ? { original: orig } : {}), ...(extra.durationMs ? { durationMs: extra.durationMs } : {}), ...(extra.audioMediaId ?? mediaIds.audio ? { audioMediaId: extra.audioMediaId ?? mediaIds.audio } : {}), ...(mediaIds.video ? { videoMediaId: mediaIds.video } : {}), ...(voice ? { voice } : {}), script: takeScript() };
     /* the player expects this reply's sentences (an utterance already told it; a typed answer, a nudge or Stop tells it here) */
-    if (d && !extra.sentByDuplex) d.sent();
+    if (d && !extra.sentByDuplex) { resumeAfterTyping(); holdRef.current?.reset(); pieceWavs.current = []; d.sent(); }
     const onEvent = d ? speechEvents(d) : undefined;
     let r = await call("/api/ai-interview/turn", body, (x, replace) => setLive((c) => (replace ? x : (c ?? "") + x)), onEvent);
     /* a dropped connection: ask again from the same position — the server replays what it already answered */
@@ -321,7 +394,7 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
     if (d) { spokenSeq.current = next.lastSeq; d.replyDone(true); }
     if (input.kind === "answer") { setDraft(""); setOriginal(null); setMediaIds({}); typing.current = { start: null, pasted: false }; }
     lastActivity.current = Date.now();
-    if (next.done) { safeSet(storeKey(token), null); setTimeout(() => { if (duplexRef.current && duplexRef.current.phase !== "speaking") { duplexRef.current.stop(); } rtRef.current?.client.close(); }, 15_000); }
+    if (next.done) { holdRef.current?.reset(); safeSet(storeKey(token), null); setTimeout(() => { if (duplexRef.current && duplexRef.current.phase !== "speaking") { duplexRef.current.stop(); } rtRef.current?.client.close(); }, 15_000); }
     setTimeout(() => inputRef.current?.focus(), 30);
     return true;
   };
@@ -418,11 +491,21 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
               <small id="ai-lang-help" className="ai-muted">{t.languageHelp}</small>
             </label>
           )}
+          {(info.purpose || info.invitedBecause) && <section className="ai-purpose" data-testid="ai-purpose">{info.purpose && <p dir="auto">{info.purpose}</p>}{info.invitedBecause && <p className="ai-muted" dir="auto">{info.invitedBecause}</p>}</section>}
           <section aria-labelledby="ai-consent-h"><h2 id="ai-consent-h" className="ai-h2">{t.beforeStart}</h2>
             <p data-testid="ai-consent-statement" dir="auto">{consent.statement}</p>
             {consent.recordingDisclosure && <p className="ai-muted" dir="auto">{consent.recordingDisclosure}</p>}
             {consent.dataUse && <p className="ai-muted" dir="auto">{consent.dataUse}</p>}
             <p className="ai-muted">{t.aiNotice}</p>
+            {/* 2026-11-08: what the platform actually does with the answers — nothing it does not do */}
+            <div className="ai-trust" data-testid="ai-trust" aria-labelledby="ai-trust-h">
+              <b id="ai-trust-h">{x.trustTitle}</b>
+              <ul>
+                <li>{x.trustMask}</li>
+                <li>{info.modes.some((m) => m !== "text") ? x.trustRecording : x.trustNoRecording}</li>
+                <li>{x.trustTranscript}</li>
+              </ul>
+            </div>
             <label className="ai-check"><input type="checkbox" data-testid="ai-agree" checked={form.agreed} onChange={(e) => setForm({ ...form, agreed: e.target.checked })} /> {t.agree}</label>
           </section>
           {choices.length > 1 && (
@@ -468,6 +551,8 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
   const showConv = conv.on && fallback?.to !== "turn_based";
   const showRealtime = iv.voice === "realtime" && rtState !== "off" && !fallback;
   const turnBasedVoice = voice && !showConv && !showRealtime;
+  /* a chat (or hybrid) study: a typed session may dictate any answer — speak, check the words, send */
+  const dictation = iv.mode === "text" && !!info.dictation && !conv.on;
   return (
     <Shell lang={lang} dir={dir}>
       <div className="ai-chat" data-testid="ai-chat" data-mode={iv.mode} data-voice={iv.voice ?? ""} data-status={iv.status} data-done={iv.done ? "1" : "0"} data-lang={lang} data-dir={dir}>
@@ -485,6 +570,7 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
               {x.stimuli?.map((s, i) => <StimulusView key={i} s={s} />)}
             </div>
           ))}
+          {hold && <div className="ai-turn participant pending" data-testid="ai-held" data-signal={hold.signal ?? ""}><span className="ai-sr">{`${t.you}: `}</span><p dir="auto">{hold.text}</p></div>}
           {live !== null && <div className="ai-turn moderator pending" data-testid="ai-live"><p dir="auto">{live || "…"}</p></div>}
           {iv.note && <div className="ai-turn moderator" data-testid="ai-note"><p>{iv.status === "ended" ? t.endedByTeam : iv.note}</p></div>}
         </div>
@@ -501,13 +587,18 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
             {showConv && (
               <div className="ai-conv" data-testid="ai-conv" data-phase={conv.phase} data-latency-ms={conv.latencyMs ?? ""} data-interruptions={conv.interruptions}>
                 <span className={`ai-dot ${conv.phase}`} aria-hidden="true" />
-                <span role="status" data-testid="ai-conv-status">{convWord[conv.phase]}</span>
+                <span role="status" data-testid="ai-conv-status">{hold && conv.phase === "listening" ? x.stillListening : convWord[conv.phase]}</span>
                 <span className="ai-grow" />
-                <button type="button" className="ai-btn small" data-testid="ai-conv-pause" onClick={() => { const d = duplexRef.current; if (!d) return; if (d.phase === "paused") d.resume(); else d.pause(); }}>{conv.phase === "paused" ? t.resume : t.pause}</button>
+                {hold && <button type="button" className="ai-btn small primary" data-testid="ai-done-speaking" onClick={() => holdRef.current?.commitNow()}>{x.imDone}</button>}
+                {(info.format === "hybrid" || iv.mode === "text") && conv.phase !== "paused" && <button type="button" className="ai-btn small" data-testid="ai-type-instead" onClick={() => { setDraft(beginTyping(draft)); setTimeout(() => inputRef.current?.focus(), 30); }}>{x.typeInstead}</button>}
+                <button type="button" className="ai-btn small" data-testid="ai-conv-pause" onClick={() => { const d = duplexRef.current; if (!d) return; if (d.phase === "paused") { typingPaused.current = false; d.resume(); } else d.pause(); }}>{conv.phase === "paused" ? (typingPaused.current ? x.talkInstead : t.resume) : t.pause}</button>
               </div>
             )}
             {!conv.on && iv.voice === "conversation" && !fallback && (
               <div className="ai-voice"><button type="button" className="ai-btn primary" data-testid="ai-conv-start" onClick={() => void startDuplex(iv.language)}>🎙 {t.startTalking}</button></div>
+            )}
+            {!conv.on && iv.mode === "text" && info.format === "hybrid" && (
+              <div className="ai-voice"><button type="button" className="ai-btn" data-testid="ai-talk-instead" onClick={() => void startDuplex(iv.language)}>🎙 {x.talkInstead}</button></div>
             )}
             {showRealtime && <div className="ai-conv" data-testid="ai-realtime" data-state={rtState}><span className={`ai-dot ${rtState === "on" ? "listening" : "processing"}`} aria-hidden="true" /><span role="status">{rtState === "on" ? t.listening : t.realtimeConnecting}</span></div>}
             {turnBasedVoice && (
@@ -517,10 +608,18 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
                   : <button type="button" className="ai-btn" data-testid="ai-rec-start" onClick={() => void startRecording()} disabled={busy || rec === "transcribing"}>{rec === "transcribing" ? t.transcribing : t.speak}</button>}
               </div>
             )}
+            {dictation && (
+              <div className="ai-voice ai-dictate">
+                {rec === "recording"
+                  ? <button type="button" className="ai-btn danger" data-testid="ai-dictate-stop" onClick={() => void stopRecording()}>{t.stopAndCheck}</button>
+                  : <button type="button" className="ai-btn" data-testid="ai-dictate" aria-label={x.dictate} onClick={() => void startRecording()} disabled={busy || rec === "transcribing"}>🎙 {rec === "transcribing" ? t.transcribing : x.dictate}</button>}
+                {(rec !== "idle" || original !== null) && <small className="ai-muted" data-testid="ai-dictate-note">{x.dictationNote}</small>}
+              </div>
+            )}
             {voiceNote && <span className="ai-muted" role="status" data-testid="ai-voice-note">{voiceNote}</span>}
             <label className="ai-sr" htmlFor="ai-input">{turnBasedVoice ? t.answerLabelVoice : t.answerLabel}</label>
             <textarea id="ai-input" ref={inputRef} className="ai-input" data-testid="ai-input" dir="auto" rows={turnBasedVoice ? 3 : 2} value={draft} placeholder={turnBasedVoice ? t.placeholderVoice : t.placeholder}
-              onChange={(e) => { if (!typing.current.start) typing.current.start = Date.now(); setDraft(e.target.value); lastActivity.current = Date.now(); }}
+              onChange={(e) => { if (!typing.current.start) typing.current.start = Date.now(); setDraft(conv.on && !typingPaused.current ? beginTyping(e.target.value) : e.target.value); lastActivity.current = Date.now(); }}
               onPaste={() => { typing.current.pasted = true; }}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (draft.trim()) void send({ kind: "answer", text: draft }); } }} disabled={busy} maxLength={8000} />
             <div className="ai-row">

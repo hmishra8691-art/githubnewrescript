@@ -57,7 +57,7 @@ export function mintRequest(c: RealtimeConfig, a: MintArgs): { url: string; init
         transcription: { model: c.transcribeModel, ...(a.language ? { language: a.language } : {}) },
         noise_reduction: { type: "near_field" },
         /* the gate: the provider detects the end of the participant's turn but never answers by itself */
-        turn_detection: { type: "server_vad", create_response: false, interrupt_response: true, silence_duration_ms: 650, prefix_padding_ms: 300 },
+        turn_detection: { type: "server_vad", create_response: false, interrupt_response: true, silence_duration_ms: 1100, prefix_padding_ms: 300 },
       },
       output: { voice: c.voice },
     },

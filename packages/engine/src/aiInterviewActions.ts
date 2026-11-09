@@ -1,5 +1,5 @@
 import type { AiModeration, AiProbingDepth, AiQuota, AiScreenerQuestion, AiStimulus, QualStudy, SurveyDefinition } from "@rescript/schema";
-import { AiModeration as AiModerationSchema, AI_INTERVIEW_MODES, AI_PROBING_DEPTHS } from "@rescript/schema";
+import { AiModeration as AiModerationSchema, AI_INTERVIEW_MODES, AI_PROBING_DEPTHS, interviewFormatOf, modesForFormat } from "@rescript/schema";
 import { estimateInterviewCostUsd, launchProblems, safeHttpsUrl } from "./aiInterviewStudy.js";
 import { buildModeratorPlan } from "./aiModerator.js";
 
@@ -58,6 +58,11 @@ export interface AiInterviewAction {
   silenceSeconds?: number;
   /** G1: voice styles offered — turn_based (tap to talk), conversation (hands-free, barge-in), realtime */
   voiceStyles?: ("turn_based" | "conversation" | "realtime")[];
+  /** 2026-11-08: voice / chat / hybrid (sets the modes too), the follow-up cap, exploring beyond the guide, turn-taking patience */
+  format?: "voice" | "chat" | "hybrid";
+  maxFollowUps?: number | null;
+  exploreBeyondGuide?: boolean;
+  patience?: "quick" | "balanced" | "patient";
 }
 export interface ScreenerInput { text?: string; kind?: "single" | "multi" | "number"; options?: { label: string; qualifies?: boolean; segment?: string }[]; min?: number; max?: number; fromQuestion?: string; qualifying?: string[]; segments?: Record<string, string> }
 
@@ -177,6 +182,15 @@ export function coerceAiInterviewAction(op: string, o: Record<string, unknown>):
     if (!styles.length || styles.some((x) => !x)) return `${op}: voiceStyles are turn_based, conversation and/or realtime`;
     a.voiceStyles = [...new Set(styles as ("turn_based" | "conversation" | "realtime")[])];
   }
+  if (o.format !== undefined) {
+    const f = String(o.format ?? "").toLowerCase().replace(/[^a-z]/g, "");
+    const v = /^(voice|spoken|audio|voiceinterview)$/.test(f) ? "voice" : /^(chat|text|chatbot|typed|chatinterview)$/.test(f) ? "chat" : /^(hybrid|both|voiceandtext|mixed|voicetext)$/.test(f) ? "hybrid" : null;
+    if (!v) return `${op}: format is voice, chat or hybrid`;
+    a.format = v;
+  }
+  if (o.maxFollowUps === null) a.maxFollowUps = null; else if (o.maxFollowUps !== undefined) { const n = num(o.maxFollowUps); if (n === undefined || n < 0 || n > 5) return `${op}: maxFollowUps is 0–5 follow-ups per question`; a.maxFollowUps = Math.round(n); }
+  if (typeof o.exploreBeyondGuide === "boolean") a.exploreBeyondGuide = o.exploreBeyondGuide;
+  if (o.patience !== undefined) { const v = String(o.patience).toLowerCase(); if (!["quick", "balanced", "patient"].includes(v)) return `${op}: patience is quick, balanced or patient`; a.patience = v as "quick" | "balanced" | "patient"; }
   if (Object.keys(a).length === 1) return `${op} names nothing to configure`;
   return a;
 }
@@ -252,6 +266,16 @@ export function applyAiInterviewAction(def: SurveyDefinition, a: AiInterviewActi
   if (a.studyBudgetUsd === null) { delete next.studyBudgetUsd; changes.push("no study budget"); } else if (a.studyBudgetUsd !== undefined) { next.studyBudgetUsd = a.studyBudgetUsd; changes.push(`study budget $${a.studyBudgetUsd}`); }
   if (a.silenceSeconds !== undefined) { next.silenceSeconds = a.silenceSeconds; changes.push(`nudge after ${a.silenceSeconds}s`); }
   if (a.voiceStyles) { next.voiceStyles = a.voiceStyles; changes.push(`voice: ${a.voiceStyles.map((v) => v.replace("_", "-")).join(" / ")}`); }
+  if (a.format) {
+    next.format = a.format;
+    if (!a.modes) next.modes = modesForFormat(a.format, next.modes);
+    /* a spoken format talks hands-free by default: the moderator listens through pauses */
+    if (a.format !== "chat" && !a.voiceStyles && !next.voiceStyles?.length) next.voiceStyles = ["conversation", "turn_based"];
+    changes.push(a.format === "chat" ? "chat interviews (typed, with dictation)" : a.format === "voice" ? "voice interviews" : "hybrid voice + text interviews");
+  }
+  if (a.maxFollowUps === null) { delete next.maxFollowUps; changes.push("follow-ups: the depth's default"); } else if (a.maxFollowUps !== undefined) { next.maxFollowUps = a.maxFollowUps; changes.push(`up to ${a.maxFollowUps} follow-up${a.maxFollowUps === 1 ? "" : "s"} per question`); }
+  if (a.exploreBeyondGuide !== undefined) { next.exploreBeyondGuide = a.exploreBeyondGuide; changes.push(a.exploreBeyondGuide ? "may explore unexpected topics" : "stays within the guide"); }
+  if (a.patience) { next.patience = a.patience; changes.push(`${a.patience} turn-taking`); }
   const parsed = AiModerationSchema.safeParse(next);
   if (!parsed.success) fail(`the AI interview settings are not valid: ${parsed.error.issues[0]?.path.join(".")} ${parsed.error.issues[0]?.message ?? ""}`);
   def.qualStudy = { ...study, aiModeration: parsed.data! };
@@ -275,6 +299,7 @@ export function aiModerationWords(m: AiModeration | undefined): string {
   const c = AiModerationSchema.parse(m);
   return [
     c.enabled ? "" : "off",
+    interviewFormatOf(c),
     c.modes.join(" / "),
     c.targetMinutes ? `${c.targetMinutes} min` : "",
     `${c.defaultProbing} probing${c.probing.length ? ` (+${c.probing.length} per question)` : ""}`,

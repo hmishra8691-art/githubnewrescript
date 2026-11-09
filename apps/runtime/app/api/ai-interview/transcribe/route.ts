@@ -3,6 +3,8 @@ import { sttConfigured, sttUnavailableReason, transcribe } from "@rescript/ai";
 import { aiInterviewDeps, billingFor, errorResponse } from "@/lib/aiInterview/runtimeDeps";
 import { interviewFor } from "@/lib/aiInterview/gate";
 import { meteredSessionStt } from "@/lib/metering";
+import { moderationOf } from "@rescript/engine";
+import { dictationAllowed } from "@rescript/schema";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,7 +24,8 @@ export async function POST(req: NextRequest) {
   try {
     const deps = aiInterviewDeps();
     const { session, study } = await interviewFor(deps, req.headers.get("x-session-token"), { live: true });
-    if (session.mode === "text") return NextResponse.json({ error: "this interview is in text mode" }, { status: 400 });
+    /* a chat or hybrid study lets a text-mode respondent dictate an answer (2026-11-08); a text-only study of old does not */
+    if (session.mode === "text" && !dictationAllowed(moderationOf(study.guide))) return NextResponse.json({ error: "this interview is in text mode" }, { status: 400 });
     if (!sttConfigured()) return NextResponse.json({ error: sttUnavailableReason() ?? "speech-to-text is not configured", code: "stt_unavailable" }, { status: 501 });
     const len = Number(req.headers.get("content-length") ?? 0);
     if (len > MAX) return NextResponse.json({ error: "that piece of audio is too long — speak in shorter answers" }, { status: 413 });

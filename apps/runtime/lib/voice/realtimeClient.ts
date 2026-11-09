@@ -16,6 +16,8 @@ export interface RealtimeHooks {
   onResponseDone(transcript: string, call: { name: string; arguments: string } | null): void;
   onSpeaking(on: boolean): void;
   onError(message: string): void;
+  /** 2026-11-08: the participant started speaking (a held, unfinished answer waits for them) */
+  onUserSpeech?(): void;
 }
 
 export class RealtimeClient {
@@ -70,6 +72,7 @@ export class RealtimeClient {
       case "input_audio_buffer.speech_started":
         /* the provider stops its own audio (interrupt_response); remember that this utterance cut it off */
         if (this.speaking) this.interruptedNext = true;
+        this.hooks.onUserSpeech?.();
         break;
       case "conversation.item.input_audio_transcription.completed": {
         const text = String(e.transcript ?? "").trim();

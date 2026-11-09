@@ -4,7 +4,7 @@ import {
   applySurveyActions, coerceSurveyActions, buildModeratorPlan, estimateInterviewCostUsd, fakeModeratorReply, finishTurn, launchProblems, moderationOf, prepareTurn, startInterview,
   type ModeratorPlan, type ModeratorState,
 } from "@rescript/engine";
-import { AI_PROBING_DEPTHS, type AiModeration } from "@rescript/schema";
+import { AI_PROBING_DEPTHS, interviewFormatOf, modesForFormat, type AiModeration } from "@rescript/schema";
 import { useStudio } from "../store";
 import { transcriptText } from "@/lib/aiInterviews/view";
 import { AiApiError, httpAiInterviewApi, sandboxAiInterviewApi, type AiInterviewApi, type AiView, type InterviewDetail } from "./aiInterviewApi";
@@ -123,9 +123,16 @@ function Setup({ realtime }: { realtime?: { available: boolean; reason?: string 
   return (
     <div className="card ql-section" data-testid="ai-setup" data-configured={q.aiModeration ? "1" : "0"}>
       <div className="eyebrow">Setup {q.aiModeration ? "" : "— not configured yet"}</div>
+      {/* 2026-11-08: the interview format first — the modes follow it (video stays a separate choice) */}
+      <div className="ql-row" data-testid="ai-setup-format" role="radiogroup" aria-label="Interview format">
+        <span>Format</span>
+        {([["voice", "Voice interview — a spoken conversation"], ["chat", "Chat interview — a chat link; typed answers, microphone to dictate"], ["hybrid", "Hybrid — speak or type, switching at any time"]] as const).map(([v, label]) => (
+          <label key={v} className="chip"><input type="radio" name="ai-format" data-testid={`ai-setup-format-${v}`} checked={form.format === v} onChange={() => setForm({ ...form, format: v, modes: modesForFormat(v, form.modes), voiceStyles: v !== "chat" && !form.voiceStyles.includes("conversation") ? ["conversation", ...form.voiceStyles] : form.voiceStyles })} /> {label}</label>
+        ))}
+      </div>
       <div className="ql-row">
         <span>Modes</span>
-        {(["text", "voice", "video"] as const).map((m) => <label key={m} className="chip"><input type="checkbox" data-testid={`ai-setup-mode-${m}`} checked={form.modes.includes(m)} onChange={(e) => set("modes", e.target.checked ? [...form.modes, m] : form.modes.filter((x) => x !== m))} /> {m === "video" ? "voice + camera" : m}</label>)}
+        {(["text", "voice", "video"] as const).map((m) => <label key={m} className="chip"><input type="checkbox" data-testid={`ai-setup-mode-${m}`} checked={form.modes.includes(m)} onChange={(e) => { const modes = e.target.checked ? [...form.modes, m] : form.modes.filter((x) => x !== m); setForm({ ...form, modes, format: modes.length ? interviewFormatOf({ modes }) : form.format }); }} /> {m === "video" ? "voice + camera" : m}</label>)}
       </div>
       {/* G1: how a voice interview talks — participants choose among the styles ticked here */}
       {form.modes.includes("voice") && (
@@ -143,6 +150,9 @@ function Setup({ realtime }: { realtime?: { available: boolean; reason?: string 
         <label className="f"><span>Minutes (target)</span><input className="input" type="number" min={3} max={120} data-testid="ai-setup-minutes" value={form.minutes} onChange={(e) => set("minutes", e.target.value)} placeholder={String(q.durationMinutes ?? 20)} /></label>
         <label className="f"><span>Max moderator turns</span><input className="input" type="number" min={4} max={200} value={form.maxTurns} onChange={(e) => set("maxTurns", e.target.value)} /></label>
         <label className="f"><span>Probing</span><select className="select" data-testid="ai-setup-probing" value={form.probing} onChange={(e) => set("probing", e.target.value)}>{AI_PROBING_DEPTHS.map((d) => <option key={d} value={d}>{d === "none" ? "none — ask and move on" : d === "light" ? "light — 1 follow-up when thin" : "deep — up to 3 follow-ups"}</option>)}</select></label>
+        <label className="f"><span>Max follow-ups per question</span><select className="select" data-testid="ai-setup-max-followups" value={form.maxFollowUps} onChange={(e) => set("maxFollowUps", e.target.value)}><option value="">the probing depth's default</option>{[0, 1, 2, 3, 4, 5].map((n) => <option key={n} value={String(n)}>{n}</option>)}</select></label>
+        <label className="f"><span>Pauses (voice)</span><select className="select" data-testid="ai-setup-patience" value={form.patience} onChange={(e) => set("patience", e.target.value)}><option value="quick">quick — short thinking windows</option><option value="balanced">balanced</option><option value="patient">patient — long thinking windows</option></select></label>
+        <label className="f"><span>Unexpected topics</span><select className="select" data-testid="ai-setup-explore" value={form.explore ? "yes" : "no"} onChange={(e) => set("explore", e.target.value === "yes")}><option value="yes">may explore them briefly</option><option value="no">stay within the guide</option></select></label>
         <label className="f"><span>Interviews wanted</span><input className="input" type="number" min={1} data-testid="ai-setup-target" value={form.target} onChange={(e) => set("target", e.target.value)} /></label>
         <label className="f"><span>Languages (blank = the participant's own)</span><input className="input" data-testid="ai-setup-languages" value={form.languages} onChange={(e) => set("languages", e.target.value)} placeholder="en, hi" /></label>
         <label className="f"><span>Moderator name</span><input className="input" value={form.persona} onChange={(e) => set("persona", e.target.value)} /></label>
@@ -177,9 +187,10 @@ function Setup({ realtime }: { realtime?: { available: boolean; reason?: string 
   );
 }
 
-interface FormState { voiceStyles: ("turn_based" | "conversation" | "realtime")[]; modes: ("text" | "voice" | "video")[]; minutes: string; maxTurns: string; probing: string; target: string; languages: string; persona: string; tone: string; cap: string; recording: string; thanks: string; incentive: string; redirect: string; perQuestion: Record<string, string>; screener: string; quotas: string; objectives: string }
+interface FormState { format: "voice" | "chat" | "hybrid"; maxFollowUps: string; patience: string; explore: boolean; voiceStyles: ("turn_based" | "conversation" | "realtime")[]; modes: ("text" | "voice" | "video")[]; minutes: string; maxTurns: string; probing: string; target: string; languages: string; persona: string; tone: string; cap: string; recording: string; thanks: string; incentive: string; redirect: string; perQuestion: Record<string, string>; screener: string; quotas: string; objectives: string }
 function toForm(c: AiModeration, configured: boolean): FormState {
   return {
+    format: configured ? interviewFormatOf(c) : "chat", maxFollowUps: c.maxFollowUps !== undefined ? String(c.maxFollowUps) : "", patience: c.patience ?? "balanced", explore: c.exploreBeyondGuide !== false,
     voiceStyles: c.voiceStyles?.length ? [...c.voiceStyles] : ["turn_based", "conversation"],
     modes: configured ? c.modes : ["text"], minutes: c.targetMinutes ? String(c.targetMinutes) : "", maxTurns: String(c.maxTurns), probing: c.defaultProbing, target: c.targetCompletes ? String(c.targetCompletes) : "",
     languages: c.languages.join(", "), persona: c.persona.name, tone: c.persona.tone, cap: String(c.costCapUsd), recording: c.recordingConsent, thanks: c.thankYouMessage ?? "", incentive: c.incentive ?? "", redirect: c.redirectUrl ?? "",
@@ -198,7 +209,7 @@ function fromForm(f: FormState, questionIds: string[]): { ok: true; action: Reco
   if (quotas.some((x) => !x)) return { ok: false, error: "Quotas are “segment: number”, one per line." };
   const perQuestion = Object.entries(f.perQuestion).filter(([id, d]) => d && questionIds.includes(id)).map(([question, depth]) => ({ question, depth }));
   return { ok: true, action: {
-    op: "configure_ai_interviews", enabled: true, modes: f.modes, targetMinutes: num(f.minutes) ?? null, maxTurns: num(f.maxTurns), defaultProbing: f.probing,
+    op: "configure_ai_interviews", enabled: true, format: f.format, maxFollowUps: num(f.maxFollowUps) ?? null, exploreBeyondGuide: f.explore, patience: f.patience, modes: f.modes, targetMinutes: num(f.minutes) ?? null, maxTurns: num(f.maxTurns), defaultProbing: f.probing,
     resetProbing: true, ...(perQuestion.length ? { probing: perQuestion } : {}), languages: f.languages.split(/[,\s]+/).filter(Boolean), targetCompletes: num(f.target) ?? null,
     persona: { name: f.persona || "Alex", tone: f.tone }, costCapUsd: num(f.cap), recordingConsent: f.recording,
     ...(f.modes.includes("voice") && f.voiceStyles.length ? { voiceStyles: f.voiceStyles } : {}),

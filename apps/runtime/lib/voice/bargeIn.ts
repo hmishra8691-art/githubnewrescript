@@ -13,6 +13,10 @@
  * when it comes, is not played (the participant already moved on) — it is reported as interrupted with
  * nothing heard. A new utterance waits until the reply in flight is answered (so the server always gets
  * the turns in order and a resend replays instead of answering twice).
+ *
+ * HOLDING A PAUSE (2026-11-08): an utterance is a PIECE of an answer, not a turn. The page takes it (`taken`: back
+ * to listening, nothing in flight), joins the pieces, and sends the answer (`sent`) only when the turn-taking
+ * engine says the participant has finished (lib/voice/turnHold.ts).
  */
 
 export type DuplexPhase = "idle" | "listening" | "userSpeaking" | "processing" | "speaking" | "paused" | "ended";
@@ -34,6 +38,8 @@ export type DuplexEvent =
   | { type: "start" } | { type: "pause" } | { type: "resume" } | { type: "end" }
   | { type: "vad_start"; at: number } | { type: "vad_end"; at: number }
   | { type: "sent" }
+  /** 2026-11-08: the page took an utterance into the answer it is holding — no request is in flight for it */
+  | { type: "taken" }
   | { type: "audio_start"; at: number } | { type: "audio_end"; at: number }
   | { type: "reply_done" } | { type: "reply_failed" };
 export type DuplexEffect =
@@ -84,6 +90,7 @@ export function duplexStep(s: DuplexState, e: DuplexEvent, o: { ignoreMs?: numbe
       st.phase = "processing";
       if (!st.inFlight) fx.push({ type: "send_next" });
       break;
+    case "taken": st.pending = Math.max(0, st.pending - 1); settle(); break;
     case "sent": st.inFlight = true; st.pending = Math.max(0, st.pending - 1); st.discardReply = false; settle(); break;
     case "audio_start":
       if (st.discardReply || st.phase === "paused" || st.phase === "ended" || st.phase === "userSpeaking") { fx.push({ type: "stop_playback", reason: "discard" }); break; }

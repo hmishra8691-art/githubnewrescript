@@ -90,6 +90,7 @@ const RUNTIME_CREDENTIALS = {
   "ai-interview/speak/route.ts": { by: "the participant's session (the service checks it)", evidence: /aiInterviewDeps\(/ },
   "ai-interview/study/route.ts": { by: "the study's participant token (the service checks it)", evidence: /aiInterviewDeps\(/ },
   "ai-interview/transcribe/route.ts": { by: "the participant's session (the service checks it)", evidence: /aiInterviewDeps\(/ },
+  "ai-interview/listen/route.ts": { by: "the participant's session (the service checks it)", evidence: /aiInterviewDeps\(/ },
   "ai-interview/turn/route.ts": { by: "the participant's session (the service checks it)", evidence: /aiInterviewDeps\(/ },
   "assessment/sandbox/route.ts": { by: "a runtime with no database only (403 elsewhere); attempts bound to their own token", evidence: /sandboxAvailable\(\)/ },
   "geocode/route.ts": { by: "the session id, through definitionForProviderCall (a provider call needs a session whose survey asks for it)", evidence: /definitionForProviderCall\(/ },

@@ -109,6 +109,26 @@ export const QualSessionPlan = z.object({
 });
 export type QualSessionPlan = z.infer<typeof QualSessionPlan>;
 
+/**
+ * THE RESEARCH BRIEF BEHIND A GUIDE (2026-11-08 — research context & interview planning). What the researcher said
+ * in their own words, what the planner made of it, and when they approved the plan. `purpose` and `invitedBecause`
+ * are written FOR RESPONDENTS (shown before consent on the interview link); everything else is the team's.
+ */
+export const QualResearchBrief = z.object({
+  /** the researcher's own words, as given */
+  context: z.string().default(""),
+  audience: z.string().optional(),
+  /** to respondents: why this research is being done, in plain words */
+  purpose: z.string().optional(),
+  /** to respondents: why they were invited */
+  invitedBecause: z.string().optional(),
+  themes: z.array(z.object({ name: z.string(), depth: z.enum(["deep", "medium", "brief"]), why: z.string().optional() })).default([]),
+  expectedInsights: z.array(z.string()).default([]),
+  recommendedMinutes: z.number().int().positive().optional(),
+  approvedAt: z.string().optional(),
+});
+export type QualResearchBrief = z.infer<typeof QualResearchBrief>;
+
 export const QualStudy = z.object({
   kind: z.enum(["interview", "focus_group"]),
   title: z.string().optional(),
@@ -125,6 +145,8 @@ export const QualStudy = z.object({
   sections: z.array(QualGuideSection).default([]),
   /** 2026-10-22: run this interview guide as AI-moderated 1:1 interviews (aiInterview.ts); absent = not configured */
   aiModeration: AiModeration.optional(),
+  /** 2026-11-08: the research context and the approved plan the guide was made from (absent = written directly) */
+  brief: QualResearchBrief.optional(),
   updatedAt: z.string().optional(),
 });
 export type QualStudy = z.infer<typeof QualStudy>;

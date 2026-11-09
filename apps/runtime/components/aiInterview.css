@@ -59,3 +59,8 @@
 .ai-shell[dir="rtl"] { font-family: var(--rs-font, system-ui, "Noto Naskh Arabic", "Noto Nastaliq Urdu", "Segoe UI", Tahoma, sans-serif); }
 .ai-shell[dir="rtl"] .ai-turn { line-height: 1.7; }
 @media (prefers-reduced-motion: reduce) { .ai-dot { animation: none !important; } }
+/* 2026-11-08 — the answer held through a pause, dictation in chat, the privacy panel */
+.ai-turn.participant.pending { background: color-mix(in srgb, var(--rs-primary, #2563eb) 72%, #fff); border: 1px dashed rgba(255, 255, 255, .7); }
+.ai-dictate small { flex-basis: 100%; }
+.ai-trust { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: .95em; }
+.ai-trust ul { margin: 6px 0 0; padding-inline-start: 20px; display: grid; gap: 3px; }

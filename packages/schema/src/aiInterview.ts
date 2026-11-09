@@ -150,8 +150,36 @@ export const AiModeration = z.object({
   voiceStyles: z.array(AiVoiceStyle).optional(),
   /** each study language's wording for the scripted fallback and the participant page (G1), by language code */
   translations: z.record(AiLanguagePack).optional(),
+  /**
+   * HOW RESPONDENTS TAKE PART (2026-11-08): voice = a spoken conversation; chat = a chat link, typed answers with a
+   * microphone to dictate any answer; hybrid = both in one interview, switching at will. Absent = read from `modes`
+   * (a study launched before keeps exactly what it had).
+   */
+  format: z.enum(["voice", "chat", "hybrid"]).optional(),
+  /** the follow-ups any probed question may get (0–5), overriding the depth's default; a question's own rule still wins */
+  maxFollowUps: z.number().int().min(0).max(5).optional(),
+  /** may the moderator follow an unexpected but relevant point the guide does not name */
+  exploreBeyondGuide: z.boolean().default(true),
+  /** how long the moderator waits through a pause before taking an answer as finished (voice) */
+  patience: z.enum(["quick", "balanced", "patient"]).default("balanced"),
 });
 export type AiModeration = z.infer<typeof AiModeration>;
+
+export const AI_INTERVIEW_FORMATS = ["voice", "chat", "hybrid"] as const;
+export type AiInterviewFormat = (typeof AI_INTERVIEW_FORMATS)[number];
+/** the format a configuration amounts to: its own, else read from the modes it offers */
+export function interviewFormatOf(m: Pick<AiModeration, "format" | "modes">): AiInterviewFormat {
+  if (m.format) return m.format;
+  const voice = m.modes.some((x) => x !== "text"), text = m.modes.includes("text");
+  return voice && text ? "hybrid" : voice ? "voice" : "chat";
+}
+/** the modes a format offers (video stays wherever the researcher turned it on) */
+export function modesForFormat(format: AiInterviewFormat, current: readonly AiInterviewMode[] = []): AiInterviewMode[] {
+  const video = current.includes("video") ? ["video" as const] : [];
+  return format === "chat" ? ["text"] : format === "voice" ? ["voice", ...video] : ["text", "voice", ...video];
+}
+/** can a respondent dictate an answer by microphone in a text session of this study */
+export const dictationAllowed = (m: Pick<AiModeration, "format" | "modes">) => { const f = interviewFormatOf(m); return f === "chat" || f === "hybrid"; };
 
 /** the follow-ups a depth allows when no rule overrides it */
 export const PROBE_DEPTH_FOLLOW_UPS: Record<AiProbingDepth, number> = { none: 0, light: 1, deep: 3 };

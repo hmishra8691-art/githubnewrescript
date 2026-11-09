@@ -1,4 +1,5 @@
 import type { AiModeration, AiScreenerQuestion, AiStimulus, QualStudy } from "@rescript/schema";
+import { dictationAllowed, interviewFormatOf } from "@rescript/schema";
 import { buildModeratorPlan, moderationOf, type DecisionRecord, type ModeratorFlag, type ModeratorPlan } from "./aiModerator.js";
 
 /**
@@ -89,6 +90,13 @@ export interface PublicStudyView {
   silenceSeconds: number;
   /** G1: the voice styles the participant may choose (realtime only when the runtime has a provider) */
   voiceStyles?: ("turn_based" | "conversation" | "realtime")[];
+  /** 2026-11-08: voice / chat / hybrid; whether a typed session may dictate; how patient the voice turn-taking is */
+  format?: "voice" | "chat" | "hybrid";
+  dictation?: boolean;
+  patience?: "quick" | "balanced" | "patient";
+  /** 2026-11-08: from the approved research brief — why the research is done and why this respondent was invited */
+  purpose?: string;
+  invitedBecause?: string;
 }
 
 /** what the participant's page is told before the interview — no qualifying rules, no moderator notes, no objectives */
@@ -107,6 +115,11 @@ export function publicStudyView(study: QualStudy, opts: { title?: string } = {})
     ...(cfg.incentive ? { incentive: cfg.incentive } : {}),
     silenceSeconds: cfg.silenceSeconds,
     voiceStyles: voiceStylesOf(cfg),
+    format: interviewFormatOf(cfg),
+    dictation: dictationAllowed(cfg),
+    patience: cfg.patience ?? "balanced",
+    ...(study.brief?.purpose ? { purpose: study.brief.purpose } : {}),
+    ...(study.brief?.invitedBecause ? { invitedBecause: study.brief.invitedBecause } : {}),
   };
 }
 

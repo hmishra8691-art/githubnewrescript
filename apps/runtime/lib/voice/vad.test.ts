@@ -139,3 +139,14 @@ test("WAV: 16 kHz mono 16-bit, resampled from 48 kHz, pre-roll ring", () => {
   const kept = ring.take();
   assert.ok(kept.reduce((a, f) => a + f.length, 0) <= 1300 && kept.length >= 3);
 });
+
+test("2026-11-08: the pieces of a held answer join into one playable WAV", async () => {
+  const { joinWavs } = await import("./wav.ts");
+  const a = encodeWav(new Float32Array(1600).fill(0.1), 16000), b = encodeWav(new Float32Array(800).fill(-0.1), 16000);
+  const j = joinWavs([a, b])!;
+  const v = new DataView(j.buffer);
+  assert.equal(j.length, 44 + (1600 + 800) * 2);
+  assert.equal(v.getUint32(40, true), (1600 + 800) * 2);
+  assert.equal(v.getUint32(24, true), 16000);
+  assert.equal(joinWavs([]), null);
+});

@@ -1,8 +1,9 @@
 import {
-  buildModeratorPlan, displayableStimulus, fakeModeratorReply, finishTurn, interviewStatus, moderationOf, prepareTurn, publicStudyView, redirectFor, screenParticipant, startInterview, transcriptForQual,
+  buildModeratorPlan, displayableStimulus, endOfTurn, fakeModeratorReply, finishTurn, listenRequest, readListen, interviewStatus, moderationOf, prepareTurn, publicStudyView, redirectFor, screenParticipant, startInterview, transcriptForQual,
   type InterviewTurnRecord, type ModelRequest, type ModeratorPlan, type ModeratorReply, type ModeratorState, type ParticipantInput, type PreparedTurn, type PublicStudyView,
 } from "@rescript/engine";
 import type { AiStimulus, PanelOutcome } from "@rescript/schema";
+import { interviewFormatOf } from "@rescript/schema";
 import { outcomeForInterview, type FlagKind, type NotifyEmitInput } from "@rescript/engine";
 import type { AiInterviewStore, SessionRec, StudyRec } from "./types.ts";
 import { realtimeReplyFrom, realtimeTurnInstructions, realtimeVerbatimInstructions, spokeVerbatim } from "@rescript/engine";
@@ -283,6 +284,8 @@ export async function turn(deps: Deps, body: TurnBody, opts: { onSay?: SayStream
   const input: ParticipantInput = kind === "answer" ? { kind, text, meta: { ...(body.input?.meta ?? {}), ...(session.mode !== "text" && body.original != null ? { spoken: true } : {}) }, ...(interrupted ? { interrupted } : {}) } : { kind };
   const now = deps.now();
   const prepared = prepareTurn(plan, session.state, input, { now, modelAvailable: !!deps.model });
+  /* 2026-11-08: a typed session speaks its replies only in a hybrid study (the participant switched to talking) — never a free voice for a chat study */
+  if (session.mode === "text" && interviewFormatOf(moderationOf(study.guide)) !== "hybrid") opts = { ...opts, onSpeak: undefined };
   /* G1 realtime: a model turn is spoken by the provider — hand it the turn's instructions, record nothing yet */
   const rt = session.mode === "voice" && session.state.voice?.style === "realtime" && body.realtime ? body.realtime : null;
   if (rt?.prepare && prepared.kind === "model") return { interview: await withPanel(deps, session, view(plan, study, session, existing, silence)), added: [], replayed: false, realtime: { action: "respond", instructions: realtimeTurnInstructions(plan, prepared) } };
@@ -344,6 +347,28 @@ export async function turn(deps: Deps, body: TurnBody, opts: { onSay?: SayStream
     ...(status === "completed" ? [{ ...base, type: "ai_interview.completed" as const, ref: session.id, idempotencyKey: `ai_interview.completed:${session.id}`, detail: { segment: session.segment, turns: all.length } }] : []),
   ]);
   return { interview: await withPanel(deps, after2, view(plan, study, after2, all, silence)), added: newTurns.map((t) => turnView(plan, t)), replayed: false, ...(rtOut ? { realtime: rtOut } : {}) };
+}
+
+/**
+ * IS THE PARTICIPANT STILL TALKING? (2026-11-08) The page holds a pause instead of sending a half answer; when the
+ * words alone cannot tell (a short answer to an open question, a single sentence), it asks here. One small metered
+ * model call on the study's guide (cached prefix); nothing is written. Without a model, past the interview's AI
+ * cap, or when the call fails, the answer is "unclear" and the page keeps its own adaptive wait.
+ */
+export async function listen(deps: Deps, body: { sessionToken: string; answer?: unknown; script?: unknown }): Promise<{ state: "complete" | "continuing" | "unclear"; source: "model" | "rules" }> {
+  const { session, study } = await sessionOf(deps, body.sessionToken);
+  if (session.status !== "in_progress") throw new AiInterviewError("This interview has finished.", 409, "finished");
+  const answer = String(body.answer ?? "").slice(0, 4000).trim();
+  if (!answer) return { state: "continuing", source: "rules" };
+  const plan = planFor(study, session.language);
+  if (!deps.model || session.state.costUsd >= plan.costCapUsd * 0.9 || session.state.modelOff) return { state: "unclear", source: "rules" };
+  const rules = endOfTurn({ answer, question: session.state.lastQuestion, language: session.language });
+  const fake = () => ({ state: rules.signal === "thinking" || rules.signal === "incomplete" ? "continuing" : "complete", reason: rules.reason });
+  try {
+    const r = await deps.model(listenRequest(plan, session.state, answer), { session, study, fake, script: body.script });
+    if ("failed" in r) return { state: "unclear", source: "rules" };
+    return { state: readListen(r.value), source: "model" };
+  } catch { return { state: "unclear", source: "rules" }; }
 }
 
 export async function toQual(deps: Deps, plan: ModeratorPlan, study: StudyRec, session: SessionRec, turns: InterviewTurnRecord[]) {

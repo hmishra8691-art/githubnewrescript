@@ -223,6 +223,8 @@ console.log("\n3 — the live view: voice chip (interruptions, latency) and the 
 {
   await openAi();
   await studio.waitForSelector('[data-testid="ai-row"] [data-testid="ai-voice-stats"][data-style="conversation"]', { timeout: 20000 });
+  /* 2026-11-08: the answer is held through the participant's pause before it is sent, so the live view (re-read every 5 s) may need one more read */
+  await studio.waitForFunction(() => Number(document.querySelector('[data-testid="ai-voice-stats"][data-style="conversation"]')?.getAttribute("data-interruptions") ?? 0) >= 1, null, { timeout: 20000 });
   const chip = await studio.$('[data-testid="ai-voice-stats"][data-style="conversation"]');
   assert.ok(Number(await chip.getAttribute("data-interruptions")) >= 1);
   const row = await studio.$('[data-testid="ai-row"]:has([data-testid="ai-voice-stats"][data-style="conversation"])');

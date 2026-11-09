@@ -10,6 +10,7 @@ import { useStudio } from "../store";
 import { allSegments } from "@/lib/qual/qualWorkspace";
 import { httpQualApi, sharedSandboxQualApi, agreementOf, QualApiError, type QualApi, type WorkspaceView, type CodingReport } from "./qualApi";
 import { AiInterviewsTab } from "./AiInterviewsTab";
+import { PlanTab } from "./PlanTab";
 /* F2 2026-10-22: AI synthesis, blind double-coding, highlight reels, text group sessions, transcript correction, auto-coding */
 import { httpSynthesisApi, sandboxSynthesisApi, type SynthesisApi } from "./synthesisApi";
 import { SynthesisTab } from "./SynthesisTab";
@@ -44,9 +45,9 @@ import { ClipPlayer } from "./ClipPlayer";
  * by link, a back room of observers, recording per speaker → one transcript.
  */
 
-type Tab = "guide" | "ai" | "sessions" | "transcripts" | "coding" | "themes" | "report" | "synthesis" | "double" | "highlights" | "groups" | "live" | "alerts";
+type Tab = "plan" | "guide" | "ai" | "sessions" | "transcripts" | "coding" | "themes" | "report" | "synthesis" | "double" | "highlights" | "groups" | "live" | "alerts";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "guide", label: "Guide" }, { key: "ai", label: "AI interviews" }, { key: "sessions", label: "Sessions" }, { key: "transcripts", label: "Transcripts" },
+  { key: "plan", label: "Plan" }, { key: "guide", label: "Guide" }, { key: "ai", label: "AI interviews" }, { key: "sessions", label: "Sessions" }, { key: "transcripts", label: "Transcripts" },
   { key: "coding", label: "Coding" }, { key: "themes", label: "Themes" }, { key: "synthesis", label: "Synthesis" }, { key: "double", label: "Double coding" }, { key: "highlights", label: "Highlights" }, { key: "groups", label: "Group sessions" }, { key: "live", label: "Live sessions" }, { key: "alerts", label: "Alerts & panels" }, { key: "report", label: "Report" },
 ];
 const STATUS_BADGE: Record<string, string> = { ai_suggested: "warning", human_reviewed: "success", rejected: "error" };
@@ -66,7 +67,7 @@ export function QualPanel() {
   defRef.current = s.def;
   const api = React.useMemo<QualApi>(() => (s.surveyDbId === "sandbox" ? sharedSandboxQualApi(() => defRef.current) : httpQualApi(s.surveyDbId)), [s.surveyDbId]);
   /* G3: a deep link (an alert's "open the live view") names the tab: ?qual=ai|alerts|… */
-  const [tab, setTab] = React.useState<Tab>(() => { if (typeof window === "undefined") return "guide"; const q = new URLSearchParams(window.location.search).get("qual"); return (TABS.some((t) => t.key === q) ? q : "guide") as Tab; });
+  const [tab, setTab] = React.useState<Tab>(() => { if (typeof window === "undefined") return "guide"; const q = new URLSearchParams(window.location.search).get("qual"); return (TABS.some((t) => t.key === q) ? q : s.def.qualStudy ? "guide" : "plan") as Tab; });
   const [ws, setWs] = React.useState<WorkspaceView | null>(null);
   const syn = React.useMemo<SynthesisApi>(() => (api.sandbox ? sandboxSynthesisApi(api, () => defRef.current, setWs) : httpSynthesisApi(s.surveyDbId, setWs, () => api.load())), [api, s.surveyDbId]);
   const [error, setError] = React.useState<{ text: string; status?: number } | null>(null);
@@ -101,6 +102,7 @@ export function QualPanel() {
       {error && <div className={`alert ${error.status === 403 ? "warning" : "error"}`} data-testid="qual-error" data-status={error.status ?? ""}>{error.text}</div>}
       {note && <div className="alert success" data-testid="qual-note">{note}</div>}
       {forbidden ? <div className="empty" data-testid="qual-forbidden">Qualitative data belong to the Data module, and your access does not include it. The guide can still be exported from Intelligent Mode.</div>
+        : tab === "plan" ? <PlanTab onDone={() => setTab("ai")} />
         : tab === "guide" ? <GuideTab api={api} run={run} />
         : tab === "ai" ? <AiInterviewsTab qualApi={api} setWs={setWs} setNote={setNote} />
         : tab === "alerts" ? <AlertsPanelsTab />

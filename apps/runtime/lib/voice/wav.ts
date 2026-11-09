@@ -52,3 +52,19 @@ export class FrameRing {
   }
   take(): Float32Array[] { const out = this.frames; this.frames = []; this.total = 0; return out; }
 }
+
+/** 2026-11-08: the pieces of one held answer (16-bit mono WAVs of one rate, from `encodeWav`) → one WAV, for the consented recording */
+export function joinWavs(wavs: readonly Uint8Array[]): Uint8Array | null {
+  const ok = wavs.filter((w) => w.length > 44);
+  if (!ok.length) return null;
+  if (ok.length === 1) return ok[0];
+  const rate = new DataView(ok[0].buffer, ok[0].byteOffset, 44).getUint32(24, true);
+  const n = ok.reduce((a, w) => a + w.length - 44, 0);
+  const out = new Uint8Array(44 + n);
+  out.set(ok[0].subarray(0, 44), 0);
+  const v = new DataView(out.buffer);
+  v.setUint32(4, 36 + n, true); v.setUint32(40, n, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+  let at = 44;
+  for (const w of ok) { out.set(w.subarray(44), at); at += w.length - 44; }
+  return out;
+}

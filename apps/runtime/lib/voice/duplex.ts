@@ -29,7 +29,7 @@ export function conversationSupport(): ConversationSupport {
 }
 
 export interface DuplexHooks {
-  /** an utterance is ready to send (the page transcribes it and sends the turn; then calls `sent()`) */
+  /** a piece of speech ended at a pause (the page transcribes it, holds it with `take()`, and calls `sent()` when the answer goes) */
   onUtterance(wav: Uint8Array, info: { durationMs: number; endAt: number }): void;
   onPhase(p: DuplexPhase): void;
   /** end of the participant's speech → the first audio of the reply */
@@ -65,7 +65,7 @@ export class DuplexController {
 
   constructor(hooks: DuplexHooks, o: DuplexOptions) {
     this.hooks = hooks;
-    this.o = { ignoreMs: 300, playbackBiasDb: 10, hangoverMs: 800, ...o };
+    this.o = { ignoreMs: 300, playbackBiasDb: 10, hangoverMs: 1000, ...o };
   }
 
   get phase(): DuplexPhase { return this.st.phase; }
@@ -102,6 +102,8 @@ export class DuplexController {
   /* ---------------------------------------------------------------- the reply */
 
   /** a turn request went out (the utterance's, or a nudge's) */
+  /** 2026-11-08: the utterance just delivered is held as part of the answer in progress (nothing is sent yet) */
+  take(): void { this.dispatch({ type: "taken" }); }
   sent(): void { this.chunks.clear(); this.nextIndex = 0; this.heard = 0; this.replyOpen = true; this.discarding = false; this.dispatch({ type: "sent" }); }
   speakChunk(i: number, text: string): void { if (!this.chunks.has(i)) this.chunks.set(i, { i, text }); this.pump(); }
   audioChunk(i: number, audio: { mime: string; b64: string } | null): void { const c = this.chunks.get(i) ?? { i, text: "" }; c.audio = audio; this.chunks.set(i, c); this.pump(); }
