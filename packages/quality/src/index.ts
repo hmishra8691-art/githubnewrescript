@@ -8,6 +8,7 @@ export * from "./engine.js";
 export * from "./similarity.js";
 export * from "./profiles.js";
 export { attentionResult } from "./rules/attention.js";
+export { logicChecksFor } from "./rules/logic.js";
 export { matrixSignature, gridPositions } from "./rules/matrix.js";
 export { openEndHash, openEnds } from "./rules/openEnd.js";
 export { navigationFingerprint } from "./rules/behaviour.js";

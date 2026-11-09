@@ -191,7 +191,7 @@ export function importScripts(def0: SurveyDefinition, bundle: ScriptBundle, newI
       const g = code.trim() ? codeGate(code, "logic") : { ok: true, errors: [] as string[] };
       if (!g.ok) { out.refused.push({ name, reasons: g.errors.slice(0, 3) }); continue; }
       const notes = [note, ...(it.hadCondition ? ["Its “run only when” condition was not imported — set it again if needed."] : [])];
-      const sc: CustomScript = { id: newId("script"), name, scope, ...(ref ? { ref } : {}), event: (["on_load", "on_change", "on_submit", "on_validate", "on_complete"].includes(String(it.event)) ? it.event : "on_load") as CustomScript["event"], code, enabled: false, notes: notes.join(" ") };
+      const sc: CustomScript = { id: newId("script"), name, scope, ...(ref ? { ref } : {}), event: (["on_load", "on_change", "on_submit", "on_validate", "on_complete"].includes(String(it.event)) ? it.event : "on_load") as CustomScript["event"], code, enabled: false, origin: "import", notes: notes.join(" ") };
       def.scripts.push(sc);
       out.added.push({ kind: "logic", name, id: sc.id, notes });
     } else {

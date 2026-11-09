@@ -230,6 +230,28 @@ export const RULES: RuleDef[] = [
     defaultSeverity: "medium", riskPoints: 8, qualityPenalty: 12, enabledIn: STD_UP, needs: ["timing"], params: [],
   },
 
+  /* 2026-11-09 (phase 4): contradictions read from the questionnaire's own structure — rules/logic.ts */
+  {
+    id: "consistency.exclusive_combined", category: "consistency", title: "Exclusive answer combined with others",
+    description: "\"None of these\" / \"Don't know\" (an exclusive option) selected together with other answers in a multi-select — the live survey prevents it, imported or edited data does not.",
+    defaultSeverity: "high", riskPoints: 15, qualityPenalty: 20, enabledIn: ALL, params: [],
+  },
+  {
+    id: "consistency.funnel", category: "consistency", title: "Brand funnel contradiction",
+    description: "A brand chosen at a later funnel stage (consideration, usage, preference) that was not chosen at an earlier one (awareness) — using a brand the respondent says they have never heard of. Matched by option label.",
+    defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 15, enabledIn: ALL, params: [],
+  },
+  {
+    id: "consistency.part_whole", category: "consistency", title: "Part larger than its whole",
+    description: "A count that is part of an earlier count is larger than it: children under 18 above the household size, or \"how many of them …\" above the number asked just before.",
+    defaultSeverity: "high", riskPoints: 15, qualityPenalty: 20, enabledIn: ALL, params: [],
+  },
+  {
+    id: "consistency.age_years", category: "consistency", title: "More years than the respondent's age",
+    description: "A \"how many years …\" answer (working, living here, using the brand) greater than the respondent's stated age.",
+    defaultSeverity: "high", riskPoints: 15, qualityPenalty: 20, enabledIn: ALL, params: [],
+  },
+
   /* ------------------------------------------------------------ pattern */
   {
     id: "pattern.low_entropy", category: "pattern", title: "Low response entropy",

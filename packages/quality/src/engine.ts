@@ -12,6 +12,7 @@ import { timingRules } from "./rules/timing.js";
 import { matrixRules, matrixSignature } from "./rules/matrix.js";
 import { patternRules } from "./rules/pattern.js";
 import { attentionRules, attentionResult, consistencyRules, stateFor } from "./rules/attention.js";
+import { logicRules } from "./rules/logic.js";
 import { openEndRules, openEndHash, openEnds } from "./rules/openEnd.js";
 import { behaviourRules, navigationFingerprint } from "./rules/behaviour.js";
 import { similarityRules, clusterSurvey } from "./similarity.js";
@@ -303,6 +304,7 @@ export function assess(input: QualityInput): QualityAssessment {
     drafts.push(...patternRules(ctx));
     drafts.push(...attentionRules(ctx));
     drafts.push(...consistencyRules(ctx));
+    drafts.push(...logicRules(ctx));
     drafts.push(...openEndRules(ctx));
     drafts.push(...behaviourRules(ctx));
   }

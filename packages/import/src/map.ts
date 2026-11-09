@@ -203,7 +203,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       migration = `Migration: ${a.summary} `;
       if (a.translated?.gate.ok) migratedScripts.push({
         id: uid("script"), name: `Migrated JS · ${cu.role}${questionId ? "" : ` · ${cu.location}`} (review)`.slice(0, 120),
-        scope: questionId ? "question" : "survey", ...(questionId ? { ref: questionId } : {}), event: a.translated.event, code: a.translated.code, enabled: false,
+        scope: questionId ? "question" : "survey", ...(questionId ? { ref: questionId } : {}), event: a.translated.event, code: a.translated.code, enabled: false, origin: "import",
         notes: `Script check: passes. Translated from the Qualtrics JavaScript in “${name}” by the importer; not executed. Review it, then switch it on.`.slice(0, 1000),
       });
       if (a.native && questionId) nativeTimers.push({ questionId, minSeconds: a.native.minSeconds, location: cu.location });
@@ -213,7 +213,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       id: uid("script"), name,
       scope: questionId ? "question" : "survey", ...(questionId ? { ref: questionId } : {}),
       event: /submit/i.test(cu.role + cu.code.slice(0, 200)) ? "on_submit" : "on_load",
-      code: cu.code, enabled: false,
+      code: cu.code, enabled: false, origin: "import",
       notes: `${verdict}Imported from ${c.source.platform} (${cu.location}); not executed. ${migration}${cu.refs.length ? `Reads ${cu.refs.join(", ")}. ` : ""}Analyse it in Intelligent mode, then rebuild it as Rescript logic.`.slice(0, 1000),
     };
   };

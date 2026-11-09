@@ -36,6 +36,7 @@ import { runSimulation } from "@rescript/templates";
 import { methodologyAnswer, methodologyQuestion, setPendingMethodology } from "../../lib/intelligent/methodologyRequest";
 import { trackerAnswer, trackerQuestion } from "../../lib/intelligent/trackerRequest";
 import { trackerSession } from "../../lib/tracker/session";
+import { runScriptCheck, scriptStatusAnswer, scriptStatusQuestion } from "../../lib/scripts/scriptCheck";
 import type { ClientTask } from "@/lib/copilot/taskStore";
 import { StructurePane } from "./copilot/StructurePane";
 import { paneLayout, splitterKey, readPaneWidths, PANE_LIMITS } from "../../lib/intelligent/paneLayout";
@@ -361,6 +362,13 @@ export function IntelligentView() {
      * engine here, in the browser — nothing saved — and the answer says what broke. The full report (journeys,
      * downloads, saving as TEST data) is waiting in Research tools → Tests.
      */
+    /* "did the AI's script run? which scripts are validated?" — the script lifecycle check (2026-11-09, phase 4) */
+    if (scriptStatusQuestion(t) && s.def.scripts.length) {
+      const run = await runScriptCheck(s.def, s.surveyDbId);
+      const a = scriptStatusAnswer(run);
+      copilot.local(t, { kind: "answer", category: "debugging", understood: "Check every logic script: generated, executed, validated.", answer: a.answer, sections: a.sections, detected: [{ what: "read as", value: "script status" }, { what: "scripts", value: String(run.check.scripts.length) }] }, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     /* "is the change since the last wave real?" — the wave tracker answers from the waves in Results → Wave tracker (2026-11-09) */
     if (trackerQuestion(t)) {
       const a = trackerAnswer(t, trackerSession(s.surveyDbId));

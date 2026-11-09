@@ -69,6 +69,8 @@ export interface SimulationResult {
   scriptErrors: { pageId: string; errors: { message: string; questionRef?: string }[] }[];
   logs: string[];
   listFills: { listFillId: string; items: { code: string; label: string }[] }[];
+  /** per logic script (id): how often it ran in this walk, how often it threw, refused by the gate (2026-11-09) */
+  scriptRuns: Record<string, { runs: number; failures: number; refused: number; messages: string[] }>;
 }
 
 /*
@@ -230,9 +232,18 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
   const state = createResponseState(def, { seed: opts.seed ?? 1, embedded: opts.embedded ?? {} });
   const quotaCounts = opts.quotaCounts ?? {};
   const lfCounts = opts.listFillCounts ?? {};
-  const out: SimulationResult = { state, pages: [], scriptErrors: [], logs: [], listFills: [] };
+  const out: SimulationResult = { state, pages: [], scriptErrors: [], logs: [], listFills: [], scriptRuns: {} };
+  const tally = (r: { runs?: { id: string; ok: boolean; failed?: string; refused?: string }[] }) => {
+    for (const x of r.runs ?? []) {
+      const t = (out.scriptRuns[x.id] ??= { runs: 0, failures: 0, refused: 0, messages: [] });
+      if (x.refused) { t.refused++; if (t.messages.length < 3 && !t.messages.includes(x.refused)) t.messages.push(x.refused); continue; }
+      t.runs++;
+      if (x.failed) { t.failures++; if (t.messages.length < 3 && !t.messages.includes(x.failed)) t.messages.push(x.failed); }
+    }
+  };
 
   const load = runScripts(def, state, "on_load");
+  tally(load);
   out.logs.push(...load.logs);
 
   let nav = start(def, state, quotaCounts);
@@ -272,6 +283,7 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
       if (value !== undefined && value !== null) {
         setAnswer(def, state, q.id, value, loop);
         const r = runScripts(def, state, "on_change", { scopeRef: [q.id, step.pageId.split("@")[0]], loop });
+        tally(r);
         out.logs.push(...r.logs);
       }
     }
@@ -292,6 +304,7 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
     const submit = errors.length || validate.errors.length
       ? { logs: [] as string[], errors: [] as typeof validate.errors }
       : runScripts(def, state, "on_submit", { scopeRef: submitScope, loop });
+    tally(validate); tally(submit);
     const scripts = { logs: [...validate.logs, ...submit.logs], errors: [...validate.errors, ...submit.errors] };
     out.logs.push(...scripts.logs);
     if (scripts.errors.length) out.scriptErrors.push({ pageId: step.pageId, errors: scripts.errors });

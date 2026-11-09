@@ -120,7 +120,7 @@ export function applyLogicScriptAction(def: SurveyDefinition, a: LogicScriptActi
       if (def.scripts.some((s) => s.name.trim().toLowerCase() === a.name.trim().toLowerCase())) fail(`there is already a logic script “${a.name}” — update it (update_logic_script {"script":"${a.name}", "edits"|"code"…}) instead of adding a second one`);
       gate(a.code, a.name);
       const scope = a.scope ?? "survey";
-      const s: CustomScript = { id: env.ids("scr"), name: a.name, scope, ...(resolveRef(def, env, scope, a.ref) ? { ref: resolveRef(def, env, scope, a.ref) } : {}), event: a.event ?? "on_load", code: a.code, enabled: a.enabled ?? true, ...(a.notes ? { notes: a.notes } : {}) } as CustomScript;
+      const s: CustomScript = { id: env.ids("scr"), name: a.name, scope, ...(resolveRef(def, env, scope, a.ref) ? { ref: resolveRef(def, env, scope, a.ref) } : {}), event: a.event ?? "on_load", code: a.code, enabled: a.enabled ?? true, origin: "ai", ...(a.notes ? { notes: a.notes } : {}) } as CustomScript;
       def.scripts.push(s);
       return { description: `Add logic script “${s.name}” (${s.event} on ${where(s)}) — checked by the logic-script gate, not run yet`, warnings: [], touched: s.scope === "question" && s.ref ? [s.ref] : [] };
     }

@@ -159,6 +159,8 @@ export interface ScriptRunResult {
   refused?: string;
   /** the names of the scripts the gate refused in this run (runScripts) */
   refusedScripts?: string[];
+  /** every script this call selected, by id: ran (ok, or threw — `failed`), or refused by the gate (2026-11-09) */
+  runs?: { id: string; ok: boolean; failed?: string; refused?: string }[];
 }
 
 /** what a script sees of one iteration (shared with the sandbox snapshot, logicSandbox.ts) */
@@ -379,9 +381,11 @@ export function runScripts(
       // not run: the inspector says so, and the caller warns in the console in live (S0b D3)
       combined.logs.push(`[${script.name}] refused: ${r.refused}`);
       (combined.refusedScripts ??= []).push(script.name);
+      (combined.runs ??= []).push({ id: script.id, ok: false, refused: r.refused });
       continue;
     }
     combined.ran = (combined.ran ?? 0) + 1;
+    (combined.runs ??= []).push({ id: script.id, ok: !r.failed, ...(r.failed ? { failed: r.failed } : {}) });
     combined.logs.push(...own.logs.map((l) => `[${script.name}] ${l}`));
     combined.errors.push(...own.errors);
     if (r.failed) combined.logs.push(`[${script.name}] ERROR: ${r.failed}`);

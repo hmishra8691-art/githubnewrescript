@@ -2,7 +2,7 @@
 import React from "react";
 import type { CustomQualityRule, QualityClass, QualityConfig, RuleRole, RuleSetting, Severity, Strictness } from "@rescript/schema";
 import { QualityConfig as QualityConfigSchema } from "@rescript/schema";
-import { RULES, CATEGORY_LABELS, BUILTIN_PROFILES, SYSTEM_VARIABLE_HELP, configFingerprint, type RuleDef, type QualityProfile } from "@rescript/quality";
+import { RULES, CATEGORY_LABELS, logicChecksFor, BUILTIN_PROFILES, SYSTEM_VARIABLE_HELP, configFingerprint, type RuleDef, type QualityProfile } from "@rescript/quality";
 import { useStudio, uid } from "./store";
 import { ConditionEditor } from "./ConditionBuilder";
 import { CountInput } from "./CountInput";
@@ -155,6 +155,7 @@ export function QualitySettings() {
                   </div>
                   {open && (
                     <div className="qs-cat-body">
+                      {cat === "consistency" && <LogicChecks />}
                       {rules.map((r) => (
                         <RuleRow key={r.id} rule={r} level={level} setting={cfg.rules[r.id]} questions={s.def.questions}
                           onChange={(next) => set(`edit rule ${r.title}`, (q) => { if (next) q.rules[r.id] = next; else delete q.rules[r.id]; })} />
@@ -517,7 +518,7 @@ function RoleToggle({ rule, setting, onChange }: { rule: RuleDef; setting: RuleS
 }
 
 function QuestionScope({ rule, setting, questions, onChange }: { rule: RuleDef; setting: RuleSetting | undefined; questions: { id: string; code: string; text: string }[]; onChange(ids: string[]): void }) {
-  const scoped = ["timing.question_speeding", "timing.matrix_speeding", "timing.openend_speeding", "matrix.straightline", "consistency.impossible_path", "openend.too_short", "openend.gibberish", "openend.repeated", "openend.generic", "openend.irrelevant", "openend.contradiction", "openend.duplicate", "openend.ai_like", "openend.pasted"];
+  const scoped = ["timing.question_speeding", "timing.matrix_speeding", "timing.openend_speeding", "matrix.straightline", "consistency.impossible_path", "consistency.exclusive_combined", "consistency.funnel", "consistency.part_whole", "consistency.age_years", "openend.too_short", "openend.gibberish", "openend.repeated", "openend.generic", "openend.irrelevant", "openend.contradiction", "openend.duplicate", "openend.ai_like", "openend.pasted"];
   if (!scoped.includes(rule.id)) return null;
   const ids = setting?.questionIds ?? [];
   return (
@@ -635,6 +636,21 @@ function ProfilePicker({ cfg, onApply }: { cfg: QualityConfig; onApply(p: Qualit
 }
 
 /* ================================================================ attention summary */
+
+/** the contradictions this questionnaire's structure lets the engine check (2026-11-09, phase 4) — before any data exists */
+function LogicChecks() {
+  const s = useStudio();
+  const checks = React.useMemo(() => { try { return logicChecksFor(s.def); } catch { return []; } }, [s.def]);
+  const title = (id: string) => RULES.find((r) => r.id === id)?.title ?? id;
+  return (
+    <div className="qs-logic" data-testid="qs-logic-checks">
+      <strong>Contradiction checks found in this questionnaire</strong>
+      {checks.length ? (
+        <ul>{checks.slice(0, 30).map((c, i) => <li key={i}><span className="chip">{title(c.ruleId)}</span> {c.what}</li>)}</ul>
+      ) : <p className="qs-help">None recognised yet: no multi-select with “None of these”, no awareness → usage questions sharing brands, no household / children or “how many of them” counts, no age with a “how many years” question. Add your own as a custom rule below.</p>}
+    </div>
+  );
+}
 
 function AttentionSummary() {
   const s = useStudio();

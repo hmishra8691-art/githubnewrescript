@@ -60,6 +60,10 @@ export const CLEANING_WORDS: [RegExp, string[]][] = [
   [/\b(?:off[-\s]topic|irrelevant)\s+(?:open[-\s]?ends?|answers?|responses?|comments?)?\b/i, ["openend.irrelevant"]],
   [/\b(?:failed|missed)\s+(?:the\s+)?attention\s+checks?\b|\battention\s+check\s+failures?\b|\binattentive\b/i, ["attention."]],
   [/\binconsisten\w*\b|\bcontradict\w*\b/i, ["consistency.", "openend.contradiction"]],
+  [/\bfunnel\b|\bnever heard of\b|\bnot aware of\b/i, ["consistency.funnel"]],
+  [/\bnone of (?:these|the above)\b.{0,40}\b(?:with|and|plus|along)\b|\bexclusive (?:answers?|options?)\b/i, ["consistency.exclusive_combined"]],
+  [/\bpart(?:s)? (?:larger|bigger|greater) than\b|\bmore (?:children|kids) than\b|\bhousehold size\b/i, ["consistency.part_whole"]],
+  [/\b(?:more|longer) years than (?:their |the )?age\b|\bolder than (?:they are|their age)\b|\byears? (?:exceed|greater than|more than) (?:their |the )?age\b/i, ["consistency.age_years"]],
 ];
 /** the rules a sentence names, by family */
 export function rulesNamed(text: string): string[] {

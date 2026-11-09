@@ -320,6 +320,12 @@ export const CustomScript = z.object({
   notes: z.string().optional(),
   /** Run only when this condition holds (any nesting) — the "script guard". */
   when: Condition.optional(),
+  /**
+   * Who wrote it (2026-11-09): a person in the Scripts panel, the AI (logic-script actions), or an import. Shown with the
+   * script's lifecycle — generated / executed / validated (packages/templates/src/scriptLifecycle.ts). Absent on older
+   * scripts ("unknown").
+   */
+  origin: z.enum(["person", "ai", "import"]).optional(),
 });
 export type CustomScript = z.infer<typeof CustomScript>;
 

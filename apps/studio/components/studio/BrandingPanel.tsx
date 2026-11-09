@@ -1,4 +1,5 @@
 "use client";
+import { ScriptLifecycleBar, ScriptStageChip } from "./ScriptLifecycle";
 import React from "react";
 import { useStudio } from "./store";
 import { THEME_PRESETS } from "@/lib/defaults";
@@ -1198,9 +1199,10 @@ export function LogicScriptCard({ index: i, refusal, setRefusal }: { index: numb
             onClick={() => { const copy = duplicateLogicScript(sc, `script_${Date.now().toString(36)}`); s.labelNextEdit(`Duplicate script “${sc.name}”`); s.update((d) => { d.scripts.splice(i + 1, 0, copy); }); s.toast(`Copied as “${copy.name}”. ${DUPLICATE_NOTE}`); }}>Duplicate</button>
           <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
         </div>
+        <div style={{ marginBottom: 6 }}><ScriptStageChip scriptId={sc.id} /></div>
         <ScriptCodeField code={sc.code} refusal={refusal} def={s.def} label={`Script “${sc.name}” code`} header={<ScriptHealthChip scriptId={sc.id} />} itemKey={`logic_script:${sc.id}`} scriptId={sc.id}
           onRefusal={setRefusal}
-          onSave={(code) => { s.labelNextEdit(`Edit script “${sc.name}”`); s.update((d) => { d.scripts[i].code = code; }); }} />
+          onSave={(code) => { s.labelNextEdit(`Edit script “${sc.name}”`); s.update((d) => { if (d.scripts[i].code !== code) d.scripts[i].origin = "person"; d.scripts[i].code = code; }); }} />
         <div style={{ marginTop: 6 }} data-testid="script-when">
           <OptionalCondition label="Run only when" value={sc.when}
             hint="Otherwise the script runs for every respondent at its event."
@@ -1219,6 +1221,7 @@ export function ScriptsPanel() {
         <h2 style={{ margin: 0, fontSize: 17 }}>Custom Scripts</h2>
       </div>
       <ScriptHealthSummaryBar />
+      <ScriptLifecycleBar />
       <LegacyScriptsBanner />
       <p className="muted" style={{ fontSize: 13 }}>
         Scripts run in a sandboxed frame (never on the respondent&apos;s page) with this API:{" "}
@@ -1241,7 +1244,7 @@ export function ScriptsPanel() {
         s.update((d) => {
           d.scripts.push({
             id: `script_${Date.now().toString(36)}`, name: `Script ${d.scripts.length + 1}`,
-            scope: "survey", event: "on_submit", code: "", enabled: true,
+            scope: "survey", event: "on_submit", code: "", enabled: true, origin: "person",
           });
         })}>
         + script
