@@ -36,6 +36,7 @@ import { runSimulation } from "@rescript/templates";
 import { methodologyAnswer, methodologyQuestion, setPendingMethodology } from "../../lib/intelligent/methodologyRequest";
 import { trackerAnswer, trackerQuestion } from "../../lib/intelligent/trackerRequest";
 import { trackerSession } from "../../lib/tracker/session";
+import { INTELLIGENT_INPUT_EVENT, takePendingIntelligentInput } from "../../lib/intelligent/pendingInput";
 import { runScriptCheck, scriptStatusAnswer, scriptStatusQuestion } from "../../lib/scripts/scriptCheck";
 import type { ClientTask } from "@/lib/copilot/taskStore";
 import { StructurePane } from "./copilot/StructurePane";
@@ -202,6 +203,13 @@ export function IntelligentView() {
   const primary = (sel?.primary ?? (s.selectedQuestionId ? `question:${s.selectedQuestionId}` : null)) as ObjectKey | null;
 
   const [text, setText] = React.useState("");
+  /* a sentence handed over by Help's "Send to Intelligent Mode" (2026-11-09): it lands in the input, unsent */
+  React.useEffect(() => {
+    const take = () => { const p = takePendingIntelligentInput(); if (p) { setText(p); inputRef.current?.focus(); } };
+    take();
+    window.addEventListener(INTELLIGENT_INPUT_EVENT, take);
+    return () => window.removeEventListener(INTELLIGENT_INPUT_EVENT, take);
+  }, []);
   const [turns, setTurns] = React.useState<Entry[]>(() => sessions.get(s.surveyDbId) ?? []);
   React.useEffect(() => { sessions.set(s.surveyDbId, turns); }, [turns, s.surveyDbId]);
   const [busy, setBusy] = React.useState(false);

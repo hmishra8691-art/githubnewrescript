@@ -54,6 +54,8 @@ const nextConfig = {
       "/api/surveys/*/stories/**": ["./public/report-fonts/**", ffmpegFile],
       "/api/cron/story-renders": ["./public/report-fonts/**", ffmpegFile],
       "/docs": ["./content/docs/**"], "/docs/[slug]": ["./content/docs/**"], "/llms.txt": ["./content/docs/**"], "/llms-full.txt": ["./content/docs/**"], "/sitemap.xml": ["./content/docs/**"],
+      /* Help (2026-11-09): the guides and the documentation are its knowledge base, read at request time */
+      "/api/help/ask": ["./content/help/**", "./content/docs/**"], "/api/help/article": ["./content/help/**", "./content/docs/**"],
     },
   },
 };

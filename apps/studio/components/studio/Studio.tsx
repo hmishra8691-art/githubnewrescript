@@ -34,6 +34,11 @@ import { DistributionPanel } from "./DistributionPanel";
 import { ProjectPanel } from "./ProjectPanel";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
+import { STUDIO_NAV } from "@/lib/studioNav";
+import { HelpAssistant } from "@/components/help/HelpAssistant";
+import type { HelpContext } from "@/lib/help/compose";
+import { setPendingIntelligentInput } from "@/lib/intelligent/pendingInput";
+import { conditionSummary, stripHtmlText } from "@rescript/engine";
 import { LocalizationPanel } from "./localization/LocalizationPanel";
 import { UsagePanel, useMeterView } from "./UsagePanel";
 import { WalletMenu } from "../billing/WalletMenu";
@@ -75,85 +80,7 @@ const EDITING_TABS = new Set<Tab>([
  * "the thing that ships it" at a glance. Grouping is presentation: keys,
  * order within the list and the click behaviour are unchanged.
  */
-const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
-  { key: "questions", label: "Questions", icon: "questions", group: "Programming" },
-  { key: "settings", label: "Survey Settings", icon: "settings", group: "Programming" },
-  { key: "flow", label: "Survey Flow", icon: "flow", group: "Programming" },
-  { key: "logic", label: "Logic", icon: "logic", group: "Programming" },
-  { key: "variables", label: "Variables", icon: "variables", group: "Programming" },
-  { key: "calculations", label: "Calculations", icon: "calc", group: "Programming" },
-  { key: "quotas", label: "Quotas", icon: "quotas", group: "Programming" },
-  { key: "listfill", label: "List Fill", icon: "listfill", group: "Programming" },
-  /* 2026-11-09: the research methodology engine — objective → method → study (questions, design, plan, simulation) */
-  { key: "studydesign", label: "Study design", icon: "designs", group: "Research tools" },
-  { key: "designs", label: "Design Generators", icon: "designs", group: "Research tools" },
-  /*
-   * Qualitative research (2026-10-18): the interview / focus-group guide, session records and
-   * recordings, transcripts, AI-assisted coding with human review, themes and the report. Not in
-   * EDITING_TABS: its data are Data-module records gated at the routes, not the questionnaire.
-   */
-  { key: "qualitative", label: "Qualitative", icon: "notes", group: "Research tools" },
-  { key: "branding", label: "Branding", icon: "branding", group: "Research tools" },
-  { key: "assets", label: "Assets", icon: "assets", group: "Research tools" },
-  /*
-   * Translation & Localization — every language version of the survey (text
-   * and audio) over the one language-neutral definition. In Research tools
-   * beside Branding: it changes what a respondent reads and hears, never what
-   * the survey asks or stores. In EDITING_TABS: a translation is authorship.
-   */
-  { key: "localization", label: "Translation", icon: "layers", group: "Research tools" },
-  { key: "scripts", label: "Scripts", icon: "scripts", group: "Research tools" },
-  /* S3b: every piece of code in the survey in one list, each editable in place (beside Scripts: Research tools is where survey code lives) */
-  { key: "allcode", label: "All code", icon: "scripts", group: "Research tools" },
-  /*
-   * §55/§56. In Research tools rather than Programming, and deliberately NOT
-   * in EDITING_TABS: a reviewer checking whether a programmer's change broke
-   * path C must not have to take the edit lock away from them to do it. The
-   * route gates it on `survey.edit` without the lock, for the same reason.
-   */
-  { key: "tests", label: "Tests", icon: "check", group: "Research tools" },
-  { key: "data", label: "Data", icon: "data", group: "Results" },
-  /* 2026-11-09: multi-wave tracking — uploaded waves and this survey's live data, mapped, tested and composition-checked */
-  { key: "tracker", label: "Wave tracker", icon: "chart", group: "Results" },
-  /*
-   * Not in EDITING_TABS: a fieldwork manager watching supplier delivery is
-   * reading response data, and must not need the edit lock to do it — the
-   * same reasoning that keeps Data and Versions live for a reviewer.
-   */
-  { key: "fieldwork", label: "Fieldwork", icon: "chart", group: "Results" },
-  /*
-   * The recruitment exchange (2026-11-03). Beside Fieldwork, in Results, and for the same reason: buying sample
-   * and watching it arrive are one job. Not in EDITING_TABS — a sample desk does not hold the edit lock — and
-   * the route, not this list, decides who may spend money (`deploy.manage`).
-   */
-  { key: "recruitment", label: "Recruitment", icon: "chart", group: "Results" },
-  /*
-   * §24. Beside Versions & Deploy, because sending a study is the step after
-   * shipping it — and gated on `deploy.manage` at the route, not here: the
-   * roles separate the programmer who edits from the manager who sends.
-   */
-  /*
-   * §60. First in Management, because it is the project — the thing every
-   * other tab is about. Not in EDITING_TABS: recording a due date is not an
-   * act on the questionnaire and must not need the edit lock (the route
-   * gates it on `survey.edit` without the lock, and on
-   * `project.lock_settings` for the freeze).
-   */
-  { key: "project", label: "Project", icon: "home", group: "Management" },
-  /*
-   * Metered usage & wallet (billing brief §11). Beside Project, because the
-   * wallet belongs to the project, not the questionnaire. Not in
-   * EDITING_TABS: reading what the project has spent, and asking for
-   * credits, never needs the edit lock.
-   */
-  { key: "usage", label: "Usage & Wallet", icon: "chart", group: "Management" },
-  { key: "distribution", label: "Distribution", icon: "share", group: "Management" },
-  { key: "versions", label: "Versions & Deploy", icon: "versions", group: "Management" },
-  { key: "json", label: "JSON", icon: "json", group: "Management" },
-  { key: "collaborators", label: "Collaborators", icon: "collaborators", group: "Management" },
-  { key: "notes", label: "Internal notes", icon: "notes", group: "Management" },
-  { key: "activity", label: "Activity", icon: "activity", group: "Management" },
-];
+const NAV = STUDIO_NAV as unknown as { key: Tab; label: string; icon: IconName; group: string }[];
 
 /**
  * Hand the user their own work as a file.
@@ -898,6 +825,22 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
    */
   const navTabs = React.useMemo(() => NAV.map((n) => ({ key: n.key, label: n.label, group: n.group })), []);
   const modeCtx = useMode();
+  const [helpOpen, setHelpOpen] = React.useState(false);
+  /* what Help is told about where the user is: this survey, this panel, the selected question's logic in words */
+  const helpContext = (): HelpContext => {
+    const q = s.def.questions.find((x) => x.id === s.selectedQuestionId) ?? null;
+    const target = (t: { kind: string; ref?: string; status?: string }) => t.kind === "question" ? `go to ${s.def.questions.find((x) => x.id === t.ref)?.code ?? t.ref}` : t.kind === "end" || t.kind === "terminate" ? `end (${t.status ?? t.kind})` : `go to ${t.kind} ${t.ref ?? ""}`.trim();
+    return {
+      surface: "studio", tab, tabLabel: NAV.find((n) => n.key === tab)?.label, mode: modeCtx?.mode,
+      survey: { title: s.def.meta.title, code: s.def.meta.code, questions: s.def.questions.length, scripts: s.def.scripts.length, quotas: s.def.quotas.length, languages: s.def.deployment.languages.length },
+      question: q ? {
+        code: q.code, type: q.type, text: stripHtmlText(q.text ?? ""),
+        displayLogic: q.displayLogic ? conditionSummary(s.def, q.displayLogic) || null : null,
+        skipLogic: (q.skipLogic ?? []).map((r) => `IF ${conditionSummary(s.def, r.when) || "always"} → ${target(r.target)}`),
+        validation: [...(q.required ? ["required"] : []), ...(q.validation ?? []).map((v) => v.kind)],
+      } : null,
+    };
+  };
   const programmingMode = modeCtx?.mode ?? "studio";
   // the split is a pair of renderers; below SPLIT_MIN_WIDTH it folds to the primary and comes back when the window widens
   const splitMode = modeCtx?.split && modeCtx.splitAllowed ? modeCtx.split : null;
@@ -935,6 +878,9 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         </div>
         <span className="spacer" />
         <PaletteButton />
+        {/* Help (2026-11-09): the assistant, with this project as context — it explains and hands changes to Intelligent Mode */}
+        <button className="btn" onClick={() => setHelpOpen((o) => !o)} data-testid="studio-help" aria-expanded={helpOpen}
+          title="Ask anything about ResLens.ai — with this project as context"><Icon name="help" size={15} /> Help</button>
         <button className="btn" onClick={preview} disabled={saving}
           title="Full-page preview of the survey you are editing right now"><Icon name="play" size={15} /> Preview</button>
         <button className="btn" onClick={testSurvey} disabled={saving || roWrite} data-testid="test-survey"
@@ -1006,6 +952,17 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         </div>
       )}
       {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
+      {helpOpen && (
+        <div className="hx-drawer" role="dialog" aria-label="Help" data-testid="studio-help-drawer">
+          <div className="hx-drawer-head">
+            <strong>Help</strong>
+            <a className="btn small ghost" href="/help" target="_blank" rel="noreferrer" title="Open Help in its own tab, with your saved conversations">Open full Help</a>
+            <button className="btn small ghost" onClick={() => setHelpOpen(false)} aria-label="Close Help">×</button>
+          </div>
+          <HelpAssistant compact surface="studio" surveyId={s.surveyDbId} getContext={helpContext}
+            onIntelligent={(instruction) => { setPendingIntelligentInput(instruction); modeCtx?.setMode("intelligent"); setTab("questions"); s.toast("The request is in Intelligent Mode's input — read it and press Propose. Nothing is changed until you apply the proposal."); }} />
+        </div>
+      )}
       <ReadOnlyBar surveyId={s.surveyDbId} onOpen={() => setTab("usage")} />
       {liveIsBehind && (
         <div className="publish-bar" data-testid="publish-bar">

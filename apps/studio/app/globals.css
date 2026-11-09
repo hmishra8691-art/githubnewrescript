@@ -3286,3 +3286,53 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .chip.sl-not_reached { background: #fef3c7; color: #92400e; }
 .chip.sl-failing, .chip.sl-refused { background: #fee2e2; color: #991b1b; }
 .chip.sl-stale { opacity: .6; text-decoration: line-through dotted; }
+
+/* Help assistant (2026-11-09) — the Help page and the Studio's Help drawer; theme tokens only, so it follows light/dark */
+.hx-page { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg, var(--panel)); }
+.hx-page-bar { display: flex; justify-content: flex-end; padding: 8px 24px 0; }
+.hx-bill { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--subtle); }
+.hx { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; flex: 1; min-height: 0; padding: 12px 24px 24px; max-width: 1200px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+.hx.compact { grid-template-columns: minmax(0, 1fr); padding: 0; height: 100%; }
+.hx-side { display: grid; align-content: start; gap: 10px; }
+.hx-hist { display: grid; gap: 2px; max-height: 70vh; overflow: auto; }
+.hx-hist-row { display: flex; align-items: center; border-radius: 8px; }
+.hx-hist-row.on, .hx-hist-row:hover { background: var(--panel); }
+.hx-hist-open { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 6px 8px; color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.hx-hist-del { background: none; border: 0; color: var(--subtle); cursor: pointer; padding: 4px 8px; }
+.hx-small { font-size: 12.5px; }
+.hx-main { display: flex; flex-direction: column; min-height: 60vh; min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; }
+.hx.compact .hx-main { border: 0; border-radius: 0; min-height: 0; height: 100%; }
+.hx-log, .hx-article { flex: 1; overflow: auto; padding: 16px 18px; display: grid; align-content: start; gap: 12px; }
+.hx-welcome h2 { margin: 0 0 4px; font-size: 20px; }
+.hx-welcome p { margin: 0 0 12px; font-size: 13.5px; }
+.hx-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.hx-chip { border: 1px solid var(--border); background: var(--bg, transparent); color: var(--text); border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; text-align: left; }
+.hx-chip:hover { border-color: var(--accent); }
+.hx-chip.small { font-size: 12.5px; padding: 4px 10px; }
+.hx-topics { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 14px; }
+.hx-topic { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+.hx-topic summary { cursor: pointer; font-weight: 600; }
+.hx-topic ul { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 4px; }
+.hx-link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-align: left; font-size: 13px; }
+.hx-q { justify-self: end; max-width: 80%; background: var(--accent); color: #fff; padding: 8px 12px; border-radius: 14px 14px 4px 14px; font-size: 14px; white-space: pre-wrap; }
+.hx-a { max-width: 100%; display: grid; gap: 8px; border: 1px solid var(--border); border-radius: 14px 14px 14px 4px; padding: 10px 14px; background: var(--bg, transparent); }
+.hx-md { font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.hx-md h1 { font-size: 18px; margin: 0 0 6px; } .hx-md h2 { font-size: 15px; margin: 12px 0 4px; } .hx-md h3 { font-size: 14px; }
+.hx-md p { margin: 6px 0; } .hx-md ul, .hx-md ol { margin: 6px 0; padding-left: 20px; }
+.hx-md pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; overflow: auto; font-size: 12.5px; }
+.hx-md code { font-size: 12.5px; }
+.hx-clarify { display: grid; gap: 6px; border-top: 1px dashed var(--border); padding-top: 8px; font-size: 13.5px; }
+.hx-do { display: grid; gap: 6px; border: 1px solid var(--accent); border-radius: 10px; padding: 8px 10px; font-size: 13px; }
+.hx-instr { display: block; white-space: pre-wrap; background: var(--panel); border-radius: 6px; padding: 6px 8px; }
+.hx-do .btn { justify-self: start; }
+.hx-sources { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12.5px; align-items: baseline; }
+.hx-src { color: var(--accent); text-decoration: none; } .hx-src:hover { text-decoration: underline; }
+.hx-meta { font-size: 12px; color: var(--subtle); }
+.hx-busy { color: var(--subtle); font-size: 13px; }
+.hx-input { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--panel); }
+.hx-input textarea { flex: 1; resize: none; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 14px; background: var(--bg, transparent); color: var(--text); }
+.hx-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); z-index: 60; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border); box-shadow: -12px 0 32px rgba(15, 23, 42, .18); }
+.hx-drawer-head { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.hx-drawer-head strong { flex: 1; }
+.hx-drawer .hx { flex: 1; min-height: 0; }
+@media (max-width: 760px) { .hx { grid-template-columns: minmax(0, 1fr); padding: 8px 16px 16px; } .hx-side { display: none; } .hx-q { max-width: 92%; } }

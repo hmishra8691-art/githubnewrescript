@@ -11,7 +11,9 @@ export type IconName =
   | "assets"
   | "search" | "plus" | "play" | "flask" | "download" | "export" | "user" | "bell" | "chevron-down" | "chevron-right" | "check" | "warning" | "info" | "close" | "home" | "grid" | "share" | "shield" | "logout" | "sparkle" | "chart" | "table" | "layers" | "upload" | "paperclip"
   /* Survey Flow elements (Add Element grid) */
-  | "shuffle" | "repeat" | "redirect" | "flag";
+  | "shuffle" | "repeat" | "redirect" | "flag"
+  /* Help (2026-11-09) */
+  | "help";
 
 const P: Record<IconName, React.ReactNode> = {
   questions: <><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 9h8M8 13h8M8 17h5" /></>,
@@ -48,6 +50,7 @@ const P: Record<IconName, React.ReactNode> = {
   check: <path d="m5 12 5 5 9-10" />,
   warning: <><path d="M12 3 2.5 20h19z" /><path d="M12 10v4M12 17h.01" /></>,
   info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>,
+  help: <><circle cx="12" cy="12" r="9" /><path d="M9.5 9.2a2.6 2.6 0 0 1 5 1c0 1.8-2.5 2.2-2.5 3.8M12 17h.01" /></>,
   close: <path d="M6 6l12 12M18 6 6 18" />,
   home: <><path d="M3 11 12 3l9 8" /><path d="M5 10v10h14V10" /></>,
   grid: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
