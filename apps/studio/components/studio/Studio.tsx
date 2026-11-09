@@ -48,10 +48,11 @@ import { useMode } from "./ModeContext";
 import { propertiesWanted } from "../../lib/programmingMode";
 import { ModeRenderer, SplitCenter } from "./ModeRenderers";
 import { ModeChooser } from "./ModeChooser";
+import { WaveTrackerPanel } from "./WaveTrackerPanel";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "studydesign" | "data" | "fieldwork" | "recruitment"
+  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "studydesign" | "data" | "tracker" | "fieldwork" | "recruitment"
   | "distribution" | "project" | "usage" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -112,6 +113,8 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
    */
   { key: "tests", label: "Tests", icon: "check", group: "Research tools" },
   { key: "data", label: "Data", icon: "data", group: "Results" },
+  /* 2026-11-09: multi-wave tracking — uploaded waves and this survey's live data, mapped, tested and composition-checked */
+  { key: "tracker", label: "Wave tracker", icon: "chart", group: "Results" },
   /*
    * Not in EDITING_TABS: a fieldwork manager watching supplier delivery is
    * reading response data, and must not need the edit lock to do it — the
@@ -1114,6 +1117,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "scripts" && <ScriptsPanel />}
           {tab === "allcode" && <AllCodePanel tools={(sel, all) => <ScriptBundleTools selected={sel} all={all} />} />}
           {tab === "data" && <DataPanel />}
+          {tab === "tracker" && <WaveTrackerPanel />}
           {tab === "fieldwork" && <FieldworkPanel />}
           {tab === "recruitment" && <RecruitmentPanel />}
           {tab === "project" && <ProjectPanel />}

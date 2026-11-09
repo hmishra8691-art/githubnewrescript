@@ -34,6 +34,8 @@ import { researchRequest } from "../../lib/intelligent/researchRequest";
 import { setPendingSimulation, simulationAnswer, simulationRequest } from "../../lib/intelligent/simulationRequest";
 import { runSimulation } from "@rescript/templates";
 import { methodologyAnswer, methodologyQuestion, setPendingMethodology } from "../../lib/intelligent/methodologyRequest";
+import { trackerAnswer, trackerQuestion } from "../../lib/intelligent/trackerRequest";
+import { trackerSession } from "../../lib/tracker/session";
 import type { ClientTask } from "@/lib/copilot/taskStore";
 import { StructurePane } from "./copilot/StructurePane";
 import { paneLayout, splitterKey, readPaneWidths, PANE_LIMITS } from "../../lib/intelligent/paneLayout";
@@ -359,6 +361,12 @@ export function IntelligentView() {
      * engine here, in the browser — nothing saved — and the answer says what broke. The full report (journeys,
      * downloads, saving as TEST data) is waiting in Research tools → Tests.
      */
+    /* "is the change since the last wave real?" — the wave tracker answers from the waves in Results → Wave tracker (2026-11-09) */
+    if (trackerQuestion(t)) {
+      const a = trackerAnswer(t, trackerSession(s.surveyDbId));
+      copilot.local(t, { kind: "answer", category: "analysis", understood: "Compare the tracker's waves: KPIs, significance and sample composition.", answer: a.answer, sections: a.sections, detected: [{ what: "read as", value: "wave tracking" }, { what: "waves", value: String(trackerSession(s.surveyDbId).waves.length) }] }, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     /* "which method should I use to …?" — the methodology engine answers; Study design opens with the objective (2026-11-09) */
     const method = methodologyQuestion(t);
     if (method) {

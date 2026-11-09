@@ -3240,3 +3240,35 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .sd-preview.ok { background: #ecfdf5; border-color: #a7f3d0; }
 .sd-preview.bad { background: #fef2f2; border-color: #fecaca; }
 .sd-preview p { margin: 0; }
+
+/* Results → Wave tracker (2026-11-09) */
+.wt { display: grid; gap: 12px; max-width: 1150px; }
+.wt-card { border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 10px 14px; display: grid; gap: 8px; }
+.wt-card h3 { margin: 0; font-size: 14px; }
+.wt-ask form { display: flex; gap: 6px; }
+.wt-ask input { flex: 1; }
+.wt-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+.wt-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.wt-table th, .wt-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border, #e2e8f0); vertical-align: top; }
+.wt-table tr.bad td { background: #fef2f2; }
+.wt-table tr.warn td { background: #fffbeb; }
+.wt-table tr.missing td { color: #64748b; }
+.wt-num { width: 56px; }
+.wt-codes { width: 90px; }
+.wt-checks { display: flex; flex-wrap: wrap; gap: 4px 12px; max-height: 120px; overflow: auto; }
+.wt-kpi { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--border, #e2e8f0); }
+.wt-kpi-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.wt-chart { width: 100%; max-width: 560px; height: auto; }
+.wt-grid { stroke: #e2e8f0; }
+.wt-axis { font-size: 10px; fill: #64748b; }
+.wt-ci { stroke: #93c5fd; stroke-width: 6; stroke-linecap: round; opacity: .55; }
+.wt-line { fill: none; stroke: #2563eb; stroke-width: 2; }
+.wt-line.adj { stroke: #9333ea; stroke-dasharray: 5 4; }
+.wt-dot { fill: #2563eb; }
+.wt-legend { margin: 0; font-size: 12px; }
+.wt-v { font-size: 12px; }
+.wt-v.up { color: #047857; font-weight: 600; }
+.wt-v.warn { color: #b45309; font-weight: 600; }
+.wt-v.bad { color: #b91c1c; }
+.wt-v.flat { color: #475569; }
+.pill.up { background: #d1fae5; color: #065f46; }

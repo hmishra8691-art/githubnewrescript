@@ -18,6 +18,7 @@ export * from "./versionedMetadata.js";
 export * from "./planBridge.js";
 export * from "./plannedVariables.js";
 export * from "./waves.js";
+export * from "./waveTracker.js";
 export * from "./findings.js";
 export * from "./findingsReport.js";
 export * from "./posthoc.js";
