@@ -60,7 +60,7 @@ const dedupe = (xs: unknown[]): { out: unknown[]; dropped: string[] } => {
  */
 export function autoFixMethodAction(action: Record<string, unknown>, reason: string, def?: SurveyDefinition): MethodFix | null {
   const op = String(action.op ?? action.action ?? "");
-  if (!isMethodOp(op) || op === "simulate_conjoint") return null;
+  if (!isMethodOp(op) || op === "simulate_conjoint" || op === "create_experiment") return null;
   const o: Record<string, unknown> = { ...action };
   const r = reason;
   const isMaxDiff = op.endsWith("_maxdiff");

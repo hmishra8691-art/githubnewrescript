@@ -2065,6 +2065,11 @@ function DesignTasks(p: QRProps) {
           p.state.seed,
           `${p.q.id}:${t}`,
         );
+        /*
+         * PARTIAL PROFILE (2026-11-09): an attribute left out of this task (empty in every concept) is not shown at all.
+         * A brand-specific cell that is empty in only some concepts keeps its column and shows "—".
+         */
+        const taskAttrCols = isMaxdiff ? attrCols : attrCols.filter((a) => alts.some((alt) => Number(alt.none_option) !== 1 && String(alt[a] ?? "") !== ""));
         return (
           <div key={t} className="rs-card" style={{ margin: 0 }}>
             <div style={{ fontWeight: 600, marginBottom: 10 }} data-testid={isMaxdiff ? `md-task-${t}` : undefined}>
@@ -2082,7 +2087,7 @@ function DesignTasks(p: QRProps) {
                     ) : (
                       <>
                         <th className="rowlabel">Option</th>
-                        {attrCols.map((a) => <th key={a}>{a}</th>)}
+                        {taskAttrCols.map((a) => <th key={a}>{a}</th>)}
                         <th>Choose</th>
                       </>
                     )}
@@ -2157,7 +2162,7 @@ function DesignTasks(p: QRProps) {
                       <tr key={altKey} className={isChosen ? "rs-cbc-chosen" : undefined} data-testid="cbc-alt"
                         data-task={t} data-alt={altKey} data-position={i + 1} data-none={isNone ? "1" : undefined}>
                         <td className="rowlabel">{optLabel}</td>
-                        {attrCols.map((a) => <td key={a} data-label={a}>{isNone || alt[a] === "" ? "—" : String(alt[a] ?? "")}</td>)}
+                        {taskAttrCols.map((a) => <td key={a} data-label={a}>{isNone || alt[a] === "" ? "—" : String(alt[a] ?? "")}</td>)}
                         <td className="rs-cbc-choose">
                           <label className="rs-cbc-pick">
                             <input type="radio" name={`${p.q.id}_${t}`} aria-label={`Choose ${optLabel}`}

@@ -47,7 +47,8 @@ test("the brief's three requests: MaxDiff and CBC get the methods guide, LEAST L
 test("sizes and caching: the system prompt is unchanged and under its cap; the guide is small and rides in the cached prefix", () => {
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800, `${COPILOT_SYSTEM_PROMPT.length}`);
   /* F4 2026-10-22: + CVA, dual-response None, labelled / brand-specific CBC, summed price, menu sections, simulate_conjoint (was < 4,600) */
-  assert.ok(COPILOT_METHODS_GUIDE.length < 9_000, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
+  /* Design Generators phase 2 2026-11-09: + partial-profile CBC, create_experiment (was < 9,000) */
+  assert.ok(COPILOT_METHODS_GUIDE.length < 10_000, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
   assert.ok(COPILOT_LIST_FILL_GUIDE.length < 4_200, `List Fill guide ${COPILOT_LIST_FILL_GUIDE.length}`);
   const prompt = copilotUserPrompt({ ...base, message: BRIEF[0], methods: true, listFill: true });
   const [system, user] = copilotCall(prompt);
@@ -61,13 +62,13 @@ const exampleLines = (guide: string) => guide.split("\n").filter((l) => l.starts
 
 test("the guide's worked examples pass the engine's gate and apply as written, with the measured diagnostics", () => {
   const examples = exampleLines(COPILOT_METHODS_GUIDE);
-  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template"]);
+  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "create_conjoint", "create_experiment", "create_experiment"]);
   const creates = examples.filter((a) => a.op.startsWith("create_")), updates = examples.filter((a) => a.op.startsWith("update_")).slice(0, 2);
   const c1 = coerceSurveyActions(creates);
   assert.deepEqual(c1.rejected, []);
   const made = applySurveyActions(empty(), c1.actions);
   assert.deepEqual(made.errors, []);
-  assert.deepEqual(made.def.designs.map((d) => d.kind), ["maxdiff", "conjoint", "menu", "acbc", "cva"]);
+  assert.deepEqual(made.def.designs.map((d) => d.kind), ["maxdiff", "conjoint", "menu", "acbc", "cva", "conjoint", "experiment", "experiment"]);
   assert.match(made.results[4].description, /rating-based conjoint \(CVA\).*D-optimal/);
   assert.match(made.results[0].description, /8 items, 4 per task, 6 tasks, 10 versions; each respondent sees every item 3 times/);
   assert.match(made.results[1].description, /D-efficiency \d+(\.\d)?% per version/);
@@ -150,4 +151,51 @@ test("method templates: the guide's add_method_template lines apply, and pricing
   assert.ok(made.def.questions.some((q) => q.variant === "hotspot.shelf"));
   assert.ok(made.def.questions.some((q) => q.variableName === "UNAIDED_CODED") && made.def.questions.some((q) => q.variableName === "AD_DIAG"));
   for (const m of ["build a brand funnel for coffee brands", "an ad test for our new TV commercial", "a virtual shelf test for our cereal", "an implicit association test of coffee vs tea", "a sequential monadic test of three concepts", "an adaptive Gabor-Granger ladder for the plan", "add a price ladder from $5 to $20", "add a Van Westendorp price sensitivity block", "price sensitivity meter with Newton-Miller-Smith", "PSM for the new kettle"]) assert.ok(methodsIntent(m), m);
+});
+
+/* Design Generators phase 2 (2026-11-09): partial-profile CBC and custom experimental designs through the Copilot */
+test("phase 2: partial-profile CBC and create_experiment are taught, applied with the real generators, and refused without essentials", async () => {
+  const { registerBuiltinDesignGenerators } = await import("@rescript/designs");
+  registerBuiltinDesignGenerators();
+  const run = (def: ReturnType<typeof empty>, raw: unknown[]) => {
+    const c = coerceSurveyActions(raw);
+    assert.deepEqual(c.rejected, [], JSON.stringify(c.rejected));
+    const o = applySurveyActions(def, c.actions, { now: "2026-11-09T00:00:00.000Z" });
+    return { ...o, applied: o.results };
+  };
+  for (const t of ["a partial-profile CBC with 9 attributes", "build a fractional factorial for the ad test", "a Latin square of the four concepts", "a BIBD for 12 flavours", "a D-optimal design"]) assert.equal(methodsIntent(t), true, t);
+  const lines = COPILOT_METHODS_GUIDE.split("\n").filter((l) => /^\{"op":"create_(experiment|conjoint)"/.test(l) && /attributesPerTask|create_experiment/.test(l));
+  assert.equal(lines.length, 3);
+  for (const l of lines) {
+    const raw = JSON.parse(l.split("   //")[0]);
+    const out = run(empty(), [raw]);
+    assert.deepEqual(out.errors, [], l);
+    assert.equal(out.def.designs.length, 1);
+  }
+  const pp = run(empty(), [JSON.parse(lines.find((l) => /attributesPerTask/.test(l))!.split("   //")[0])]);
+  const d = pp.def.designs[0];
+  assert.equal(d.config.attributesPerTask, 4);
+  for (const task of new Set(d.file!.rows.map((r) => `${r.version}:${r.task}`))) {
+    const rows = d.file!.rows.filter((r) => `${r.version}:${r.task}` === task && Number(r.none_option) !== 1);
+    const shown = ["Brand", "Body", "Fuel", "Range", "Warranty", "Safety", "Price"].filter((a) => rows.some((r) => String(r[a] ?? "") !== ""));
+    assert.equal(shown.length, 4, task);
+  }
+  assert.match(pp.applied[0].description, /partial profile: 4 of 7 attributes shown per task/);
+  const ex = run(empty(), [{ op: "create_experiment", designType: "fractional", factors: [{ name: "Headline", levels: ["A", "B"] }, { name: "Image", levels: ["X", "Y", "Z"] }, { name: "Offer", levels: ["P", "Q"] }], prohibitions: [{ Headline: "A", Offer: "Q" }] }]);
+  const e = ex.def.designs[0];
+  assert.equal(e.kind, "experiment");
+  assert.ok(e.file!.rows.every((r) => !(r.Headline === "A" && r.Offer === "Q")));
+  assert.match(ex.applied[0].description, /D-optimal fractional factorial, 3 factors .* D-efficiency/);
+  assert.equal(ex.def.questions.length, 0);
+  const w = run(empty(), [{ op: "create_experiment", treatments: ["A", "B", "C", "D"] }]);
+  assert.equal(w.def.designs[0].config.designType, "williams");
+  assert.match(w.applied[0].description, /carry-over balanced/);
+  const rej = (raw: unknown) => coerceSurveyActions([raw]).rejected[0]?.reason ?? "";
+  assert.match(rej({ op: "create_experiment", designType: "fractional" }), /needs the factors .* rather than inventing/);
+  assert.match(rej({ op: "create_experiment", designType: "latin_square" }), /needs the treatments/);
+  assert.match(rej({ op: "create_experiment", designType: "taguchi", treatments: ["a", "b"] }), /designType is fractional/);
+  assert.match(rej({ op: "create_experiment", treatments: ["a", "b", "c"], runs: 4 }), /runs applies to a fractional design/);
+  assert.match(rej({ op: "create_conjoint", method: "cbc", attributesPerTask: 1, attributes: [{ name: "A", levels: ["1", "2"] }, { name: "B", levels: ["1", "2"] }] }), /at least 2/);
+  const acbc = applySurveyActions(empty(), coerceSurveyActions([{ op: "create_conjoint", method: "acbc", attributesPerTask: 3, attributes: [{ name: "A", levels: ["1", "2"] }, { name: "B", levels: ["1", "2"] }] }]).actions);
+  assert.match(acbc.errors.join(" "), /does not apply to ACBC/);
 });

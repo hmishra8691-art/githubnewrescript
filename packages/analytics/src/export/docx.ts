@@ -277,7 +277,7 @@ export const METHOD_WORDS: Record<string, string> = {
   mann_whitney: "Mann–Whitney U test", kruskal_wallis: "Kruskal–Wallis test", correlation: "Correlation", regression: "Linear regression", logistic_regression: "Logistic regression",
   factor: "Exploratory factor analysis", reliability: "Scale reliability (Cronbach's α)", cluster: "Cluster analysis", conjoint_utilities: "Conjoint part-worth utilities", maxdiff_scores: "MaxDiff scores",
   turf: "TURF reach analysis", driver_analysis: "Key-driver analysis", text_themes: "Open-text theme coding", ranking_scores: "Ranking scores", allocation_shares: "Allocation shares",
-  pricing: "Price sensitivity analysis", brand_funnel: "Brand funnel",
+  pricing: "Price sensitivity analysis", brand_funnel: "Brand funnel", kano: "Kano model",
 };
 
 /** the building blocks the sibling documents (the statistical analysis plan) are made of */
@@ -613,7 +613,7 @@ function hypothesisTests(def: SurveyDefinition, H1: H1Fn, plan: AnalysisPlan, hy
   const items = planItems(plan);
   out.push(gridTable(["", "Test(s)", "Reads", "Decision rule"], hyps.map((h) => {
     const mine = items.filter((it) => it.hypotheses.includes(h.label));
-    const inferential = mine.filter((it) => !["frequencies", "mean", "median", "top_box", "nps", "text_themes", "ranking_scores", "allocation_shares", "turf", "brand_funnel", "pricing", "maxdiff_scores", "conjoint_utilities", "factor", "reliability", "cluster"].includes(it.method));
+    const inferential = mine.filter((it) => !["frequencies", "mean", "median", "top_box", "nps", "text_themes", "ranking_scores", "allocation_shares", "turf", "brand_funnel", "pricing", "maxdiff_scores", "conjoint_utilities", "factor", "reliability", "cluster", "kano"].includes(it.method));
     const rule = !mine.length ? "Not testable as planned: no analysis in the plan reads both sides of it. Add one (see Recommendations)."
       : !inferential.length || h.type === "descriptive" ? "Descriptive: read as a level, share or ranking with its confidence interval; no significance test decides it."
       : `Supported if p < ${alpha} after correction in the predicted direction${h.expectedEffect ? `, with at least a ${h.expectedEffect} effect` : ""}; not supported otherwise; inconclusive when a group has fewer than ${MIN_READ_BASE} respondents.`;

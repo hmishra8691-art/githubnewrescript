@@ -63,3 +63,40 @@ test("every sample generates through its real generator, with no validation erro
     if (s.request) assert.equal(readDesignRequest(s.request).kind, kind === "custom" ? null : kind, `${kind}: its request names its method`);
   }
 });
+
+test("partial profile: read, recommended with more tasks, and offered for many attributes", () => {
+  const r = readDesignRequest("A partial-profile CBC with 10 attributes, showing 4 attributes per task");
+  assert.equal(r.kind, "conjoint"); assert.equal(r.attributesPerTask, 4);
+  const rec = recommendDesign(r);
+  assert.equal(rec.config.attributesPerTask, 4);
+  assert.ok((rec.config.tasks as number) >= 16, String(rec.config.tasks));
+  assert.ok(rec.why.some((w) => /Partial profile: each task shows 4 of the 10/.test(w)));
+  const plugin = designGeneratorRegistry.get("conjoint")!;
+  assert.deepEqual(plugin.validateConfig?.(rec.config as never) ?? [], []);
+  const full = recommendDesign(readDesignRequest("a choice-based conjoint with 8 attributes"));
+  assert.match(full.warnings.join(" "), /partial-profile CBC/);
+});
+
+test("mergeDesignReading: the model fills only what the rules missed, and only with names the researcher said", async () => {
+  const { mergeDesignReading } = await import("./designRequest.js");
+  const text = "We want to test a coffee subscription: brand with Arabica Co, Bean Bros and Café Uno, price of 9, 12 or 15 dollars, and delivery weekly or monthly. Give people about a dozen choice sets.";
+  const rules = readDesignRequest(text);
+  const m = mergeDesignReading(rules, {
+    kind: "conjoint",
+    attributes: [{ name: "brand", levels: ["Arabica Co", "Bean Bros", "Café Uno"] }, { name: "price", levels: ["9", "12", "15 dollars"] }, { name: "delivery", levels: ["weekly", "monthly"] }, { name: "Roast", levels: ["Light", "Dark"] }],
+    items: [], treatments: [], tasks: 12, alternatives: 99, none: null,
+  }, text);
+  assert.equal(m.read.kind, rules.kind ?? "conjoint");
+  assert.deepEqual(rules.attributes, [], "the rules do not split a spoken sentence into attributes");
+  assert.deepEqual(m.read.attributes.map((a) => [a.name, a.levels.length]), [["brand", 3], ["price", 3], ["delivery", 2]]);
+  assert.ok(m.dropped >= 1, "the invented Roast attribute is dropped");
+  assert.equal(rules.tasks, undefined); assert.equal(m.read.tasks, 12);
+  assert.equal(m.read.alternatives, rules.alternatives, "out-of-range numbers are ignored");
+  assert.ok(m.read.understood.some((u) => /\(read by the AI\)/.test(u)));
+  /* a field the rules read is never overruled */
+  const r2 = readDesignRequest("A MaxDiff of 12 items, 4 per task.");
+  const m2 = mergeDesignReading(r2, { kind: "conjoint", perTask: 5, items: [], attributes: [], treatments: [] }, "A MaxDiff of 12 items, 4 per task.");
+  assert.equal(m2.read.kind, "maxdiff"); assert.equal(m2.read.perTask, 4); assert.deepEqual(m2.added, []);
+  /* garbage from the model changes nothing */
+  assert.deepEqual(mergeDesignReading(r2, "nonsense", "x").read, r2);
+});

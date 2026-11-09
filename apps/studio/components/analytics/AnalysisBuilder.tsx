@@ -44,6 +44,8 @@ const ROLE_FOR_KIND: Record<AnalysisKind, VariableRole[]> = {
   hb: ["complex"], lca: ["categorical", "scale"], sem: ["scale", "numeric"],
   /* S5c */
   sequential_monadic: ["scale", "numeric"], iat: ["numeric"], shelf: ["categorical", "multi"],
+  /* Design Generators phase 2: the functional and dysfunctional grids (and the importance grid) */
+  kano: ["complex", "categorical"],
 };
 
 const HINT: Partial<Record<AnalysisKind, string>> = {

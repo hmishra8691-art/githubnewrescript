@@ -36,12 +36,14 @@ function ChoiceTasks({ rows, columns, tasks, rating }: { rows: Row[]; columns: s
         const alts = rows.filter((r) => Number(r.task) === t);
         const none = alts.some((a) => Number(a.none_option) === 1);
         const shown = alts.filter((a) => Number(a.none_option) !== 1);
+        /* partial profile: only the attributes this task shows (the rest are blank in every alternative) */
+        const taskAttrs = attrs.filter((a) => shown.some((x) => String(x[a] ?? "") !== ""));
         return (
           <div key={t} className="dp-task" data-testid="design-task">
             <div className="dp-task-head">{rating ? `Profile ${t}` : `Task ${t}`}{alts.some((a) => Number(a.is_holdout) === 1) ? " · holdout" : ""}</div>
             <table className="dp-cards">
               <thead><tr><th />{shown.map((a, i) => <th key={i}>{rating ? "Rate 0–10" : `Option ${i + 1}`}</th>)}{none && <th>None</th>}</tr></thead>
-              <tbody>{attrs.map((a) => <tr key={a}><th>{a}</th>{shown.map((x, i) => <td key={i}>{String(x[a] ?? "")}</td>)}{none && <td className="dp-none">{a === attrs[0] ? "I would choose none of these" : ""}</td>}</tr>)}</tbody>
+              <tbody>{taskAttrs.map((a) => <tr key={a}><th>{a}</th>{shown.map((x, i) => <td key={i}>{String(x[a] ?? "")}</td>)}{none && <td className="dp-none">{a === taskAttrs[0] ? "I would choose none of these" : ""}</td>}</tr>)}</tbody>
             </table>
           </div>
         );
@@ -103,6 +105,7 @@ export function DesignFacts({ kind, file }: { kind: string; file: { rows: Row[];
     if (typeof s.efficiency?.pooled === "number") facts.push(["D-efficiency (pooled)", `${Math.round(s.efficiency.pooled * 1000) / 10}%`]);
     if (typeof s.efficiency?.perVersion?.mean === "number") facts.push(["D-efficiency per version (mean)", `${Math.round(s.efficiency.perVersion.mean * 1000) / 10}%`]);
     if (s.method) facts.push(["Design method", String(s.method)]);
+    if (s.partialProfile) { const pp = s.partialProfile, pv = pp.shownPerVersion; facts.push(["Attributes shown per task", pv ? `${pp.attributesPerTask} — each attribute in ${pv.min === pv.max ? pv.min : `${pv.min}–${pv.max}`} of a respondent's ${pp.tasksPerVersion} tasks` : String(pp.attributesPerTask)]); }
     facts.push(["None option", s.noneOption ? "yes" : "no"]);
   }
   if (kind === "maxdiff") {

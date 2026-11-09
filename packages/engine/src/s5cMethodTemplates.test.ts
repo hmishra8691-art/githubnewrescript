@@ -87,3 +87,26 @@ test("add_method_template brand_funnel and ad_test: the AI-coded open ends, carr
   assert.match(JSON.stringify(coerce([{ op: "add_method_template", template: "ad_test", videoUrl: "http://x" }]).rejected), /videoUrl must be https/);
   assert.match(JSON.stringify(coerce([{ op: "add_method_template", template: "brand_funnel", brands: ["A|B", "C"] }]).rejected), /2–15 different names/);
 });
+
+/* Design Generators phase 2 (2026-11-09): the Kano model template and its methodology */
+test("add_method_template kano: functional + dysfunctional grids on the same rows, the five standard answers, importance, the kano plan item", async () => {
+  const r = act(base(), [{ op: "add_method_template", template: "kano", product: "the Volt app", features: ["Offline mode", "Dark theme", "Live chat"], importance: true }]);
+  assert.deepEqual(r.def.questions.map((q) => q.variableName), ["KANO_FUNC", "KANO_DYSF", "KANO_IMP"]);
+  const [f, d] = r.def.questions;
+  assert.match(f.text, /if the Volt app HAD each/); assert.match(d.text, /did NOT have/);
+  assert.deepEqual(f.rows!.map((x) => [x.code, x.label]), d.rows!.map((x) => [x.code, x.label]));
+  assert.deepEqual(f.options.map((o) => o.label), ["I like it that way", "I expect it to be that way", "I am neutral", "I can live with it that way", "I dislike it that way"]);
+  const t = r.def.research!.analysisPlan!.tests[0];
+  assert.equal(t.method, "kano");
+  assert.deepEqual(t.variables, ["KANO_FUNC", "KANO_DYSF", "KANO_IMP"]);
+  const qc = runQualityCheck(r.def);
+  assert.equal(qc.deployable, true, JSON.stringify(qc.areas.filter((a) => a.status === "fail")));
+  assert.match(coerce([{ op: "add_method_template", template: "kano" }]).rejected[0].reason, /kano needs features .* never invent/);
+  assert.match(coerce([{ op: "add_method_template", template: "kano", features: ["One"] }]).rejected[0].reason, /2–20 different features/);
+  const { STUDY_METHODOLOGIES, recommendMethodology, sampleInputsFor } = await import("./studyMethodology.js");
+  const m = STUDY_METHODOLOGIES.find((x) => x.id === "kano")!;
+  const built = act(base(), m.build(sampleInputsFor(m)) as unknown[]);
+  assert.equal(built.def.research!.analysisPlan!.tests[0].method, "kano");
+  const rec = recommendMethodology("Which features are must-haves and which are delighters for our app?");
+  assert.equal(rec?.recommended.id, "kano");
+});

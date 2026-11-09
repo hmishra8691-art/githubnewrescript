@@ -8,12 +8,13 @@ import { brand, csat, gap, nps, pricing, text, trend, turf } from "./business.js
 import { conjoint, maxdiff } from "./choice.js";
 import { hb, lca, sem } from "./advanced.js";
 import { iat, sequentialMonadic, shelf } from "./experimental.js";
+import { kano } from "./kano.js";
 
 export type AnalysisRunner = (def: AnalysisDefinition, ds: Dataset, totalCases: number) => AnalysisResult;
 
 export const RUNNERS: Record<AnalysisDefinition["kind"], AnalysisRunner> = {
   descriptive, topbox, crosstab, test: statisticalTest, correlation, regression, segmentation, cluster, factor, reliability, trend,
-  nps, csat, turf, gap, pricing, brand, ranking, allocation, text, quality, weighting, conjoint, maxdiff, hb, lca, sem, sequential_monadic: sequentialMonadic, iat, shelf,
+  nps, csat, turf, gap, pricing, brand, ranking, allocation, text, quality, weighting, conjoint, maxdiff, hb, lca, sem, sequential_monadic: sequentialMonadic, iat, shelf, kano,
 };
 
 /**

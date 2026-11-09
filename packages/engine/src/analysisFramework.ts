@@ -930,7 +930,7 @@ export function requiredBase(def: SurveyDefinition, item: PlanItem, opts: { plan
         }
         case "maxdiff_scores": case "conjoint_utilities":
           return { minimum: 200, note: "200 respondents", rule: "at least 200 respondents (Orme's rule of thumb for stable aggregate utilities; 200 per subgroup to compare segments) — the design's tasks per respondent and its versions set the rest" };
-        case "turf": case "pricing": case "brand_funnel":
+        case "turf": case "pricing": case "brand_funnel": case "kano":
           return { minimum: 100, note: "100 respondents", rule: "at least 100 (rule of thumb for a stable reach or price curve)" };
         /* advanced models (2026-10-22): the same numbers advancedSuitability refuses and warns at */
         case "hb":

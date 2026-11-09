@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { SurveyDefinition, designGeneratorRegistry } from "@rescript/schema";
-import { DESIGN_SAMPLES, DESIGN_KIND_NAMES, readDesignRequest, recommendDesign, registerBuiltinDesignGenerators, type DesignKind, type DesignRecommendation } from "@rescript/designs";
+import { DESIGN_SAMPLES, DESIGN_VARIANTS, DESIGN_KIND_NAMES, readDesignRequest, recommendDesign, registerBuiltinDesignGenerators, type DesignKind, type DesignRecommendation } from "@rescript/designs";
 import { STUDY_METHODOLOGIES, CATEGORY_NAMES, applySurveyActions, coerceSurveyActions, parseAttributes, sampleInputsFor, type StudyCategory } from "@rescript/engine";
 import { useStudio } from "./store";
 import { useCommands } from "./CommandContext";
@@ -39,14 +39,17 @@ const DESCRIPTIONS: Record<string, string> = {
 export function designLibraryGroups(): LibraryGroup[] {
   const cats = [...new Set(STUDY_METHODOLOGIES.map((m) => m.category))] as StudyCategory[];
   return [
-    { key: "designs", label: "Choice & experimental designs", note: "generates a design file", methods: [...DESIGN_KINDS, "custom" as const].map((k) => ({ id: `design:${k}`, name: k === "custom" ? "Design file from columns (advanced)" : DESIGN_KIND_NAMES[k as DesignKind], description: DESCRIPTIONS[k] })) },
+    { key: "designs", label: "Choice & experimental designs", note: "generates a design file", methods: [...DESIGN_KINDS, "custom" as const].flatMap((k) => [
+      { id: `design:${k}`, name: k === "custom" ? "Design file from columns (advanced)" : DESIGN_KIND_NAMES[k as DesignKind], description: DESCRIPTIONS[k] },
+      ...Object.entries(DESIGN_VARIANTS).filter(([, v]) => v.kind === k).map(([id, v]) => ({ id: `design:${id}`, name: v.name, description: v.description })),
+    ]) },
     ...cats.map((c) => ({ key: c, label: CATEGORY_NAMES[c], note: "builds a complete study", methods: STUDY_METHODOLOGIES.filter((m) => m.category === c).map((m) => ({ id: `study:${m.id}`, name: m.name, description: m.fit })) })),
   ];
 }
 
 export function DesignWorkspace({ renderForm }: { renderForm(kind: string, initialConfig: Record<string, unknown> | undefined, initialName: string | undefined, onClose: () => void): React.ReactNode }) {
   const pending = React.useMemo(() => takePendingDesignRequest(), []);
-  const [selected, setSelected] = React.useState<string | null>(pending ? `design:${recommendDesign(readDesignRequest(pending)).kind}` : null);
+  const [selected, setSelected] = React.useState<string | null>(pending ? (() => { const r = readDesignRequest(pending); const k = recommendDesign(r).kind; return `design:${k === "conjoint" && r.partial ? "conjoint@partial" : k}`; })() : null);
   const groups = React.useMemo(() => designLibraryGroups(), []);
   return (
     <div className="dw" data-testid="design-workspace">
@@ -67,9 +70,12 @@ export function DesignWorkspace({ renderForm }: { renderForm(kind: string, initi
 
 type Tab = "sample" | "guided" | "describe";
 
-function DesignMethod({ kind, pending, renderForm }: { kind: string; pending: string | null; renderForm: Parameters<typeof DesignWorkspace>[0]["renderForm"] }) {
+function DesignMethod({ kind: methodId, pending, renderForm }: { kind: string; pending: string | null; renderForm: Parameters<typeof DesignWorkspace>[0]["renderForm"] }) {
   const s = useStudio();
-  const sample = DESIGN_SAMPLES[kind as keyof typeof DESIGN_SAMPLES];
+  /* a variant (partial-profile CBC) is its kind's generator with the variant's sample and settings */
+  const variant = DESIGN_VARIANTS[methodId];
+  const kind: string = variant?.kind ?? methodId;
+  const sample = variant ?? DESIGN_SAMPLES[kind as keyof typeof DESIGN_SAMPLES];
   const plugin = designGeneratorRegistry.get(kind)!;
   const [tab, setTab] = React.useState<Tab>(pending ? "describe" : "sample");
   const [form, setForm] = React.useState<{ config?: Record<string, unknown>; name?: string; n: number }>({ n: 0 });
@@ -78,10 +84,10 @@ function DesignMethod({ kind, pending, renderForm }: { kind: string; pending: st
   const sampleFile = React.useMemo(() => { try { return sample ? plugin.generate(structuredClone(sample.config) as never, 20261109) : null; } catch { return null; } }, [sample, plugin]);
 
   return (
-    <div className="dm" data-testid={`design-method-${kind}`}>
+    <div className="dm" data-testid={`design-method-${methodId}`}>
       <div className="dm-head">
-        <h3>{kind === "custom" ? "Design file from columns" : DESIGN_KIND_NAMES[kind as DesignKind]}</h3>
-        <p className="dm-desc">{plugin.description ?? DESCRIPTIONS[kind]}</p>
+        <h3>{variant ? variant.name : kind === "custom" ? "Design file from columns" : DESIGN_KIND_NAMES[kind as DesignKind]}</h3>
+        <p className="dm-desc">{variant ? variant.description : plugin.description ?? DESCRIPTIONS[kind]}</p>
       </div>
       <div className="dm-tabs" role="tablist">
         {(["sample", "guided", "describe"] as Tab[]).map((t) => (
@@ -95,7 +101,7 @@ function DesignMethod({ kind, pending, renderForm }: { kind: string; pending: st
         <div className="dm-panel" data-testid="dm-sample">
           <div className="dm-sample-head">
             <div><b>{sample.title}</b><p className="dm-desc">{sample.objective}</p></div>
-            <button type="button" className="btn primary small" onClick={() => openForm(structuredClone(sample.config), `${sample.title} — ${plugin.label}`)} data-testid="dm-use-sample">Use this sample as a starting point</button>
+            <button type="button" className="btn primary small" onClick={() => openForm(structuredClone(sample.config), `${sample.title} — ${variant?.name ?? plugin.label}`)} data-testid="dm-use-sample">Use this sample as a starting point</button>
           </div>
           <SampleParameters kind={kind} config={sample.config} />
           {sampleFile ? <DesignPreview kind={kind} file={sampleFile} /> : <p className="sd-warn">The sample could not be generated.</p>}
@@ -147,7 +153,22 @@ function Describe({ kind, initial, surveyId, onUse }: { kind: DesignKind; initia
     if (answers.treatments) a.treatments = answers.treatments.split("\n").map((x) => x.trim()).filter(Boolean);
     return recommendDesign(read, a);
   }, [read, answers, kind]);
-  const understand = () => { setRead(readDesignRequest(text)); setAnswers({}); };
+  /* the rules read it at once; with "Read it with AI" on, the server's model reading (metered, only names you said)
+     replaces it when it arrives — any failure keeps the rules' reading */
+  const [useAi, setUseAi] = React.useState(true);
+  const [reading, setReading] = React.useState<{ busy: boolean; note: string | null; source: "rules" | "ai" | null }>({ busy: false, note: null, source: null });
+  const understand = async () => {
+    const t = text;
+    setRead(readDesignRequest(t)); setAnswers({});
+    if (!useAi) { setReading({ busy: false, note: null, source: "rules" }); return; }
+    setReading({ busy: true, note: null, source: null });
+    try {
+      const r = await fetch("/api/designs/interpret", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: t, surveyId, useAi }) });
+      const j = await r.json().catch(() => null);
+      if (r.ok && j?.read) { setRead(j.read); setReading({ busy: false, note: j.note ?? null, source: j.source ?? "rules" }); }
+      else setReading({ busy: false, note: j?.error ? `Read by the rules — ${j.error}` : "Read by the rules.", source: "rules" });
+    } catch { setReading({ busy: false, note: "Read by the rules — the AI could not be reached.", source: "rules" }); }
+  };
   return (
     <div className="dm-panel" data-testid="dm-describe">
       <label className="f"><span>Describe the design you need — the method, attributes and levels or items, tasks, alternatives, constraints, sample, time</span>
@@ -155,12 +176,15 @@ function Describe({ kind, initial, surveyId, onUse }: { kind: DesignKind; initia
           placeholder="I want a choice-based conjoint with six attributes and three to four levels per attribute, an efficient balanced design, 12 choice tasks and three alternatives per task." /></label>
       <HeardNote heard={heard} onUseOriginal={heard ? () => { setText((t) => t.replace(heard.english ?? "", heard.text)); setHeard(null); } : undefined} />
       <div className="row" style={{ gap: 8 }}>
-        <button type="button" className="btn primary small" disabled={text.trim().length < 6} onClick={understand} data-testid="dm-understand">Recommend a design</button>
+        <button type="button" className="btn primary small" disabled={text.trim().length < 6 || reading.busy} onClick={understand} data-testid="dm-understand">Recommend a design</button>
+        <label className="row" style={{ gap: 6, fontSize: 13 }} title="One AI request on this project, charged like other AI requests; it can only add names you actually said."><input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} data-testid="dm-use-ai" /> Read it with AI too</label>
         <VoiceButton surveyId={surveyId} label="Speak instead" refusedMessage="Microphone access was refused — allow it in the browser to describe the design by voice."
           onHeard={(h) => { const w = (h.english || h.text).trim(); if (!w) return; setText((t) => `${t.trim()}${t.trim() ? " " : ""}${w}`); setHeard(h.english && h.language !== "en" ? h : null); }} />
       </div>
+      {reading.busy && <p className="dm-desc" data-testid="dm-reading">The AI is reading it…</p>}
       {read && rec && (
-        <div className="dm-rec" data-testid="dm-recommendation" data-kind={rec.kind}>
+        <div className="dm-rec" data-testid="dm-recommendation" data-kind={rec.kind} data-source={reading.source ?? "rules"}>
+          {reading.note && <p className="dm-desc" data-testid="dm-reading-note">{reading.note}</p>}
           {read.understood.length > 0 && <div><b>Understood</b><ul>{read.understood.map((u) => <li key={u}>{u}</li>)}</ul></div>}
           <div><b>Recommended: {DESIGN_KIND_NAMES[rec.kind]}</b><ul data-testid="dm-why">{rec.why.map((w) => <li key={w}>{w}</li>)}</ul></div>
           {rec.assumptions.length > 0 && <div><b>Assumed</b><ul>{rec.assumptions.map((w) => <li key={w}>{w}</li>)}</ul></div>}

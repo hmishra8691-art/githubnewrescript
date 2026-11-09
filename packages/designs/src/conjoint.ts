@@ -136,6 +136,12 @@ export interface ConjointConfig {
   brandAttribute?: string;
   labelled?: boolean;
   alternativeSpecific?: (string | { attribute: string; appliesTo: string[] })[];
+  /**
+   * PARTIAL PROFILE (2026-11-09): show only this many attributes per task, the rest left out (empty cells, coded as
+   * zeros by the estimator, hidden on the respondent's screen). Which attributes a task shows is balanced within each
+   * version — each attribute shown about equally often, each pair together about equally often. Unset = full profile.
+   */
+  attributesPerTask?: number;
 }
 
 /** The design-file columns a CBC design writes besides its attributes — an attribute may not be named after one. */
@@ -243,6 +249,46 @@ function pickBalancedLevel(
   return candidates[Math.floor(rng() * candidates.length)];
 }
 
+/**
+ * Partial profile: per version, choose `k` attributes for each task — the least shown so far first, then the pair
+ * coverage that is lowest, ties by the seed — and blank the others in every alternative of that task.
+ */
+export function applyPartialProfile(attrs: string[], rows: Record<string, unknown>[], k: number | undefined, seed: number): { attributesPerTask: number; tasksPerVersion: number; shownPerVersion: { min: number; max: number }; shownPerAttribute: { min: number; max: number }; pairsTogether: { min: number; max: number } } | null {
+  if (!k || k >= attrs.length || k < 2) return null;
+  const byTask = new Map<string, Record<string, unknown>[]>();
+  for (const r of rows) { const key = `${r.version}:${r.task}`; (byTask.get(key) ?? byTask.set(key, []).get(key)!).push(r); }
+  const shownTotal = new Map(attrs.map((a) => [a, 0]));
+  const pairTotal = new Map<string, number>();
+  const versions = [...new Set(rows.map((r) => Number(r.version)))];
+  let pvMin = Infinity, pvMax = 0, tasksPer = 0;
+  for (const v of versions) {
+    const rand = mulberry32(subSeed(seed, `conjoint:partial:v${v}`));
+    const shown = new Map(attrs.map((a) => [a, 0]));
+    const pairs = new Map<string, number>();
+    const pk = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+    const tasks = [...new Set(rows.filter((r) => Number(r.version) === v).map((r) => Number(r.task)))].sort((a, b) => a - b);
+    for (const t of tasks) {
+      const pick: string[] = [];
+      while (pick.length < k) {
+        let best: string | null = null, bestScore = Infinity;
+        for (const a of attrs) {
+          if (pick.includes(a)) continue;
+          const score = shown.get(a)! * 1000 + pick.reduce((s, b) => s + (pairs.get(pk(a, b)) ?? 0), 0) * 10 + rand();
+          if (score < bestScore) { bestScore = score; best = a; }
+        }
+        pick.push(best!);
+      }
+      for (const a of pick) { shown.set(a, shown.get(a)! + 1); shownTotal.set(a, shownTotal.get(a)! + 1); }
+      for (let i = 0; i < pick.length; i++) for (let j = i + 1; j < pick.length; j++) { const key = pk(pick[i], pick[j]); pairs.set(key, (pairs.get(key) ?? 0) + 1); pairTotal.set(key, (pairTotal.get(key) ?? 0) + 1); }
+      for (const r of byTask.get(`${v}:${t}`) ?? []) if (Number(r.none_option) !== 1) for (const a of attrs) if (!pick.includes(a)) r[a] = "";
+    }
+    tasksPer = Math.max(tasksPer, tasks.length);
+    for (const n of shown.values()) { pvMin = Math.min(pvMin, n); pvMax = Math.max(pvMax, n); }
+  }
+  const sv = [...shownTotal.values()], pv = attrs.length > 1 ? attrs.flatMap((a, i) => attrs.slice(i + 1).map((b) => pairTotal.get(a < b ? `${a}|${b}` : `${b}|${a}`) ?? 0)) : [0];
+  return { attributesPerTask: k, tasksPerVersion: tasksPer, shownPerVersion: { min: pvMin, max: pvMax }, shownPerAttribute: { min: Math.min(...sv), max: Math.max(...sv) }, pairsTogether: { min: Math.min(...pv), max: Math.max(...pv) } };
+}
+
 export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
   kind: "conjoint",
   label: "Choice-Based Conjoint (CBC)",
@@ -271,6 +317,7 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       help: "Level pairs that must never appear together in one concept — e.g. a value brand at the top price.",
     },
     { name: "tasks", label: "Tasks per version", type: "number", default: 10 },
+    { name: "attributesPerTask", label: "Partial profile: attributes shown per task (blank = all)", type: "number", help: "For many attributes (7+): each task shows only this many, balanced so every attribute and every pair is shown about equally often. 4–5 is typical; more tasks are needed than in full profile." },
     {
       name: "alternativesPerTask",
       label: "Alternatives per task",
@@ -321,6 +368,12 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
     const c = normalize(config);
     if (c.attributes.length < 2) {
       errors.push("Conjoint requires at least 2 attributes.");
+    }
+    if (config.attributesPerTask != null) {
+      const k = Number(config.attributesPerTask);
+      if (!Number.isInteger(k) || k < 2) errors.push("Partial profile needs at least 2 attributes shown per task.");
+      else if (k >= c.attributes.length) errors.push(`Partial profile shows fewer attributes than the design has (${c.attributes.length}) — leave it blank for full profile.`);
+      if (isAlternativeSpecific(config)) errors.push("Partial profile cannot be combined with a brand-specific / labelled design.");
     }
     for (const attr of c.attributes) {
       if (!attr.name) errors.push("Every attribute needs a name.");
@@ -610,6 +663,8 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       optimisation = { algorithm: "level swapping (Huber & Zwerina 1996)", swaps, evaluations, versionsStoppedAtBudget: exhausted };
     }
 
+    const partialProfile = applyPartialProfile(c.attributes.map((a) => a.name), rows, config.attributesPerTask, seed);
+
     // Summary: level frequencies and one-way balance score per attribute.
     const levelFrequencies: Record<string, Record<string, number>> = {};
     const balanceScores: Record<string, number> = {};
@@ -657,6 +712,7 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
        * their standard errors grew.
        */
       summary: {
+        ...(partialProfile ? { partialProfile } : {}),
         method: c.method,
         levelFrequencies,
         balanceScores,

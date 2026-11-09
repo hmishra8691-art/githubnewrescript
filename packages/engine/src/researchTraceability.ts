@@ -124,7 +124,7 @@ export function isFramingQuestion(def: SurveyDefinition, q: Question): boolean {
   const block = listBlocks(def.flow as unknown[]).find((b) => b.pages.some((p) => p.node.questionIds.includes(q.id)));
   return FRAMING_BLOCK.test(block?.title ?? "");
 }
-const DESCRIPTIVE = new Set<string>(["frequencies", "mean", "median", "top_box", "nps", "text_themes", "ranking_scores", "allocation_shares", "turf", "brand_funnel", "pricing", "maxdiff_scores", "conjoint_utilities", "factor", "reliability", "cluster"]);
+const DESCRIPTIVE = new Set<string>(["frequencies", "mean", "median", "top_box", "nps", "text_themes", "ranking_scores", "allocation_shares", "turf", "brand_funnel", "pricing", "maxdiff_scores", "conjoint_utilities", "factor", "reliability", "cluster", "kano"]);
 const plain = (s: string | undefined, n = 90) => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const resolve = (def: SurveyDefinition, ref: string): Question | undefined => getQuestionByCodeOrVar(def, ref) ?? def.questions.find((q) => q.id === ref);
 

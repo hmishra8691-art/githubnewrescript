@@ -64,6 +64,22 @@ export type ConjointMethodName = "cbc" | "menu" | "acbc" | "cva";
 export interface LevelRef { attribute: string; level: string }
 export interface ConjointProhibitionInput { a: LevelRef; b: LevelRef; also?: LevelRef[]; alsoOp?: "and" | "or" }
 export interface MenuItemInput { name: string; prices: string[]; required?: boolean }
+/**
+ * A CUSTOM EXPERIMENTAL DESIGN (Design Generators phase 2, 2026-11-09): a factorial (full or D-optimal
+ * fraction) over factors and levels, or an order / block design over treatments (Latin square, Williams,
+ * BIBD). Attached to the survey as a design file (kind "experiment") — no question is created; the panel's
+ * Designs list shows it and its rows drive vignettes, monadic cells or the order treatments are shown in.
+ */
+export type ExperimentDesignType = "fractional" | "full_factorial" | "latin_square" | "williams" | "bibd";
+export interface ExperimentSpec {
+  designType?: ExperimentDesignType;
+  factors?: { name: string; levels: string[] }[];
+  treatments?: string[];
+  runs?: number; versions?: number; blockSize?: number; blocks?: number;
+  prohibitions?: ConjointProhibitionInput[];
+  randomizeOrder?: boolean;
+  seed?: number; name?: string;
+}
 export interface ConjointSpec {
   method?: ConjointMethodName;
   attributes?: { name: string; levels: string[] }[];
@@ -84,6 +100,8 @@ export interface ConjointSpec {
   /* F4 2026-10-22 — CBC dual-response None, alternative-specific / labelled designs */
   dualResponse?: boolean; dualResponsePrompt?: string | null;
   labelled?: boolean; brandAttribute?: string | null; alternativeSpecific?: { attribute: string; appliesTo: string[] }[] | null;
+  /* Design Generators phase 2 (2026-11-09) — partial-profile CBC: attributes shown per task (null = all) */
+  attributesPerTask?: number | null;
   /* F4 2026-10-22 — menu: mutually exclusive sections */
   exclusiveGroups?: { name: string; items: string[] }[] | null;
   /* F4 2026-10-22 — rating-based (CVA) */
@@ -116,9 +134,10 @@ export type MethodAction =
   | ({ op: "update_maxdiff"; target: string; text?: string; required?: boolean } & MaxDiffSpec)
   | ({ op: "create_conjoint" } & MethodPlacement & ConjointSpec)
   | ({ op: "update_conjoint"; target: string; text?: string; required?: boolean } & ConjointSpec)
+  | ({ op: "create_experiment" } & ExperimentSpec)
   | { op: "simulate_conjoint"; target: string; scenario: SimulationScenarioInput; remove?: boolean };
 
-export const METHOD_ACTION_OPS = ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "simulate_conjoint"] as const;
+export const METHOD_ACTION_OPS = ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "simulate_conjoint", "create_experiment"] as const;
 const OPS = new Set<string>(METHOD_ACTION_OPS);
 export const isMethodOp = (op: string): boolean => OPS.has(op);
 
@@ -237,6 +256,7 @@ const CONJOINT_METHODS: Record<string, ConjointMethodName> = {
   /* F4 2026-10-22: rating-based (CVA) and the CBC variants are implemented */
   cva: "cva", rating: "cva", ratings: "cva", rating_based: "cva", ratings_based: "cva", full_profile: "cva", full_profile_rating: "cva", traditional: "cva", likelihood_to_buy: "cva",
   labelled: "cbc", labeled: "cbc", alternative_specific: "cbc", brand_specific: "cbc", dual_response: "cbc",
+  partial_profile: "cbc", partial_profile_cbc: "cbc", ppcbc: "cbc",
 };
 /** method words that imply a CBC option */
 const IMPLIED: Record<string, Partial<ConjointSpec>> = { labelled: { labelled: true }, labeled: { labelled: true }, dual_response: { dualResponse: true } };
@@ -246,7 +266,7 @@ const NOT_IMPLEMENTED: Record<string, string> = {
   aca: "ACA (adaptive conjoint analysis, self-explicated) is not implemented",
   self_explicated: "self-explicated conjoint is not implemented",
 };
-const SUPPORTED = "Rescript runs choice-based (cbc — with dual-response None and brand-specific / labelled designs), menu-based (menu), adaptive (acbc) and rating-based (cva) conjoint";
+const SUPPORTED = "Rescript runs choice-based (cbc — with dual-response None, brand-specific / labelled and partial-profile designs), menu-based (menu), adaptive (acbc) and rating-based (cva) conjoint";
 
 /** shared by create and update: every field checked, or the reason it is refused */
 function maxdiffSpecOf(o: Record<string, unknown>, partial: boolean): MaxDiffSpec | string {
@@ -426,6 +446,18 @@ function conjointSpecOf(o: Record<string, unknown>, partial: boolean): ConjointS
     if (!d || !m[d]) return "design is efficient (level-balanced, then swapped for D-efficiency) or balanced (level-balanced, minimal overlap)";
     spec.design = m[d];
   }
+  /* Design Generators phase 2 (2026-11-09): partial-profile CBC — attributesPerTask / shownAttributes / partialProfile: N */
+  const appRaw = o.attributesPerTask ?? o.attributes_per_task ?? o.shownAttributes ?? (typeof o.partialProfile === "number" ? o.partialProfile : undefined);
+  if (appRaw === null) spec.attributesPerTask = null;
+  else if (appRaw !== undefined) { const n = num(appRaw); if (n === undefined || !Number.isInteger(n) || n < 2) return "attributesPerTask (partial-profile CBC) is a whole number of attributes shown per task, at least 2"; spec.attributesPerTask = n; }
+  if (o.partialProfile === true && spec.attributesPerTask === undefined && !partial) {
+    const n = Array.isArray(o.attributes) ? o.attributes.length : 0;
+    if (n >= 3) spec.attributesPerTask = Math.max(2, Math.min(n - 1, n >= 9 ? 5 : 4));
+  }
+  if (rawMethod && /^(partial_profile|partial_profile_cbc|ppcbc)$/.test(rawMethod) && spec.attributesPerTask === undefined && !partial) {
+    const n = Array.isArray(o.attributes) ? o.attributes.length : 0;
+    if (n >= 3) spec.attributesPerTask = Math.max(2, Math.min(n - 1, n >= 9 ? 5 : 4));
+  }
   if (o.items !== undefined) {
     if (!Array.isArray(o.items)) return "items (menu) is a list of {name, prices}";
     const items: MenuItemInput[] = [];
@@ -447,6 +479,47 @@ function conjointSpecOf(o: Record<string, unknown>, partial: boolean): ConjointS
     if (m !== "menu" && !spec.attributes?.length) return `create_conjoint (${m}) needs the attributes and their levels (attributes: [{name, levels}]) — ask the researcher for them rather than inventing them`;
     if (spec.addAttributes || spec.removeAttributes || spec.levels || spec.addProhibitions || spec.removeProhibitions) return "addAttributes / removeAttributes / levels / addProhibitions / removeProhibitions belong to update_conjoint — give the whole list to create_conjoint";
   }
+  return spec;
+}
+
+const EXPERIMENT_TYPES: Record<string, ExperimentDesignType> = {
+  fractional: "fractional", fractional_factorial: "fractional", d_optimal: "fractional", doptimal: "fractional", main_effects: "fractional", orthogonal: "fractional",
+  full_factorial: "full_factorial", full: "full_factorial", factorial: "full_factorial", all_combinations: "full_factorial",
+  latin_square: "latin_square", latin: "latin_square", williams: "williams", williams_design: "williams", carryover_balanced: "williams",
+  bibd: "bibd", balanced_incomplete_block: "bibd", balanced_incomplete_block_design: "bibd", incomplete_block: "bibd",
+};
+function experimentSpecOf(o: Record<string, unknown>): ExperimentSpec | string {
+  const spec: ExperimentSpec = {};
+  const t = str(o.designType ?? o.type ?? o.design ?? o.method)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (t) { if (!EXPERIMENT_TYPES[t]) return `designType is fractional (D-optimal main effects), full_factorial, latin_square, williams or bibd — not “${t}”`; spec.designType = EXPERIMENT_TYPES[t]; }
+  const factors = attributesOf(o.factors ?? o.attributes, "factors");
+  if (typeof factors === "string") return factors;
+  if (factors) spec.factors = factors;
+  const tr = strList(o.treatments ?? o.concepts ?? o.conditions, 60);
+  if ((o.treatments ?? o.concepts ?? o.conditions) !== undefined && !tr) return "treatments is a list of the concepts / conditions to order or block";
+  if (tr) spec.treatments = tr;
+  if (!spec.designType) spec.designType = spec.factors?.length ? "fractional" : "williams";
+  const factorial = spec.designType === "fractional" || spec.designType === "full_factorial";
+  if (factorial && !spec.factors?.length) return `a ${spec.designType.replace("_", " ")} design needs the factors and their levels (factors: [{name, levels}]) — ask the researcher for them rather than inventing them`;
+  if (!factorial && !spec.treatments?.length) return `a ${spec.designType.replace("_", " ")} design needs the treatments (treatments: [...]) — ask the researcher for them rather than inventing them`;
+  if (factorial && spec.treatments) return "treatments belong to latin_square / williams / bibd designs — a factorial design takes factors";
+  if (!factorial && spec.factors) return "factors belong to fractional / full_factorial designs — an order or block design takes treatments";
+  const fields: [keyof ExperimentSpec, string[], string, number][] = [
+    ["runs", ["runs"], "runs", 2], ["versions", ["versions", "blocksOfRuns"], "versions", 1],
+    ["blockSize", ["blockSize", "perBlock", "treatmentsPerBlock"], "blockSize", 2], ["blocks", ["blocks"], "blocks", 1], ["seed", ["seed"], "seed", 0],
+  ];
+  for (const [key, keys, what, min] of fields) {
+    const v = whole(o, keys, what, min, false);
+    if (isErr(v)) return v.error;
+    if (v !== undefined) (spec as Record<string, unknown>)[key] = v;
+  }
+  if (spec.runs !== undefined && spec.designType !== "fractional") return "runs applies to a fractional design (a full factorial runs every combination)";
+  if ((spec.blockSize !== undefined || spec.blocks !== undefined) && spec.designType !== "bibd") return "blockSize / blocks apply to a bibd design";
+  const pros = prohibitionsOf(o.prohibitions, "prohibitions");
+  if (typeof pros === "string") return pros;
+  if (pros?.length) { if (!factorial) return "prohibitions apply to factorial designs (combinations of factor levels)"; spec.prohibitions = pros; }
+  if (bool(o.randomizeOrder ?? o.shuffle) !== undefined) spec.randomizeOrder = bool(o.randomizeOrder ?? o.shuffle);
+  const name = str(o.name ?? o.designName, 120); if (name) spec.name = name;
   return spec;
 }
 
@@ -513,6 +586,7 @@ export function coerceMethodAction(op: string, o: Record<string, unknown>): Meth
     }
     case "create_maxdiff": { const s = maxdiffSpecOf(o, false); return typeof s === "string" ? s : { op, ...placementOf(o), ...s }; }
     case "create_conjoint": { const s = conjointSpecOf(o, false); return typeof s === "string" ? s : { op, ...placementOf(o), ...s }; }
+    case "create_experiment": { const s = experimentSpecOf(o); return typeof s === "string" ? s : { op, ...s }; }
     case "update_maxdiff": case "update_conjoint": {
       const target = str(o.target ?? o.question, 80); if (!target) return `${op} needs the target question (its code)`;
       const s = op === "update_maxdiff" ? maxdiffSpecOf(o, true) : conjointSpecOf(o, true);
@@ -545,11 +619,11 @@ type DesignFile = { columns: string[]; rows: Record<string, unknown>[]; summary?
 
 const KIND_OF: Record<ConjointMethodName, string> = { cbc: "conjoint", menu: "menu", acbc: "acbc", cva: "cva" };
 const METHOD_OF_KIND: Record<string, ConjointMethodName> = { conjoint: "cbc", menu: "menu", acbc: "acbc", cva: "cva" };
-const LABEL: Record<string, string> = { maxdiff: "MaxDiff", conjoint: "choice-based conjoint (CBC)", menu: "menu-based conjoint", acbc: "adaptive CBC (ACBC)", cva: "rating-based conjoint (CVA)" };
+const LABEL: Record<string, string> = { experiment: "experimental", maxdiff: "MaxDiff", conjoint: "choice-based conjoint (CBC)", menu: "menu-based conjoint", acbc: "adaptive CBC (ACBC)", cva: "rating-based conjoint (CVA)" };
 /** the config keys whose change changes the generated rows (others — labels, instructions, the None text — are read at render time) */
 const GENERATION_KEYS: Record<string, string[]> = {
   maxdiff: ["items", "itemsPerTask", "tasks", "versions", "appearancesPerItem", "itemsPerVersion", "balance", "prohibitedPairs", "practiceTask"],
-  conjoint: ["attributes", "prohibitions", "tasks", "alternativesPerTask", "noneOption", "holdoutTasks", "versions", "method", "dualResponseNone", "brandAttribute", "labelled", "alternativeSpecific"],
+  conjoint: ["attributes", "prohibitions", "tasks", "alternativesPerTask", "noneOption", "holdoutTasks", "versions", "method", "dualResponseNone", "brandAttribute", "labelled", "alternativeSpecific", "attributesPerTask"],
   menu: ["items", "requiredItems", "tasks", "versions", "noneOption", "exclusiveGroups"],
   acbc: ["attributes", "prohibitions", "screeningTasks", "conceptsPerScreen", "maxAttributesVaried", "unacceptableThreshold", "mustHaveThreshold", "tournamentAlternatives", "minTournamentConcepts", "priceBase", "priceIncrements", "priceVariation", "priceRound"],
   cva: ["attributes", "prohibitions", "mode", "profiles", "versions", "holdouts"],
@@ -726,7 +800,7 @@ function resolveLevel(attrs: { name: string; levels: string[] }[], r: LevelRef, 
 const proKey = (p: ConjointProhibitionInput) => [p.a, p.b, ...(p.also ?? [])].map((x) => `${norm(x.attribute)}=${norm(x.level)}`).sort().join("&");
 
 /* F4 2026-10-22: fields that belong to one method only */
-const CBC_ONLY = ["dualResponse", "dualResponsePrompt", "labelled", "brandAttribute", "alternativeSpecific"] as const;
+const CBC_ONLY = ["dualResponse", "dualResponsePrompt", "labelled", "brandAttribute", "alternativeSpecific", "attributesPerTask"] as const;
 const CVA_ONLY = ["mode", "profiles", "scaleMin", "scaleMax", "minLabel", "maxLabel", "monotone"] as const;
 const ACBC_PRICE = ["priceBase", "priceIncrements", "priceVariation", "priceCurrency"] as const;
 const MENU_ONLY = ["exclusiveGroups"] as const;
@@ -854,7 +928,28 @@ function conjointConfig(method: ConjointMethodName, s: ConjointSpec, prev?: Cfg)
   if (s.none !== undefined) c.noneOption = s.none;
   if (s.noneLabel !== undefined) { if (s.noneLabel === null) delete c.noneLabel; else c.noneLabel = s.noneLabel; }
   if (s.design) c.method = s.design; else if (c.method === undefined && !prev) c.method = "efficient";
+  if (s.attributesPerTask !== undefined) { if (s.attributesPerTask === null) delete c.attributesPerTask; else c.attributesPerTask = s.attributesPerTask; }
+  if (typeof c.attributesPerTask === "number" && c.attributesPerTask >= attrs.length) { delete c.attributesPerTask; assumed.push(`full profiles (every one of the ${attrs.length} attributes is shown in each task)`); }
   return { config: c, assumed };
+}
+
+const EXPERIMENT_WORDS: Record<string, string> = { fractional: "D-optimal fractional factorial", full_factorial: "full factorial", latin_square: "Latin square", williams: "Williams (carry-over balanced)", bibd: "balanced incomplete block (BIBD)" };
+/** an experimental design's figures in words, from the generator's own summary */
+export function experimentWords(config: Cfg, file: DesignFile): string {
+  const s = (file.summary ?? {}) as Record<string, any>;
+  const t = String(config.designType);
+  const parts: string[] = [EXPERIMENT_WORDS[t] ?? t];
+  const factors = (config.factors as { name: string; levels: string[] }[] | undefined) ?? [];
+  if (factors.length) parts.push(`${plural(factors.length, "factor")} (${factors.map((f) => `${f.name} ${f.levels.length}`).join(", ")} levels)`);
+  const tr = (config.treatments as string[] | undefined) ?? [];
+  if (tr.length) parts.push(plural(tr.length, "treatment"));
+  if (s.runs) parts.push(`${s.runs} runs${s.totalCombinations ? ` of ${s.totalCombinations} combinations` : ""}`);
+  else parts.push(plural(file.rows.length, "row"));
+  if (typeof s.dEfficiency === "number") parts.push(`D-efficiency ${s.dEfficiency}%`);
+  if (typeof s.maxCorrelation === "number") parts.push(`largest correlation between factors ${s.maxCorrelation}`);
+  if (s.carryover) parts.push(s.carryoverBalanced ? "carry-over balanced" : `carry-over ${s.carryover.min}–${s.carryover.max}`);
+  if (s.pairConcurrence) parts.push(`pairs together ${s.pairConcurrence.min === s.pairConcurrence.max ? `${s.pairConcurrence.min} each` : `${s.pairConcurrence.min}–${s.pairConcurrence.max}`}`);
+  return parts.join(", ");
 }
 
 /** conjoint diagnostics in words, from the summary the generator measured */
@@ -888,6 +983,7 @@ export function conjointDesignWords(kind: string, config: Cfg, file: DesignFile)
       ? `D-efficiency ${pct(e.pooled)} pooled (one version alone is too short to identify the model)`
       : `D-efficiency ${pct(e.perVersion?.mean)} per version (worst ${pct(e.perVersion?.min)}), ${pct(e.pooled)} pooled`) : "",
     counts.length ? `each level shown ${Math.min(...counts)}–${Math.max(...counts)} times` : "",
+    s.partialProfile ? `partial profile: ${s.partialProfile.attributesPerTask} of ${attrs.length} attributes shown per task (each attribute in ${s.partialProfile.shownPerVersion?.min ?? "?"}–${s.partialProfile.shownPerVersion?.max ?? "?"} of a respondent's ${s.partialProfile.tasksPerVersion ?? "?"} tasks)` : "",
     e && typeof e.avoidableOverlapPct === "number" ? `avoidable overlap ${e.avoidableOverlapPct}%` : "",
     e && typeof e.duplicateConceptTasks === "number" ? `${e.duplicateConceptTasks} tasks with a duplicate concept` : "",
     s.legalConcepts != null ? `the prohibitions leave ${s.legalConcepts} of ${s.totalConcepts} concepts (${s.spaceRemaining}%)` : "",
@@ -949,6 +1045,28 @@ export function applyMethodAction(def: SurveyDefinition, a: MethodAction, env: M
   const warnings: string[] = [];
   switch (a.op) {
     case "simulate_conjoint": return applySimulation(def, a, env);
+    case "create_experiment": {
+      const factorial = a.designType === "fractional" || a.designType === "full_factorial";
+      const config: Cfg = { designType: a.designType ?? "fractional", randomizeOrder: a.randomizeOrder ?? true };
+      if (factorial) {
+        const factors = (a.factors ?? []).map((f) => ({ name: f.name, levels: [...f.levels] }));
+        config.factors = factors;
+        const pros = (a.prohibitions ?? []).map((p) => {
+          const r = { a: resolveLevel(factors, p.a, "prohibition"), b: resolveLevel(factors, p.b, "prohibition"), ...(p.also?.length ? { also: p.also.map((x) => resolveLevel(factors, x, "prohibition")), ...(p.alsoOp ? { alsoOp: p.alsoOp } : {}) } : {}) };
+          if (norm(r.a.attribute) === norm(r.b.attribute)) fail(`a prohibition pairs levels of two different factors (both are ${r.a.attribute})`);
+          return r;
+        });
+        if (pros.length) config.prohibitions = pros;
+        if (a.runs !== undefined) config.runs = a.runs;
+      } else config.treatments = [...(a.treatments ?? [])];
+      for (const k of ["versions", "blockSize", "blocks"] as const) if (a[k] !== undefined) config[k] = a[k];
+      const seed = a.seed ?? seedFor("experiment", config);
+      const file = generate("experiment", config, seed);
+      const id = env.ids("design");
+      const name = a.name ?? `${EXPERIMENT_WORDS[config.designType as string] ?? "Experimental"} design`;
+      def.designs.push({ id, kind: "experiment", name, version: 1, seed, config, file: { format: "json", columns: file.columns, rows: file.rows, ...(file.summary ? { summary: file.summary } : {}), generatedAt: env.now } } as never);
+      return { description: `Attached the experimental design “${name}” (seed ${seed}): ${experimentWords(config, file)}. No question was created — the design is in Design Generators → Designs, ready for vignettes, monadic cells or a Latin-square / Williams randomizer.`, warnings, touched: [] };
+    }
     case "create_maxdiff": case "create_conjoint": {
       const kind = a.op === "create_maxdiff" ? "maxdiff" : KIND_OF[(a as ConjointSpec).method ?? "cbc"];
       const built = a.op === "create_maxdiff" ? maxdiffConfig(def, env, a) : conjointConfig((a as ConjointSpec).method ?? "cbc", a as ConjointSpec);
@@ -1066,6 +1184,7 @@ export function describeMethodAction(a: MethodAction): string {
     case "create_conjoint": return `Create a ${LABEL[KIND_OF[a.method ?? "cbc"]]}`;
     case "update_maxdiff": return `Change the MaxDiff ${a.target}`;
     case "update_conjoint": return `Change the conjoint ${a.target}`;
+    case "create_experiment": return `Create a ${EXPERIMENT_WORDS[a.designType ?? "fractional"] ?? "experimental"} design${a.factors ? ` over ${plural(a.factors.length, "factor")}` : a.treatments ? ` of ${plural(a.treatments.length, "treatment")}` : ""}`;
     case "simulate_conjoint": return a.remove ? `Remove simulator scenario “${a.scenario.name}” from ${a.target}` : `Simulator scenario “${a.scenario.name}” on ${a.target}`;
   }
 }

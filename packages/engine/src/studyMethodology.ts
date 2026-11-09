@@ -151,6 +151,14 @@ export const STUDY_METHODOLOGIES: Methodology[] = [
     inputs: [{ key: "attributes", label: "Attributes and levels (≤ 6)", kind: "attributes", required: true }],
     sample: { min: 60, note: "≈ 60–100 completes" }, loi: "≈ 6–8 minutes", analysis: ["individual OLS part-worths", "attribute importance"],
     alternatives: ["acbc", "conjoint_pricing"], build: (i) => [{ op: "create_conjoint", method: "cva", attributes: i.attributes ?? [] } as SurveyAction] },
+  /* Design Generators phase 2 (2026-11-09) */
+  { id: "kano", name: "Kano model (feature classification)", category: "product",
+    fit: "which features are expected, which add satisfaction in proportion and which delight — to prioritise a roadmap", strengths: ["separates must-haves from delighters", "Better / Worse coefficients for prioritising", "two short grids"], tradeoffs: ["classification, not a trade-off against price (pair with conjoint for that)", "the paired questions feel repetitive past ~15 features"],
+    signals: [[/\bkano\b/, 5], [/\b(?:must[- ]haves?|must[- ]be|delighters?|delight|basic expectations?|nice[- ]to[- ]haves?)\b/, 3], [/\b(?:feature|roadmap|backlog)\b.{0,40}\b(?:prioriti[sz]|classif|categori[sz])/, 2]],
+    inputs: [{ key: "items", label: "Features (2–20)", kind: "list", required: true }, { key: "product", label: "Product", kind: "text" }],
+    sample: { min: 100, note: "≈ 100+ completes; 200+ to compare segments" }, loi: "≈ 1 minute per 3 features",
+    analysis: ["Kano category per feature (Berger's evaluation table)", "category shares and strength", "Better / Worse coefficients (satisfaction gain / loss)"],
+    alternatives: ["maxdiff", "attribute_evaluation"], build: (i) => tpl("kano", { features: list(i.items, ["Feature 1", "Feature 2", "Feature 3"]).slice(0, 20), importance: true, ...(i.product?.trim() ? { product: i.product.trim() } : {}) }) },
   { id: "attribute_evaluation", name: "Product attribute evaluation (importance × performance)", category: "product",
     fit: "how a product performs on what matters, to find fixes and strengths", strengths: ["importance–performance quadrant", "simple"], tradeoffs: ["stated importance discriminates poorly (use derived importance or MaxDiff)"],
     signals: [[/\b(?:attribute (?:evaluation|rating)|how (?:does|do) (?:our|the) product perform|strengths and weaknesses|importance.{0,20}performance)\b/, 3]],
@@ -289,7 +297,7 @@ const byId = new Map(STUDY_METHODOLOGIES.map((m) => [m.id, m]));
 /** a method named in the researcher's words — what they proposed */
 const NAMED: [RegExp, string][] = [
   [/\bvan ?westendorp|\bpsm\b|price sensitivity meter/, "van_westendorp"], [/gabor|price ladder/, "gabor_granger"], [/\bacbc\b|adaptive (?:choice|conjoint)/, "acbc"],
-  [/menu[- ]based/, "menu_conjoint"], [/rating[- ]based conjoint|\bcva\b/, "rating_conjoint"], [/\bconjoint\b|\bcbc\b/, "conjoint_pricing"], [/max ?diff|best[- ]worst/, "maxdiff"],
+  [/menu[- ]based/, "menu_conjoint"], [/rating[- ]based conjoint|\bcva\b/, "rating_conjoint"], [/\bconjoint\b|\bcbc\b/, "conjoint_pricing"], [/max ?diff|best[- ]worst/, "maxdiff"], [/\bkano\b/, "kano"],
   [/sequential monadic/, "sequential_monadic"], [/\bmonadic\b/, "monadic"], [/\bnps\b|net promoter/, "nps_cx"], [/\bcsat\b|\bces\b/, "csat_ces"], [/\bsegmentation\b/, "segmentation"],
   [/brand funnel/, "brand_funnel"], [/brand lift/, "brand_lift"], [/\bu ?& ?a\b|usage (?:and|&) attitude/, "usage_attitude"], [/\btracker\b/, "brand_tracking"],
 ];

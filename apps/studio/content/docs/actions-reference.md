@@ -20,7 +20,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **List Fill** (3): `create_list_fill`, `update_list_fill`, `remove_list_fill`
 
-**Research methods (MaxDiff, conjoint)** (5): `create_maxdiff`, `update_maxdiff`, `create_conjoint`, `update_conjoint`, `simulate_conjoint`
+**Research methods (MaxDiff, conjoint)** (6): `create_maxdiff`, `update_maxdiff`, `create_conjoint`, `update_conjoint`, `simulate_conjoint`, `create_experiment`
 
 **Qualitative (AI follow-up probes)** (1): `set_probe`
 
@@ -276,6 +276,9 @@ export type MethodTemplateAction = {
   brands?: string[];
   /** ad_test: the ad (https or the media library) — the guide asks for it; absent, set it in the editor */
   videoUrl?: string;
+  /** kano: the features (2–20), and whether to add the importance grid (default false) */
+  features?: string[];
+  importance?: boolean;
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */
@@ -377,6 +380,7 @@ export type MethodAction =
   | ({ op: "update_maxdiff"; target: string; text?: string; required?: boolean } & MaxDiffSpec)
   | ({ op: "create_conjoint" } & MethodPlacement & ConjointSpec)
   | ({ op: "update_conjoint"; target: string; text?: string; required?: boolean } & ConjointSpec)
+  | ({ op: "create_experiment" } & ExperimentSpec)
   | { op: "simulate_conjoint"; target: string; scenario: SimulationScenarioInput; remove?: boolean };
 ```
 
@@ -430,6 +434,8 @@ export interface ConjointSpec {
   /* F4 2026-10-22 — CBC dual-response None, alternative-specific / labelled designs */
   dualResponse?: boolean; dualResponsePrompt?: string | null;
   labelled?: boolean; brandAttribute?: string | null; alternativeSpecific?: { attribute: string; appliesTo: string[] }[] | null;
+  /* Design Generators phase 2 (2026-11-09) — partial-profile CBC: attributes shown per task (null = all) */
+  attributesPerTask?: number | null;
   /* F4 2026-10-22 — menu: mutually exclusive sections */
   exclusiveGroups?: { name: string; items: string[] }[] | null;
   /* F4 2026-10-22 — rating-based (CVA) */

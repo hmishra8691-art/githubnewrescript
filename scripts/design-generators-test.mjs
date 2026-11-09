@@ -44,7 +44,7 @@ console.log("\n1 — the method library");
 await openTab(p, "Design Generators");
 await p.waitForSelector('[data-testid="design-workspace"] [data-testid="method-library"]');
 const names = await p.$$eval('[data-testid="method-library"] .ml-name', (n) => n.map((x) => x.textContent));
-assert.equal(names.length, 7 + 31, `${names.length} methods (7 design-file methods + every study methodology)`);
+assert.equal(names.length, 8 + 32, `${names.length} methods (8 design-file methods incl. partial-profile CBC + every study methodology)`);
 for (const want of ["Choice-based conjoint (CBC)", "MaxDiff (best–worst scaling)", "Adaptive CBC (ACBC)", "Menu-based conjoint (MBC)", "Rating-based conjoint (CVA)", "Custom experimental design", "Van Westendorp Price Sensitivity Meter"]) assert.ok(names.includes(want), want);
 const groups = await p.$$eval('[data-testid="method-library"] .ml-group-h', (h) => h.map((x) => x.childNodes[0].textContent));
 assert.ok(groups.includes("Pricing & price sensitivity") && groups.includes("Product & concept testing") && groups.includes("Brand research"), groups.join("|"));

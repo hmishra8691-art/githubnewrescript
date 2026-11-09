@@ -45,11 +45,17 @@ import { randomizerOrderVariable } from "./displayOrder.js";
  *                        agreement) and post-exposure purchase intent. Plan: frequencies of recall, mean
  *                        likeability, top-2 box of the diagnostics and of intent.
  *
+ *   kano                 the Kano model (Design Generators phase 2, 2026-11-09): two grids over the same features —
+ *                        KANO_FUNC "how would you feel if it HAD …" and KANO_DYSF "… if it did NOT have …" — on the
+ *                        five standard answers (like / expect / neutral / live with / dislike), rows coded f1…fn in
+ *                        both, plus (importance: true) KANO_IMP, a 5-point importance grid. Plan: kano (Berger's
+ *                        evaluation table, category shares, Better / Worse).
+ *
  * Variable names are fixed per template (PSM_TOO_CHEAP, …) so the plan can name them; a survey that already has
  * one of them is refused with the clash named — pass `prefix` ("A_" → A_PSM_TOO_CHEAP) to add a second copy.
  */
 
-export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic", "iat", "shelf_test", "brand_funnel", "ad_test"] as const;
+export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic", "iat", "shelf_test", "brand_funnel", "ad_test", "kano"] as const;
 export type MethodTemplateKey = (typeof METHOD_TEMPLATE_KEYS)[number];
 
 export type MethodTemplateAction = {
@@ -82,6 +88,9 @@ export type MethodTemplateAction = {
   brands?: string[];
   /** ad_test: the ad (https or the media library) — the guide asks for it; absent, set it in the editor */
   videoUrl?: string;
+  /** kano: the features (2–20), and whether to add the importance grid (default false) */
+  features?: string[];
+  importance?: boolean;
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */
@@ -148,6 +157,13 @@ export function coerceMethodTemplateAction(o: Record<string, unknown>): MethodTe
     a.brands = bs;
   }
   if (o.videoUrl !== undefined) { const u = str(o.videoUrl, 2000); if (!u || !/^(?:https:\/\/|\/api\/media\/)/.test(u)) return "add_method_template videoUrl must be https or the survey's media library (/api/media/…)"; a.videoUrl = u; }
+  if (o.features !== undefined) {
+    const fs = Array.isArray(o.features) ? o.features.map((x) => str(x, 120)).filter((x): x is string => !!x) : [];
+    if (fs.length < 2 || fs.length > 20 || new Set(fs.map((x) => x.toLowerCase())).size !== fs.length) return "add_method_template features must be 2–20 different features";
+    a.features = fs;
+  }
+  if (typeof o.importance === "boolean") a.importance = o.importance;
+  if (a.template === "kano" && !a.features) return "add_method_template kano needs features — the 2–20 features to classify (ask for them; never invent them)";
   if (a.template === "shelf_test" && !a.imageUrl) return "add_method_template shelf_test needs imageUrl — the shelf photo (ask for it; never invent one)";
   if (o.plan === false) a.plan = false;
   return a;
@@ -292,6 +308,22 @@ export function methodTemplateFragment(a: Omit<MethodTemplateAction, "op">, ids:
           { method: "frequencies", variables: [`${P}UNAIDED_CODED`], priority: 2, tier: "recommended", hypotheses: [], reason: "unaided first mention (top of mind), coded by the AI classification" },
         ],
         notes: ["UNAIDED_CODED is resolved by the AI classification at runtime (needs the AI service); every other stage is plain data."],
+      };
+    }
+    case "kano": {
+      const features = a.features ?? ["Feature 1", "Feature 2", "Feature 3"];
+      const rows = features.map((f, i) => ({ code: `f${i + 1}`, label: f }));
+      const KANO = [{ code: 1, label: "I like it that way" }, { code: 2, label: "I expect it to be that way" }, { code: 3, label: "I am neutral" }, { code: 4, label: "I can live with it that way" }, { code: 5, label: "I dislike it that way" }];
+      const p = product === "this product" ? "the product" : product;
+      const func = q("KANO_FUNC", "matrix_single", `How would you feel if ${p} HAD each of these features?`, { rows, options: KANO, instruction: "One answer per feature." });
+      const dysf = q("KANO_DYSF", "matrix_single", `And how would you feel if ${p} did NOT have each of these features?`, { rows, options: KANO, instruction: "One answer per feature." });
+      const imp = a.importance ? [q("KANO_IMP", "matrix_single", `How important is each of these features to you?`, { rows, options: [{ code: 1, label: "Not at all important" }, { code: 2, label: "Slightly important" }, { code: 3, label: "Moderately important" }, { code: 4, label: "Very important" }, { code: 5, label: "Extremely important" }] })] : [];
+      return {
+        title: `Kano model over ${features.length} features`,
+        questions: [func, dysf, ...imp],
+        block: { type: "block", id: ids("b"), title: "Kano model", children: [page("If it has the feature", [func]), page("If it does not have the feature", [dysf]), ...(imp.length ? [page("Importance", imp)] : [])] } as FlowNode,
+        tests: [{ method: "kano", variables: [`${P}KANO_FUNC`, `${P}KANO_DYSF`, ...(imp.length ? [`${P}KANO_IMP`] : [])], priority: 1, tier: "essential", hypotheses: [], reason: "Kano classification of each feature (must-be, one-dimensional, attractive, indifferent) with Better / Worse coefficients" }],
+        notes: ["The functional and dysfunctional grids share the feature rows (f1…fn) — keep them in step if you edit one; the Kano analysis pairs them by row code."],
       };
     }
     case "ad_test": {

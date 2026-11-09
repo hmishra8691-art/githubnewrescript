@@ -43,6 +43,9 @@ export interface DesignRequest {
   treatments: string[];
   runs?: number;
   prohibitions: { a: { attribute: string; level: string }; b: { attribute: string; level: string } }[];
+  /** partial-profile CBC: asked for, and how many attributes per task */
+  partial?: boolean;
+  attributesPerTask?: number;
   /** what was read, in words — shown to the researcher */
   understood: string[];
 }
@@ -68,7 +71,7 @@ export function readDesignRequest(text: string): DesignRequest {
   if (kind) understood.push(`Method: ${DESIGN_KIND_NAMES[kind]}`);
 
   /* named attributes: "Brand: A, B, C" lines, or "brand (A, B, C)" inline */
-  let attributes = parseAttributes(lines.filter((l) => /:[^,;|]+[,;|]/.test(l)).join("\n")).filter((a) => a.levels.length >= 2 && a.name.length <= 40 && !/^(?:attributes?|levels?|items?|treatments?|factors?)$/i.test(a.name));
+  let attributes = parseAttributes(lines.filter((l) => /:[^,;|]+[,;|]/.test(l)).join("\n")).filter((a) => a.levels.length >= 2 && a.name.length <= 40 && a.name.trim().split(/\s+/).length <= 5 && a.levels.every((l) => l.length <= 40) && !/^(?:attributes?|levels?|items?|treatments?|factors?)$/i.test(a.name));
   if (!attributes.length) for (const m of t.matchAll(/\b([A-Za-z][\w /-]{1,30}?)\s*\(([^()]{3,200})\)/g)) { const lv = m[2].split(/[,;|/]| or /).map((x) => x.trim()).filter(Boolean); if (lv.length >= 2 && !/^(?:e\.?g|i\.?e)/i.test(m[1])) attributes.push({ name: m[1].trim().replace(/^(?:and|with)\s+/i, ""), levels: lv }); }
   attributes = attributes.filter((a, i, all) => all.findIndex((b) => b.name.toLowerCase() === a.name.toLowerCase()) === i);
   if (attributes.length) understood.push(`Attributes: ${attributes.map((a) => `${a.name} (${a.levels.length})`).join(", ")}`);
@@ -97,6 +100,9 @@ export function readDesignRequest(text: string): DesignRequest {
   const sample = num(re("\\b(?:sample (?:of|size)?|n ?=)\\s*(\\d+)\\b|\\b(\\d+) (?:completes|respondents|interviews|participants)\\b").exec(t)?.slice(1).find(Boolean));
   const minutes = num(re("\\b(\\d+)[- ]?(?:minutes?|mins?)\\b").exec(t)?.[1]);
   const runs = num(re("\\bN runs\\b").exec(t)?.[1]);
+  const attributesPerTask = num(re("\\b(?:show(?:ing)?|only) N attributes(?: per (?:task|screen|concept))?\\b|\\bN attributes per (?:task|screen|concept)\\b").exec(t)?.[1]);
+  const partial = /\bpartial[- ]profile\b/i.test(t) || !!attributesPerTask || undefined;
+  if (partial) understood.push(`Partial profile${attributesPerTask ? `: ${attributesPerTask} attributes per task` : ""}`);
   if (tasks) understood.push(`${tasks} tasks per respondent`);
   if (alternatives) understood.push(`${alternatives} alternatives per task`);
   if (perTask) understood.push(`${perTask} per task`);
@@ -118,7 +124,8 @@ export function readDesignRequest(text: string): DesignRequest {
     if (a && b && a.attribute !== b.attribute) prohibitions.push({ a, b });
   }
   if (prohibitions.length) understood.push(`${prohibitions.length} prohibited combination${prohibitions.length === 1 ? "" : "s"}`);
-  return { kind, kindNamed, attributes, attributeCount, levels, items, itemCount, perTask, tasks, alternatives, versions, method, none, dualNone, holdouts, sample, minutes, specialist, designType, treatments, runs, prohibitions, understood };
+  if (partial && (kind === "acbc" || !kind)) { kind = "conjoint"; kindNamed = true; }
+  return { kind, kindNamed, attributes, attributeCount, levels, items, itemCount, perTask, tasks, alternatives, versions, method, none, dualNone, holdouts, sample, minutes, specialist, designType, treatments, runs, prohibitions, partial, attributesPerTask, understood };
 }
 
 export interface DesignQuestion { key: "attributes" | "items" | "treatments" | "factors" | "kind" | "prices"; ask: string; example: string }
@@ -226,7 +233,10 @@ export function recommendDesign(req: DesignRequest, answers: { attributes?: Conj
 
   if (kind === "conjoint") {
     const alternatives = req.alternatives ?? adv?.alternatives ?? 3;
-    const tasks = req.tasks ?? adv?.tasks ?? 12;
+    /* partial profile: k attributes per task (4–5 typical, never more than A − 1), and ≈ 1.5× the tasks */
+    const k = req.partial ? Math.max(2, Math.min(a.length - 1, req.attributesPerTask ?? (a.length >= 9 ? 5 : 4))) : null;
+    const tasks = req.tasks ?? (k ? Math.min(24, Math.ceil(((adv?.tasks ?? 12) * 1.5) / 2) * 2) : adv?.tasks ?? 12);
+    if (k) why.push(`Partial profile: each task shows ${k} of the ${a.length} attributes${req.attributesPerTask ? " (as asked)" : ""}, the others left out, balanced so every attribute and every pair appears about equally often — respondents compare fewer things at once, so full-profile overload is avoided. Partial profiles carry less information per task, hence ${tasks} tasks.`);
     const minSample = Math.max(300, Math.ceil((500 * maxLevels) / (tasks * alternatives) / 10) * 10);
     const method = req.method ?? "efficient";
     why.push(`${alternatives} alternatives per task${req.alternatives ? " (as asked)" : ""} — ${alternatives <= 3 ? "easy to compare in full profile" : "more information per task, still readable"}${a.length >= 6 && alternatives > 3 ? "; with this many attributes, 3 is kinder to respondents" : ""}.`);
@@ -236,11 +246,11 @@ export function recommendDesign(req: DesignRequest, answers: { attributes?: Conj
     why.push(`${versions} versions: respondents see different task sets, which estimates the design more precisely than one fixed set.`);
     why.push(`A None option${req.none === false ? " is left out (forced choice, as asked)" : req.dualNone ? " as a dual response (choose, then “would you buy it?”), keeping full information from the forced choice" : " lets respondents say they would buy none — needed for volume and share simulations"}.`);
     why.push(`Sample: at least ${minSample} completes (Orme: n ≥ 500 × ${maxLevels} ÷ (${tasks} × ${alternatives}), and 300 in practice for main effects).`);
-    if (a.length >= 7) warnings.push(`${a.length} attributes in full profile is demanding; consider ACBC, or fewer attributes.`);
+    if (a.length >= 7 && !k) warnings.push(`${a.length} attributes in full profile is demanding; consider a partial-profile CBC (4–5 attributes per task) or ACBC.`);
     if (tasks > 20) warnings.push(`${tasks} tasks risks fatigue; 8–15 is usual.`);
     if (alternatives > 5) warnings.push(`${alternatives} alternatives per task is hard to read; 3–4 is usual.`);
     if (req.sample && req.sample < minSample) warnings.push(`${req.sample} completes is below the ≈ ${minSample} this design needs.`);
-    return { kind, config: { method, attributes: a, tasks, alternativesPerTask: alternatives, versions, noneOption: req.none !== false && !req.dualNone ? true : false, dualResponseNone: !!req.dualNone, holdoutTasks: req.holdouts ?? 0, ...(req.prohibitions.length ? { prohibitions: req.prohibitions } : {}) }, why, assumptions, questions, warnings, minSample, minutes: Math.round((tasks * 25) / 60), placeholders };
+    return { kind, config: { method, attributes: a, tasks, alternativesPerTask: alternatives, versions, ...(k ? { attributesPerTask: k } : {}), noneOption: req.none !== false && !req.dualNone ? true : false, dualResponseNone: !!req.dualNone, holdoutTasks: req.holdouts ?? 0, ...(req.prohibitions.length ? { prohibitions: req.prohibitions } : {}) }, why, assumptions, questions, warnings, minSample, minutes: Math.round((tasks * 25) / 60), placeholders };
   }
   if (kind === "acbc") {
     why.push(`ACBC for ${a.length} attributes: a build-your-own step, screening screens and a choice tournament adapt to what each respondent cares about, so many attributes stay manageable.`);
@@ -264,6 +274,25 @@ export function recommendDesign(req: DesignRequest, answers: { attributes?: Conj
 /* ------------------------------------------------------------------ samples */
 
 /** a worked sample for every generator: the request a researcher might write, and its configuration */
+/**
+ * VARIANTS of a design kind that the library lists as methods of their own (Design Generators phase 2): the same
+ * generator with the variant's setting — partial-profile CBC is the CBC generator with attributesPerTask.
+ */
+export const DESIGN_VARIANTS: Record<string, { kind: DesignKind; name: string; description: string; title: string; objective: string; request: string; config: Record<string, unknown> }> = {
+  "conjoint@partial": {
+    kind: "conjoint", name: "Partial-profile CBC",
+    description: "Choice tasks that show only some of many attributes at a time — 8–20 attributes without overload.",
+    title: "Electric car", objective: "Which of ten car features drive choice, without showing all ten in every task?",
+    request: "A partial-profile conjoint for an electric car with 10 attributes, showing 5 attributes per task, 3 alternatives.",
+    config: { method: "efficient", attributes: [
+      { name: "Brand", levels: ["Volta", "Ampère", "Faraday"] }, { name: "Body", levels: ["Hatchback", "Sedan", "SUV"] }, { name: "Range", levels: ["300 km", "450 km", "600 km"] },
+      { name: "Charging (10–80%)", levels: ["45 min", "30 min", "18 min"] }, { name: "Battery warranty", levels: ["5 years", "8 years"] }, { name: "Seats", levels: ["4", "5", "7"] },
+      { name: "Driver assistance", levels: ["Basic", "Highway assist", "Full self-parking"] }, { name: "Home charger", levels: ["Not included", "Included"] },
+      { name: "Service plan", levels: ["Pay as you go", "3 years included"] }, { name: "Price", levels: ["$32,000", "$38,000", "$44,000", "$50,000"] },
+    ], attributesPerTask: 5, tasks: 18, alternativesPerTask: 3, versions: 50, noneOption: true, holdoutTasks: 0 },
+  },
+};
+
 export const DESIGN_SAMPLES: Record<DesignKind | "custom", { title: string; objective: string; request: string; config: Record<string, unknown> }> = {
   conjoint: {
     title: "Streaming subscription", objective: "Which plan features drive choice, and how price-sensitive are subscribers?",
@@ -317,3 +346,99 @@ export const DESIGN_SAMPLES: Record<DesignKind | "custom", { title: string; obje
     config: { rows: 12, columnsSpec: ["Row: sequence", "Cell: random_level A | B | C", "Block: block 4"], versions: 1 },
   },
 };
+
+/* ------------------------------------------------------------ the model's reading, merged (Design Generators phase 2) */
+
+/**
+ * MODEL-ASSISTED READING (2026-11-09). A model reads the request into the same fields as `readDesignRequest`; the
+ * two are merged here so the model can only ADD what the rules missed, never overrule them or invent content:
+ *   · a field the rules read stays as read; the model fills only empty ones — except attributes, which the model's
+ *     reading replaces when it found more of them (each said) or the rules' reading is a sentence split at commas;
+ *   · every attribute, level, item and treatment name must occur in the researcher's own words (case and spacing
+ *     ignored) — a name the model made up is dropped and counted;
+ *   · numbers must be whole and in range (tasks 1–40, alternatives 2–6, versions 1–999, items per task 2–10,
+ *     attributes per task 2–(attributes − 1), sample 10–100,000, minutes 1–120, runs 2–5,000).
+ * What the model added is listed in `understood` with "(read by the AI)" so the researcher sees where it came from.
+ */
+export interface DesignReadingMerge { read: DesignRequest; added: string[]; dropped: number }
+
+const KINDS: DesignKind[] = ["conjoint", "acbc", "menu", "cva", "maxdiff", "experiment"];
+const EXP_TYPES: ExperimentType[] = ["fractional", "full_factorial", "latin_square", "williams", "bibd"];
+const squash = (s: string) => s.toLowerCase().normalize("NFKC").replace(/[\s ]+/g, " ").trim();
+
+export function mergeDesignReading(rules: DesignRequest, model: unknown, text: string): DesignReadingMerge {
+  const read: DesignRequest = structuredClone(rules);
+  const added: string[] = [];
+  let dropped = 0;
+  const m = (model && typeof model === "object" ? model : {}) as Record<string, unknown>;
+  const said = squash(String(text ?? ""));
+  const grounded = (s: unknown): s is string => typeof s === "string" && s.trim().length > 0 && s.length <= 120 && said.includes(squash(s));
+  const names = (v: unknown, max: number): string[] => {
+    if (!Array.isArray(v)) return [];
+    const out: string[] = [];
+    for (const x of v.slice(0, max)) { if (grounded(x)) { if (!out.some((o) => squash(o) === squash(x))) out.push(String(x).trim()); } else dropped++; }
+    return out;
+  };
+  const whole = (v: unknown, lo: number, hi: number): number | undefined => (typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi ? v : undefined);
+  const note = (s: string) => { added.push(s); read.understood.push(`${s} (read by the AI)`); };
+
+  if (!read.kind && typeof m.kind === "string" && (KINDS as string[]).includes(m.kind)) { read.kind = m.kind as DesignKind; note(`Method: ${DESIGN_KIND_NAMES[read.kind]}`); }
+  /* the rules' attributes stand unless the model found more of them, all said, or the rules' look like a sentence split at commas */
+  const sentence = read.attributes.some((a) => a.levels.some((l) => l.length > 30 || l.split(/\s+/).length > 4));
+  if (Array.isArray(m.attributes) && (!read.attributes.length || sentence || m.attributes.length > read.attributes.length)) {
+    const attrs: ConjointAttribute[] = [];
+    for (const a of m.attributes.slice(0, 30)) {
+      const r = (a ?? {}) as Record<string, unknown>;
+      if (!grounded(r.name)) { dropped++; continue; }
+      const levels = names(r.levels, 20);
+      if (levels.length >= 2) attrs.push({ name: String(r.name).trim(), levels });
+      else dropped++;
+    }
+    if (attrs.length && (!read.attributes.length || sentence || attrs.length > read.attributes.length)) { if (read.attributes.length) read.understood = read.understood.filter((u) => !/^Attributes?:/.test(u)); read.attributes = attrs; note(`${attrs.length} attributes: ${attrs.map((a) => `${a.name} (${a.levels.length} levels)`).join(", ")}`); }
+  }
+  if (!read.items.length) { const it = names(m.items, 60); if (it.length >= 2) { read.items = it; note(`${it.length} items: ${it.slice(0, 6).join(", ")}${it.length > 6 ? ", …" : ""}`); } }
+  if (!read.treatments.length) { const tr = names(m.treatments, 30); if (tr.length >= 2) { read.treatments = tr; note(`${tr.length} treatments: ${tr.join(", ")}`); } }
+  const nums: [keyof DesignRequest, string, number, number, string][] = [
+    ["tasks", "tasks", 1, 40, "tasks"], ["alternatives", "alternatives", 2, 6, "alternatives per task"], ["versions", "versions", 1, 999, "versions"],
+    ["perTask", "perTask", 2, 10, "items per task"], ["sample", "sample", 10, 100_000, "sample"], ["minutes", "minutes", 1, 120, "minutes"], ["runs", "runs", 2, 5000, "runs"],
+    ["attributeCount", "attributeCount", 2, 30, "attributes"], ["itemCount", "itemCount", 2, 100, "items"],
+  ];
+  for (const [key, src, lo, hi, words] of nums) {
+    if (read[key] !== undefined) continue;
+    const v = whole(m[src], lo, hi);
+    if (v !== undefined) { (read as unknown as Record<string, unknown>)[key] = v; note(`${words}: ${v}`); }
+  }
+  if (read.none === undefined && typeof m.none === "boolean") { read.none = m.none; note(m.none ? "a None option" : "no None option"); }
+  if (!read.method && (m.method === "efficient" || m.method === "balanced")) { read.method = m.method; note(`${m.method} design`); }
+  if (!read.designType && typeof m.designType === "string" && (EXP_TYPES as string[]).includes(m.designType)) { read.designType = m.designType as ExperimentType; note(`design type: ${m.designType.replace("_", " ")}`); }
+  if (!read.partial && m.partial === true) { read.partial = true; note("partial profile"); }
+  if (read.attributesPerTask === undefined) {
+    const A = read.attributes.length || read.attributeCount || 0;
+    const v = whole(m.attributesPerTask, 2, Math.max(2, A - 1));
+    if (v !== undefined && A > v) { read.attributesPerTask = v; read.partial = true; note(`${v} attributes shown per task`); }
+  }
+  if (read.partial && read.kind && read.kind !== "conjoint") read.partial = undefined;
+  return { read, added, dropped };
+}
+
+/** the JSON a model returns for a design request (the same fields `mergeDesignReading` accepts) */
+export const DESIGN_READING_SCHEMA = {
+  type: "object", additionalProperties: false,
+  properties: {
+    kind: { type: ["string", "null"], enum: [...KINDS, null] },
+    attributes: { type: "array", items: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, levels: { type: "array", items: { type: "string" } } }, required: ["name", "levels"] } },
+    items: { type: "array", items: { type: "string" } },
+    treatments: { type: "array", items: { type: "string" } },
+    tasks: { type: ["integer", "null"] }, alternatives: { type: ["integer", "null"] }, versions: { type: ["integer", "null"] }, perTask: { type: ["integer", "null"] },
+    attributeCount: { type: ["integer", "null"] }, itemCount: { type: ["integer", "null"] }, sample: { type: ["integer", "null"] }, minutes: { type: ["integer", "null"] }, runs: { type: ["integer", "null"] },
+    none: { type: ["boolean", "null"] }, method: { type: ["string", "null"], enum: ["efficient", "balanced", null] },
+    designType: { type: ["string", "null"], enum: [...EXP_TYPES, null] }, partial: { type: ["boolean", "null"] }, attributesPerTask: { type: ["integer", "null"] },
+  },
+  required: ["kind", "attributes", "items", "treatments"],
+} as const;
+
+export const DESIGN_READING_RULES = `You read a market researcher's description of a design (conjoint, MaxDiff, menu-based, ACBC, rating-based conjoint, or a custom experimental design) into JSON.
+EXTRACT ONLY WHAT IS SAID. Never invent attributes, levels, items or treatments: copy each name exactly as the researcher wrote it (spoken requests may say levels in a sentence — "brand with Apple, Samsung and Google" → Brand: Apple, Samsung, Google). If something is not stated, use null or an empty list.
+kind: conjoint (choice-based / CBC, including partial profile), acbc (adaptive), menu (menu-based, add-ons with prices), cva (rating-based), maxdiff (best–worst), experiment (factorial, fractional, D-optimal, Latin square, Williams, BIBD) — or null when no method is named or clearly implied.
+Numbers: tasks, alternatives per task, versions, perTask (MaxDiff items per task), attributeCount / itemCount (when only a count is given), sample, minutes, runs, attributesPerTask (partial profile: attributes shown per task). "a dozen" = 12.
+Return JSON only.`;
