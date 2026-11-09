@@ -12,6 +12,7 @@ import { customPlugin } from "./custom.js";
 import { menuPlugin } from "./menu.js";
 import { acbcPlugin } from "./acbc.js";
 import { cvaPlugin } from "./cva.js";
+import { experimentPlugin } from "./experiment.js";
 import { inspectConjointDesign, inspectMaxDiffDesign } from "./quality.js";
 
 export * from "./conjoint.js";
@@ -21,6 +22,7 @@ export * from "./custom.js";
 export * from "./menu.js";
 export * from "./acbc.js";
 export * from "./cva.js";
+export * from "./experiment.js";
 export * from "./conjointAltSpecific.js";
 export * from "./export.js";
 export * from "./diagnostics.js";
@@ -35,6 +37,7 @@ export function registerBuiltinDesignGenerators(): void {
     menuPlugin,
     acbcPlugin,
     cvaPlugin,
+    experimentPlugin,
   ] as unknown as DesignGeneratorPlugin[];
   /*
    * The publish gate asks the registry whether a stored design is sound
@@ -63,3 +66,4 @@ export function registerBuiltinDesignGenerators(): void {
 
 // Register at module load so importing the package is enough.
 registerBuiltinDesignGenerators();
+export * from "./designRequest.js";

@@ -46,7 +46,7 @@ assert.match(await p.textContent('[data-testid="sd-misfit"]'), /cannot measure p
 ok("the objective carried over from Intelligent Mode; MaxDiff for pricing flagged with the reason");
 
 console.log("\n3 — Manual CBC: advice → build and check → add");
-await p.selectOption('[data-testid="sd-method"]', "conjoint_pricing");
+await p.click('[data-testid="sd-method"] [data-testid="method-conjoint_pricing"]');
 await p.fill('[data-testid="sd-in-attributes"]', "Price: $9, $14, $19\nStorage: 50 GB, 200 GB, 1 TB\nSupport: Email, 24/7 chat");
 await p.fill('[data-testid="sd-sample"]', "200");
 await p.waitForSelector('[data-testid="sd-advice"][data-method="cbc"]');

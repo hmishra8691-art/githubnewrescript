@@ -35,6 +35,8 @@ import { setPendingSimulation, simulationAnswer, simulationRequest } from "../..
 import { runSimulation } from "@rescript/templates";
 import { methodologyAnswer, methodologyQuestion, setPendingMethodology } from "../../lib/intelligent/methodologyRequest";
 import { trackerAnswer, trackerQuestion } from "../../lib/intelligent/trackerRequest";
+import { designRequestAnswer, designRequestQuestion, setPendingDesignRequest } from "../../lib/intelligent/designRequest";
+import { readDesignRequest, recommendDesign } from "@rescript/designs";
 import { trackerSession } from "../../lib/tracker/session";
 import { INTELLIGENT_INPUT_EVENT, takePendingIntelligentInput } from "../../lib/intelligent/pendingInput";
 import { runScriptCheck, scriptStatusAnswer, scriptStatusQuestion } from "../../lib/scripts/scriptCheck";
@@ -376,6 +378,22 @@ export function IntelligentView() {
       const a = scriptStatusAnswer(run);
       copilot.local(t, { kind: "answer", category: "debugging", understood: "Check every logic script: generated, executed, validated.", answer: a.answer, sections: a.sections, detected: [{ what: "read as", value: "script status" }, { what: "scripts", value: String(run.check.scripts.length) }] }, heard);
       setBusy(false); inputRef.current?.focus(); return;
+    }
+    /*
+     * "Create a CBC with six attributes, 12 tasks and 3 alternatives" (2026-11-09): when the request still lacks what
+     * only the researcher can give (the attribute names, the items) — or it is a custom experimental design, which
+     * the Copilot has no action for — the design engine answers with its recommendation and opens Design Generators
+     * on the request. A complete request goes on to the Copilot, which builds it as a proposal (create_conjoint /
+     * create_maxdiff) for approval.
+     */
+    if (designRequestQuestion(t)) {
+      const rec = recommendDesign(readDesignRequest(t));
+      if (rec.questions.length || rec.kind === "experiment") {
+        setPendingDesignRequest(t);
+        const a = designRequestAnswer(t);
+        copilot.local(t, { kind: "answer", category: "research_design", understood: `Recommend a ${a.kind} design and open it in Design Generators.`, answer: a.answer, sections: a.sections, detected: [{ what: "read as", value: "design request" }, { what: "method", value: a.kind }] }, heard);
+        setBusy(false); inputRef.current?.focus(); return;
+      }
     }
     /* "is the change since the last wave real?" — the wave tracker answers from the waves in Results → Wave tracker (2026-11-09) */
     if (trackerQuestion(t)) {

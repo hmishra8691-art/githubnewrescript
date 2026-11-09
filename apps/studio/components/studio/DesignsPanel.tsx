@@ -5,6 +5,53 @@ import { registerBuiltinDesignGenerators, designToCSV, designFileName, measureMa
 import { designVersionCount } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { ConjointDesignQuality } from "./ConjointDesignQuality";
+import { DesignWorkspace } from "./DesignWorkspace";
+import { DesignPreview } from "./DesignPreview";
+import { readDesignRequest, recommendDesign, type DesignKind } from "@rescript/designs";
+
+/** the design, its configuration and seed as one JSON file — re-importable, reproducible (2026-11-09) */
+function downloadJson(kind: string, name: string, version: number, config: unknown, seed: number, file: { columns: string[]; rows: Record<string, unknown>[]; summary?: Record<string, unknown> }) {
+  const blob = new Blob([JSON.stringify({ kind, name, version, seed, config, columns: file.columns, rows: file.rows, summary: file.summary ?? null }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = designFileName(kind, name, version, "json");
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+/**
+ * THE GUIDED SET-UP'S ADVISER (2026-11-09): what the platform's rules recommend for the design as it is configured
+ * right now — tasks, alternatives, items per task, versions — with the reasons and warnings, and one click to take
+ * the numbers (never the attributes or items, which are the researcher's).
+ */
+const ADVISED = new Set(["conjoint", "maxdiff", "acbc", "menu", "cva", "experiment"]);
+function Recommendation({ kind, config, onApply }: { kind: string; config: Record<string, unknown>; onApply(patch: Record<string, unknown>): void }) {
+  const rec = React.useMemo(() => {
+    if (!ADVISED.has(kind)) return null;
+    const attrs = (kind === "menu" ? config.items : kind === "experiment" ? config.factors : config.attributes) as { name: string; levels: string[] }[] | undefined;
+    const usable = Array.isArray(attrs) ? attrs.filter((a) => a?.name && a.levels?.length) : [];
+    const items = kind === "maxdiff" && Array.isArray(config.items) ? (config.items as string[]).filter(Boolean) : [];
+    const treatments = kind === "experiment" && Array.isArray(config.treatments) ? (config.treatments as string[]).filter(Boolean) : [];
+    if (!usable.length && !items.length && !treatments.length) return null;
+    const req = readDesignRequest(kind === "experiment" ? String(config.designType ?? "").replace("_", " ") : "");
+    return recommendDesign(req, { kind: kind as DesignKind, ...(usable.length ? { attributes: usable } : {}), ...(items.length ? { items } : {}), ...(treatments.length ? { treatments } : {}) });
+  }, [kind, config]);
+  if (!rec) return null;
+  const keys = ["tasks", "alternativesPerTask", "itemsPerTask", "versions", "profiles", "runs", "blockSize"];
+  const patch = Object.fromEntries(Object.entries(rec.config).filter(([k]) => keys.includes(k)));
+  const differs = Object.entries(patch).some(([k, v]) => config[k] !== v);
+  return (
+    <div className="dg-rec" data-testid="dg-recommendation">
+      <b>Recommended for this design</b>
+      <ul>{rec.why.map((w) => <li key={w}>{w}</li>)}</ul>
+      {rec.warnings.length > 0 && <div className="sd-warn">{rec.warnings.map((w) => <div key={w}>{w}</div>)}</div>}
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        {rec.minSample != null && <span className="chip">Sample ≥ {rec.minSample}</span>}
+        {Object.entries(patch).map(([k, v]) => <span key={k} className="chip">{k.replace(/([A-Z])/g, " $1").toLowerCase()}: {String(v)}</span>)}
+        {differs && <button type="button" className="btn small" onClick={() => onApply(patch)} data-testid="dg-apply-recommendation">Apply these settings</button>}
+      </div>
+    </div>
+  );
+}
 
 registerBuiltinDesignGenerators();
 
@@ -89,8 +136,9 @@ function ConfigField({ field, value, onChange, config }: {
       type Lv = { attribute: string; level: string };
       const pairs: { a: Lv; b: Lv; also?: Lv[]; alsoOp?: "and" | "or"; when?: unknown; note?: string }[] =
         Array.isArray(value) ? (value as never) : [];
+      /* the design's attributes — `factors` in a custom experimental design (2026-11-09) */
       const attrs: { name: string; levels: string[] }[] = Array.isArray(config?.attributes)
-        ? (config!.attributes as never) : [];
+        ? (config!.attributes as never) : Array.isArray(config?.factors) ? (config!.factors as never) : [];
       const usable = attrs.filter((a) => a.name && a.levels?.length);
       const levelsOf = (name: string) => usable.find((a) => a.name === name)?.levels ?? [];
       const set = (i: number, patch: Partial<typeof pairs[number]>) =>
@@ -267,16 +315,19 @@ function maxdiffDiagnosticsOf(d: DesignReference): Pick<MaxDiffDiagnostics, "lin
   return measureMaxDiffDesign(rows, items, { prohibitedPairs: cfg.prohibitedPairs });
 }
 
-function GeneratorForm({ kind, existing, onDone }: {
+function GeneratorForm({ kind, existing, onDone, initialConfig, initialName }: {
   kind: string; existing?: DesignReference; onDone(): void;
+  /** a starting configuration — a sample, or a recommendation from Describe it (2026-11-09) */
+  initialConfig?: Record<string, unknown>; initialName?: string;
 }) {
   const s = useStudio();
   const plugin = designGeneratorRegistry.get(kind)!;
-  const [name, setName] = React.useState(existing?.name ?? `${plugin.label} design`);
+  const [name, setName] = React.useState(existing?.name ?? initialName ?? `${plugin.label} design`);
   const [seed, setSeed] = React.useState<number>(existing?.seed ?? Math.floor(Math.random() * 100000));
   const [config, setConfig] = React.useState<Record<string, unknown>>(() => {
     if (existing?.config) return structuredClone(existing.config);
     const c: Record<string, unknown> = {};
+    if (initialConfig) { for (const f of plugin.configFields) if (f.default !== undefined) c[f.name] = structuredClone(f.default); return { ...c, ...structuredClone(initialConfig) }; }
     for (const f of plugin.configFields) if (f.default !== undefined) c[f.name] = structuredClone(f.default);
     return c;
   });
@@ -343,9 +394,10 @@ function GeneratorForm({ kind, existing, onDone }: {
         <ConfigField key={f.name} field={f} value={config[f.name]} config={config}
           onChange={(v) => setConfig((c) => ({ ...c, [f.name]: v }))} />
       ))}
+      <Recommendation kind={kind} config={config} onApply={(patch) => setConfig((c) => ({ ...c, ...patch }))} />
       {errors.map((e, i) => <div key={i} className="chip warn" style={{ marginBottom: 6 }}>{e}</div>)}
       <div className="row">
-        <button className="btn primary" onClick={generate}>Generate Design File</button>
+        <button className="btn primary" onClick={generate} data-testid="dg-generate">Generate Design File</button>
         {preview && <button className="btn" onClick={save}>✓ Attach to survey</button>}
         {preview && (
           <button className="btn" onClick={() => {
@@ -356,6 +408,7 @@ function GeneratorForm({ kind, existing, onDone }: {
             a.click();
           }}>⬇ CSV</button>
         )}
+        {preview && <button className="btn" onClick={() => downloadJson(kind, name, existing ? existing.version + 1 : 1, config, seed, preview)}>⬇ JSON</button>}
         <span className="grow" />
         <button className="btn small" onClick={onDone}>close</button>
       </div>
@@ -364,6 +417,7 @@ function GeneratorForm({ kind, existing, onDone }: {
           <div className="flabel" style={{ marginTop: 12 }}>
             preview — {preview.rows.length} rows{preview.summary ? " · summary below" : ""}
           </div>
+          <DesignPreview kind={kind} file={preview} />
           <div className="table-wrap" style={{ maxHeight: 260, overflowY: "auto" }}>
             <table className="grid">
               <thead><tr>{preview.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
@@ -503,17 +557,14 @@ export function DesignsPanel() {
         <h2 style={{ margin: 0, fontSize: 17 }}>Research Design Generators</h2>
       </div>
       <p className="muted" style={{ fontSize: 13 }}>
-        Generate versioned, seeded design files (Conjoint, MaxDiff, custom). Reference them from a
-        <em> Conjoint tasks</em> / <em>MaxDiff tasks</em> question, or loop over tasks in the Survey Flow.
-        New methodologies plug in via <code>designGeneratorRegistry.register()</code>.
+        Pick a method: each opens with a worked sample built by the real generator, then set it up step by step or
+        describe what you need in your own words (or by voice). Generated designs are versioned and seeded — reference
+        them from a <em>Conjoint tasks</em> / <em>MaxDiff tasks</em> question, regenerate them, or export them.
       </p>
 
-      <div className="row" style={{ marginBottom: 16, flexWrap: "wrap" }}>
-        {designGeneratorRegistry.all().map((p) => (
-          <button key={p.kind} className="btn" onClick={() => { setEditing(null); setOpenKind(p.kind); }}>
-            + {p.label}
-          </button>
-        ))}
+      {/* 2026-11-09: every method in one library — sample, guided set-up, describe it (words or voice) */}
+      <DesignWorkspace renderForm={(kind, initialConfig, initialName, onClose) => <GeneratorForm kind={kind} initialConfig={initialConfig} initialName={initialName} onDone={onClose} />} />
+      <div className="row" style={{ margin: "16px 0", flexWrap: "wrap" }}>
         <span className="grow" />
         <ImportDesign />
       </div>
@@ -547,6 +598,7 @@ export function DesignsPanel() {
             ) : (
               <span className="chip" data-testid="design-imported" title="Brought in from a file — there is no configuration to regenerate from">imported</span>
             )}
+            {d.file && <button className="btn small" onClick={() => downloadJson(d.kind, d.name, d.version, d.config ?? {}, d.seed ?? 0, { columns: d.file!.columns, rows: d.file!.rows as Record<string, unknown>[], summary: d.file!.summary as Record<string, unknown> | undefined })}>⬇ JSON</button>}
             {d.file && (
               <button className="btn small" onClick={() => {
                 const csv = designToCSV({ columns: d.file!.columns, rows: d.file!.rows });

@@ -9,6 +9,7 @@ import { runSimulation } from "@rescript/templates";
 import { useStudio } from "./store";
 import { takePendingMethodology } from "../../lib/intelligent/methodologyRequest";
 import { HeardNote, VoiceButton } from "../intelligent/VoiceButton";
+import { MethodLibrary, type LibraryGroup } from "./MethodLibrary";
 import type { HeardTranscript } from "../../lib/intelligent/voice";
 
 registerBuiltinDesignGenerators();
@@ -52,8 +53,10 @@ export function StudyDesignPanel() {
   const [objective, setObjective] = React.useState(pending?.objective ?? "");
   /* what was heard when it was not English: the original beside the English reading the engine uses */
   const [heard, setHeard] = React.useState<HeardTranscript | null>(null);
-  const [rec, setRec] = React.useState<MethodologyRecommendation | null>(pending ? recommendMethodology(pending.objective) : null);
-  const [methodId, setMethodId] = React.useState<string>(rec?.recommended.id ?? "van_westendorp");
+  const [rec, setRec] = React.useState<MethodologyRecommendation | null>(pending?.objective ? recommendMethodology(pending.objective) : null);
+  /* a method picked in Design Generators → Methods arrives chosen */
+  const [methodId, setMethodId] = React.useState<string>(pending?.methodId ?? rec?.recommended.id ?? "van_westendorp");
+  const libraryGroups = React.useMemo<LibraryGroup[]>(() => CATS.map((c) => ({ key: c, label: CATEGORY_NAMES[c], methods: STUDY_METHODOLOGIES.filter((x) => x.category === c).map((x) => ({ id: x.id, name: x.name, description: x.fit })) })), []);
   const [fields, setFields] = React.useState<Fields>({});
   const [sample, setSample] = React.useState("");
   const [minutes, setMinutes] = React.useState("");
@@ -127,9 +130,9 @@ export function StudyDesignPanel() {
 
       <section className="sd-step">
         <b>2. Method</b>
-        <select className="select" data-testid="sd-method" value={methodId} onChange={(e) => { setMethodId(e.target.value); setPreview(null); }}>
-          {CATS.map((c) => <optgroup key={c} label={CATEGORY_NAMES[c]}>{STUDY_METHODOLOGIES.filter((x) => x.category === c).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</optgroup>)}
-        </select>
+        {/* 2026-11-09: a readable, grouped list instead of a native drop-down (whose group headings browsers draw pale) */}
+        <MethodLibrary compact groups={libraryGroups} selected={methodId} onSelect={(id) => { setMethodId(id); setPreview(null); }} testId="sd-method" />
+        <div className="sd-chosen" data-testid="sd-chosen">Chosen: <b>{m.name}</b> — {CATEGORY_NAMES[m.category]}</div>
         <p className="muted sd-fit">{m.fit} · sample {m.sample.note} · {m.loi}</p>
         <div className="sd-pros"><div><b>Strengths</b><ul>{m.strengths.map((x) => <li key={x}>{x}</li>)}</ul></div><div><b>Trade-offs</b><ul>{m.tradeoffs.map((x) => <li key={x}>{x}</li>)}</ul></div><div><b>Analysis</b><ul>{m.analysis.map((x) => <li key={x}>{x}</li>)}</ul></div></div>
       </section>

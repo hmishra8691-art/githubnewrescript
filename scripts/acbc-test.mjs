@@ -17,8 +17,10 @@ const h = await openHarness();
 
 console.log("\nSTUDIO — generator and type");
 await h.goTab("Design Generators");
-await h.page.waitForSelector('button:has-text("Adaptive CBC (ACBC)")');
-await h.page.click('button:has-text("Adaptive CBC (ACBC)")');
+/* 2026-11-09: the method library — pick ACBC, then its guided set-up (the generator form) */
+await h.page.waitForSelector('[data-testid="method-design:acbc"]');
+await h.page.click('[data-testid="method-design:acbc"]');
+await h.page.click('[data-testid="dm-tab-guided"]');
 await h.page.waitForSelector('text=Screening screens');
 assert.ok(await h.page.$('text=Rejections before a level is asked as unacceptable'));
 await h.page.click('button:has-text("close")');

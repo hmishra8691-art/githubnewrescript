@@ -24,6 +24,7 @@ export function methodologyAnswer(r: MethodologyRecommendation): { answer: strin
   };
 }
 
-let pending: { objective: string } | null = null;
-export function setPendingMethodology(p: { objective: string } | null): void { pending = p; }
-export function takePendingMethodology(): { objective: string } | null { const p = pending; pending = null; return p; }
+/* the objective (from Intelligent Mode) and/or the method picked in Design Generators → Methods */
+let pending: { objective: string; methodId?: string } | null = null;
+export function setPendingMethodology(p: { objective: string; methodId?: string } | null): void { pending = p; }
+export function takePendingMethodology(): { objective: string; methodId?: string } | null { const p = pending; pending = null; return p; }

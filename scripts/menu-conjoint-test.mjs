@@ -21,8 +21,10 @@ const h = await openHarness();
 
 console.log("\nSTUDIO — the generator and the picker know about menus");
 await h.goTab("Design Generators");
-await h.page.waitForSelector('button:has-text("Menu-Based Conjoint (MBC)")');
-await h.page.click('button:has-text("Menu-Based Conjoint (MBC)")');
+/* 2026-11-09: the method library — pick menu-based conjoint, then its guided set-up (the generator form) */
+await h.page.waitForSelector('[data-testid="method-design:menu"]');
+await h.page.click('[data-testid="method-design:menu"]');
+await h.page.click('[data-testid="dm-tab-guided"]');
 await h.page.waitForSelector('text=Menu items & price points');
 assert.ok(await h.page.$('text=Always-included items (base product)'), "the configurator's base-item field is there");
 assert.ok(await h.page.$('button:has-text("+ attribute")'), "items are edited with the attributes editor — one editor, two uses");

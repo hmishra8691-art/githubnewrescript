@@ -41,9 +41,29 @@ export interface CustomDesignConfig {
   versions?: number;
 }
 
+/**
+ * A column written as one line (2026-11-09, so the Studio's list field can edit it):
+ *   "Cell: random_level A | B | C"   "Score: random_int 1-5"   "Row: sequence"   "Wave: constant 3"
+ *   "Block: block 4"                  "Note: expression Q1 + 1"
+ * Objects pass through unchanged.
+ */
+export function readColumnSpec(x: unknown): CustomColumnSpec {
+  if (x && typeof x === "object") return x as CustomColumnSpec;
+  const m = /^\s*([^:]+?)\s*:\s*(sequence|random_int|random_level|constant|block|expression)\b\s*(.*)$/i.exec(String(x ?? ""));
+  if (!m) return { name: String(x ?? "").trim(), kind: "unknown" as CustomColumnKind };
+  const [, name, kind, rest] = m;
+  const k = kind.toLowerCase() as CustomColumnKind;
+  if (k === "random_int") { const r = /(-?\d+)\s*(?:-|to|\.\.)\s*(-?\d+)/.exec(rest); return { name, kind: k, ...(r ? { min: Number(r[1]), max: Number(r[2]) } : {}) }; }
+  if (k === "random_level") return { name, kind: k, levels: rest.split(/[|,]/).map((v) => v.trim()).filter(Boolean) };
+  if (k === "constant") return { name, kind: k, value: rest.trim() === "" ? undefined : /^-?\d+(?:\.\d+)?$/.test(rest.trim()) ? Number(rest.trim()) : rest.trim() };
+  if (k === "block") return { name, kind: k, blockSize: Number(rest.trim()) || undefined };
+  if (k === "expression") return { name, kind: k, expression: rest.trim() };
+  return { name, kind: k };
+}
+
 export const customPlugin: DesignGeneratorPlugin<CustomDesignConfig> = {
   kind: "custom",
-  label: "Custom design",
+  label: "Design file from columns (advanced)",
   description:
     "Free-form design file: sequences, random integers, frequency-balanced level picks, constants, blocks, and free-text expression columns.",
   configFields: [
@@ -52,7 +72,7 @@ export const customPlugin: DesignGeneratorPlugin<CustomDesignConfig> = {
       name: "columnsSpec",
       label: "Columns",
       type: "list",
-      help: "Each column: name + kind (sequence | random_int | random_level | constant | block | expression) and its parameters.",
+      help: "One column per line — “Name: random_level A | B | C”, “Name: random_int 1-5”, “Name: sequence”, “Name: constant 3”, “Name: block 4”, “Name: expression …”. For a real experimental design use Custom experimental design.",
     },
     {
       name: "versions",
@@ -65,7 +85,7 @@ export const customPlugin: DesignGeneratorPlugin<CustomDesignConfig> = {
   validateConfig(config: CustomDesignConfig): string[] {
     const errors: string[] = [];
     const rows = config.rows ?? 0;
-    const specs = config.columnsSpec ?? [];
+    const specs = (config.columnsSpec ?? []).map(readColumnSpec);
     if (rows < 1) errors.push("rows must be at least 1.");
     if (specs.length < 1) errors.push("At least one column is required.");
     const names = specs.map((s) => s.name);
@@ -114,7 +134,7 @@ export const customPlugin: DesignGeneratorPlugin<CustomDesignConfig> = {
 
   generate(config: CustomDesignConfig, seed: number) {
     const rowsPerVersion = config.rows;
-    const specs = config.columnsSpec ?? [];
+    const specs = (config.columnsSpec ?? []).map(readColumnSpec);
     const versions = config.versions ?? 1;
     const columns = ["version", "row", ...specs.map((s) => s.name)];
     const rows: Record<string, unknown>[] = [];

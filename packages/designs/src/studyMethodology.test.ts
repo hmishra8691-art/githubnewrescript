@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
-import { applySurveyActions, coerceSurveyActions, STUDY_METHODOLOGIES, recommendMethodology, designAdvice, parseAttributes } from "@rescript/engine";
+import { applySurveyActions, coerceSurveyActions, STUDY_METHODOLOGIES, recommendMethodology, designAdvice, parseAttributes, sampleInputsFor } from "@rescript/engine";
 import { registerBuiltinDesignGenerators } from "./index.js";
 
 registerBuiltinDesignGenerators();
@@ -20,6 +20,16 @@ test("every methodology builds a valid study through the real gate and generator
     assert.deepEqual(r.errors, [], `${m.id}: ${r.errors.join(" | ").slice(0, 300)}`);
     assert.ok(r.def.questions.length >= 1, `${m.id} wrote questions`);
     if (/conjoint|acbc|maxdiff|innovation/.test(m.id)) assert.ok((r.def.designs ?? []).length >= 1, `${m.id} generated its design file`);
+  }
+});
+
+test("every methodology's worked sample builds through the real gate and generators (2026-11-09)", () => {
+  for (const m of STUDY_METHODOLOGIES) {
+    const c = coerceSurveyActions(m.build(sampleInputsFor(m)));
+    assert.deepEqual(c.rejected, [], `${m.id}: ${JSON.stringify(c.rejected).slice(0, 300)}`);
+    const r = applySurveyActions(empty(), c.actions);
+    assert.deepEqual(r.errors, [], `${m.id}: ${r.errors.join(" | ").slice(0, 300)}`);
+    assert.ok(r.def.questions.length >= 1, `${m.id} wrote questions`);
   }
 });
 

@@ -414,6 +414,40 @@ export function designAdvice(x: { attributes?: { name: string; levels: string[] 
   return { method: "cbc", why: `${A} attributes with up to ${c} levels: CBC, ${alternatives} concepts per task plus a None option, ${tasks} tasks.`, tasks, alternatives, versions: 300, minSample, minutes: Math.round(tasks * 25 / 60), warnings };
 }
 
+/* ------------------------------------------------------------ worked samples (2026-11-09) */
+
+/**
+ * A WORKED SAMPLE FOR EVERY METHODOLOGY: realistic inputs per category, so the method opens with a study the real
+ * builder produces (questions, logic, design files, analysis plan) before the researcher types anything.
+ */
+const SAMPLE_BY_CATEGORY: Partial<Record<StudyCategory, MethodInputs>> = {
+  pricing: { product: "the Premium plan", currency: "$", prices: [8, 10, 12, 14, 16, 18], brands: ["Our brand", "Competitor A", "Competitor B"] },
+  product: { product: "the new snack bar", concepts: ["Oat & honey", "Dark chocolate", "Berry crunch"], items: ["Natural ingredients", "High protein", "Low sugar", "Recyclable pack", "Made locally", "Long shelf life", "Gluten free", "Kid-friendly taste", "Sharing size", "Under $2"] },
+  brand: { product: "coffee shops", brands: ["Our brand", "Bean Co", "Daily Grind", "Roast House"] },
+  advertising: { product: "the spring campaign", concepts: ["Ad A — family", "Ad B — humour", "Ad C — product demo"], brands: ["Our brand", "Competitor A"] },
+  employee: { organisation: "Acme Ltd", statements: ["I am proud to work here", "My manager supports my development", "I see myself here in two years", "My workload is manageable"] },
+  customer: { product: "our online store", brands: ["Our store"] },
+  segmentation: { product: "home fitness", statements: ["I exercise to manage stress", "I prefer working out at home", "I follow fitness influencers", "Price matters more than brand", "I track everything with apps", "I work out with friends"] },
+  usage: { product: "plant-based milk", brands: ["Oatly", "Alpro", "Store brand"] },
+  shopper: { product: "breakfast cereal", brands: ["Brand A", "Brand B", "Brand C", "Store brand"] },
+  healthcare: { product: "a once-weekly treatment", brands: ["Current standard", "New treatment"] },
+  opinion: { product: "the city's transport plan" },
+  media: { product: "the streaming service", brands: ["Show A", "Show B", "Show C"] },
+  market_entry: { product: "electric scooters", brands: ["Lime", "Bird", "Tier"] },
+  innovation: { product: "smart kitchen ideas", concepts: ["Fridge that orders groceries", "Self-cleaning oven", "Voice-guided recipes", "Waste tracker"], items: ["Saves time", "Saves money", "Healthier eating", "Less waste", "Easy to use", "Works with my phone", "Looks good", "Quiet", "Energy efficient", "Safe for kids"] },
+};
+const SAMPLE_ATTRIBUTES = parseAttributesLines("Monthly price: $9, $14, $19\nStorage: 50 GB, 200 GB, 1 TB\nSupport: Email, 24/7 chat\nDevices: 1, 3, Unlimited");
+const SAMPLE_MENU = parseAttributesLines("Extra storage: $2, $4\nPriority support: $5, $9\nFamily sharing: $3, $6");
+function parseAttributesLines(t: string) { return t.split("\n").map((l) => { const [n, r] = l.split(/:(.*)/s); return { name: n.trim(), levels: r.split(",").map((x) => x.trim()) }; }); }
+
+export function sampleInputsFor(m: Methodology): MethodInputs {
+  const base = SAMPLE_BY_CATEGORY[m.category] ?? {};
+  const out: MethodInputs = { product: "the new product", currency: "$", prices: [5, 10, 15, 20, 25], concepts: ["Concept A", "Concept B", "Concept C"], brands: ["Our brand", "Competitor A", "Competitor B"], items: Array.from({ length: 10 }, (_, i) => `Feature ${i + 1}`), statements: ["Statement 1", "Statement 2", "Statement 3", "Statement 4"], organisation: "Acme", ...base };
+  out.attributes = m.id === "menu_conjoint" ? SAMPLE_MENU : SAMPLE_ATTRIBUTES;
+  for (const i of m.inputs) if (i.example && i.kind === "text") (out as Record<string, unknown>)[i.key] = i.example;
+  return out;
+}
+
 /* ------------------------------------------------------------ reading the researcher's lists */
 
 /** "Price: $9, $14, $19" per line → attributes */
