@@ -92,7 +92,7 @@ function DecisionBrief({ brief }: { brief: Any }) {
   const set = (k: number, patch: Any) => setRows((r) => r.map((x, i) => (i === k ? { ...x, ...patch } : x)));
   const md = () => [
     `# Decision brief${brief.question ? `: ${brief.question}` : ""}`, "", `Based on the analysis run of ${String(brief.computedAt).slice(0, 10)} (n = ${brief.n}). Only findings that hold after correction count as evidence.`, "",
-    ...rows.flatMap((r) => [`## ${ACTIONS.find(([v]) => v === r.decided)?.[1] ?? r.decided}: ${r.title.replace(/^[^:]+:\s*/, "")}`, `- Agent recommended: ${ACTIONS.find(([v]) => v === r.action)?.[1]}${r.decided !== r.action ? " (changed by the researcher)" : ""}`, `- Basis: ${r.basis}`, ...(r.evidence.length ? [`- Evidence: ${r.evidence.join("; ")}`] : ["- Evidence: none that holds"]), `- Strength: ${r.strength}`, ...(r.caveat ? [`- Caveat: ${r.caveat}`] : []), ...(r.owner ? [`- Owner: ${r.owner}`] : []), ...(r.note ? [`- Note: ${r.note}`] : []), ""]),
+    ...rows.flatMap((r) => [`## ${ACTIONS.find(([v]) => v === r.decided)?.[1] ?? r.decided}: ${r.title.replace(/^[^:]+:\s*/, "")}`, `- Recommended: ${ACTIONS.find(([v]) => v === r.action)?.[1]}${r.decided !== r.action ? " (changed by the researcher)" : ""}`, `- Basis: ${r.basis}`, ...(r.evidence.length ? [`- Evidence: ${r.evidence.join("; ")}`] : ["- Evidence: none that holds"]), `- Strength: ${r.strength}`, ...(r.caveat ? [`- Caveat: ${r.caveat}`] : []), ...(r.owner ? [`- Owner: ${r.owner}`] : []), ...(r.note ? [`- Note: ${r.note}`] : []), ""]),
     ...(brief.implications?.length ? ["## Implications", ...brief.implications.map((x: string) => `- ${x}`), ""] : []),
     ...(brief.recommendations?.length ? ["## Recommendations (analytics engine)", ...brief.recommendations.map((x: string) => `- ${x}`)] : []),
   ].join("\n");
@@ -105,7 +105,7 @@ function DecisionBrief({ brief }: { brief: Any }) {
         <tbody>{rows.map((r, k) => (
           <tr key={r.id} data-testid="agw-brief-row">
             <td><select className="select small" value={r.decided} onChange={(e) => set(k, { decided: e.target.value })} aria-label={`Decision for ${r.id}`}>{ACTIONS.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select>
-              <div style={{ marginTop: 4 }}>{r.title.replace(/^[^:]+:\s*/, "")}</div>{r.decided !== r.action && <div className="agw-warn">Changed from the agent's “{ACTIONS.find(([v]) => v === r.action)?.[1]}”</div>}</td>
+              <div style={{ marginTop: 4 }}>{r.title.replace(/^[^:]+:\s*/, "")}</div>{r.decided !== r.action && <div className="agw-warn">Changed from the recommended “{ACTIONS.find(([v]) => v === r.action)?.[1]}”</div>}</td>
             <td>{r.basis}{r.evidence.length ? <ul>{r.evidence.map((e: string, j: number) => <li key={j}>{e}</li>)}</ul> : <div className="muted">No finding that holds.</div>}<div className="muted">Strength: {r.strength}{r.caveat ? ` · ${r.caveat}` : ""}</div></td>
             <td><input className="input small" placeholder="Owner" value={r.owner} onChange={(e) => set(k, { owner: e.target.value })} /><textarea rows={2} placeholder="Note" value={r.note} onChange={(e) => set(k, { note: e.target.value })} /></td>
           </tr>))}</tbody></table>

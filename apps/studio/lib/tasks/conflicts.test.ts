@@ -23,12 +23,12 @@ test("two agents creating the same code, or one deleting what another edits, or 
   const by = Object.fromEntries(cs.map((c) => [c.key, c]));
   assert.equal(by["q:q21"].kind, "same_code");
   assert.deepEqual(by["q:q21"].steps.map((s) => s.stepId), ["b1", "b2"]);
-  assert.match(by["q:q21"].question, /Two agents both created Q21/);
+  assert.match(by["q:q21"].question, /Two parts of this task both created Q21/);
   assert.equal(by["set:q5:text"].kind, "same_setting");
   assert.equal(by["q:q9"].kind, "edit_deleted");
   assert.ok(!cs.some((c) => c.steps.some((s) => s.stepId === "x")), "a step still running is not judged");
   assert.deepEqual(stepsToRedo(by["q:q21"], "b1"), ["b2"]);
-  assert.match(conflictMessage([by["q:q21"]]), /^Conflict between agents: /);
+  assert.match(conflictMessage([by["q:q21"]]), /^Your decision is needed: /);
 });
 
 test("a step that edits the same question twice, alone, is not a conflict with itself", () => {

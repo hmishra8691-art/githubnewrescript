@@ -50,7 +50,7 @@ const G = globalThis as unknown as { __rescriptResearchBackend?: ResearchBackend
 export function setResearchBackend(b: ResearchBackend | null): void { G.__rescriptResearchBackend = b; }
 const backend = (): ResearchBackend | null => G.__rescriptResearchBackend ?? null;
 
-const NO_DATA = "This agent works on a saved project's responses, and this survey has no database behind it (the sandbox). Open a saved survey to run it.";
+const NO_DATA = "This works on a saved project's responses, and this survey has no database behind it (the sandbox). Open a saved survey to run it.";
 
 /* ------------------------------------------------------------ helpers */
 

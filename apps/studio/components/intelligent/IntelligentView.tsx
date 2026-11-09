@@ -30,7 +30,7 @@ import { applyIntent, undoIntent } from "../../lib/copilot/spoken";
 import { CopilotCard, SaveFailed } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
 import { TaskStrip } from "./TaskStrip";
-import { requestAgentTask } from "../../lib/agents/workspace";
+import { researchRequest } from "../../lib/intelligent/researchRequest";
 import type { ClientTask } from "@/lib/copilot/taskStore";
 import { StructurePane } from "./copilot/StructurePane";
 import { paneLayout, splitterKey, readPaneWidths, PANE_LIMITS } from "../../lib/intelligent/paneLayout";
@@ -173,6 +173,18 @@ function useDurableTask(surveyId: string, active: boolean): { task: ClientTask |
   return state;
 }
 
+/** the research planners: their result is data shown in the card, not changes to review */
+const RESEARCH_PLANNERS = new Set(["analysis", "report", "decision"]);
+/** larger pieces of work Intelligent mode plans and runs as steps — each one a sentence the researcher can edit */
+const WELCOME_TASKS: { label: string; text: string }[] = [
+  { label: "Rework questions", text: "Make every question in the survey shorter and more neutral" },
+  { label: "Translate", text: "Translate the whole survey into French" },
+  { label: "Build a scored exam", text: "Create a 25 question exam with an answer key on " },
+  { label: "Run the analysis plan", text: "Run the analysis plan" },
+  { label: "Draft the findings report", text: "Draft the findings report for a client audience" },
+  { label: "Recommend next steps", text: "Recommend next steps from the findings" },
+];
+
 export function IntelligentView() {
   const s = useStudio();
   const sel = useSelection();
@@ -219,8 +231,6 @@ export function IntelligentView() {
   /* asking for the inspector (Review, a proposal's changes, research) shows it — as a drawer when it is not docked */
   const layoutRef = React.useRef(layout);
   layoutRef.current = layout;
-  /** the task's full record lives in the AI Agents workspace: open it there, on that task */
-  const openAgents = React.useCallback((taskId?: string) => { requestAgentTask(taskId); s.goToTab?.("agents"); }, [s]);
   const revealInspector = React.useCallback(() => { setShowInspector(true); if (layoutRef.current.inspector !== "docked") setDrawer("inspector"); }, []);
   /* a drawer only for a pane that is not docked; Escape closes it */
   React.useEffect(() => {
@@ -330,6 +340,17 @@ export function IntelligentView() {
      * the Apply button — the Studio's own, no model call. Before, both went to the model: the undo became a
      * refused "Remove the custom code of survey", the "apply" a second, duplicate proposal.
      */
+    /*
+     * ONE INTELLIGENT SYSTEM (2026-11-08). The research agents the removed AI Agents tab used to start — run the
+     * analysis plan, draft the findings report, recommend next steps — start from the same sentence here; the
+     * engine picks the planner, the steps run side by side, every check and repair runs as before.
+     */
+    const research = researchRequest(t);
+    if (research) {
+      await copilot.startResearch(t, research, heard);
+      revealInspector();
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     if (undoIntent(t)) {
       await copilot.undoLast(t, heard);
       setBusy(false); inputRef.current?.focus(); return;
@@ -939,6 +960,11 @@ export function IntelligentView() {
                   <span className="iq-example-about">PDF (with OCR), Word, text · read before it designs</span>
                 </button>
               </div>
+              {/* everything the removed AI Agents tab could start, said as a sentence here (2026-11-08) */}
+              <div className="cp-welcome-more" data-testid="cp-welcome-more">
+                <span className="iqi-dim">It can also take on larger work, step by step:</span>
+                {WELCOME_TASKS.map((w) => <button key={w.label} type="button" className="ax-chip" onClick={() => { setText(w.text); inputRef.current?.focus(); }} data-testid="cp-welcome-task">{w.label}</button>)}
+              </div>
               <button type="button" className="iq-example iqi-welcome-import" onClick={() => fileRef.current?.click()} data-testid="iq-import-start">
                 <span className="iq-example-text"><Icon name="paperclip" size={13} /> Import a questionnaire — Qualtrics QSF, Decipher XML, Word, Excel, CSV, PDF or text</span>
                 <span className="iq-example-about">reverse-engineered into Rescript · previewed before anything is created</span>
@@ -970,7 +996,7 @@ export function IntelligentView() {
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
                     onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); revealInspector(); }}
-                    onReviewTask={(id) => void copilot.openTaskResult(id).then(() => { revealInspector(); copilot.setTab("changes"); })} onShowTask={(id) => openAgents(id)} onRetryTask={(id) => void copilot.taskAction(id, "retry")}
+                    onReviewTask={(id) => { const research = RESEARCH_PLANNERS.has(turn.task?.planner ?? ""); void copilot.openTaskResult(id).then(() => { if (research) return; revealInspector(); copilot.setTab("changes"); }); }} onShowTask={() => revealInspector()} surveyId={s.surveyDbId} onRetryTask={(id) => void copilot.taskAction(id, "retry")}
                     onExecutePlan={(id, items) => void copilot.executePlan(id, items)} onCancelPlan={(id) => copilot.cancelPlan(id)}
                     documents={documentActions}
                     onResume={(id) => void copilot.resume(id)} onReviewReady={(id) => void copilot.reviewReady(id)} onBuildRest={(id) => void copilot.buildRemaining(id)} onResumeNow={(id) => copilot.resumeNow(id)} onDiscard={(id) => copilot.discardWork(id)}
@@ -1063,7 +1089,8 @@ export function IntelligentView() {
             {/*
               * THE REVIEW PANEL STAYS THE REVIEW PANEL (2026-11-07). The copilot's task shows as a few lines of
               * step-by-step progress (TaskStrip) above the Changes / Review / Findings tabs, only while it is
-              * running, waiting or ready to review; every row, attempt and message is in the AI Agents workspace.
+              * running, waiting or ready to review. Since 2026-11-08 it is the ONLY place a task is followed (the AI Agents
+              * tab is gone): plain phases, each step's outcome in the researcher's words, and why anything could not finish.
               */}
             {copilot.activeTask
               ? <TaskStrip task={copilot.activeTask.task} surveyId={s.surveyDbId} onRetry={() => void copilot.taskAction(copilot.activeTask!.entryId, "retry")} onResolved={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}
@@ -1071,9 +1098,8 @@ export function IntelligentView() {
                   onResume={() => void copilot.taskAction(copilot.activeTask!.entryId, "resume")}
                   onContinue={() => void copilot.taskAction(copilot.activeTask!.entryId, "advance")}
                   onCancel={() => void copilot.taskAction(copilot.activeTask!.entryId, "cancel")}
-                  onReview={() => void copilot.openTaskResult(copilot.activeTask!.entryId).then(() => { revealInspector(); copilot.setTab("changes"); })}
-                  onDetails={() => openAgents(copilot.activeTask!.task.id)} />
-              : durableTask.task && <TaskStrip task={durableTask.task} onDetails={() => openAgents(durableTask.task!.id)} />}
+                  onReview={() => { const research = RESEARCH_PLANNERS.has(copilot.activeTask!.task.planner ?? ""); void copilot.openTaskResult(copilot.activeTask!.entryId).then(() => { if (research) return; revealInspector(); copilot.setTab("changes"); }); }} />
+              : durableTask.task && <TaskStrip task={durableTask.task} />}
             <CopilotPanel copilot={copilot} def={s.def} onSelect={selectQuestion} onApply={applyCopilot} applyNote={applyNote} readOnly={s.readOnly}
               onImportQuotaSheet={() => quotaSheetRef.current?.click()} quotaImport={quotaImport}
               primary={primary} index={index} onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(t) => void ask(t)} onTemplate={writeTemplate}

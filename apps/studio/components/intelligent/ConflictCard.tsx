@@ -3,9 +3,9 @@ import React from "react";
 import type { StepConflict } from "../../lib/tasks/conflicts";
 
 /**
- * A CONFLICT BETWEEN AGENTS, RAISED THE MOMENT IT HAPPENS (2026-11-07). Two steps running side by side changed the
+ * A CONFLICT BETWEEN PARTS OF ONE TASK (agents working side by side internally), RAISED THE MOMENT IT HAPPENS (2026-11-07). Two steps running side by side changed the
  * same thing in ways that cannot both stand; the task is paused before anything builds on it. The researcher sees
- * what each agent did and keeps one — the other step is redone on top of it, and the task carries on.
+ * what each part did (never which agent) and keeps one — the other step is redone on top of it, and the task carries on.
  */
 export function ConflictCard({ taskId, surveyId, conflicts, onResolved, compact }: { taskId: string; surveyId: string; conflicts: StepConflict[]; onResolved: (task: unknown) => void; compact?: boolean }) {
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -22,7 +22,7 @@ export function ConflictCard({ taskId, surveyId, conflicts, onResolved, compact 
   if (!conflicts.length) return null;
   return (
     <section className={`agw-conflicts${compact ? " compact" : ""}`} data-testid="agw-conflicts" role="alert" aria-live="assertive">
-      <b>{conflicts.length === 1 ? "Two agents need your decision" : `${conflicts.length} decisions needed — agents changed the same things`}</b>
+      <b>{conflicts.length === 1 ? "Your decision is needed" : `${conflicts.length} decisions needed — two parts of the work changed the same things`}</b>
       {conflicts.map((c) => (
         <div key={c.key} className="agw-conflict" data-testid="agw-conflict" data-key={c.key}>
           <p>{c.question}</p>

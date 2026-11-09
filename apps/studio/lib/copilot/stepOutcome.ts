@@ -63,3 +63,18 @@ export function taskOutcome(t: { status: string; steps: readonly StepLike[] }): 
     default: return { label: done && done < steps.length ? `Partially complete — ${of}` : of, tone: "busy" };
   }
 }
+
+/**
+ * THE RESEARCHER'S WORDS FOR A STEP (2026-11-08 — Intelligent mode is the only researcher-facing surface). The engine
+ * still retries, repairs and re-plans exactly as before; the researcher is told what matters: done, being worked on,
+ * waiting for them, or could not be finished (with the reason, elsewhere). An automatic second attempt is the system's
+ * business — while it is still trying, the step is "Working on it", not "Failed attempt 1".
+ */
+export function researcherOutcome(s: StepLike, taskStatus: string): StepOutcome {
+  const o = stepOutcome(s, taskStatus);
+  if (s.status === "completed") return o.tone === "warn" ? { label: "Done — needs a look", tone: "warn", final: true } : { label: "Done", tone: "ok", final: true };
+  if (!o.final && (s.status === "running" || s.status === "retrying" || s.status === "failed")) return { label: "Working on it", tone: "busy", final: false };
+  if (o.tone === "bad") return { label: s.status === "failed" ? "Couldn't finish" : "Stopped", tone: "bad", final: true };
+  if (s.status === "blocked") return { label: "Needs your answer", tone: "warn", final: false };
+  return o;
+}

@@ -12,6 +12,7 @@ import { languageName } from "../../../lib/intelligent/voice";
 import type { CopilotEntry, EngineTurn } from "./useCopilot";
 import { DocumentOutput, ThemeTurnCard, type DocumentActions } from "./DocumentCards";
 import { QualTurnCard } from "./QualTurnCard";
+import { ResearchOutput } from "../ResearchOutput";
 import { validateResearch, PROVENANCE_REASON, type SurveyAction } from "@rescript/engine";
 import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilot/history";
 
@@ -26,7 +27,7 @@ import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilo
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, onReviewTask, onShowTask, onRetryTask, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents, verify, onApplyAnyway }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, onReviewTask, onShowTask, onRetryTask, surveyId, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents, verify, onApplyAnyway }: {
   /** S2c: the open proposal's test session (only for the open proposal's card) */
   verify?: VerifyView | null;
   onApplyAnyway?(): void;
@@ -61,9 +62,10 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   onDiscard?(entryId: string): void;
   /** a planned task (2026-10-29): open its finished result as one proposal */
   onReviewTask?(entryId: string): void;
-  /** a planned task: show the execution panel */
-  /** the task's full record — every step, attempt and message — in the AI Agents workspace */
+  /** a planned task: show its progress in the panel on the right */
   onShowTask?(taskId: string): void;
+  /** the survey, for a research result's own actions (downloads, exports) */
+  surveyId?: string;
   /** run only the failed steps again (completed ones are kept) */
   onRetryTask?(entryId: string): void;
   counts: { label: string; value: number }[] | null;
@@ -160,13 +162,17 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
               {entry.task.status === "running" || entry.task.status === "pending" ? " — each step is saved as it completes; this continues in the background when you close this page." : ""}
             </p>
             <div className="row" style={{ gap: 8 }}>
-              {onShowTask && <button type="button" className="iq-btn" data-testid="cp-task-show" onClick={() => onShowTask(entry.task!.id)}>Details in AI Agents</button>}
-              {entry.task.status === "completed" && onReviewTask && <button type="button" className="iq-btn primary" data-testid="cp-task-review" onClick={() => onReviewTask(entry.id)}>Review the result</button>}
+              {onShowTask && <button type="button" className="iq-btn" data-testid="cp-task-show" onClick={() => onShowTask(entry.task!.id)}>Show progress</button>}
+              {entry.task.status === "completed" && onReviewTask && <button type="button" className="iq-btn primary" data-testid="cp-task-review" onClick={() => onReviewTask(entry.id)}>{["analysis", "report", "decision"].includes(entry.task.planner ?? "") ? "Show the results" : "Review the result"}</button>}
               {/* partial apply: what the finished steps made is usable now, whatever happened to the rest */}
               {entry.task.status !== "completed" && entry.task.status !== "running" && entry.task.status !== "pending" && entry.task.progress.completed > 0 && onReviewTask && <button type="button" className="iq-btn primary" data-testid="cp-task-review-partial" onClick={() => onReviewTask(entry.id)}>Review &amp; apply what&apos;s done ({entry.task.progress.completed} step{entry.task.progress.completed === 1 ? "" : "s"})</button>}
               {(entry.task.status === "failed" || entry.task.status === "needs_attention") && entry.task.progress.failed > 0 && onRetryTask && <button type="button" className="iq-btn" data-testid="cp-task-retry" onClick={() => onRetryTask(entry.id)} title="Runs only the failed steps again — everything finished is kept">Retry {entry.task.progress.failed === 1 ? "the failed step" : `${entry.task.progress.failed} failed steps`}</button>}
             </div>
           </div>
+        )}
+        {entry.research && surveyId && (
+          /* what a research task produced (2026-11-08 — started from Intelligent mode): the run, the storyline, the decision brief */
+          <div className="cp-research" data-testid="cp-research"><ResearchOutput data={entry.research} surveyId={surveyId} /></div>
         )}
         {entry.coverage && (
           /* the research coverage of a generated survey (Phase 3): every hypothesis measured, every question serving the design */

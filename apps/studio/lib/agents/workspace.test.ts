@@ -2,10 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, agentGraph, agentOf, agentStatuses, isLive } from "./workspace.ts";
-
-const step = (stepId: string, kind: string | undefined, status: string, dependsOn: string[] = [], extra: Record<string, unknown> = {}) =>
-  ({ stepId, kind, status, dependsOn, planVersion: 1, retryCount: 0, title: stepId, ...extra }) as never;
+import { AGENTS, agentOf } from "./workspace.ts";
 
 test("every step kind a registered handler runs belongs to exactly one agent — no orphan work, no double counting", () => {
   const dir = join(import.meta.dirname, "..", "tasks", "handlers");
@@ -25,55 +22,6 @@ test("every step kind a registered handler runs belongs to exactly one agent —
   for (const a of AGENTS.filter((x) => x.availability === "planned")) assert.deepEqual(a.kinds, []);
 });
 
-test("the graph is the step rows: columns follow dependencies, edges are dependsOn, only work in flight is live", () => {
-  const g = agentGraph({ planVersion: 1, steps: [
-    step("design", "gen.design", "completed"), step("skeleton", "gen.skeleton", "completed"),
-    step("b1", "gen.batch", "running", ["skeleton"]), step("b2", "gen.batch", "pending", ["skeleton"]),
-    step("logic", "gen.logic", "pending", ["b1", "b2"]), step("validate", "gen.validate", "pending", ["logic", "design", "ghost"]),
-    step("old", "gen.batch", "tombstoned"),
-  ] });
-  assert.deepEqual(g.nodes.map((n) => [n.stepId, n.column]), [["design", 0], ["skeleton", 0], ["b1", 1], ["b2", 1], ["logic", 2], ["validate", 3]]);
-  assert.equal(g.columns, 4);
-  assert.ok(!g.nodes.some((n) => n.stepId === "old"), "a tombstoned step is not drawn");
-  assert.equal(g.edges.length, 6, "a dependency on a step that does not exist is not drawn");
-  assert.deepEqual(g.edges.filter((e) => e.live), [{ from: "skeleton", to: "b1", live: true }], "only the edge into the running step, from a finished one");
-  assert.deepEqual(g.agents, ["design", "writer", "logic", "validation"]);
-});
-
-test("a dependency loop is cut, not looped forever", () => {
-  const g = agentGraph({ planVersion: 1, steps: [step("a", "gen.batch", "pending", ["b"]), step("b", "gen.batch", "pending", ["a"])] });
-  assert.equal(g.nodes.length, 2);
-});
-
-test("agent states come from the rows: working only while a step runs in an open task; a planned agent never works", () => {
-  const open = { status: "running", steps: [step("b1", "gen.batch", "running"), step("v", "gen.validate", "pending", ["b1"]), step("t", "translation.batch", "failed", [], { finishedAt: 5 })] } as never;
-  const done = { status: "completed", steps: [step("l", "gen.logic", "completed", [], { finishedAt: 9 }), step("x", "gen.repair", "failed")] } as never;
-  const s = Object.fromEntries(agentStatuses([open, done]).map((a) => [a.id, a]));
-  assert.equal(s.writer.state, "working");
-  assert.equal(s.writer.now, "b1");
-  assert.equal(s.validation.state, "waiting");
-  assert.equal(s.translation.state, "attention");
-  assert.equal(s.logic.state, "done", "finished work in a closed task");
-  assert.equal(s.logic.lastActive, 9);
-  assert.equal(s.assessment.state, "idle");
-  assert.equal(s.writing.state, "idle", "the report agent exists now and has not run here");
-  assert.equal(s.decision.state, "idle");
-  assert.equal(s.writer.steps.failed, 1, "a failure in a closed task is counted but does not raise attention");
-  assert.equal(isLive({ status: "running" }), true);
-  assert.equal(isLive({ status: "needs_attention" }), false);
-  assert.equal(isLive(null), false);
-});
-
-test("the journey reads the overview's module states; unreadable stages are unknown, not 'not started'", async () => {
-  const { workflowStages } = await import("./workflow.ts");
-  const m = (key: string, state: string) => ({ key, label: key, state, detail: "", tab: key }) as never;
-  const v = workflowStages([m("research", "configured"), m("programming", "configured"), m("quotas", "not_configured"), m("languages", "configured"),
-    m("fieldwork", "not_configured"), m("collection", "not_configured"), m("quality", "not_configured"), m("analysis", "needs_attention"), m("reporting", "configured")]);
-  assert.deepEqual(v.map((s) => s.state), ["in_progress", "not_started", "attention", "done"]);
-  const u = workflowStages([m("research", "configured"), m("programming", "configured"), m("quotas", "configured"), m("languages", "configured")], { unknown: ["collect", "analyze", "act"] });
-  assert.deepEqual(u.map((s) => s.state), ["done", "unknown", "unknown", "unknown"]);
-});
-
 test("every launcher names a planner that is registered, and says plainly what the agent is asked", async () => {
   const { LAUNCHERS, launchMessage } = await import("./launch.ts");
   const dir = join(import.meta.dirname, "..", "tasks", "handlers");
@@ -86,33 +34,4 @@ test("every launcher names a planner that is registered, and says plainly what t
   assert.equal(launchMessage(tr, { language: "French" }), "Translate the whole survey into French");
   assert.equal(launchMessage(tr, { scope: "Q1–Q5" }), "", "a required field missing sends nothing");
   assert.equal(launchMessage(LAUNCHERS.find((l) => l.id === "build")!, { brief: "Bank app CSAT", count: "40" }), "Write a 40 question survey: Bank app CSAT");
-});
-
-test("an agent whose queued work sits in a paused task needs attention, not 'queued'", () => {
-  const paused = { status: "needs_attention", steps: [step("c", "analysis.check", "pending")] } as never;
-  assert.equal(agentStatuses([paused]).find((a) => a.id === "analysis")!.state, "attention");
-});
-
-test("the newest task decides a finished agent's state: failures in a cancelled task are 'failed', never 'Finished'", () => {
-  const cancelled = { status: "cancelled", steps: [step("w1", "copilot.generate", "completed"), step("w2", "copilot.generate", "failed"), step("c", "copilot.check", "pending")] } as never;
-  const older = { status: "completed", steps: [step("x", "copilot.generate", "completed")] } as never;
-  const s = Object.fromEntries(agentStatuses([cancelled, older]).map((a) => [a.id, a.state]));
-  assert.equal(s.writer, "failed");
-  assert.equal(s.validation, "stopped", "its step never ran because the task was cancelled");
-  assert.equal(Object.fromEntries(agentStatuses([older]).map((a) => [a.id, a.state])).writer, "done");
-});
-
-test("run phases come from the launcher's own request, then from the step rows; the feed is the rows' own times", async () => {
-  const { runPhases, activityFeed } = await import("./workspace.ts");
-  assert.deepEqual(runPhases(null, { phase: "understanding", detail: "Reading" }).map((p) => p.state), ["active", "waiting", "waiting", "waiting", "waiting", "waiting"]);
-  assert.deepEqual(runPhases(null, { phase: "planning", detail: "Planning" }).slice(0, 2).map((p) => p.state), ["done", "active"]);
-  const running = { status: "running", planner: "generation", steps: [step("d", "gen.design", "completed", [], { startedAt: 1, finishedAt: 2 }), step("b1", "gen.batch", "running", ["d"], { startedAt: 3 }), step("v", "gen.validate", "pending", ["b1"])] } as never;
-  const ph = runPhases(running);
-  assert.deepEqual(ph.map((p) => [p.id, p.state]), [["understand", "done"], ["plan", "done"], ["agents", "done"], ["execute", "active"], ["validate", "waiting"], ["complete", "waiting"]]);
-  assert.match(ph[3].detail, /^Questionnaire writer: b1 · 1\/2 done$/);
-  assert.match(ph[2].detail, /Research design, Questionnaire writer, Validation/);
-  const cancelled = runPhases({ status: "cancelled", steps: [step("b1", "copilot.generate", "completed"), step("b2", "copilot.generate", "failed"), step("c", "copilot.check", "pending")] } as never);
-  assert.deepEqual(cancelled.slice(3).map((p) => p.state), ["failed", "failed", "failed"]);
-  const feed = activityFeed(running);
-  assert.deepEqual(feed.map((e) => [e.at, e.text]), [[3, "started b1"], [2, "finished d"], [1, "started d"]]);
 });

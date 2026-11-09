@@ -121,11 +121,11 @@ export const NOTICES = {
   plannedAsTask(lang: ReplyLanguage, steps: number, units: number, what: string): string {
     const u = units > 1 ? units : 0;
     switch (lang) {
-      case "hi": return `यह काम बड़ा है, इसलिए इसे ${steps} छोटे ${plural(steps, "चरण", "चरणों")} में बाँटा गया है${u ? ` (${u} ${what})` : ""}। हर चरण पूरा होते ही सहेजा जाता है — हर चरण की प्रगति दाईं ओर दिखती है (पूरा विवरण: AI Agents); पेज बंद करने पर भी काम जारी रहता है।`;
-      case "hinglish": return `Yeh kaam bada hai, isliye ise ${steps} chhote ${plural(steps, "step", "steps")} mein baanta gaya hai${u ? ` (${u} ${what})` : ""}. Har step poora hote hi save ho jaata hai — har step ki progress right side mein dikhti hai (poori details: AI Agents); page band karne par bhi kaam chalta rehta hai.`;
-      case "mr": return `हे काम मोठे आहे, म्हणून ते ${steps} छोट्या ${plural(steps, "टप्प्यात", "टप्प्यांत")} विभागले आहे${u ? ` (${u} ${what})` : ""}. प्रत्येक टप्पा पूर्ण होताच जतन होतो — प्रत्येक टप्प्याची प्रगती उजवीकडे दिसते (पूर्ण तपशील: AI Agents); पेज बंद केले तरी काम सुरू राहते.`;
-      case "ur": return `یہ کام بڑا ہے، اس لیے اسے ${steps} چھوٹے ${plural(steps, "مرحلے", "مراحل")} میں بانٹا گیا ہے${u ? ` (${u} ${what})` : ""}۔ ہر مرحلہ مکمل ہوتے ہی محفوظ ہو جاتا ہے — ہر مرحلے کی پیش رفت دائیں جانب دکھائی دیتی ہے (مکمل تفصیل: AI Agents)؛ صفحہ بند کرنے پر بھی کام جاری رہتا ہے۔`;
-      default: return `This is a large piece of work, so it has been planned as ${steps} small step${steps === 1 ? "" : "s"}${u ? ` (${u} ${what})` : ""}. Each step is saved the moment it completes — progress shows step by step on the right (full detail in AI Agents); the work carries on if you close this page.`;
+      case "hi": return `यह काम बड़ा है, इसलिए इसे ${steps} छोटे ${plural(steps, "चरण", "चरणों")} में बाँटा गया है${u ? ` (${u} ${what})` : ""}। हर चरण पूरा होते ही सहेजा जाता है — हर चरण की प्रगति दाईं ओर दिखती है; पेज बंद करने पर भी काम जारी रहता है।`;
+      case "hinglish": return `Yeh kaam bada hai, isliye ise ${steps} chhote ${plural(steps, "step", "steps")} mein baanta gaya hai${u ? ` (${u} ${what})` : ""}. Har step poora hote hi save ho jaata hai — har step ki progress right side mein dikhti hai; page band karne par bhi kaam chalta rehta hai.`;
+      case "mr": return `हे काम मोठे आहे, म्हणून ते ${steps} छोट्या ${plural(steps, "टप्प्यात", "टप्प्यांत")} विभागले आहे${u ? ` (${u} ${what})` : ""}. प्रत्येक टप्पा पूर्ण होताच जतन होतो — प्रत्येक टप्प्याची प्रगती उजवीकडे दिसते; पेज बंद केले तरी काम सुरू राहते.`;
+      case "ur": return `یہ کام بڑا ہے، اس لیے اسے ${steps} چھوٹے ${plural(steps, "مرحلے", "مراحل")} میں بانٹا گیا ہے${u ? ` (${u} ${what})` : ""}۔ ہر مرحلہ مکمل ہوتے ہی محفوظ ہو جاتا ہے — ہر مرحلے کی پیش رفت دائیں جانب دکھائی دیتی ہے؛ صفحہ بند کرنے پر بھی کام جاری رہتا ہے۔`;
+      default: return `This is a large piece of work, so it has been planned as ${steps} small step${steps === 1 ? "" : "s"}${u ? ` (${u} ${what})` : ""}. Each step is saved the moment it completes — progress shows step by step on the right; the work carries on if you close this page.`;
     }
   },
 };

@@ -88,10 +88,10 @@ export function findConflicts(steps: readonly StepLike[]): StepConflict[] {
     out.push({
       key, kind, object,
       steps: involved.map((x) => ({ stepId: x.stepId, title: x.title, did: x.did })),
-      question: kind === "same_code" ? `Two agents both created ${object}. Which version should stand? The other step is redone around it with a new code.`
-        : kind === "same_block" ? `Two agents both created ${object}. Keep which one? The other step is redone and puts its questions into the kept block.`
-        : kind === "edit_deleted" ? `One agent deleted ${object} while another changed it. Keep it (with the change) or delete it?`
-        : `Two agents set ${object} differently. Which should stand?`,
+      question: kind === "same_code" ? `Two parts of this task both created ${object}. Which version should stand? The other part is redone around it with a new code.`
+        : kind === "same_block" ? `Two parts of this task both created ${object}. Keep which one? The other part is redone and puts its questions into the kept block.`
+        : kind === "edit_deleted" ? `One part of this task deleted ${object} while another changed it. Keep it (with the change) or delete it?`
+        : `Two parts of this task set ${object} differently. Which should stand?`,
     });
   }
   return out;
@@ -104,5 +104,5 @@ export function stepsToRedo(c: StepConflict, keep: string): string[] {
 
 /** the sentence a paused task carries while a conflict waits for the researcher */
 export function conflictMessage(cs: StepConflict[]): string {
-  return cs.length === 1 ? `Conflict between agents: ${cs[0].question}` : `${cs.length} conflicts between agents need your decision — first: ${cs[0].question}`;
+  return cs.length === 1 ? `Your decision is needed: ${cs[0].question}` : `${cs.length} decisions are needed — first: ${cs[0].question}`;
 }

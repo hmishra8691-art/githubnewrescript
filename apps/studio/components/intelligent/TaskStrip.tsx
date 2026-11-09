@@ -1,8 +1,10 @@
 "use client";
 import React from "react";
 import { executionView, type TaskView } from "../../lib/copilot/deliverable";
-import { ConflictCard } from "../agents/ConflictCard";
+import { ConflictCard } from "./ConflictCard";
 import type { StepConflict } from "../../lib/tasks/conflicts";
+import { researcherOutcome } from "../../lib/copilot/stepOutcome";
+import { taskPhases } from "../../lib/intelligent/taskPhases";
 
 /**
  * THE PROGRAMMING PROGRESS STRIP (2026-11-07). The Intelligent mode's right panel is for REVIEW — Changes, Review,
@@ -13,11 +15,16 @@ import type { StepConflict } from "../../lib/tasks/conflicts";
  * with its truthful outcome (lib/copilot/stepOutcome.ts), the buttons that act on it, and a link to the details.
  * It shows only while the task is running, waiting for the researcher, or finished and ready to review — a cancelled
  * or failed task leaves the panel to the review tabs and says what happened in its own chat card.
+ *
+ * ONE INTELLIGENT SYSTEM (2026-11-08). The AI Agents tab is gone, so this is where every task is followed — in the
+ * researcher's terms: four phases (planned, working, checking, ready), each step's outcome in plain words
+ * (`researcherOutcome`: an automatic retry is "Working on it", not an attempt count), and, for a step that could not
+ * finish, the reason. Which internal agent ran a step, and how agents hand work to each other, is never shown.
  */
-export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCancel, onReview, onDetails, onResolved, onRetry }: {
+export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCancel, onReview, onResolved, onRetry }: {
   task: TaskView & { id?: string; blocked?: { message?: string }; conflicts?: StepConflict[] };
   surveyId?: string; onResolved?: () => void; onRetry?: () => void;
-  onPause?: () => void; onResume?: () => void; onContinue?: () => void; onCancel?: () => void; onReview?: () => void; onDetails?: () => void;
+  onPause?: () => void; onResume?: () => void; onContinue?: () => void; onCancel?: () => void; onReview?: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
   const v = executionView(task);
@@ -36,7 +43,7 @@ export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCan
     if (!v.completed) return null;
     return (
       <section className="cp-taskstrip stopped" data-testid="iq-taskstrip" data-status={task.status} aria-label="Programming result">
-        <div className="cp-taskstrip-head"><b>{task.status === "cancelled" ? "Stopped" : "Partly done"}</b><span className="iqi-dim" data-testid="iq-taskstrip-line">{v.completed} of {v.total} steps done{failedRows.length ? ` · ${failedRows.length} failed` : ""}</span><span className="grow" />{onDetails && <button type="button" className="iq-btn" onClick={onDetails} data-testid="iq-taskstrip-details">Details</button>}</div>
+        <div className="cp-taskstrip-head"><b>{task.status === "cancelled" ? "Stopped" : "Partly done"}</b><span className="iqi-dim" data-testid="iq-taskstrip-line">{v.completed} of {v.total} steps done{failedRows.length ? ` · ${failedRows.length} failed` : ""}</span></div>
         {failedRows.length > 0 && <ul className="cp-taskstrip-failed">{failedRows.slice(0, 3).map((f) => <li key={f.stepId}><b>{f.title ?? f.stepId}</b>{f.failureMessage ? ` — ${f.failureMessage}` : ""}</li>)}</ul>}
         <div className="cp-taskstrip-actions">
           {onReview && <button type="button" className="iq-btn primary" onClick={onReview} data-testid="iq-taskstrip-review-partial">Review &amp; apply what&apos;s done</button>}
@@ -45,7 +52,9 @@ export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCan
       </section>
     );
   }
-  const rows = v.rows.filter((r) => r.status !== "tombstoned");
+  const phases = taskPhases(task as never);
+  const raw = new Map((task.steps as readonly { stepId: string; status: string; retryCount?: number; validation?: { status?: string } | null; failureMessage?: string }[]).map((s) => [s.stepId, s]));
+  const rows = v.rows.filter((r) => r.status !== "tombstoned").map((r) => { const s = raw.get(r.stepId); const o = s ? researcherOutcome(s, task.status) : { label: r.outcome, tone: r.tone }; return { ...r, outcome: o.label, tone: o.tone, why: o.tone === "bad" ? s?.failureMessage : undefined }; });
   const shown = open ? rows : rows.slice(0, 4);
   const icon = (tone: string) => (tone === "ok" ? "✓" : tone === "bad" ? "✕" : tone === "warn" ? "!" : tone === "busy" ? "●" : "○");
   return (
@@ -53,10 +62,11 @@ export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCan
       <div className="cp-taskstrip-head">
         <b>{task.status === "completed" ? "Ready to review" : task.status === "needs_attention" ? "Waiting for you" : "Programming"}</b>
         <span className="iqi-dim" data-testid="iq-taskstrip-line">{v.completed} of {v.total} steps done{v.failed ? ` · ${v.failed} failed` : ""}</span>
-        <span className="grow" />
-        {onDetails && <button type="button" className="iq-btn" onClick={onDetails} data-testid="iq-taskstrip-details" title="Every step, attempt and message, in the AI Agents workspace">Details</button>}
       </div>
-      {running.length > 0 && <div className="cp-taskstrip-now" data-testid="iq-taskstrip-now" aria-live="polite">Now: {running.map((r) => `${r.title ?? r.stepId}${r.retryCount ? ` (attempt ${r.retryCount + 1})` : ""}${r.startedAt ? ` · ${since(r.startedAt)}` : ""}`).join(" · ")}</div>}
+      <ol className="cp-taskstrip-phases" data-testid="iq-taskstrip-phases" aria-label="Where the work stands">
+        {phases.map((p) => <li key={p.id} className={`ph-${p.state}`} data-state={p.state} aria-current={p.state === "active" ? "step" : undefined} title={p.detail}><span aria-hidden="true">{p.state === "done" ? "✓" : p.state === "failed" ? "✕" : p.state === "attention" ? "!" : p.state === "active" ? "●" : "○"}</span> {p.label}{p.detail && p.state !== "waiting" ? <em> · {p.detail}</em> : null}</li>)}
+      </ol>
+      {running.length > 0 && <div className="cp-taskstrip-now" data-testid="iq-taskstrip-now" aria-live="polite">Now: {running.map((r) => `${r.title ?? r.stepId}${r.startedAt ? ` · ${since(r.startedAt)}` : ""}`).join(" · ")}</div>}
       {!running.length && (task.status === "running" || task.status === "pending") && v.completed < v.total && <div className="cp-taskstrip-now">Starting the next step…</div>}
       <ol className="cp-taskstrip-steps">
         {shown.map((r, i) => (
@@ -65,6 +75,7 @@ export function TaskStrip({ task, surveyId, onPause, onResume, onContinue, onCan
             <span className="cp-taskstrip-n">Step {i + 1}</span>
             <span className="cp-taskstrip-title">{r.title}</span>
             <span className="cp-taskstrip-out">{r.outcome}</span>
+            {r.why && <span className="cp-taskstrip-why">{r.why}</span>}
           </li>
         ))}
       </ol>

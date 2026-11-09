@@ -77,6 +77,8 @@ export interface CopilotEntry {
   status: "thinking" | "ready" | "failed" | "empty" | "plan" | "task";
   /** a planned task (2026-10-29, docs/EXECUTION-ENGINE-2026-10-29.md): the persisted plan's state, refreshed by the page's drive loop */
   task?: TaskClientView;
+  /** what a research task (analysis, findings report, next steps) produced — shown in the card, never applied to the questionnaire */
+  research?: Record<string, unknown>;
   reply?: CopilotReply;
   /** the change plan the model proposed before building (Phase 2): read, ticked and approved here; `approved` once it was built */
   changePlan?: ChangePlan & { approved?: string[]; failures?: { id: string; failure: TurnFailure }[] };
@@ -1051,6 +1053,28 @@ export function useCopilot(opts: {
     if (v) opts.patch(entryId, { task: v });
     if (action === "advance" || (v && v.drive === "advance")) void driveTask(entryId, tid);
   }, [opts, taskCall, taskQuery, driveTask]);
+  /*
+   * THE RESEARCH AGENTS, FROM INTELLIGENT MODE (2026-11-08). "Run the analysis plan", "Draft the findings report",
+   * "Recommend next steps" start the same registered planners the removed AI Agents tab started — through
+   * POST /api/copilot/tasks, which checks the Data Analytics edit right those agents need — and the task is then
+   * driven, shown and reviewed exactly like any other Intelligent-mode task.
+   */
+  const startResearch = React.useCallback(async (text: string, req: { planner: string; options: Record<string, unknown>; label: string }, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking" });
+    const r = await taskCall("/api/copilot/tasks", { message: text, definition: s.def, planner: req.planner, options: req.options });
+    const tv = r.d?.task as TaskClientView | undefined;
+    if (r.status === 200 && tv) {
+      const reply: CopilotReply = { kind: "answer", reply: `${req.label}: planned as ${tv.progress.total} step${tv.progress.total === 1 ? "" : "s"}. Progress shows on the right as each one finishes; the work carries on if you close this page. Nothing changes the questionnaire.`, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] };
+      opts.patch(id, { status: "task", task: tv, reply, usage: { charge: Number(r.d?.usage && (r.d.usage as { charge?: number }).charge) || 0 } });
+      setTaskDurable(r.d?.durable === true);
+      void driveTaskRef.current?.(id, tv.id);
+      return;
+    }
+    const error = String(r.d?.error ?? (r.status === 403 ? "You need edit access to Data Analytics on this project to run this." : r.status === 404 ? "That could not be planned — say a little more about what you want." : r.status === 501 ? "Planned tasks are switched off on this server." : `It could not start (${r.status || "network"}). Try again.`));
+    opts.patch(id, { status: "failed", error });
+  }, [opts, s.def, taskCall]);
+
   /** the completed task's result, opened as ONE proposal in the ordinary review → Apply (History, undo) */
   const openTaskResult = React.useCallback(async (entryId: string): Promise<{ ok: boolean; reason?: string }> => {
     const e = (opts.entries as CopilotEntry[]).find((x) => x.id === entryId);
@@ -1058,7 +1082,7 @@ export function useCopilot(opts: {
     /* partial apply (2026-11-07): a stopped, cancelled or paused task hands over what its completed steps made */
     if (!tid || !(e.task?.status === "completed" || (e.task && e.task.progress.completed > 0 && e.task.status !== "running" && e.task.status !== "pending"))) return { ok: false, reason: "Nothing is finished yet to review." };
     const r = await taskCall(`/api/copilot/tasks/${tid}?${taskQuery}&result=1`);
-    const res = r.d?.result as { actions?: SurveyAction[]; partial?: boolean; steps?: number; unresolved?: { title: string; reason: string }[] } | null | undefined;
+    const res = r.d?.result as { actions?: SurveyAction[]; data?: Record<string, unknown>; partial?: boolean; steps?: number; unresolved?: { title: string; reason: string }[] } | null | undefined;
     if (!res) return { ok: false, reason: "The result could not be read — try again." };
     const actions = Array.isArray(res.actions) ? res.actions : [];
     const left = res.unresolved ?? [];
@@ -1072,7 +1096,10 @@ export function useCopilot(opts: {
         return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: e.text, actions }) }, openOp: opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
       });
     }
-    opts.patch(entryId, { status: "ready", reply, ...(actions.length ? { proposal: "open" as const, opKey } : {}), usage: { charge: Number(e.task?.spend?.charge) || 0 } });
+    /* a research task's result is data (the run, the storyline, the decision brief): shown in the card, nothing to apply */
+    const research = !actions.length && res.data && Object.keys(res.data).length ? res.data : undefined;
+    if (research) reply.reply = res.partial ? `${partialLine ?? ""} What is finished is below.`.trim() : "Finished — the results are below. Nothing in the questionnaire changed.";
+    opts.patch(entryId, { status: "ready", reply, ...(research ? { research } : {}), ...(actions.length ? { proposal: "open" as const, opKey } : {}), usage: { charge: Number(e.task?.spend?.charge) || 0 } });
     return { ok: true };
   }, [opts, taskCall, taskQuery, recordProposal, session.openOp, setSession, stale, s.def]);
   /** the task the execution panel shows: the newest entry that carries one */
@@ -1708,7 +1735,7 @@ export function useCopilot(opts: {
     ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, undoLast, uploadDocs, deleteDoc, refreshDocs,
     downloadOutput, regenerateOutput, themeRequest, themeCardAction, qualRequest, qualCardAction,
     planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,
-    taskAction, openTaskResult, activeTask, taskDurable,
+    taskAction, openTaskResult, startResearch, activeTask, taskDurable,
     executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep, runProductionTest, cleaningRequest, cleaningCardAction,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,

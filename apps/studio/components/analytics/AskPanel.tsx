@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { DictateButton } from "./DictateButton";
-import { VoiceButton } from "../agents/VoiceButton";
+import { VoiceButton } from "../intelligent/VoiceButton";
 import type { AskItem, AskOp, AskProposal, DatasetSpec, UndoRecord } from "@rescript/analytics";
 import { AxApi, type Row } from "./api";
 import { ReportBuilderDialog } from "./ReportBuilderDialog";
