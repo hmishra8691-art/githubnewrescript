@@ -31,6 +31,8 @@ import { CopilotCard, SaveFailed } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
 import { TaskStrip } from "./TaskStrip";
 import { researchRequest } from "../../lib/intelligent/researchRequest";
+import { setPendingSimulation, simulationAnswer, simulationRequest } from "../../lib/intelligent/simulationRequest";
+import { runSimulation } from "@rescript/templates";
 import type { ClientTask } from "@/lib/copilot/taskStore";
 import { StructurePane } from "./copilot/StructurePane";
 import { paneLayout, splitterKey, readPaneWidths, PANE_LIMITS } from "../../lib/intelligent/paneLayout";
@@ -349,6 +351,23 @@ export function IntelligentView() {
     if (research) {
       await copilot.startResearch(t, research, heard);
       revealInspector();
+      setBusy(false); inputRef.current?.focus(); return;
+    }
+    /*
+     * SIMULATED TEST RESPONDENTS (2026-11-09): "generate 100 test responses and test every path" runs through the real
+     * engine here, in the browser — nothing saved — and the answer says what broke. The full report (journeys,
+     * downloads, saving as TEST data) is waiting in Research tools → Tests.
+     */
+    const sim = simulationRequest(t, s.def);
+    if (sim) {
+      try {
+        const report = runSimulation(s.def, sim.config);
+        setPendingSimulation({ config: sim.config, report });
+        const a = simulationAnswer(s.def, report);
+        copilot.local(t, { kind: "answer", category: "testing", understood: sim.understood, answer: `${a.answer} Every respondent's journey, the Excel / CSV downloads and “Save as test data” are in Research tools → Tests.`, sections: a.sections, detected: [{ what: "read as", value: "simulate test respondents" }, { what: "respondents", value: String(sim.config.count) }] }, heard);
+      } catch (e) {
+        copilot.local(t, { kind: "answer", category: "testing", understood: sim.understood, answer: `The simulation could not run: ${(e as Error).message}`, sections: [], detected: [] }, heard);
+      }
       setBusy(false); inputRef.current?.focus(); return;
     }
     if (undoIntent(t)) {

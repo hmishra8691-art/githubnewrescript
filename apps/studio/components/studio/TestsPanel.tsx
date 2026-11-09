@@ -2,6 +2,7 @@
 import React from "react";
 import type { SuiteSummary, TestCaseResult, TestExpectations } from "@rescript/templates";
 import { useStudio } from "./store";
+import { SimulationPanel } from "./SimulationPanel";
 
 /**
  * TEST CASES AND REGRESSION TESTING (§55, §56).
@@ -87,7 +88,12 @@ const VERDICT_CLASS: Record<string, string> = {
 const when = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "never";
 
+/** Research tools → Tests: simulated respondents (2026-11-09), then the regression test cases */
 export function TestsPanel() {
+  return <><SimulationPanel /><TestCasesPanel /></>;
+}
+
+function TestCasesPanel() {
   const s = useStudio();
   const [data, setData] = React.useState<Payload | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);

@@ -46,6 +46,14 @@ export interface GenerateOptions {
   seed?: number;
   /** answers pinned for every respondent — the caller's thumb on the scale. */
   pinned?: Record<string, unknown>;
+  /**
+   * 2026-11-08: answers pinned for ONE respondent (a profile, a sampled demographic distribution) — they win over
+   * `pinned`. The walk still decides what that respondent is shown; a pinned answer to a question they never reach
+   * is simply unused.
+   */
+  pinnedFor?: (index: number) => Record<string, unknown> | undefined;
+  /** 2026-11-08: the share of respondents steered to complete (default 0.75); the rest take the outcome their answers earn */
+  completeShare?: number;
   embedded?: Record<string, string>;
   quotaCounts?: QuotaCounts;
   listFillCounts?: ListFillCounts;
@@ -696,7 +704,8 @@ export function generatePopulation(def: SurveyDefinition, opts: GenerateOptions)
      * the rest take whatever outcome their answers earn them, which is what
      * populates the screened and quota-full paths.
      */
-    const wantComplete = rng() < 0.75;
+    const wantComplete = rng() < (opts.completeShare ?? 0.75);
+    const pinnedHere = { ...(opts.pinned ?? {}), ...(opts.pinnedFor?.(i) ?? {}) };
     const MAX_ATTEMPTS = wantComplete ? 8 : 3;
     let sim: SimulationResult | null = null;
     let lastBlock: SimulationResult["blocked"] | undefined;
@@ -727,7 +736,7 @@ export function generatePopulation(def: SurveyDefinition, opts: GenerateOptions)
       const answers: Record<string, unknown> = {};
       for (const q of def.questions) {
         if (!isAnswerable(q)) continue;
-        const pin = opts.pinned?.[q.id];
+        const pin = pinnedHere[q.id];
         const target = targets[q.id];
         if (pin !== undefined) { answers[q.id] = pin; continue; }
         if (target !== undefined) { answers[q.id] = target; continue; }
