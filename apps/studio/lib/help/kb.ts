@@ -5,7 +5,7 @@ import { STUDY_METHODOLOGIES, CATEGORY_NAMES } from "@rescript/engine";
 import { buildMenuGroups } from "../menubar.ts";
 import { STUDIO_NAV } from "../studioNav.ts";
 import { MODES } from "../programmingMode.ts";
-import { DOC_ORDER, docsDir, readDoc } from "../docs/pages.ts";
+import { docsDir, listDocs, readDoc } from "../docs/pages.ts";
 import { chunksOf, parseArticle, type HelpArticle } from "./articles.ts";
 import { buildIndex, type HelpIndex } from "./search.ts";
 
@@ -30,7 +30,9 @@ export function loadGuides(): HelpArticle[] {
 }
 
 export function loadDocs(): HelpArticle[] {
-  return DOC_ORDER.map((d) => { const md = readDoc(d.slug); return md ? parseArticle(md, "doc", d.slug) : null; }).filter((x): x is HelpArticle => !!x).map((a) => ({ ...a, keywords: [...a.keywords, ...(DOC_ORDER.find((d) => d.slug === a.id)?.description.split(/[,:;]/).map((s) => s.trim()).filter(Boolean) ?? [])] }));
+  /* every Developer Docs page (2026-11-09: the feature guides as well as the reference), keyed by its summary too */
+  const pages = listDocs();
+  return pages.map((d) => { const md = readDoc(d.slug); return md ? parseArticle(md.replace(/^---\n[\s\S]*?\n---\n/, ""), "doc", d.slug) : null; }).filter((x): x is HelpArticle => !!x).map((a) => ({ ...a, keywords: [...a.keywords, ...(pages.find((d) => d.slug === a.id)?.description.split(/[,:;]/).map((s) => s.trim()).filter(Boolean) ?? [])] }));
 }
 
 /** articles generated from the code — always in step with the build */
@@ -76,7 +78,10 @@ function stamp(): string {
 export function helpKnowledge(): { index: HelpIndex; articles: Map<string, HelpArticle> } {
   const key = stamp();
   if (cache && cache.key === key) return cache;
-  const all = [...loadGuides(), ...generatedArticles(), ...loadDocs()];
+  /* a docs page and a help guide may share a slug (display-logic is both): the guide keeps the id, the page becomes docs-<slug> */
+  const guides = loadGuides();
+  const taken = new Set(guides.map((g) => g.id));
+  const all = [...guides, ...generatedArticles(), ...loadDocs().map((d) => (taken.has(d.id) ? { ...d, id: `docs-${d.id}` } : d))];
   const articles = new Map(all.map((a) => [a.id, a]));
   cache = { key, index: buildIndex(all.flatMap(chunksOf)), articles };
   return cache;

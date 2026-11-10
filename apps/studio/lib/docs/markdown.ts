@@ -5,12 +5,19 @@
  * HTML pass-through: every character of the source is escaped and only the
  * constructs the pages use are drawn — headings, paragraphs, fenced code,
  * inline code, bold, italic, links, lists, tables, block quotes, rules and
- * HTML comments (dropped). A link to another page is relative (`logic`,
+ * HTML comments (dropped). Developer Docs (2026-11-09) adds front matter, `::: example <id>` (a live example the
+ * page route mounts), `::: steps` (expandable step-by-step), `::: note | tip | warning | unsupported` callouts and
+ * syntax highlighting for json, js, css, html and the logic language — still escaping every character of the
+ * source. A link to another page is relative (`logic`,
  * `question-types`) and is left for the page route to resolve; an absolute
  * link opens as written. Dependency-free on purpose.
  */
 export interface RenderedDoc {
   html: string;
+  /** the front matter (`---` key: value lines `---` at the top): summary, related, status … */
+  meta: Record<string, string>;
+  /** the live examples the page places, in order (`::: example <id>`) */
+  examples: string[];
   /** the page title: the first H1 */
   title: string;
   /** every heading, for the page's table of contents */
@@ -33,9 +40,53 @@ export function inline(text: string): string {
   }).join("");
 }
 
+/** the marker a live example leaves in the html; the page route splits on it */
+export const EXAMPLE_MARK = (id: string) => `<!--rs-example:${id}-->`;
+export const EXAMPLE_SPLIT = /<!--rs-example:([a-z0-9-]+)-->/;
+
+const KEYWORDS: Record<string, RegExp> = {
+  js: /\b(?:const|let|var|function|return|if|else|for|of|in|while|new|true|false|null|undefined|this|typeof|async|await|=>)\b/,
+  logic: /\b(?:AND|OR|NOT|NOR|BUT NOT|IS|SELECTED|between|and|contains|any|all|answered|empty|starts with|ranked|first|last|before|after|IF|THEN|ELSE|SELECT|DESELECT|CLEAR|SET|SHOW|HIDE|COUNT|UNION|MINUS|INTERSECTION|DIFFERENCE)\b/,
+};
+/** a small, safe highlighter: the text is escaped first, then wrapped token by token */
+export function highlight(lang: string, code: string): string {
+  const l = lang === "javascript" ? "js" : lang;
+  if (!["json", "js", "css", "html", "logic"].includes(l)) return esc(code);
+  const rules: [string, RegExp][] = l === "json"
+    ? [["k", /"(?:[^"\\]|\\.)*"(?=\s*:)/], ["s", /"(?:[^"\\]|\\.)*"/], ["n", /-?\b\d+(?:\.\d+)?\b/], ["b", /\b(?:true|false|null)\b/]]
+    : l === "css"
+      ? [["c", /\/\*[\s\S]*?\*\//], ["k", /[a-z-]+(?=\s*:)/], ["s", /"[^"]*"|'[^']*'/], ["n", /#[0-9a-fA-F]{3,8}\b|-?\b\d+(?:\.\d+)?(?:px|em|rem|%|s|ms)?\b/], ["b", /[.#\[][\w-]+(?:="[^"]*")?\]?(?=[^{}]*\{)/]]
+      : l === "html"
+        ? [["c", /<!--[\s\S]*?-->/], ["k", /<\/?[a-zA-Z][\w-]*|\/?>/], ["s", /"[^"]*"/], ["b", /\{\{[^}]*\}\}/]]
+        : l === "logic"
+          ? [["c", /--[^\n]*/], ["s", /"[^"]*"/], ["b", /\{\{[^}]*\}\}/], ["k", KEYWORDS.logic], ["n", /\b\d+(?:\.\d+)?\b/]]
+          : [["c", /\/\/[^\n]*|\/\*[\s\S]*?\*\//], ["s", /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/], ["k", KEYWORDS.js], ["n", /\b\d+(?:\.\d+)?\b/]];
+  let out = "", rest = code;
+  while (rest) {
+    let best: { cls: string; i: number; t: string } | null = null;
+    for (const [cls, re] of rules) { const m = re.exec(rest); if (m && m[0] && (!best || m.index < best.i)) best = { cls, i: m.index, t: m[0] }; }
+    if (!best) { out += esc(rest); break; }
+    out += esc(rest.slice(0, best.i)) + `<span class="tk-${best.cls}">${esc(best.t)}</span>`;
+    rest = rest.slice(best.i + best.t.length);
+  }
+  return out;
+}
+
+function frontMatter(md: string): { meta: Record<string, string>; body: string } {
+  const m = /^---\n([\s\S]*?)\n---\n/.exec(md);
+  if (!m) return { meta: {}, body: md };
+  const meta: Record<string, string> = {};
+  for (const line of m[1].split("\n")) { const kv = /^([a-z_]+):\s*(.*)$/.exec(line.trim()); if (kv) meta[kv[1]] = kv[2].trim(); }
+  return { meta, body: md.slice(m[0].length) };
+}
+
+const CALLOUT: Record<string, string> = { note: "Note", tip: "Tip", warning: "Watch out", unsupported: "Not supported" };
+
 export function renderMarkdown(md: string): RenderedDoc {
-  const src = md.replace(/<!--[\s\S]*?-->/g, "");
+  const fm = frontMatter(md);
+  const src = fm.body.replace(/<!--[\s\S]*?-->/g, "");
   const lines = src.split("\n");
+  const examples: string[] = [];
   const out: string[] = [];
   const headings: RenderedDoc["headings"] = [];
   let title = "";
@@ -44,6 +95,29 @@ export function renderMarkdown(md: string): RenderedDoc {
   const para: string[] = [];
   while (i < lines.length) {
     const line = lines[i];
+    // directives (Developer Docs)
+    const dir = /^:::\s*([a-z]+)\s*(.*?)\s*$/.exec(line);
+    if (dir && dir[1] !== "") {
+      flushPara(para);
+      const [, kind, arg] = dir;
+      if (kind === "example") { const id = slug(arg); examples.push(id); out.push(EXAMPLE_MARK(id)); i++; continue; }
+      const body: string[] = [];
+      i++;
+      while (i < lines.length && !/^:::\s*$/.test(lines[i])) { body.push(lines[i]); i++; }
+      i++;
+      if (kind === "steps") {
+        const items = body.filter((l) => /^\s*\d+\.\s+/.test(l)).map((l) => l.replace(/^\s*\d+\.\s+/, ""));
+        out.push(`${arg ? `<p class="docs-steps-title">${inline(arg)}</p>` : ""}<ol class="docs-steps" data-testid="docs-steps">${items.map((it, n) => {
+          const [head, ...more] = it.split(" — ");
+          return `<li><details${n === 0 ? " open" : ""}><summary><span class="docs-step-n">${n + 1}</span>${inline(head)}</summary>${more.length ? `<div class="docs-step-body">${inline(more.join(" — "))}</div>` : ""}</details></li>`;
+        }).join("")}</ol>`);
+        continue;
+      }
+      const inner = renderMarkdown(body.join("\n"));
+      examples.push(...inner.examples);
+      out.push(`<div class="docs-callout docs-callout-${esc(kind)}" data-testid="docs-callout-${esc(kind)}"><div class="docs-callout-title">${inline(arg || CALLOUT[kind] || kind)}</div>${inner.html}</div>`);
+      continue;
+    }
     // fenced code
     const fence = /^```(\w*)\s*$/.exec(line);
     if (fence) {
@@ -52,7 +126,7 @@ export function renderMarkdown(md: string): RenderedDoc {
       i++;
       while (i < lines.length && !/^```\s*$/.test(lines[i])) { body.push(lines[i]); i++; }
       i++;
-      out.push(`<pre><code${fence[1] ? ` class="language-${esc(fence[1])}"` : ""}>${esc(body.join("\n"))}</code></pre>`);
+      out.push(`<pre${fence[1] ? ` data-lang="${esc(fence[1])}"` : ""}><code${fence[1] ? ` class="language-${esc(fence[1])}"` : ""}>${highlight(fence[1], body.join("\n"))}</code></pre>`);
       continue;
     }
     // heading
@@ -109,5 +183,5 @@ export function renderMarkdown(md: string): RenderedDoc {
     i++;
   }
   flushPara(para);
-  return { html: out.join("\n"), title, headings };
+  return { html: out.join("\n"), title, headings, meta: fm.meta, examples };
 }

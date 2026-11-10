@@ -1,4 +1,5 @@
 "use client";
+import { HelpMenu } from "../ui/HelpMenu";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { StudioProvider, useStudio, selectedQuestion } from "./store";
@@ -879,8 +880,8 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         <span className="spacer" />
         <PaletteButton />
         {/* Help (2026-11-09): the assistant, with this project as context — it explains and hands changes to Intelligent Mode */}
-        <button className="btn" onClick={() => setHelpOpen((o) => !o)} data-testid="studio-help" aria-expanded={helpOpen}
-          title="Ask anything about ResLens.ai — with this project as context"><Icon name="help" size={15} /> Help</button>
+        {/* 2026-11-09: Help → Help (this drawer) or Developer Docs (a new tab, so the survey stays open) */}
+        <HelpMenu className="btn" active={helpOpen} onHelp={() => setHelpOpen((o) => !o)} docsInNewTab align="right" testId="studio-help" />
         <button className="btn" onClick={preview} disabled={saving}
           title="Full-page preview of the survey you are editing right now"><Icon name="play" size={15} /> Preview</button>
         <button className="btn" onClick={testSurvey} disabled={saving || roWrite} data-testid="test-survey"

@@ -1,6 +1,9 @@
+---
+summary: How a ResLens.ai survey is built — the builder, the survey definition and Intelligent Mode — and how these docs show each feature
+---
 # Getting started
 
-A ReScript survey is one JSON document — the *survey definition* — that the Studio edits, the runtime renders to respondents, the analytics read and the exporters write out. There are three ways to program it, and they all write the same document.
+A ResLens.ai survey is one JSON document — the *survey definition* — that the Studio edits, the runtime renders to respondents, the analytics read and the exporters write out. There are three ways to program it, and they all write the same document.
 
 ## Three ways to program
 
@@ -50,6 +53,16 @@ Every question has three names. The **id** (`q_age`) is stable and internal — 
 
 A survey has a *draft* (what the Studio edits), *versions* (saved snapshots) and a *deployment*. Respondents reach the live survey at `/s/<client>/<study>` on the runtime and a test version at `/t/<client>/<study>`; test responses are kept apart from live ones in every count, export and analysis. The `/sandbox` project in the Studio is an in-memory playground that saves nothing — the right place to try a definition or a sentence.
 
+## How these docs show a feature
+
+Every guide under **A · Survey programming fundamentals** and **B · Advanced programming** follows one example three ways:
+
+1. **Builder view** — a screenshot of the real Studio with the example loaded, showing where the feature is configured (captured from the product, not drawn).
+2. **Programming view** — the condition, mask or pipe as the engine prints it, and the stored JSON of the survey definition. Each has a Copy button.
+3. **Respondent view** — the example survey itself, running live in the page with the same renderer and engine as a real survey link. Answer it, press Next and Back, and Restart as a new respondent.
+
+Each guide then covers when to use the feature, step-by-step setup, the data it produces, common mistakes and troubleshooting. Pages marked *generated* are written from the platform's own code.
+
 ## Where to go next
 
-The [survey definition](survey-definition) for the whole document; [question types](question-types) for what each type stores; [logic](logic) for conditions and calculations; [Intelligent mode](intelligent-mode) for programming in sentences.
+Start with [Single select](single-select) and [Display logic](display-logic) for the everyday building blocks. For the complete reference: the [survey definition](survey-definition) for the whole document; [question types](question-types) for what each type stores; [logic](logic) for conditions and calculations; [Intelligent mode](intelligent-mode) for programming in sentences.

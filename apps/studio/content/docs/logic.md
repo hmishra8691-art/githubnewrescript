@@ -1,6 +1,6 @@
 # Logic and expressions
 
-Everything conditional in a ReScript survey — display logic, skip logic, validation gates, branch conditions, option visibility, quota cells, list operations, punches — is a **condition**. Everything computed — calculated variables, inline piping, expression sources — is an **expression**. Both have a text form you write and a JSON form the definition stores; the engine compiles one to the other and refuses what it cannot read, with the object named.
+Everything conditional in a ResLens.ai survey — display logic, skip logic, validation gates, branch conditions, option visibility, quota cells, list operations, punches — is a **condition**. Everything computed — calculated variables, inline piping, expression sources — is an **expression**. Both have a text form you write and a JSON form the definition stores; the engine compiles one to the other and refuses what it cannot read, with the object named.
 
 ## Conditions in text
 

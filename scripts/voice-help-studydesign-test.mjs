@@ -50,7 +50,7 @@ ok("spoken objective → in the box, editable → edited → Recommend → a pri
 
 console.log("\n2 — Help → Ask");
 await openTab(p, "Questions");
-await p.click('[data-testid="studio-help"]');
+await p.click('[data-testid="studio-help-button"]'); await p.click('[data-testid="studio-help-help"]');
 await p.waitForSelector('[data-testid="studio-help-drawer"] [data-testid="agw-mic"]');
 await speak('[data-testid="studio-help-drawer"]', "how do I show a question only when someone answers yes");
 assert.equal(await p.inputValue('[data-testid="help-input"]'), "how do I show a question only when someone answers yes");
@@ -80,7 +80,7 @@ await p2.addInitScript(() => { const md = navigator.mediaDevices; if (md) md.get
 await p2.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "load" });
 await p2.waitForSelector(".block-badge", { timeout: 60000 });
 await switchMode(p2, "studio").catch(() => {});
-await p2.click('[data-testid="studio-help"]');
+await p2.click('[data-testid="studio-help-button"]'); await p2.click('[data-testid="studio-help-help"]');
 await p2.click('[data-testid="studio-help-drawer"] [data-testid="agw-mic"]');
 await p2.waitForSelector('[data-testid="studio-help-drawer"] .agw-voice-err');
 assert.match(await p2.textContent('[data-testid="studio-help-drawer"] .agw-voice-err'), /allow it in the browser to ask by voice/);

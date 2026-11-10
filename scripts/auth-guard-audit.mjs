@@ -50,9 +50,6 @@ const PUBLIC = {
   "auth/password/route.ts": "a password reset is for people who cannot sign in; answers identically for unknown addresses",
   "auth/logout/route.ts": "signing out must never fail, including from an already-dead session",
   "auth/heartbeat/route.ts": "validates the session cookie itself and answers 401 without the guard's shape",
-  "docs/[slug]/route.ts":
-    "the public developer documentation as markdown (Phase 7): a file shipped with the app, by a slug validated against [a-z0-9-]; "
-    + "reads no data, needs no account — what llms.txt links to",
   "localization/export/route.ts":
     "a pure transform of the document in the request body into a spreadsheet: reads no data, spends no provider, keeps nothing",
   "localization/import/route.ts":

@@ -5,6 +5,7 @@ import { interviewsHandoffHref } from "@/lib/interviews-url";
 import { Icon } from "./Icon";
 import { WalletMenu } from "../billing/WalletMenu";
 import { AlertBell } from "../notify/AlertBell";
+import { HelpMenu } from "./HelpMenu";
 
 /**
  * THE TOP-LEVEL HEADER shared by the Dashboard and Data Analytics pages:
@@ -34,7 +35,8 @@ export function AppHeader({ active, user, onSignOut, crumbs, onAddFunds }: {
       <nav className="apph-nav" aria-label="Primary">
         <a href="/" className={active === "dashboard" ? "on" : ""} aria-current={active === "dashboard" ? "page" : undefined}><Icon name="grid" size={16} /> Projects</a>
         <a href="/analytics" className={active === "analytics" ? "on" : ""} aria-current={active === "analytics" ? "page" : undefined} data-testid="dash-analytics"><Icon name="analytics" size={16} /> Data Analytics</a>
-        <a href="/help" className={active === "help" ? "on" : ""} aria-current={active === "help" ? "page" : undefined} data-testid="dash-help"><Icon name="help" size={16} /> Help</a>
+        {/* 2026-11-09: Help opens a menu — Help (the assistant and guides) or Developer Docs */}
+        <HelpMenu className="apph-navbtn" active={active === "help"} testId="dash-help" />
         {/* absent, rather than broken, when this installation has no Interviews app */}
         {interviewsHref && (
           <a href={interviewsHref} data-testid="dash-interviews"><Icon name="play" size={16} /> Interviews</a>

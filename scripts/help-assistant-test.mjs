@@ -54,7 +54,7 @@ async function ask(text, expectCount) {
 }
 
 console.log("\n1 — the Help drawer");
-await p.click('[data-testid="studio-help"]');
+await p.click('[data-testid="studio-help-button"]'); await p.click('[data-testid="studio-help-help"]');
 await p.waitForSelector('[data-testid="studio-help-drawer"] [data-testid="help-welcome"]');
 assert.equal(await p.getAttribute('[data-testid="help-input"]', "placeholder"), "Ask anything about ResLens.ai...");
 const chips = await p.$$eval('[data-testid="help-suggestions"] .hx-chip', (b) => b.map((x) => x.textContent));

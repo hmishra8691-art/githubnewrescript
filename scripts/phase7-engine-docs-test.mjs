@@ -9,7 +9,7 @@
  *     refused in Changes with the gap named; Review lists the blockers; the
  *     Survey Settings switch reflects and relaxes it
  *   - the public documentation: /docs without a session, the navigation,
- *     a page's headings, the markdown at .md, llms.txt, robots, a 404
+ *     a page's headings, robots, a 404 (Developer Docs: scripts/developer-docs-test.mjs)
  *
  *   node scripts/phase7-engine-docs-test.mjs      (studio on 3000, fake AI provider)
  */
@@ -47,39 +47,30 @@ const errors = [];
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   page.on("console", (m) => { if (m.type() === "error" && !/favicon|Failed to load resource|net::ERR|status of (404|501|502|402|409|401|400)/.test(m.text())) errors.push(m.text()); });
-  const r = await page.goto(`${STUDIO}/docs`, { waitUntil: "networkidle" });
+  const r = await page.goto(`${STUDIO}/docs`, { waitUntil: "load" });
   assert.equal(r.status(), 200, "the docs need no session");
   assert.ok(!page.url().includes("/login"), "not bounced to the login");
   await page.waitForSelector('[data-testid="docs"]');
+  /* Developer Docs (2026-11-09): categories A–G and the reference; the full docs suite is scripts/developer-docs-test.mjs */
   const nav = await page.$$eval('[data-testid="docs-nav"] a', (as) => as.map((a) => [a.textContent, a.getAttribute("href")]));
-  assert.equal(nav.length, 14, `14 pages in the navigation: ${nav.map((n) => n[1]).join(", ")}`);
-  assert.deepEqual(nav.slice(0, 3).map((n) => n[1]), ["/docs", "/docs/getting-started", "/docs/survey-definition"]);
-  assert.match(await page.textContent('[data-testid="docs-main"] h1'), /developer documentation/);
-  await page.click('[data-testid="docs-nav"] a[href="/docs/logic"]');
+  assert.ok(nav.length >= 50, `${nav.length} links in the navigation`);
+  assert.match(await page.textContent('[data-testid="docs-main"] h1'), /Developer Docs/);
+  await page.goto(`${STUDIO}/docs/logic`, { waitUntil: "load" });
   await page.waitForSelector('h1:has-text("Logic and expressions")');
   const h2 = await page.$$eval('[data-testid="docs-main"] h2', (hs) => hs.map((h) => h.id));
   assert.ok(h2.includes("conditions-in-text") && h2.includes("auto-punch"), h2.join(","));
   assert.ok((await page.$$('[data-testid="docs-main"] pre code')).length >= 5, "code examples render");
-  assert.match(await page.title(), /^Logic and expressions — ReScript Studio docs$/);
-  // the generated page is marked, and current
-  await page.goto(`${STUDIO}/docs/actions-reference`, { waitUntil: "networkidle" });
+  assert.match(await page.title(), /^Logic and expressions — ResLens.ai Developer Docs$/);
+  // the generated page is current
+  await page.goto(`${STUDIO}/docs/actions-reference`, { waitUntil: "load" });
   assert.match(await page.textContent('[data-testid="docs-main"]'), /set_research.*strict\?: boolean/s);
-  // markdown, llms.txt, robots, a 404
-  const md = await page.evaluate(async () => { const r = await fetch("/docs/logic.md"); return [r.status, r.headers.get("content-type"), (await r.text()).slice(0, 40)]; });
-  assert.equal(md[0], 200); assert.match(md[1], /text\/markdown/); assert.equal(md[2], "# Logic and expressions\n\nEverything cond");
-  const llms = await page.evaluate(async () => { const r = await fetch("/llms.txt"); return [r.status, await r.text()]; });
-  assert.equal(llms[0], 200);
-  assert.ok(llms[1].startsWith("# ReScript Studio\n"));
-  assert.equal((llms[1].match(/^- \[/gm) ?? []).length, 15, "14 pages and the full file");
-  assert.ok(llms[1].includes("/docs/intelligent-mode.md): Programming in sentences"));
-  const full = await page.evaluate(async () => { const r = await fetch("/llms-full.txt"); const t = await r.text(); return [r.status, t.length, (t.match(/<!-- page: /g) ?? []).length]; });
-  assert.equal(full[0], 200); assert.equal(full[2], 14); assert.ok(full[1] > 100000, `${full[1]} chars`);
+  // robots, a 404; llms.txt is gone (Developer Docs replaced it)
   const robots = await page.evaluate(async () => (await fetch("/robots.txt")).text());
-  assert.match(robots, /Allow: \/docs\n/); assert.match(robots, /Disallow: \/api\//);
+  assert.match(robots, /Allow: \/docs\n/); assert.match(robots, /Disallow: \/api\//); assert.ok(!robots.includes("llms"));
   assert.equal((await page.goto(`${STUDIO}/docs/nope`)).status(), 404);
-  assert.equal((await page.goto(`${STUDIO}/docs/nope.md`)).status(), 404);
+  assert.equal((await page.goto(`${STUDIO}/docs/logic.md`)).status(), 404);
   await ctx.close();
-  ok("the public documentation: no session needed, 14 pages, headings and examples rendered, markdown at .md, llms.txt and llms-full.txt, robots, a 404 for what is not there");
+  ok("the public documentation: no session needed, the Developer Docs navigation, headings and examples rendered, robots, a 404 for what is not there, no llms.txt");
 }
 
 /* ------------------------------------------------ the sandbox for the rest */
