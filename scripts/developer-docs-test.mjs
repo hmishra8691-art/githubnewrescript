@@ -360,6 +360,21 @@ console.log("\n6 — Help → Help | Developer Docs");
 await p.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "load" });
 await p.waitForSelector('[data-testid="studio-help-button"]', { timeout: 60000 });
 await p.click('[data-testid="studio-help-button"]');
+/* layering (2026-11-10): every item is on top — not under the Studio's sticky menubar — and inside the window */
+await p.waitForSelector('[data-testid="studio-help-panel"]');
+const layer = await p.evaluate(() => {
+  const panel = document.querySelector('[data-testid="studio-help-panel"]');
+  const r = panel.getBoundingClientRect();
+  const onTop = [...panel.querySelectorAll('[role="menuitem"]')].every((el) => { const q = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(q.left + 12, q.top + 6)); });
+  return { onTop, inside: r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, inBody: panel.parentElement === document.body };
+});
+assert.deepEqual(layer, { onTop: true, inside: true, inBody: true }, JSON.stringify(layer));
+await p.keyboard.press("ArrowDown");
+assert.equal(await p.evaluate(() => document.activeElement?.getAttribute("data-testid")), "studio-help-help");
+await p.keyboard.press("Escape");
+await p.waitForSelector('[data-testid="studio-help-panel"]', { state: "detached" });
+assert.equal(await p.evaluate(() => document.activeElement?.getAttribute("data-testid")), "studio-help-button", "Escape returns focus to Help");
+await p.click('[data-testid="studio-help-button"]');
 assert.equal(await p.getAttribute('[data-testid="studio-help-docs"]', "href"), "/docs");
 assert.equal(await p.getAttribute('[data-testid="studio-help-docs"]', "target"), "_blank");
 await p.click('[data-testid="studio-help-help"]');

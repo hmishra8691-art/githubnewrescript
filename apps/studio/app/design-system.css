@@ -2278,8 +2278,11 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .apph-navbtn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border-radius: 9px; color: var(--c-text-2); font-weight: 500; font-size: 14px; background: none; border: 0; cursor: pointer; font-family: inherit; }
 .apph-navbtn:hover { background: var(--c-surface-2); color: var(--c-text); }
 .apph-navbtn.on { background: var(--c-primary-50); color: var(--c-primary-700); font-weight: 600; }
-.help-menu-panel { position: absolute; top: calc(100% + 6px); left: 0; min-width: 290px; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 12px; box-shadow: 0 14px 36px rgba(15,23,42,.16); padding: 6px; z-index: 80; display: grid; gap: 2px; }
-.help-menu-panel.right { left: auto; right: 0; }
+/* the panel lives in a portal on <body>, placed (fixed) by HelpMenu.tsx under its button: above every header and the
+   Studio's sticky menubar (z ≤ 120), below dialogs (190+) — it can no longer open behind the bar below it */
+.help-menu-panel { position: fixed; box-sizing: border-box; background: var(--c-surface, #fff); color: var(--c-text); border: 1px solid var(--c-border); border-radius: 12px; box-shadow: 0 14px 36px rgba(15,23,42,.16); padding: 6px; z-index: 180; display: grid; gap: 2px; align-content: start; overflow-y: auto; overscroll-behavior: contain; animation: help-menu-in .12s ease-out; font-family: inherit; text-align: left; }
+@keyframes help-menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .help-menu-panel { animation: none; } }
 .help-menu-item { display: grid; gap: 2px; text-align: left; padding: 9px 12px; border-radius: 9px; border: 0; background: none; color: var(--c-text); text-decoration: none; font: inherit; cursor: pointer; }
 .help-menu-item:hover, .help-menu-item:focus-visible { background: var(--c-primary-50, #eef2ff); outline: none; }
 .help-menu-item b { font-size: 14px; }
