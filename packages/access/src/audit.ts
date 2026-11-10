@@ -209,6 +209,11 @@ export const AUDIT_EVENTS = [
   "fraud.case.resolve",
   "fraud.cluster.resolve",
 
+  /* Help escalation (2026-11-10): a user hands a Help conversation to the support team, and an administrator works the
+     ticket. The detail names the ticket reference and the status — never the conversation's content. */
+  "help.escalated",
+  "support.ticket_updated",
+
   /* collaboration */
   "comment.created",
   "comment.resolved",

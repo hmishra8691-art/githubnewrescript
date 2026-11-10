@@ -59,7 +59,9 @@ export type MailKind =
   /* G3 2026-10-22: an alert rule's e-mail (lib/notify) and live-session invitations / reminders sent through sendNotification (0072 widens the log's kinds) */
   | "alert"
   | "live_session_invite"
-  | "live_session_reminder";
+  | "live_session_reminder"
+  /* 2026-11-10: a Help conversation handed to the support team (0095 widens the log's kinds) */
+  | "support_escalation";
 
 export interface MailMessage {
   to: string;

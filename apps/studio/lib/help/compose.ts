@@ -21,6 +21,24 @@ export interface HelpAnswer {
   intelligent: { instruction: string } | null;
   origin: "model" | "guides";
   note: string | null;
+  /** how this answer was produced (lib/help/levels.ts): recorded with it, read by the usage report */
+  route?: HelpRoute;
+  /** Level 2: what the checks of the user's own survey found */
+  diagnosis?: { feature: string; target: string | null; verdict?: string; summary: string; findings: { severity: string; message: string }[] } | null;
+  /** a person can take it from here: offered, never forced */
+  escalate?: { offer: boolean; reason: string | null } | null;
+  /** the user's "Did this solve it?" (POST /api/help/feedback) */
+  solved?: boolean | null;
+}
+export interface HelpRoute {
+  level: 1 | 2 | 3;
+  reason: string;
+  confidence: number;
+  confidenceLevel: "high" | "medium" | "low";
+  cached: boolean;
+  modelUsed: boolean;
+  /** the problem being worked on has failed this many fixes before this answer */
+  attempt?: number;
 }
 
 /** what the Studio tells Help about where the person is (only their own open survey, sent by their browser) */

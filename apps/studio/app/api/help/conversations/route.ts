@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     const { data: conv, error } = await db.from("help_conversations").select("id, title, survey_id, updated_at").eq("id", id).eq("user_id", user.userId).is("deleted_at", null).maybeSingle();
     if (error) return missingTable(error.message) ? json(NOT_STORED) : json({ error: error.message }, 500);
     if (!conv) return json({ error: "No such conversation." }, 404);
-    const { data: msgs, error: e2 } = await db.from("help_messages").select("role, content, created_at").eq("conversation_id", id).order("created_at").limit(200);
+    const { data: msgs, error: e2 } = await db.from("help_messages").select("id, role, content, created_at").eq("conversation_id", id).order("created_at").limit(200);
     if (e2) return json({ error: e2.message }, 500);
     return json({ ok: true, persisted: true, conversation: { id: conv.id, title: conv.title, surveyId: conv.survey_id, updatedAt: conv.updated_at }, messages: msgs ?? [] });
   }

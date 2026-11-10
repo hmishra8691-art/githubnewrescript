@@ -960,7 +960,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             <a className="btn small ghost" href="/help" target="_blank" rel="noreferrer" title="Open Help in its own tab, with your saved conversations">Open full Help</a>
             <button className="btn small ghost" onClick={() => setHelpOpen(false)} aria-label="Close Help">×</button>
           </div>
-          <HelpAssistant compact surface="studio" surveyId={s.surveyDbId} getContext={helpContext}
+          <HelpAssistant compact surface="studio" surveyId={s.surveyDbId} getContext={helpContext} getDefinition={() => s.def}
             onIntelligent={(instruction) => { setPendingIntelligentInput(instruction); modeCtx?.setMode("intelligent"); setTab("questions"); s.toast("The request is in Intelligent Mode's input — read it and press Propose. Nothing is changed until you apply the proposal."); }} />
         </div>
       )}

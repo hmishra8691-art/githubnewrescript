@@ -3336,6 +3336,20 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .hx-sources { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12.5px; align-items: baseline; }
 .hx-src { color: var(--accent); text-decoration: none; } .hx-src:hover { text-decoration: underline; }
 .hx-meta { font-size: 12px; color: var(--subtle); }
+/* Help Center routing (2026-11-10): how the answer was produced, the survey check, "did this solve it", the hand-off to support */
+.hx-route { justify-self: start; font-size: 11.5px; font-weight: 600; letter-spacing: .01em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--subtle); }
+.hx-route.l2 { border-color: var(--accent); color: var(--accent); }
+.hx-route.l3 { border-style: dashed; }
+.hx-diag { font-size: 12.5px; padding: 4px 8px; border-radius: 8px; background: var(--panel); border-left: 3px solid var(--border); }
+.hx-diag.v-never { border-left-color: #dc2626; } .hx-diag.v-sometimes { border-left-color: #d97706; } .hx-diag.v-always { border-left-color: #16a34a; }
+.hx-solved { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.hx-askai { justify-self: start; }
+.hx-esc { display: grid; gap: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 13px; }
+.hx-esc > .btn { justify-self: start; }
+.hx-esc.sent { border-color: #16a34a; }
+.hx-esc-confirm { display: grid; gap: 6px; }
+.hx-esc-confirm ul { margin: 0; padding-left: 18px; }
+.hx-esc-confirm textarea { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; background: var(--bg, transparent); color: var(--text); resize: vertical; }
 .hx-busy { color: var(--subtle); font-size: 13px; }
 .hx-input { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--panel); }
 .hx-input textarea { flex: 1; resize: none; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 14px; background: var(--bg, transparent); color: var(--text); }

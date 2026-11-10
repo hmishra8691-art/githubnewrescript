@@ -56,6 +56,8 @@ export const EXPANSIONS: [RegExp, string][] = [
   [/\bonly (?:the )?(?:brands?|options?|items?|answers?|choices?) (?:they|the respondent|respondents) (?:selected|chose|picked|ticked)|\bselected (?:in|at) (?:an? )?(?:earlier|previous)|\bfrom (?:an? )?(?:earlier|previous) question\b|\bcarry(?:ing)?[- ]forward|\bbring forward/i, "carry forward masking option previous selected"],
   [/\bmask(?:ing)?\b|\bhide (?:some |the )?(?:options|answers|choices|rows|columns)|\bremove (?:options|answers) (?:they|not)/i, "masking mask option row column"],
   [/\bloop(?:s|ing)?\b|\brepeat (?:the |these )?questions? for each|\bfor each (?:brand|product|item|child)|\bmerge\b/i, "loop iteration repeat each"],
+  /* "show every selected brand in a separate set of questions" — a loop over the earlier answer, with the item piped in */
+  [/\b(?:each|every) (?:selected |chosen |picked )?(?:brand|product|item|option|answer|store|child)s?\b.{0,50}\b(?:separate|own|set of questions|same questions|questions about)|\bseparate (?:set of )?questions (?:for|about) each\b|\bsame questions (?:for|about) (?:each|every)\b/i, "loop iteration repeat each loop source question piping loop label"],
   [/\brandom(?:i[sz]e|i[sz]ation|ly)?\b|\bshuffle\b|\brotate\b|\border bias\b/i, "randomization shuffle rotate order"],
   [/\bquotas?\b|\bcells?\b.{0,20}\b(?:target|full)|\bhow many (?:completes|people) (?:per|from each)|\bquota full/i, "quota cell target full"],
   [/\bterminat(?:e|ion|ed)|\bscreen(?:ed)?[- ]?out|\bdisqualif|\bend (?:the )?survey (?:for|if|when)/i, "termination screen out end screened"],

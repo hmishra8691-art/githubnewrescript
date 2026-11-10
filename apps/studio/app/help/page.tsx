@@ -25,7 +25,7 @@ export default function HelpPage() {
     <div className="hx-page">
       <AppHeader active="help" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()} />
       <div className="hx-page-bar">
-        <label className="hx-bill" title="AI-written answers are charged like other AI requests, to the project you choose. Guides only: answers from the knowledge base, no AI, no charge.">
+        <label className="hx-bill" title="Help answers from the guides first, at no charge. AI writes an answer only when the guides cover a question weakly, a problem persists, or you press Ask the AI — charged like other AI requests to the project you choose. Guides only: never AI, never a charge.">
           <span>AI answers billed to</span>
           <select value={valid} onChange={(e) => choose(e.target.value)} data-testid="help-bill-to">
             <option value="">Guides only (no AI, no charge)</option>

@@ -6,6 +6,7 @@ import { AiConnectionPanel } from "@/components/AiConnectionPanel";
 import { AiWorkspacePolicyPanel } from "@/components/AiWorkspacePolicyPanel";
 import { MarginRulesPanel } from "@/components/admin/MarginRulesPanel";
 import { SettlementPanel } from "@/components/admin/SettlementPanel";
+import { SupportPanel } from "@/components/admin/SupportPanel";
 import { api, useSession } from "@/lib/useSession";
 
 /**
@@ -86,7 +87,7 @@ function whenLabel(iso: string | null | undefined): string {
 
 export default function AdminPage() {
   const { state, signOut } = useSession({ redirectOnSignOut: true });
-  const [tab, setTab] = React.useState<"sessions" | "accounts" | "access" | "ai" | "margins" | "settlements">("sessions");
+  const [tab, setTab] = React.useState<"sessions" | "accounts" | "access" | "ai" | "margins" | "settlements" | "support">("sessions");
 
   const [sessions, setSessions] = React.useState<AdminSessionsPayload | null>(null);
   const [accounts, setAccounts] = React.useState<AccountsPayload | null>(null);
@@ -271,6 +272,15 @@ export default function AdminPage() {
         >
           Vendor settlement
         </button>
+        {/* 2026-11-10: Help escalations and Help usage (0095) */}
+        <button
+          type="button"
+          data-testid="admin-tab-support"
+          className={tab === "support" ? "active" : undefined}
+          onClick={() => { setTab("support"); setNote(null); }}
+        >
+          Support
+        </button>
       </div>
 
       {error && <div className="auth-note err">{error}</div>}
@@ -280,6 +290,7 @@ export default function AdminPage() {
       {tab === "ai" && <><AiConnectionPanel /><AiWorkspacePolicyPanel /></>}
       {tab === "margins" && <MarginRulesPanel />}
       {tab === "settlements" && <SettlementPanel />}
+      {tab === "support" && <SupportPanel />}
 
       {tab === "sessions" && (
         <>
