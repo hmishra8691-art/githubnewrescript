@@ -54,16 +54,25 @@ revoke all on public.support_tickets from anon, authenticated;
 
 comment on table public.support_tickets is 'Help escalations to the support team: the conversation, diagnostics, steps tried and context. Created by /api/help/escalate for the caller; read and updated by platform administrators via /api/admin/support.';
 
--- the e-mail to the support address is logged in mail_deliveries like every other mail: widen the kind check by union
+-- the e-mail to the support address is logged in mail_deliveries like every other mail: widen the kind check by union.
+-- The kinds already allowed are read from the current constraint in BOTH forms Postgres prints it in — an ARRAY of
+-- quoted items (ARRAY['a'::text, …]) or one array literal ('{a,b}'::text[], which is what 0072's widening writes) —
+-- and every kind already stored in the table is kept too, so no existing row can violate the new check.
 do $$
-declare kinds text[];
+declare
+  def text;
+  kinds text[];
 begin
   if to_regclass('public.mail_deliveries') is null then return; end if;
+  select pg_get_constraintdef(c.oid) into def
+    from pg_constraint c where c.conrelid = 'public.mail_deliveries'::regclass and c.conname = 'mail_deliveries_kind_check';
   select array_agg(distinct k order by k) into kinds from (
-    select (regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g'))[1] as k
-      from pg_constraint c where c.conrelid = 'public.mail_deliveries'::regclass and c.conname = 'mail_deliveries_kind_check'
-    union select unnest(array['password_reset', 'project_invitation', 'respondent_invitation', 'test', 'support_escalation'])
-  ) x;
+    select (regexp_matches(coalesce(def, ''), '''([a-z_]+)''', 'g'))[1] as k
+    union select trim(x) from unnest(string_to_array(coalesce(substring(def from '\{([^}]*)\}'), ''), ',')) as x
+    union select distinct kind from public.mail_deliveries
+    union select unnest(array['password_reset', 'project_invitation', 'respondent_invitation', 'test', 'media_delivery',
+                              'alert', 'live_session_invite', 'live_session_reminder', 'support_escalation'])
+  ) x where k is not null and k <> '';
   execute 'alter table public.mail_deliveries drop constraint if exists mail_deliveries_kind_check';
   execute format('alter table public.mail_deliveries add constraint mail_deliveries_kind_check check (kind = any (%L::text[]))', kinds);
 end $$;
