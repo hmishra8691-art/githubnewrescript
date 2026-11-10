@@ -20,6 +20,10 @@ export interface BuilderShot {
   question?: string;
   /** Questions: the Properties section to open and show beside it (its id, e.g. "display-logic") */
   section?: string;
+  /** Branding: the settings group to open (Colours, Text…: "colors", "text", "page", "answers", "background", "buttons", "experience", "devices", "code") or "start" for Start from */
+  group?: string;
+  /** a tool's own tab to click after opening it (its button text, e.g. "Translate") */
+  sub?: string;
   /** what to say under the picture */
   caption: string;
 }
@@ -54,9 +58,20 @@ export interface DocExample {
   analysis?: { kind: string; variables: string[]; options?: Record<string, unknown>; label?: string }[] | "plan";
   /** how many simulated respondents (default 150) */
   simulate?: number;
+  /** show the respondent view with the phone or tablet sizes (branding.responsive), as the Studio's device preview does */
+  viewport?: "mobile" | "tablet";
 }
 
+import { THEME_PRESETS } from "../defaults.ts";
+
 const opts = (...labels: string[]) => labels;
+
+/** the small three-page survey the branding examples dress (phase 3) */
+const F_BASE = (): Record<string, unknown>[] => [
+  { op: "create_question", type: "single_select", code: "Q1", variable: "STAGE", text: "Which of these best describes you?", options: ["Just browsing", "Ready to buy", "Already a customer"], required: true },
+  { op: "create_question", type: "multi_select", code: "Q2", variable: "ENJOY", text: "What do you enjoy about it? Choose all that apply.", options: ["Design", "Price", "Ease of use", { label: "Something else", other: true, code: 97 }], newPage: true },
+  { op: "create_question", type: "rating", code: "Q3", variable: "REC", text: "How likely are you to recommend us to a friend?", scale: { points: 5, low: "Not at all likely", high: "Extremely likely" }, newPage: true },
+];
 
 /** the small survey the Intelligent Mode examples talk to */
 const IM_BASE = (): Record<string, unknown>[] => [
@@ -644,6 +659,100 @@ export const DOC_EXAMPLES: DocExample[] = [
     tryIt: "Answering here sends nothing — alerts and webhooks fire for real responses on a live link. The stored JSON shows the two rules and the response-event settings.",
     builder: { tab: "Survey Flow", caption: "Alerts are part of the survey definition (no secrets in it); they are set from Qualitative → Alerts & panels or by Intelligent Mode." },
   },
+  /* ---------------------------------------------------------------- F · branding and survey customization (phase 3) */
+  {
+    id: "theme-preset", title: "A preset: Premium Peach applied to a survey",
+    show: [],
+    actions: F_BASE(),
+    patch: (d) => { d.branding = structuredClone(THEME_PRESETS.find((t) => t.name === "Premium Peach")!.branding); },
+    tryIt: "Answer and move through the three pages: the colours, fonts, selection cards, pill buttons (“Continue”), the gradient behind the survey and the progress bar all come from the one preset.",
+    builder: { tab: "Branding", group: "start", caption: "Branding → Start from → A preset: eight ready-made looks; pointing at one previews it, clicking applies it, and everything it sets stays editable in the groups below." },
+  },
+  {
+    id: "theme-colours", title: "Brand colours: teal, with separate button and progress colours",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Teal brand", theme: { colors: { primary: "#0f766e", secondary: "#134e4a", background: "#f0fdfa", surface: "#ffffff", text: "#0f172a", subtleText: "#475569", border: "#99f6e4", buttonBackground: "#134e4a", progress: "#14b8a6" } } }],
+    tryIt: "Select answers: the selected option takes the primary teal; the Next button uses its own darker button colour and the progress bar its own lighter one.",
+    builder: { tab: "Branding", group: "colors", caption: "Branding → Colours: the four main colours, then the element colours (buttons, progress, links, headings) under “More”; the contrast check warns about hard-to-read pairs." },
+  },
+  {
+    id: "theme-typography", title: "Typography: a serif face, larger text and question size",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Editorial type", theme: { typography: { fontFamily: "Georgia, 'Times New Roman', serif", baseSize: "17px", headingWeight: 700, questionSize: "1.25em", lineHeight: "1.6" } } }],
+    tryIt: "Compare with any other example: every word is set in the serif family, the base size is 17px and question text is 1.25 × that.",
+    builder: { tab: "Branding", group: "text", caption: "Branding → Text: the font family, base size and heading weight; heading font, line height, letter spacing and question size under “More”." },
+  },
+  {
+    id: "theme-page-logo", title: "Page and logo: a centred, contained survey with a logo and step progress",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Contained with logo", theme: { logoUrl: "/docs-media/logo-example.png", logoPosition: "center", layout: { widthMode: "contained", maxWidth: "620px", contentAlign: "center", cardStyle: "line", radius: "6px", progressBar: "top", progressStyle: "steps" } } }],
+    tryIt: "The logo sits centred above the survey; the progress shows “Page 1 of 3” with step dots. Press Next to watch the steps advance.",
+    builder: { tab: "Branding", group: "page", caption: "Branding → Page & logo: full or contained width, alignment, card style, corner radius, spacing, the progress indicator and the logo (uploaded under Assets, or a link)." },
+  },
+  {
+    id: "theme-answers", title: "Answer styles: selection cards with lively motion",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Lively cards", theme: { appearance: { shadow: "medium", selectedTint: 18, inputStyle: "filled" } } }],
+    patch: (d) => { d.branding.appearance = { ...d.branding.appearance, optionStyle: "tiles", motion: "lively" }; },
+    tryIt: "Pick an answer: the options are selection cards (no radio button — a check badge marks the choice) and a small pop confirms the selection. The input is still there for keyboards and screen readers.",
+    builder: { tab: "Branding", group: "answers", caption: "Branding → Style & answers: the theme style (motif, illustrations, motion) and how options, radio buttons, checkboxes and text boxes look." },
+  },
+  {
+    id: "theme-background", title: "A gradient background with an overlay",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Gradient page", theme: { background: { gradient: "linear-gradient(135deg, #1e3a8a 0%, #7c3aed 100%)", overlay: "rgba(255,255,255,0.12)" }, layout: { cardStyle: "card" } } }],
+    tryIt: "The page behind the question cards is a blue-to-violet gradient, softened by a translucent white overlay; the cards keep their own surface colour so text stays readable.",
+    builder: { tab: "Branding", group: "background", caption: "Branding → Background: an image (uploaded or a link) and how it fits, a gradient, and an overlay colour over both." },
+  },
+  {
+    id: "theme-buttons", title: "Buttons: outline style and your own labels",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Own button labels", theme: { buttons: { style: "outline", nextLabel: "Continue", backLabel: "Previous", submitLabel: "Send my answers" } } }],
+    tryIt: "The buttons are outlined and read “Previous” and “Continue”; on the last page Continue becomes “Send my answers”.",
+    builder: { tab: "Branding", group: "buttons", caption: "Branding → Buttons & navigation: the button style, the Next / Back / Submit labels, whether Back is shown, and section navigation." },
+  },
+  {
+    id: "theme-experience", title: "Respondent experience: question numbers, answer letters and auto-advance",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Numbered, auto-advance", theme: { layout: { questionNumbers: "sequence", optionNumbering: "letters", autoAdvance: true } } }],
+    tryIt: "Q1 is numbered “1.” and its answers lettered A–C. Choose one: the page moves on by itself after a short beat. Page 2 has a multi-select, so it waits for Next.",
+    builder: { tab: "Branding", group: "experience", caption: "Branding → Respondent experience: auto-advance, question numbers (none, the code, or 1. 2. 3.), answer letters or numbers, and block headings." },
+  },
+  {
+    id: "theme-devices", title: "Phone sizes: larger text and roomier answers on a phone",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Phone sizes", theme: { responsive: { mobile: { baseSize: "18px", questionSize: "1.3em", optionGap: "14px", cardPadding: "12px" } } } }],
+    viewport: "mobile",
+    tryIt: "This view shows the survey with the phone sizes applied (as the Studio's phone preview does): 18px text, larger questions and more space between answers. On a computer the survey keeps its normal sizes.",
+    builder: { tab: "Branding", group: "devices", caption: "Branding → Phone & tablet: sizes that change on smaller screens — empty means the same as on a computer." },
+  },
+  {
+    id: "theme-header-footer", title: "A header and footer in HTML",
+    show: [],
+    actions: [...F_BASE(), { op: "set_theme", label: "Header and footer", theme: {
+      headerHtml: "<div style=\"display:flex;justify-content:space-between;align-items:center;font-size:14px\"><b>Lumen Research</b><span>Customer study 2026</span></div>",
+      footerHtml: "<p style=\"font-size:12.5px;text-align:center\">Your answers are confidential and used only for research. <a href=\"https://example.com/privacy\" target=\"_blank\" rel=\"noopener\">Privacy notice</a></p>",
+    } }],
+    tryIt: "A header bar sits above the survey and the footer with the privacy link below it, on every page. Header and footer HTML may not contain scripts, frames, style tags or event handlers.",
+    builder: { tab: "Branding", group: "code", caption: "Branding → Code & custom: the header and footer HTML, the survey-wide custom CSS and the survey's styles, animations and scripts." },
+  },
+  /* ---------------------------------------------------------------- G · project management and platform (phase 3) */
+  {
+    id: "translation", title: "A French version of the survey",
+    actions: [
+      { op: "create_question", type: "single_select", code: "Q1", variable: "STAGE", text: "Which of these best describes you?", options: ["Just browsing", "Ready to buy", "Already a customer"], required: true },
+      { op: "create_question", type: "rating", code: "Q2", variable: "REC", text: "How likely are you to recommend us to a friend?", scale: { points: 5, low: "Not at all likely", high: "Extremely likely" }, newPage: true },
+      { op: "add_language", code: "fr" },
+      { op: "set_translations", language: "fr", entries: [
+        { target: "Q1", text: "Laquelle de ces propositions vous décrit le mieux ?" },
+        { target: "Q1.option:1", text: "Je regarde simplement" }, { target: "Q1.option:2", text: "Prêt(e) à acheter" }, { target: "Q1.option:3", text: "Déjà client(e)" },
+        { target: "Q2", text: "Quelle est la probabilité que vous nous recommandiez à un ami ?" },
+      ] },
+    ],
+    tryIt: "Switch the language above the survey to French: the question and answer texts change, the codes and the stored answers do not. Answer in either language — STAGE is stored as the same code.",
+    builder: { tab: "Translation", sub: "Translate", caption: "Research Tools → Translation → Translate: each element's source text beside its translation, with its status (AI, edited, reviewed, approved)." },
+  },
+
 ];
 
 export const exampleById = (id: string) => DOC_EXAMPLES.find((e) => e.id === id) ?? null;

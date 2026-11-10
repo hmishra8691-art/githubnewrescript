@@ -45,6 +45,8 @@ export const EXAMPLE_MARK = (id: string) => `<!--rs-example:${id}-->`;
 export const EXAMPLE_SPLIT = /<!--rs-example:([a-z0-9-]+)-->/;
 /** a live catalog generated from the platform's own registry at render time (`::: catalog methodologies`) */
 export const CATALOG_MARK = (id: string) => `<!--rs-example:catalog-${id}-->`;
+/** a captured screenshot of a Studio tool, from lib/docs/screens.ts (`::: screen <id>`) — for tools a live survey cannot show */
+export const SCREEN_MARK = (id: string) => `<!--rs-example:screen-${id}-->`;
 
 const KEYWORDS: Record<string, RegExp> = {
   js: /\b(?:const|let|var|function|return|if|else|for|of|in|while|new|true|false|null|undefined|this|typeof|async|await|=>)\b/,
@@ -104,6 +106,7 @@ export function renderMarkdown(md: string): RenderedDoc {
       const [, kind, arg] = dir;
       if (kind === "example") { const id = slug(arg); examples.push(id); out.push(EXAMPLE_MARK(id)); i++; continue; }
       if (kind === "catalog") { out.push(CATALOG_MARK(slug(arg))); i++; continue; }
+      if (kind === "screen") { out.push(SCREEN_MARK(slug(arg))); i++; continue; }
       const body: string[] = [];
       i++;
       while (i < lines.length && !/^:::\s*$/.test(lines[i])) { body.push(lines[i]); i++; }

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { SurveyDefinition } from "@rescript/schema";
-import { applySurveyActions, coerceSurveyActions, formatCondition, formatSetExpression, interpretRequest, allPunchRules, formatPunchExpression } from "@rescript/engine";
+import { Branding, SurveyDefinition } from "@rescript/schema";
+import { applySurveyActions, coerceSurveyActions, formatCondition, formatSetExpression, interpretRequest, allPunchRules, formatPunchExpression, diffTheme, translatableElements, languageName } from "@rescript/engine";
 import { registerBuiltinDesignGenerators } from "@rescript/designs";
 import { buildDataset, plannedAnalyses, runAnalysis, type AnalyticsRow } from "@rescript/analytics";
 import { runSimulation } from "@rescript/templates";
@@ -24,8 +24,9 @@ export interface BuiltExample {
   def: SurveyDefinition;
   logic: LogicLine[];
   json: string;
-  builder: { images: string[]; caption: string; tab: string; question?: string; section?: string };
+  builder: { images: string[]; caption: string; tab: string; question?: string; section?: string; group?: string; sub?: string };
   embedded: Record<string, string>;
+  viewport?: "mobile" | "tablet";
   errors: string[];
   said: SaidLine[];
   /** the generated design file(s), as the Design Generators preview reads them */
@@ -89,6 +90,19 @@ export function buildExampleDef(ex: DocExample): { def: SurveyDefinition; errors
   return { def, errors, said };
 }
 
+const DEFAULT_BRANDING = Branding.parse({});
+
+/** the branding fields that differ from a new survey's, in the schema's own shape */
+function brandingDiff(a: unknown, b: unknown): unknown {
+  if (JSON.stringify(a) === JSON.stringify(b)) return undefined;
+  if (b && typeof b === "object" && !Array.isArray(b) && a && typeof a === "object" && !Array.isArray(a)) {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(b as object)) { const d = brandingDiff((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]); if (d !== undefined) out[k] = d; }
+    return Object.keys(out).length ? out : undefined;
+  }
+  return b;
+}
+
 function logicOf(def: SurveyDefinition): LogicLine[] {
   const lines: LogicLine[] = [];
   const code = (id?: string) => def.questions.find((q) => q.id === id)?.code ?? id ?? "?";
@@ -125,6 +139,15 @@ function logicOf(def: SurveyDefinition): LogicLine[] {
   const punches = new Map<string, string[]>();
   for (const { target, rule } of allPunchRules(def)) punches.set(target.code, [...(punches.get(target.code) ?? []), formatPunchExpression(def, target, rule)]);
   for (const [c, rules] of punches) lines.push({ label: `Auto-punch on ${c}`, text: rules.join("\n") });
+  /* the translations: per language, each translated element and its status, as the Translate tab lists them */
+  for (const [lang, entries] of Object.entries(def.localization?.translations ?? {})) {
+    const els = new Map(translatableElements(def).map((e) => [e.key, e.label]));
+    const rows = Object.entries(entries as Record<string, { text: string; status?: string }>).map(([k, v]) => `${els.get(k) ?? k}  [${v.status ?? "?"}]  ${v.text}`);
+    if (rows.length) lines.push({ label: `Translations — ${languageName(lang)} (${lang})`, text: rows.join("\n") });
+  }
+  /* the theme: every setting that differs from a new survey's, as the Branding workspace names the change */
+  const theme = diffTheme(DEFAULT_BRANDING, def.branding);
+  if (theme.length) lines.push({ label: "Theme (Branding) — what differs from the defaults", text: theme.join("\n") });
   for (const qt of (def.quotas ?? []) as Record<string, any>[]) for (const cell of qt.cells ?? []) lines.push({ label: `Quota ${qt.name} — ${cell.label} (limit ${cell.limit})`, text: formatCondition(def, cell.when) });
   return lines;
 }
@@ -186,6 +209,9 @@ export function buildExample(id: string): BuiltExample | null {
   if ((def as Record<string, any>).panels?.length) extra.panels = (def as Record<string, any>).panels;
   if ((def as Record<string, any>).alerts) extra.alerts = (def as Record<string, any>).alerts;
   if (def.designs?.length) extra.designs = def.designs.map((d) => ({ id: d.id, kind: d.kind, name: d.name, version: d.version, seed: d.seed, config: d.config, file: `${d.file?.rows?.length ?? 0} rows (shown above as the design)` }));
+  const bd = brandingDiff(DEFAULT_BRANDING, def.branding);
+  if (bd) extra.branding = bd;
+  if (def.localization && Object.keys(def.localization.translations ?? {}).length) extra.localization = def.localization;
   if (def.ux && ((def.ux.styles?.length ?? 0) + (def.ux.behaviors?.length ?? 0)) > 0) extra.ux = { styles: def.ux.styles, behaviors: def.ux.behaviors };
   const json = JSON.stringify(compact({ questions: show, ...(flow.length ? { flow } : {}), ...extra }), null, 2);
   const dir = MEDIA();
@@ -194,7 +220,8 @@ export function buildExample(id: string): BuiltExample | null {
   const built: BuiltExample = {
     id, title: ex.title, tryIt: ex.tryIt, def, logic: logicOf(def), json, embedded: ex.embedded ?? {}, errors, said, output: sample?.output ?? null,
     designs: (def.designs ?? []).filter((d) => d.file?.rows?.length).map((d) => ({ kind: d.kind, name: d.name, file: { columns: d.file!.columns ?? [], rows: (d.file!.rows as Record<string, unknown>[]).slice(0, 3000), ...(d.file!.summary ? { summary: d.file!.summary as Record<string, unknown> } : {}) } })), simulated: sample?.n ?? 0,
-    builder: { images, caption: ex.builder.caption, tab: ex.builder.intelligent ? "Intelligent Mode" : ex.builder.tab ?? "Questions", question: ex.builder.question, section: ex.builder.section },
+    builder: { images, caption: ex.builder.caption, tab: ex.builder.intelligent ? "Intelligent Mode" : ex.builder.tab ?? "Questions", question: ex.builder.question, section: ex.builder.section, group: ex.builder.group, sub: ex.builder.sub },
+    viewport: ex.viewport,
   };
   CACHE.set(id, built);
   return built;

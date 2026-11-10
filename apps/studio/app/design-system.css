@@ -2207,7 +2207,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .docs-ex .linkish:hover { text-decoration: underline; }
 .docs-article .docs-ex-pre { max-height: 360px; margin: 6px 0 0; font-size: 11.5px; }
 .docs-ex-try { font-size: 13px; color: var(--c-text-2); margin: 0 0 8px !important; }
-.docs-ex-device { border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-bg, #f8fafc); padding: 6px; max-height: 720px; overflow: auto; }
+.docs-ex-device { border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-bg, #f8fafc); padding: 6px; max-height: 720px; overflow: auto; position: relative; contain: paint; }
 .docs-ex-right { position: sticky; top: 70px; }
 .docs-live .rs-shell { margin: 0; max-width: none; padding: 10px; }
 .docs-live-foot { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 6px 4px 2px; font-size: 12px; }
@@ -2232,6 +2232,17 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .docs-ex-design { margin: 0 0 10px; overflow: auto; }
 .docs-catalog table td:first-child { min-width: 160px; }
 .docs-catalog-note { color: var(--c-text-2); font-size: 13.5px; }
+.docs-catalog-scroll { overflow-x: auto; }
+.docs-catalog th.docs-roles-cap { font-size: 11.5px; min-width: 64px; }
+.docs-catalog td.docs-roles-cell { text-align: center; }
+[data-testid="docs-roles"] td:nth-child(2) { min-width: 260px; }
+[data-testid="docs-roles"] table { min-width: 980px; }
+.docs-screen { margin: 18px 0; border: 1px solid var(--c-border); border-radius: 12px; padding: 12px; background: var(--c-surface-2); }
+.docs-screen-head { font-size: 14px; margin-bottom: 8px; display: flex; gap: 8px; align-items: baseline; }
+.docs-screen-img { display: block; border: 1px solid var(--c-border); border-radius: 8px; overflow: hidden; background: #fff; }
+.docs-screen-img img { display: block; width: 100%; height: auto; }
+.docs-live-lang { display: flex; gap: 8px; align-items: center; font-size: 13px; margin-bottom: 8px; color: var(--c-text-2); }
+.docs-live-lang select { font: inherit; padding: 3px 6px; border: 1px solid var(--c-border); border-radius: 6px; }
 .docs-ex-design .dp { font-size: 12.5px; }
 .docs-out-note { font-size: 12.5px; color: var(--c-text-2); margin: 0 0 8px !important; }
 .docs-out-item { border-top: 1px dashed var(--c-border); padding-top: 8px; margin-top: 8px; }

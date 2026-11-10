@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-11-10T11:41:56.604Z",
+  "capturedAt": "2026-11-10T13:04:44.605Z",
   "examples": [
     "acbc",
     "actions-in-practice",
@@ -57,6 +57,17 @@
     "survey-flow",
     "survey-termination",
     "text-entry",
+    "theme-answers",
+    "theme-background",
+    "theme-buttons",
+    "theme-colours",
+    "theme-devices",
+    "theme-experience",
+    "theme-header-footer",
+    "theme-page-logo",
+    "theme-preset",
+    "theme-typography",
+    "translation",
     "url-parameters",
     "validation-rules",
     "van-westendorp"

@@ -15,13 +15,17 @@ export interface LiveExampleData {
   def: SurveyDefinition;
   logic: { label: string; text: string }[];
   json: string;
-  builder: { images: string[]; caption: string; tab: string; question?: string; section?: string };
+  builder: { images: string[]; caption: string; tab: string; question?: string; section?: string; group?: string; sub?: string };
   embedded: Record<string, string>;
+  viewport?: "mobile" | "tablet";
   said?: { text: string; kind: string; understood: string; actions: string; applied: string[]; note?: string }[];
   output?: { name: string; n: number; table?: { title: string; columns: { key: string; label: string }[]; rows: Record<string, string>[] }; bars?: { label: string; value: number }[]; insights: string[]; warnings: string[]; error?: string }[] | null;
   simulated?: number;
   designs?: { kind: string; name: string; file: { columns: string[]; rows: Record<string, unknown>[]; summary?: Record<string, unknown> } }[];
 }
+
+/* the Branding workspace's group labels (components/studio/BrandingPanel.tsx SECTIONS) */
+const BRANDING_GROUP: Record<string, string> = { start: "Start from", colors: "Colours", text: "Text", page: "Page & logo", answers: "Style & answers", background: "Background", buttons: "Buttons & navigation", experience: "Respondent experience", devices: "Phone & tablet", ai: "AI interviewer", code: "Code & custom" };
 
 const KIND_LABEL: Record<string, string> = { actions: "Proposed", refused: "Refused", model: "To the language model", clarify: "Asked back", answer: "Answered" };
 
@@ -96,6 +100,8 @@ export function LiveExample({ ex }: { ex: LiveExampleData }) {
   React.useEffect(() => setMounted(true), []);
   const where = ex.builder.tab === "Questions" && ex.builder.question
     ? `Programming → Questions → ${ex.builder.question}${ex.builder.section ? ` → Properties` : ""}`
+    : ex.builder.tab === "Branding" ? `Research Tools → Branding${ex.builder.group ? ` → ${BRANDING_GROUP[ex.builder.group] ?? ex.builder.group}` : ""}`
+    : ex.builder.tab === "Translation" ? `Research Tools → Translation${ex.builder.sub ? ` → ${ex.builder.sub}` : ""}`
     : `Programming → ${ex.builder.tab}`;
   return (
     <section className="docs-ex" data-testid="docs-example" data-example={ex.id} aria-label={`Example: ${ex.title}`}>
@@ -150,7 +156,7 @@ export function LiveExample({ ex }: { ex: LiveExampleData }) {
           <div className="docs-ex-pane docs-ex-respondent" data-testid="docs-ex-respondent">
             <div className="docs-ex-stage"><span className="docs-ex-n">3</span> Respondent view <span className="docs-ex-where">live — try it</span></div>
             <p className="docs-ex-try"><b>Try it:</b> {ex.tryIt}</p>
-            <div className="docs-ex-device">{mounted ? <LiveSurvey def={ex.def} embedded={ex.embedded} /> : <p className="docs-live-loading">Starting the survey…</p>}</div>
+            <div className="docs-ex-device">{mounted ? <LiveSurvey def={ex.def} embedded={ex.embedded} viewport={ex.viewport} /> : <p className="docs-live-loading">Starting the survey…</p>}</div>
           </div>
         </div>
       </div>

@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { docsDir, listDocs, readDoc, renderDoc } from "./pages.ts";
 import { DOC_NAV } from "./nav.ts";
+import { screenById } from "./screens.ts";
 import { DOC_EXAMPLES } from "./examples.ts";
 
 /* THE DOCS RENDERER (Phase 7): every construct the pages use is drawn, everything is escaped, nothing else passes through. */
@@ -63,17 +64,20 @@ test("the pages: every page in the navigation exists, has a title and renders; a
   }
 });
 
-test("Developer Docs: every guide (A–E) has its live example, steps, and the sections a reader needs; related pages exist", () => {
+test("Developer Docs: every guide (A–G) has its live example, steps, and the sections a reader needs; related pages exist", () => {
   const pages = listDocs();
-  const GUIDED = ["fundamentals", "advanced", "intelligent", "actions", "designs"];
+  const GUIDED = ["fundamentals", "advanced", "intelligent", "actions", "designs", "branding", "platform"];
   const reference = new Set(DOC_NAV.filter((c) => c.key === "reference").flatMap((c) => c.groups.flatMap((g) => g.slugs)));
   const guides = pages.filter((p) => GUIDED.includes(p.category) && !reference.has(p.slug) && p.group !== "Reference");
-  assert.ok(guides.length >= 36 + 24, `${guides.length} guides`);
+  assert.ok(guides.length >= 36 + 24 + 17, `${guides.length} guides`);
   const ids = new Set(DOC_EXAMPLES.map((e) => e.id));
   const used = new Set<string>();
   for (const g of guides) {
     const doc = renderDoc(g.slug)!;
     if (doc.meta.example !== "none") assert.ok(doc.examples.length >= 1, `${g.slug} has a live example`);
+    /* a platform page without a live survey shows the tool itself (a captured screen) or a catalog generated from the code */
+    if (doc.meta.example === "none" && ["branding", "platform"].includes(g.category)) assert.ok(/rs-example:(screen|catalog)-/.test(doc.html), `${g.slug} shows a screen or a catalog`);
+    for (const m of doc.html.matchAll(/rs-example:screen-([a-z0-9-]+?)-->/g)) assert.ok(screenById(m[1]), `${g.slug}: screen ${m[1]} is defined`);
     for (const e of doc.examples) { assert.ok(ids.has(e), `${g.slug}: example ${e} exists`); used.add(e); }
     assert.ok(doc.html.includes("docs-steps"), `${g.slug} has step-by-step instructions`);
     for (const h of ["Common mistakes", "Troubleshooting"]) assert.ok(doc.headings.some((x) => x.text === h), `${g.slug}: ${h}`);
@@ -106,4 +110,15 @@ test("Developer Docs markdown: a ::: flow is a row of steps joined by arrows, es
   assert.equal((r.html.match(/docs-flow-step/g) ?? []).length, 3);
   assert.equal((r.html.match(/docs-flow-arrow/g) ?? []).length, 2);
   assert.ok(r.html.includes("type &lt;b&gt;a sentence&lt;/b&gt;"));
+});
+
+test("Developer Docs: the Branding group names the examples show are the Branding workspace's own", () => {
+  const panel = readFileSync(join(process.cwd(), "components", "studio", "BrandingPanel.tsx"), "utf8");
+  const live = readFileSync(join(process.cwd(), "components", "docs", "LiveExample.tsx"), "utf8");
+  const map = /const BRANDING_GROUP[^=]*= (\{[^}]+\})/.exec(live)![1];
+  for (const [, id, label] of map.matchAll(/(\w+): "([^"]+)"/g)) {
+    if (id === "start") { assert.match(panel, /<b>Start from<\/b>/); continue; }
+    assert.ok(panel.includes(`{ id: "${id}", label: "${label.replace(/&/g, "&")}"`), `${id} → ${label}`);
+  }
+  for (const e of DOC_EXAMPLES.filter((x) => x.builder.tab === "Branding")) assert.ok(map.includes(`${e.builder.group}:`), `${e.id}: group ${e.builder.group}`);
 });

@@ -46,3 +46,20 @@ test("phase 2: sentences are read by the engine and applied; refusals change not
   assert.ok(buildExample("panel-integration")!.json.includes("\"preset\": \"prolific\""));
   assert.ok(buildExample("alerts-webhooks")!.json.includes("response.completed"));
 });
+
+test("Developer Docs phase 3: branding examples go through set_theme; translation through the localization actions", () => {
+  for (const id of ["theme-preset", "theme-colours", "theme-typography", "theme-page-logo", "theme-answers", "theme-background", "theme-buttons", "theme-experience", "theme-devices", "theme-header-footer", "translation"]) {
+    const ex = buildExample(id)!;
+    assert.deepEqual(ex.errors, [], id);
+  }
+  const colours = buildExample("theme-colours")!;
+  assert.equal(colours.def.branding.colors.buttonBackground, "#134e4a");
+  assert.match(colours.logic.find((l) => l.label.startsWith("Theme"))!.text, /primary colour: #2563eb → #0f766e/);
+  assert.deepEqual(JSON.parse(colours.json), { branding: { colors: { primary: "#0f766e", secondary: "#134e4a", background: "#f0fdfa", subtleText: "#475569", border: "#99f6e4", buttonBackground: "#134e4a", progress: "#14b8a6" } } });
+  assert.equal(buildExample("theme-devices")!.viewport, "mobile");
+  assert.equal(buildExample("theme-experience")!.def.branding.layout.autoAdvance, true);
+  assert.equal(buildExample("theme-preset")!.def.branding.appearance?.motif, "peach");
+  const tr = buildExample("translation")!;
+  assert.equal(Object.keys(tr.def.localization!.translations.fr ?? {}).length, 5);
+  assert.ok(JSON.parse(tr.json).localization);
+});

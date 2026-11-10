@@ -52,8 +52,15 @@ const hits = await p.$$eval('[data-testid="docs-search-hit"] .docs-search-title'
 assert.match(hits[0], /^Skip logic/, hits.join(" | "));
 await p.keyboard.press("Enter");
 await p.waitForURL(/\/docs\/skip-logic$/);
-await p.keyboard.press("/");
-assert.equal(await p.evaluate(() => document.activeElement?.getAttribute("data-testid")), "docs-search-input", "/ focuses search");
+/* the new page's shortcut listener is attached once it hydrates: press until it is (at most a few seconds) */
+let focused = null;
+for (let k = 0; k < 10 && focused !== "docs-search-input"; k++) {
+  await p.evaluate(() => (document.activeElement)?.blur?.());
+  await p.keyboard.press("/");
+  focused = await p.evaluate(() => document.activeElement?.getAttribute("data-testid"));
+  if (focused !== "docs-search-input") await p.waitForTimeout(400);
+}
+assert.equal(focused, "docs-search-input", "/ focuses search");
 ok(`“skip logic” → ${hits.slice(0, 3).join(", ")}; Enter opens it; “/” focuses the box`);
 
 console.log("\n3 — a guide page and its three views");
@@ -217,6 +224,81 @@ for (const slug of guides2) {
   assert.ok(imgs.length >= 1 && imgs.every(Boolean), `${slug}: screenshots ${JSON.stringify(imgs)}`);
 }
 ok(`${guides2.length} C–E pages load; the ${withEx} with examples draw their live survey and screenshots`);
+
+console.log("\n5c — phase 3: branding and platform");
+await go("/docs/branding-overview");
+const PR = live("theme-preset");
+assert.equal((await p.textContent(`${PR} [data-testid="docs-live-next"]`)).trim().replace(/\s*→$/, ""), "Continue");
+assert.ok(await p.$(`${PR} .rs-shell[class*="peach"]`), "the peach motif is on the shell");
+ok("preset: Premium Peach draws its motif and its own button label");
+
+await go("/docs/buttons-and-navigation");
+const BT = live("theme-buttons");
+assert.equal((await p.textContent(`${BT} [data-testid="docs-live-back"]`)).trim(), "Previous");
+await p.click(`${BT} label:has-text("Ready to buy")`); await p.click(`${BT} [data-testid="docs-live-next"]`);
+await p.click(`${BT} label:has-text("Design")`); await p.click(`${BT} [data-testid="docs-live-next"]`);
+await p.waitForFunction((s) => document.querySelector(`${s} [data-testid="docs-live-next"]`)?.textContent.includes("Send my answers"), BT);
+ok("buttons: “Previous” / “Continue”, and “Send my answers” on the last page");
+
+await go("/docs/respondent-experience");
+const XP = live("theme-experience");
+assert.match(await p.textContent(`${XP} #rs-questions`), /1\.\s*Which of these/);
+assert.match(await p.textContent(`${XP} #rs-questions`), /A\.?\s*Just browsing/);
+await p.click(`${XP} label:has-text("Ready to buy")`);
+await p.waitForFunction((s) => /What do you enjoy/.test(document.querySelector(s).textContent), XP, { timeout: 5000 });
+ok("experience: question numbered 1., answers lettered, and choosing an answer moves on by itself");
+
+await go("/docs/page-layout-and-logo");
+const PL = live("theme-page-logo");
+await p.waitForFunction((s) => { const i = document.querySelector(`${s} [data-testid="docs-live-header"] img`); return i && i.complete && i.naturalWidth > 50; }, PL);
+assert.match(await p.textContent(`${PL} [data-testid="docs-live-progress"]`), /1\D+3/);
+ok("page & logo: the logo loads above the survey; step progress shows page 1 of 3");
+
+await go("/docs/header-and-footer");
+const HF = live("theme-header-footer");
+assert.match(await p.textContent(`${HF} [data-testid="docs-live-header"]`), /Lumen Research/);
+assert.equal(await p.getAttribute(`${HF} [data-testid="docs-live-footer"] a`, "href"), "https://example.com/privacy");
+ok("header and footer HTML on the page");
+
+await go("/docs/phone-and-tablet");
+const DV = live("theme-devices");
+const fs = await p.$eval(`${DV} [data-testid="docs-live-viewport"] .rs-shell`, (e) => parseFloat(getComputedStyle(e).fontSize));
+assert.equal(fs, 18, `phone base size ${fs}`);
+ok("phone sizes: the phone view draws 18px text");
+
+await go("/docs/translation");
+const TR = live("translation");
+await p.selectOption(`${TR} [data-testid="docs-live-lang"]`, "fr");
+await p.waitForFunction((s) => /Laquelle de ces propositions/.test(document.querySelector(s).textContent), TR);
+await p.click(`${TR} label:has-text("Prêt(e) à acheter")`);
+await p.waitForFunction((s) => /STAGE\s*=\s*2/.test(document.querySelector(s).textContent), TR);
+ok("translation: French texts over the same codes — “Prêt(e) à acheter” stores STAGE = 2");
+
+await go("/docs/projects-and-roles");
+const roleRows = await p.$$eval('[data-testid="docs-roles"] tbody tr', (r) => r.length);
+assert.ok(roleRows >= 12, `roles ${roleRows}`);
+const deployCol = async (r) => p.$eval(`[data-testid="docs-role-${r}"] td:nth-child(6)`, (e) => e.textContent.trim());
+assert.equal(await deployCol("editor"), "✓"); assert.equal(await deployCol("programmer"), "—");
+ok(`roles: ${roleRows} roles from the access rules (editor deploys, programmer does not)`);
+
+const guides3 = idx.pages.filter((x) => /Branding and survey customization|Project management and platform/.test(x.category)).map((x) => x.slug);
+assert.ok(guides3.length >= 17, `F–G pages ${guides3.length}`);
+let ex3 = 0, sc3 = 0;
+for (const slug of guides3) {
+  await go(`/docs/${slug}`);
+  if (await p.$('[data-testid="docs-example"]')) {
+    ex3++;
+    await p.waitForSelector('[data-testid="docs-example"] [data-testid="docs-live"], [data-testid="docs-example"] [data-testid="docs-live-end"]', { timeout: 10000 });
+    const imgs = await imagesLoaded('[data-testid="docs-ex-builder"]');
+    assert.ok(imgs.length >= 1 && imgs.every(Boolean), `${slug}: screenshots ${JSON.stringify(imgs)}`);
+  }
+  for (const s of await p.$$('[data-testid="docs-screen"]')) {
+    sc3++;
+    await s.scrollIntoViewIfNeeded();
+    await p.waitForFunction((el) => { const i = el.querySelector("img"); return i && i.complete && i.naturalWidth > 100; }, s, { timeout: 10000 });
+  }
+}
+ok(`${guides3.length} F–G pages load; ${ex3} live examples with screenshots, ${sc3} Studio screens`);
 
 console.log("\n6 — Help → Help | Developer Docs");
 await p.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "load" });
