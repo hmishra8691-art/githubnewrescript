@@ -39,11 +39,16 @@ export const dynamic = "force-dynamic";
  */
 
 /** One probe per migration that added something a panel depends on. */
+/*
+ * `column` defaults to "id" — so a table without an `id` column MUST name one it has, or the probe's select fails and
+ * the page reports a migration as missing that is applied (0007, 0025, 0032 and 0089 did exactly that until
+ * 2026-11-10). probes.test.ts checks every probe against its migration file.
+ */
 const PROBES: { migration: string; what: string; table: string; column?: string }[] = [
   { migration: "0002", what: "dashboard statistics", table: "surveys" },
   { migration: "0005", what: "response quality", table: "responses", column: "quality" },
   { migration: "0006", what: "response management and per-environment quotas", table: "responses", column: "deleted_at" },
-  { migration: "0007", what: "List Fill allocation", table: "listfill_counts" },
+  { migration: "0007", what: "List Fill allocation", table: "listfill_counts", column: "survey_id" },
   { migration: "0008", what: "accounts, sessions and project sharing", table: "user_sessions" },
   { migration: "0011", what: "analytics", table: "analytics_reports" },
   { migration: "0012", what: "sample sources and version immutability", table: "sample_sources" },
@@ -69,12 +74,12 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   { migration: "0022", what: "the translation cache", table: "translation_cache" },
   { migration: "0023", what: "billing: wallets, rates and usage", table: "project_wallets" },
   { migration: "0024", what: "credit transfers", table: "credit_transfers" },
-  { migration: "0025", what: "per-project spending policies", table: "project_spending" },
+  { migration: "0025", what: "per-project spending policies", table: "project_spending", column: "customer_id" },
   { migration: "0027", what: "stored recordings and transcripts", table: "media_objects" },
   { migration: "0029", what: "qualitative media delivery", table: "media_deliveries" },
   { migration: "0030", what: "interview projects", table: "interview_projects" },
   { migration: "0031", what: "billing by subject kind", table: "project_spending", column: "subject_kind" },
-  { migration: "0032", what: "the sign-in handoff to Interviews", table: "auth_handoff_codes" },
+  { migration: "0032", what: "the sign-in handoff to Interviews", table: "auth_handoff_codes", column: "code_hash" },
   { migration: "0033", what: "interview participants", table: "interview_people" },
   /*
    * Without this one, removing a collaborator returns them to the workspace
@@ -129,7 +134,7 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   { migration: "0086", what: "live vendor integrations: API call log, circuit state, webhook receipts", table: "vendor_api_calls" },
   { migration: "0087", what: "the commercial margin engine", table: "margin_applications" },
   { migration: "0088", what: "quota monitoring (recruitment quota cells)", table: "quota_progress" },
-  { migration: "0089", what: "quota holds and the vendor parameter mapping", table: "quota_holds" },
+  { migration: "0089", what: "quota holds and the vendor parameter mapping", table: "quota_holds", column: "session_id" },
   { migration: "0091", what: "the security posture in the migration chain, and schema_marks", table: "schema_marks", column: "migration" },
   /* 0092 dropped a table and added comments: nothing to probe; its schema_marks row is the record */
 ];
