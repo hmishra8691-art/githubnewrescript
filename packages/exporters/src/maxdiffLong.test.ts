@@ -141,3 +141,23 @@ test("xlsx: the MaxDiff version comes from the response's seed (the route used t
   assert.deepEqual(got, picks.map((p) => p.version));
   assert.ok(new Set(got).size > 1);
 });
+
+test("2026-11-10: a set answered with an opt-out is in the long file with OPT_OUT set and no best / worst — and only when the design offers it", () => {
+  const def = survey({ optOutNone: true });
+  const { state } = answered(def, 4);
+  const tasks = Object.keys(state.answers.q1 as object);
+  (state.answers.q1 as Record<string, unknown>)[tasks[0]] = { optOut: "none" };
+  const { rows: out, columns } = maxdiffChoiceRows(def, [state]);
+  assert.equal(columns[columns.length - 1], "OPT_OUT");
+  const opted = out.filter((r) => String(r.TASK) === tasks[0]);
+  assert.equal(opted.length, 3, "the set's three items are listed: it was shown");
+  assert.ok(opted.every((r) => r.OPT_OUT === "none" && r.BEST === "" && r.WORST === ""));
+  const chosen = out.filter((r) => String(r.TASK) === tasks[1]);
+  assert.ok(chosen.every((r) => r.OPT_OUT === ""));
+  assert.equal(chosen.filter((r) => r.BEST === 1).length, 1);
+  /* the same answer on a design with no opt-out is not an answer: the set is left out, as an unanswered set always was */
+  const plain = survey();
+  const p = answered(plain, 4);
+  (p.state.answers.q1 as Record<string, unknown>)[tasks[0]] = { optOut: "none" };
+  assert.equal(maxdiffChoiceRows(plain, [p.state]).rows.filter((r) => String(r.TASK) === tasks[0]).length, 0);
+});

@@ -3432,3 +3432,59 @@ tr.ax-row-net td { font-weight: 600; border-top: 1px dashed var(--border); }
 .dp-why { font-size: 13px; color: var(--c-text-2); margin: 0; }
 .dp-cap { font-size: 12px; }
 @media (max-width: 900px) { .dw { grid-template-columns: 1fr; } .dw-lib { position: static; max-height: none; } }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   STUDY DESIGN — the library on the left, the chosen method on the right (2026-11-10).
+   The details used to sit under a 340px list, a screen away from the method that was clicked. Now both columns are
+   as tall as the space under the page header and scroll on their own, so a click on the left is answered on the right
+   without moving the page. Below 860px of panel width the columns stack and nothing is height-limited.
+   --------------------------------------------------------------------------------------------------------------- */
+.sd { container-type: inline-size; display: grid; gap: 12px; max-width: 1480px; }
+.sd-cols { display: grid; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
+/* each column pins under the page header once the objective scrolls away, and is never taller than the space below it */
+.sd-list, .sd-detail { position: sticky; top: 8px; max-height: calc(100vh - var(--topbar-h, 58px) - var(--menubar-h, 38px) - 32px); min-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
+.sd-list { display: grid; gap: 8px; align-content: start; padding-right: 4px; }
+.sd-list .ml-search { max-width: none; position: sticky; top: 0; z-index: 1; }
+.sd-list .ml.compact .ml-items { grid-template-columns: 1fr; max-height: none; overflow: visible; }
+.sd-list .ml-item { padding: 7px 10px; }
+.sd-detail { border: 1px solid var(--c-border, #e2e8f0); border-radius: 12px; background: var(--c-surface, #fff); padding: 0 16px 16px; display: grid; gap: 12px; align-content: start; position: relative; }
+.sd-detail-head { position: sticky; top: 0; z-index: 2; background: var(--c-surface, #fff); padding: 12px 0 8px; border-bottom: 1px solid var(--c-border, #e2e8f0); display: grid; gap: 4px; }
+.sd-chosen { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sd-chosen b { font-size: 16px; }
+.sd-chosen .chip.ghost { background: transparent; border: 1px solid var(--c-border-strong, #cbd5e1); color: var(--c-text-2, #475569); }
+.sd-jump { display: flex; gap: 6px; }
+.sd-caution { background: #fffbeb; border: 1px solid #fcd34d; color: #78350f; border-radius: 10px; padding: 8px 12px; font-size: 12.5px; line-height: 1.45; }
+.sd-workflow { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; background: var(--c-primary-50, #eef2ff); border: 1px solid #c7d2fe; border-radius: 10px; padding: 8px 12px; font-size: 12.5px; }
+.sd-workflow span { flex: 1 1 260px; }
+.sd-guide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.sd-g { border: 1px solid var(--c-border, #e2e8f0); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.5; min-width: 0; }
+.sd-g.wide { grid-column: 1 / -1; }
+.sd-g.example { background: var(--panel2, #f8fafc); }
+.sd-g h5 { margin: 0 0 4px; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--c-primary-700, #3730a3); }
+.sd-g p { margin: 0; }
+.sd-g ul { margin: 0; padding-left: 18px; }
+.sd-g li + li { margin-top: 2px; }
+.sd-setup { display: grid; gap: 12px; border-top: 1px solid var(--c-border, #e2e8f0); padding-top: 12px; }
+@container (max-width: 860px) {
+  .sd-cols { grid-template-columns: 1fr; }
+  .sd-list { position: static; max-height: 300px; min-height: 0; }
+  .sd-detail { position: static; max-height: none; overflow: visible; }
+  .sd-detail-head { position: static; }
+  .sd-guide { grid-template-columns: 1fr; }
+}
+
+/* SURVEY SETTINGS → QUALITY CHECKS, IN NAMED GROUPS (2026-11-10): heading, purpose, state; the controls when open. */
+.qs-group { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); margin-top: 10px; }
+.qs-group.open { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.qs-group-head { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 10px 14px; background: none; border: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; border-radius: 10px; }
+.qs-group-head:hover { background: var(--tint); }
+.qs-group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.qs-group-title { display: grid; gap: 1px; min-width: 0; }
+.qs-group-title strong { font-size: 14px; }
+.qs-group-desc { font-size: 12.5px; line-height: 1.4; color: var(--subtle); }
+.qs-group-meta { white-space: nowrap; }
+.qs-group-body { padding: 4px 14px 14px; border-top: 1px solid var(--border); }
+.qs-group-body[hidden] { display: none; }
+.qs-group-body > :first-child { margin-top: 12px; }
+.qs-sub { margin: 16px 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--subtle); }
+@media (max-width: 560px) { .qs-group-head { grid-template-columns: 14px minmax(0, 1fr); } .qs-group-meta { grid-column: 2; justify-self: start; } }

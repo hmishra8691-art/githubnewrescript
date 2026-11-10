@@ -88,7 +88,7 @@ export function SimulationPanel() {
       const r = await fetch(`/api/surveys/${encodeURIComponent(s.surveyDbId)}/simulation`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "store", config: run.config }) });
       const j = await r.json().catch(() => null);
       if (!r.ok) { setErr(String(j?.error ?? `They could not be saved (${r.status}).`)); return; }
-      setNote(`Saved ${j.stored} simulated respondents as TEST data (run ${j.runId}, on the saved version). They are in Data → TEST only — never LIVE data, live quotas, reports or deliverables.`);
+      setNote(`Saved ${j.stored} simulated respondents as TEST data (run ${j.runId}, on the survey as it is now). They are in Data → TEST only — never LIVE data, live quotas, reports or deliverables.`);
       void loadRuns();
     } finally { setBusy(null); }
   };
@@ -138,7 +138,7 @@ export function SimulationPanel() {
         {rep && <>
           <button type="button" className="btn small" data-testid="sim-xlsx" disabled={!!busy} onClick={() => void download("xlsx")}>Download Excel</button>
           <button type="button" className="btn small" data-testid="sim-csv" disabled={!!busy} onClick={() => void download("csv")}>Download CSV</button>
-          <button type="button" className="btn small" data-testid="sim-store" disabled={!!busy || sandbox} title={sandbox ? "Saving test data needs a saved project" : "Run again on the saved version and store the respondents as TEST data"} onClick={() => void store()}>Save as test data</button>
+          <button type="button" className="btn small" data-testid="sim-store" disabled={!!busy || sandbox} title={sandbox ? "Saving test data needs a saved project" : "Run again on the survey as it is now (the same build the test link serves) and store the respondents as TEST data"} onClick={() => void store()}>Save as test data</button>
         </>}
         {busy && busy !== "Simulating" && <span className="muted">{busy}…</span>}
       </div>

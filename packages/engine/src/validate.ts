@@ -1,3 +1,4 @@
+import { maxdiffTaskOptOut } from "./maxdiffOptOut.js";
 import { uiText } from "./localization.js";
 import type { Question, ValidationRule, SurveyDefinition } from "@rescript/schema";
 import { resolveVariant } from "@rescript/schema";
@@ -922,8 +923,10 @@ export function validateQuestion(
       const vals = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
       const taskOf = (t: string) => (vals[t] && typeof vals[t] === "object" ? (vals[t] as { best?: unknown; worst?: unknown }) : {});
       const itemsOf = (t: string) => new Set(rows.filter((r) => String(r.task) === t).map((r) => String(r.item_index)));
+      /* 2026-11-10: a set answered with one of the design's opt-outs (None of these / No preference / I cannot choose) is answered */
+      const optedOut = (t: string) => maxdiffTaskOptOut(design?.config, vals[t]) !== null;
       const missing = q.required
-        ? tasks.filter((t) => { const bw = taskOf(t); return isEmpty(bw.best) || (!bestOnly && isEmpty(bw.worst)); })
+        ? tasks.filter((t) => { if (optedOut(t)) return false; const bw = taskOf(t); return isEmpty(bw.best) || (!bestOnly && isEmpty(bw.worst)); })
         : [];
       const same = tasks.filter((t) => { const bw = taskOf(t); return !isEmpty(bw.best) && !isEmpty(bw.worst) && String(bw.best) === String(bw.worst); });
       /* a code outside the set can only come from a tampered or stale answer: checked when required, as before */

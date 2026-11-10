@@ -1,3 +1,4 @@
+import { maxdiffTaskOptOut } from "./maxdiffOptOut.js";
 import { dontKnowEnabled, responseStatus } from "./dontKnow.js";
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { isCascading, cascadeParentOf, CASCADE_PARENT_SUFFIX } from "./cascade.js";
@@ -238,6 +239,9 @@ function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varNam
       const bw = v as { best?: unknown; worst?: unknown };
       if (bw.best != null) out[`${varName}_T${task}_BEST`] = Number(bw.best);
       if (bw.worst != null) out[`${varName}_T${task}_WORST`] = Number(bw.worst);
+      // 2026-11-10: a set answered with an opt-out the design offers — the kind, and no best / worst
+      const optOut = maxdiffTaskOptOut(design?.config, v);
+      if (optOut) out[`${varName}_T${task}_OPTOUT`] = optOut;
       // METHOD-04: the anchor answer (all / some / none) — one column per task
       const anchor = (v as { anchor?: unknown }).anchor;
       if (anchor != null && anchor !== "") out[`${varName}_T${task}_ANCHOR`] = String(anchor);

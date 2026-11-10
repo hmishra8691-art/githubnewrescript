@@ -268,7 +268,7 @@ export function edgesTouching(graph: LogicFlow, nodes: ReadonlySet<string>): Set
 }
 
 /** fit a box of (w,h) into a viewport — the transform for "fit to screen" */
-export function fitTransform(w: number, h: number, vw: number, vh: number, margin = 24): { k: number; tx: number; ty: number } {
-  const k = Math.min(2, Math.max(0.05, Math.min((vw - margin * 2) / Math.max(1, w), (vh - margin * 2) / Math.max(1, h))));
+export function fitTransform(w: number, h: number, vw: number, vh: number, margin = 24, maxScale = 2): { k: number; tx: number; ty: number } {
+  const k = Math.min(maxScale, Math.max(0.05, Math.min((vw - margin * 2) / Math.max(1, w), (vh - margin * 2) / Math.max(1, h))));
   return { k, tx: (vw - w * k) / 2, ty: margin };
 }

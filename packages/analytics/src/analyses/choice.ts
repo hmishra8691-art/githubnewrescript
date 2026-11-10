@@ -1,3 +1,4 @@
+import { maxdiffOptOutsOf, maxdiffTaskOptOut } from "@rescript/engine";
 import type { AnalysisDefinition, AnalysisResult, ResultTable } from "../types.js";
 import { categoricalColumn, categoriesOf, labelOf, type Dataset } from "../dataset.js";
 import { conditionalLogit, logitShares, type ChoiceSet } from "../stats/choice.js";
@@ -460,6 +461,16 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
     ? (i: number) => { const x = new Array(P).fill(0); x[i] = 1; return x; }
     : (i: number) => { const x = new Array(P).fill(0); if (i === K - 1) x.fill(-1); else x[i] = 1; return x; };
   const anchorFeat = () => new Array(P).fill(0);
+  /*
+   * TASK OPT-OUTS (2026-11-10; @rescript/engine maxdiffOptOut.ts). A set answered "None of these", "No preference" or
+   * "I cannot choose" is not a choice between items: it is left out of the counts and of the model and counted here by
+   * kind. One exception, because it is the same statement: in an ANCHORED design "None of these" is the anchor answer
+   * "none" — every item of the set is below the bar — and is used as exactly that.
+   */
+  const optOutKinds = maxdiffOptOutsOf(design.config);
+  const optOutCounts: Record<string, number> = Object.fromEntries(optOutKinds.map((o) => [o.kind, 0]));
+  let optOutTasks = 0, choiceTasks = 0, choiceW = 0;
+  const optOutRespondents = new Set<number>();
   ds.cases.forEach((c, ci) => {
     const ans = c.answers[qid] as Record<string, { best?: string; worst?: string; anchor?: string }> | undefined;
     if (!ans || typeof ans !== "object") return;
@@ -477,6 +488,15 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
       const alts = altsOf(task, version);
       const ids = alts.map((r) => itemIdx.get(String(r.item_index))!).filter((x) => x != null);
       if (ids.length < 2) continue;
+      const optOut = maxdiffTaskOptOut(design.config, bw);
+      if (optOut) {
+        optOutCounts[optOut] += w; optOutTasks++; optOutRespondents.add(ci);
+        if (anchored && optOut === "none") {
+          for (const i of ids) target.push({ alternatives: [feat(i), anchorFeat()], chosen: 1, weight: w });
+          anchorObservations += ids.length; anchorCounts.none += w; any = true;
+        }
+        continue;
+      }
       const b = bw.best != null ? itemIdx.get(String(bw.best)) : undefined, wo = bw.worst != null ? itemIdx.get(String(bw.worst)) : undefined;
       /*
        * A task answered with the same item as best and worst says nothing about
@@ -489,6 +509,7 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
       const given = (v: unknown) => v != null && v !== "";
       if ((given(bw.best) && (b == null || !ids.includes(b))) || (given(bw.worst) && (wo == null || !ids.includes(wo)))) { outsideSet++; continue; }
       for (const i of ids) shown[i] += w;
+      if (b != null || wo != null) { choiceTasks++; choiceW += w; }
       if (b != null && ids.includes(b)) { best[b] += w; score[b] += 1; target.push({ alternatives: ids.map(feat), chosen: ids.indexOf(b), weight: w }); any = true; }
       if (wo != null && ids.includes(wo)) { worst[wo] += w; score[wo] -= 1; const rest = ids.filter((i) => i !== b); if (rest.length >= 2) target.push({ alternatives: rest.map((i) => feat(i).map((v) => -v)), chosen: rest.indexOf(wo), weight: w }); any = true; }
       if (anchored && typeof bw.anchor === "string" && bw.anchor in anchorCounts) {
@@ -516,7 +537,7 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
     }
     if (any) { respondents++; perCase.push({ ci, score }); }
   });
-  if (!sets.length) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["No MaxDiff choices recorded yet."], recommendedCharts: ["maxdiff_utility"], totalCases });
+  if (!sets.length) return makeResult(def, ds, { tables: [], chart: {}, warnings: [optOutTasks ? `No MaxDiff choices recorded yet: all ${optOutTasks} answered set${optOutTasks === 1 ? " was" : "s were"} answered with an opt-out (${optOutKinds.filter((o) => optOutCounts[o.kind]).map((o) => `${o.label}: ${round(optOutCounts[o.kind], 0)}`).join(", ")}).` : "No MaxDiff choices recorded yet."], recommendedCharts: ["maxdiff_utility"], totalCases });
   const fit = conditionalLogit(sets, P);
   /*
    * Anchored: the coefficient IS the utility, measured against the anchor.
@@ -541,6 +562,15 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
       "“B−W score %” is a descriptive COUNT — (times best − times worst) / times shown — not a model estimate; it is shown beside the logit utilities, which account for which items each one was shown with. The model is pooled across respondents: individual-level (HB) utilities are not estimated here — the Hierarchical Bayes analysis (Advanced models) estimates them.", "This scale is RELATIVE: it ranks the items against each other and cannot say whether any of them matter. Generate the design as anchored (dual-response) if that question matters."] },
     { id: "fit", title: "Model fit", columns: [{ key: "m", label: "Statistic" }, { key: "v", label: "Value" }], rows: [{ m: "Respondents", v: respondents }, { m: "Choices modelled", v: sets.length }, { m: "McFadden R²", v: round(fit.mcFaddenR2, 3) }, { m: "Hit rate", v: fmtPct(fit.hitRate * 100, 1) }, { m: "Converged", v: fit.converged ? "yes" : "no" }, ...(anchored ? [{ m: "Anchor observations", v: anchorObservations }, { m: "“All important”", v: round(anchorCounts.all, 0) }, { m: "“Some important”", v: round(anchorCounts.some, 0) }, { m: "“None important”", v: round(anchorCounts.none, 0) }] : [])] },
   ];
+  if (optOutKinds.length) {
+    const answered = optOutTasks + choiceTasks;
+    tables.push({
+      id: "optouts", title: "Sets answered with an opt-out",
+      columns: [{ key: "optout", label: "Opt-out" }, { key: "meaning", label: "How it is treated" }, { key: "n", label: "Sets", type: "number", decimals: 0 }, { key: "share", label: "% of answered sets", type: "number", decimals: 1 }],
+      rows: optOutKinds.map((o) => ({ optout: o.label, meaning: o.kind === "none" ? (anchored ? "Used as the anchor answer “none”: every item of the set is below the bar" : "Reported; not a choice between items") : o.kind === "no_preference" ? "Reported; the items of the set are equal to the respondent, so no ranking is modelled" : "Reported as non-response for the set", n: round(optOutCounts[o.kind], 0), share: answered ? pct((optOutCounts[o.kind] / Math.max(1e-9, Object.values(optOutCounts).reduce((t, v) => t + v, 0) + choiceW)) * 100) : 0 })),
+      notes: [`${optOutTasks} of ${answered} answered sets (${answered ? fmtPct((optOutTasks / answered) * 100, 1) : "0%"}), from ${optOutRespondents.size} respondent${optOutRespondents.size === 1 ? "" : "s"}, were answered with an opt-out. They are not in “Times shown”, the best / worst counts or the choice model above — an opt-out is not an item and has no utility.`],
+    } as ResultTable);
+  }
   // by segment variable: mean B−W count score per group
   const by = opt(def, "by", def.columns?.[0] ?? null) as string | null;
   const chartMatrix: { rows: string[]; columns: string[]; values: (number | null)[][] } | undefined = (() => {
@@ -573,6 +603,7 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
       ...(sampleStep > 1 ? [samplingWarning(respondents, sampleStep)] : []),
       ...(fit.converged ? [] : ["The choice model did not fully converge — utilities are approximate."]),
       ...(sameItem ? [`${sameItem} task${sameItem === 1 ? "" : "s"} ignored: best and worst were the same item.`] : []),
+      ...(optOutTasks && optOutTasks / Math.max(1, optOutTasks + choiceTasks) >= 0.25 ? [`${fmtPct((optOutTasks / (optOutTasks + choiceTasks)) * 100, 0)} of answered sets were opted out of. The scores describe the remaining choices only — check whether the item list suits these respondents.`] : []),
       ...(outsideSet ? [`${outsideSet} task${outsideSet === 1 ? "" : "s"} ignored: the best or worst was not an item of that task.`] : []),
       /*
        * An anchored design whose follow-up was never answered would silently

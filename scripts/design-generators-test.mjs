@@ -14,6 +14,10 @@
 import assert from "node:assert/strict";
 import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
+import { STUDY_METHODOLOGIES } from "../packages/engine/dist/index.js";
+
+/* every study methodology is listed beside the 8 design-file methods (counted from the registry, 2026-11-10) */
+const STUDY_METHODS = STUDY_METHODOLOGIES.length;
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 let passed = 0;
@@ -44,7 +48,7 @@ console.log("\n1 — the method library");
 await openTab(p, "Design Generators");
 await p.waitForSelector('[data-testid="design-workspace"] [data-testid="method-library"]');
 const names = await p.$$eval('[data-testid="method-library"] .ml-name', (n) => n.map((x) => x.textContent));
-assert.equal(names.length, 8 + 32, `${names.length} methods (8 design-file methods incl. partial-profile CBC + every study methodology)`);
+assert.equal(names.length, 8 + STUDY_METHODS, `${names.length} methods (8 design-file methods incl. partial-profile CBC + every study methodology)`);
 for (const want of ["Choice-based conjoint (CBC)", "MaxDiff (best–worst scaling)", "Adaptive CBC (ACBC)", "Menu-based conjoint (MBC)", "Rating-based conjoint (CVA)", "Custom experimental design", "Van Westendorp Price Sensitivity Meter"]) assert.ok(names.includes(want), want);
 const groups = await p.$$eval('[data-testid="method-library"] .ml-group-h', (h) => h.map((x) => x.childNodes[0].textContent));
 assert.ok(groups.includes("Pricing & price sensitivity") && groups.includes("Product & concept testing") && groups.includes("Brand research"), groups.join("|"));

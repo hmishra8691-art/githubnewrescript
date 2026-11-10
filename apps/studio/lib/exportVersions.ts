@@ -50,11 +50,34 @@ export interface ResolvedVersions {
   unplaced: { sessionId: string; reason: string }[];
   /** one sentence per conflict, for a warning header on the delivery */
   warnings: string[];
+  /** responses read through the working draft because the saved version they are stamped with lacks their questions */
+  draftRead: number;
+  /** answer keys that no version and no draft defines — reported, never silently dropped */
+  undefinedKeys: string[];
 }
 
 export interface ExportRowRef {
   session_id: string;
   version_id?: string | null;
+  /** the stored answers — read only for their KEYS, to see whether the row's version can describe them */
+  answers?: Record<string, unknown> | null;
+}
+
+/** the label a draft-read row and the draft's columns carry */
+export const DRAFT_VERSION_ID = "draft";
+
+/**
+ * The question an answer key belongs to: `q5`, `q5@3` (a loop iteration), `q5__other__97` (an Other-specify box) and
+ * the like all belong to `q5`.
+ */
+export function answerQuestionId(key: string): string {
+  return key.split("@")[0].split("__")[0];
+}
+
+/** the answered keys of a row that its definition has no question for */
+function orphanKeys(answers: Record<string, unknown> | null | undefined, ids: Set<string>): string[] {
+  if (!answers) return [];
+  return Object.keys(answers).filter((k) => !ids.has(answerQuestionId(k)));
 }
 
 /**
@@ -77,6 +100,17 @@ export async function resolveExportVersions(
    * is the real, memoising loader; a test passes its own.
    */
   loadDefinition: (db: any, versionId: string) => Promise<SurveyDefinition | null> = getCachedVersionDefinition,
+  /**
+   * The working draft, when it may differ from the saved versions (2026-11-10).
+   *
+   * THE DEFECT THIS CLOSES: a download with eight columns and no questions. Simulated respondents and imported files
+   * were validated against the DRAFT and stamped with the saved version's id; when the draft was ahead of that
+   * version — a questionnaire built and never saved as a version — the export read each row through a version that
+   * had none of its questions, and every answer left the file without a word. A row whose answers its own version
+   * cannot describe, and the draft can, is read through the draft, the draft's questions join the columns, and the
+   * file says so. Answers that nothing defines are counted and named in the warnings. No answer disappears silently.
+   */
+  draft?: SurveyDefinition | null,
 ): Promise<ResolvedVersions> {
   const wanted = [...new Set(rows.map((r) => r.version_id).filter((v): v is string => !!v))];
 
@@ -110,10 +144,28 @@ export async function resolveExportVersions(
    */
   add(current.versionId, current.version, current.def);
 
+  /* which rows hold answers their own version cannot describe — and can the draft? */
+  const idsOf = new Map<SurveyDefinition, Set<string>>();
+  const ids = (d: SurveyDefinition) => { let s = idsOf.get(d); if (!s) { s = new Set(d.questions.map((q) => q.id)); idsOf.set(d, s); } return s; };
+  const ownDef = (r: ExportRowRef) => (r.version_id ? byId.get(r.version_id)?.def : undefined) ?? current.def;
+  const draftRows = new Set<string>();
+  const undefinedKeys = new Set<string>();
+  for (const r of rows) {
+    const orphans = orphanKeys(r.answers, ids(ownDef(r)));
+    if (!orphans.length) continue;
+    const stillOrphan = draft ? orphanKeys(r.answers, ids(draft)) : orphans;
+    /* the draft must explain MORE of this row than its own version does — otherwise the stamp stands */
+    if (draft && stillOrphan.length < orphans.length) { draftRows.add(r.session_id); for (const k of stillOrphan) undefinedKeys.add(answerQuestionId(k)); }
+    else for (const k of orphans) undefinedKeys.add(answerQuestionId(k));
+  }
+  const draftLabel = `${current.version} + draft`;
+  if (draft && draftRows.size) add(DRAFT_VERSION_ID, draftLabel, draft);
+
   const union = buildUnionDictionary(versions);
 
   const unplaced: { sessionId: string; reason: string }[] = [];
   const perRow: SurveyDefinition[] = rows.map((r) => {
+    if (draft && draftRows.has(r.session_id)) return draft;
     const own = r.version_id ? byId.get(r.version_id) : undefined;
     if (own) return own.def;
     unplaced.push({
@@ -125,11 +177,27 @@ export async function resolveExportVersions(
     return current.def;
   });
   const perRowVersion: string[] = rows.map((r) => {
+    if (draft && draftRows.has(r.session_id)) return draftLabel;
     const own = r.version_id ? byId.get(r.version_id) : undefined;
     return own?.version ?? current.version;
   });
 
   const warnings = describeConflicts(union.conflicts);
+  if (draftRows.size) {
+    warnings.push(
+      `${draftRows.size} response${draftRows.size === 1 ? " holds" : "s hold"} answers to questions that are in the working draft and not in the saved version `
+      + `(they were stored from the draft, by a simulation or an import). ${draftRows.size === 1 ? "It is" : "They are"} exported through the draft so no answer is left out. `
+      + `Save a version to make the draft the questionnaire of record.`,
+    );
+  }
+  if (undefinedKeys.size) {
+    const names = [...undefinedKeys].sort();
+    warnings.push(
+      `Answers are stored under ${names.length} question id${names.length === 1 ? "" : "s"} that no saved version${draft ? " and no draft" : ""} defines `
+      + `(${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}) — the question was deleted before any version kept it. `
+      + `Those answers have no column in this file; they remain in the stored responses.`,
+    );
+  }
   if (unplaced.length) {
     warnings.push(
       `${unplaced.length} response${unplaced.length === 1 ? "" : "s"} could not be matched to the version `
@@ -155,6 +223,8 @@ export async function resolveExportVersions(
     }),
     unplaced,
     warnings,
+    draftRead: draftRows.size,
+    undefinedKeys: [...undefinedKeys].sort(),
   };
 }
 

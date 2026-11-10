@@ -295,7 +295,9 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       seenCodes.add(String(codeV));
       if (String(codeV) !== o.sourceId) mapping.push({ kind: "option", source: `${cq.sourceId}/${o.sourceId}`, rescript: `${code}=${codeV}` });
       const flags: string[] = [];
-      if (o.exclusive) flags.push("exclusive");
+      /* 2026-11-10: "exclusive" belongs to a multiple-choice answer (choosing it clears the others). On a single choice
+         every answer already is, and the flag would be a setting that question type does not offer (reported as a leftover). */
+      if (o.exclusive && k.type !== "single_select" && k.type !== "dropdown") flags.push("exclusive");
       if (o.otherSpecify) flags.push("other_specify");
       if (o.anchor) flags.push(i >= cq.options.length / 2 ? "anchor_bottom" : "anchor_top");
       const rnd = cq.randomization;

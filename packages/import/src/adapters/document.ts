@@ -1,3 +1,4 @@
+import { missingAssetPlaceholder } from "@rescript/engine";
 import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CFlow, CExpr, CRef, COp, CanonicalKind, Issue, SourceFormat, CanonicalEmbeddedField, PendingInstruction, CanonicalAsset,
 } from "../canonical.js";
@@ -51,6 +52,16 @@ const OPT_NUM = /^\s*(\d{1,3})\s*[.)=:\-–]\s*(.+)$/;
 const OPT_LETTER = /^\s*([a-hA-H])[.)]\s+(.+)$/;
 const OPT_BULLET = /^\s*(?:[•\-\*○●□■☐◻▢◯◦▪]|\(\s*\)|\[\s*\])\s*(.+)$/;
 const OPT_TRAILING = /^(.+?)(?:\s*\.{3,}\s*|\s+\(|\s+\[|\t+\s*)(\d{1,3})\s*[)\]]?\s*$/;
+/**
+ * SPECIAL ANSWERS (2026-11-10): answers that are not one of the substantive options. They are exclusive in a multiple
+ * choice question (choosing one clears the rest) and keep their place when the others are randomized.
+ */
+const EXCLUSIVE_ANSWER = /^(?:none(?: of (?:these|the above|them))?\b|nothing\b|no(?:ne)? of the above\b|don'?t know\b|do not know\b|not sure\b|unsure\b|can(?:'?t|not) (?:say|choose|decide)\b|prefer not to (?:say|answer)\b|rather not say\b|refused\b|no answer\b|not applicable\b|n\/?a\b|does not apply\b|no preference\b|no opinion\b|all of (?:these|the above)\b)/i;
+const SPECIAL_ANSWER = /\b(?:other|none|nothing|don'?t know|do not know|not sure|unsure|prefer not|rather not|refused|no answer|not applicable|n\/?a|does not apply|no preference|no opinion|can(?:'?t|not) (?:say|choose)|all of (?:these|the above))\b/i;
+/** programming, not wording, in a bracket at the end of a question's line (see startQuestion) */
+const INLINE_PROGRAMMING = /^(?:(?:ASK|SHOW|DISPLAY)\s+(?:(?:Q\w+)\s+)?(?:ONLY\s+)?(?:IF|WHEN)\b|(?:BASE|FILTER)\s*:|SKIP\s+TO\b|GO\s*TO\b|RANDOMI[SZ]E\b|ROTATE\b|TERMINATE\b|SCREEN\s*OUT\b|(?:PROGRAMMER(?:'S)?\s+NOTE|PROG(?:RAMMER)?\s*[:.]|PN\s*:)|(?:SHOW|INSERT|DISPLAY|ADD)\s+(?:THE\s+)?(?:IMAGE|PICTURE|PHOTO|VIDEO|AUDIO|LOGO|STIMULUS|CONCEPT(?:\s+BOARD)?|PACK\s*SHOT)\b|(?:IMAGE|PICTURE|PHOTO|VIDEO|STIMULUS)\s*(?:HERE|:))/i;
+/** an instruction that says a picture, video or stimulus belongs with the question */
+const ASSET_INSTRUCTION = /^(?:(?:SHOW|INSERT|DISPLAY|ADD)\s+(?:THE\s+)?)?(IMAGE|PICTURE|PHOTO|VIDEO|AUDIO|LOGO|STIMULUS|CONCEPT(?:\s+BOARD)?|PACK\s*SHOT)\b\s*(?:HERE)?\s*[:\-–]?\s*(.*)$/i;
 const INSTRUCTION = /^\s*(?:\[[^\]]+\]|\([^)]+\)|<[^>]+>)\s*$|^\s*(?:PROGRAMMER(?:'S)?\s+NOTE|PROG(?:RAMMER)?\s*[:.]|PN\s*:|INTERVIEWER|INSTRUCTION|NOTE\s*:|ASK\s+(?:ALL|IF|ONLY|THOSE|Q\w+)|SHOW\s+(?:IF|ONLY)|DISPLAY\s+(?:IF|ONLY)|BASE\s*:|FILTER\s*:|IF\s+.+(?:SKIP|GO|CONTINUE|TERMINATE|ASK)|SKIP\s+TO|GO\s+TO|TERMINATE|RANDOMI[SZ]E|ROTATE|SINGLE\s+(?:CODE|ANSWER|RESPONSE|SELECT)|MULTI(?:PLE)?\s+(?:CODE|ANSWER|RESPONSE|SELECT)|SELECT\s+(?:ONE|ALL)|HIDDEN|CARRY\s*(?:FORWARD|OVER|FWD)|MASK|PIPE\s+IN|LOOP|REPEAT\s+(?:THIS|FOR|THE)|SAME\s+LIST)\b/i;
 const HEADING = /^\s*(?:section|part|block|module|chapter)\s+[\w.-]+\s*(?:[:.–—-]\s*(.*))?$/i;
 const PAGE_BREAK = /^\s*(?:[-=_*~]{3,}|\[?\s*(?:page\s*break|new\s*page|next\s*(?:page|screen)|screen\s*break)\s*\]?)\s*$/i;
@@ -83,8 +94,23 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
     if (cur) finishDraft(cur);
     if (pendingBreak) { page++; pendingBreak = false; }
     const id = code ?? `Q${++auto}`;
+    /*
+     * 2026-11-10: PROGRAMMER INSTRUCTIONS WRITTEN ON THE QUESTION'S OWN LINE — "… with Alpha? (ASK IF Q1 = Alpha)",
+     * "… you think. [SHOW IMAGE: pack.png]", "… heard of? [RANDOMIZE]". They used to stay in the question text (shown to
+     * respondents) and their logic was never read, because only an instruction on a line of its own was one. A
+     * trailing bracket whose content is programming, not wording, is taken off the text and read as an instruction;
+     * respondent wording in brackets ("(Select all that apply)") stays where it is.
+     */
+    const inline: string[] = [];
+    for (;;) {
+      const m = /\s*(?:\[([^\]]+)\]|\(([^)]+)\))\s*$/.exec(text);
+      if (!m || m.index === 0 || !INLINE_PROGRAMMING.test((m[1] ?? m[2]).trim())) break;
+      inline.unshift((m[1] ?? m[2]).trim());
+      text = text.slice(0, m.index);
+    }
     const q: CanonicalQuestion = { sourceId: id, variable: id, code: id, text: text.trim(), kind: "unknown", sourceType: "document", options: [], rows: [], required: true, validation: [], skips: [], custom: [], confidence: "high", notes: code ? [] : ["numbered by the import — the document gave no code"] };
-    cur = { q, instructions: [...pending], optionNotes: new Map(), block, page, typeSaid: false };
+    cur = { q, instructions: [...pending, ...inline], optionNotes: new Map(), block, page, typeSaid: false };
+    if (inline.length) q.notes.push(`programming on the question's line was read as instructions, not shown to respondents: ${inline.map((x) => `“${x}”`).join(", ")}`);
     if (pendingImages.length) { attachImages(cur as Draft, pendingImages); pendingImages = []; }
     pending = [];
     drafts.push(cur);
@@ -104,7 +130,7 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
     if (t) { label = t[1].trim(); code = t[2]; }
     const o: CanonicalOption = { sourceId: code, code: /^\d+$/.test(code) ? Number(code) : code, label };
     if (/\b(?:please\s+specify|specify|other\s*[:(]|other\s*$|write\s+in)\b/i.test(label) || looksLikeOtherSpecify(label) || notes.some((n) => /specify|open/i.test(n))) o.otherSpecify = true;
-    if (/^(?:none(?: of (?:these|the above))?|don'?t know|not sure|prefer not to (?:say|answer)|refused|no answer)\b/i.test(label) || notes.some((n) => /exclusive|single|only/i.test(n))) o.exclusive = true;
+    if (EXCLUSIVE_ANSWER.test(label) || notes.some((n) => /exclusive|single|only/i.test(n))) o.exclusive = true;
     if (notes.some((n) => /anchor|fix(?:ed)?\b/i.test(n))) o.anchor = true;
     d.optionNotes.set(d.q.options.length, notes);
     d.q.options.push(o);
@@ -312,14 +338,18 @@ function inferType(d: Draft, issues: Issue[]) {
     q.randomizeOptions = true;
     /* "RANDOMIZE … EXCEPT 99" / "… EXCEPT NONE OF THE ABOVE": those keep their place (anchored at the end) */
     const ex = /\brandomi[sz]e[^\n]*?\bexcept\b\s+(?:for\s+)?(?:options?\s+|codes?\s+)?([^\n.]+)/i.exec(said);
-    const special = (o: CanonicalOption) => /\b(?:other|none|none of (?:the|these)|don'?t know|not sure|prefer not|refused|n\/?a)\b/i.test(o.label);
+    const special = (o: CanonicalOption) => o.otherSpecify === true || o.exclusive === true || o.anchor === true || SPECIAL_ANSWER.test(o.label);
     if (ex) {
       const words = ex[1].replace(/[\])>]+\s*$/, "").split(/\s*(?:,|\band\b|&|\/)\s*/i).map((w) => w.trim().replace(/^[["“(]+|[\]"”)]+$/g, "")).filter(Boolean);
       const fixed = q.options.filter((o) => words.some((w) => String(o.code) === w || o.label.toLowerCase() === w.toLowerCase().replace(/^["“]|["”]$/g, "") || (w.length > 3 && o.label.toLowerCase().startsWith(w.toLowerCase()))));
       if (fixed.length) q.randomization = { anchorsTop: [], anchorsBottom: fixed.map((o) => o.sourceId), undisplayed: [], sourceType: `document: randomize except ${fixed.map((o) => o.code).join(", ")}` };
       else issues.push({ location: `${q.sourceId} · randomization`, type: "ambiguous", severity: "low", message: `${q.sourceId} says to randomize except “${ex[1].trim()}”, which matches none of its options.`, autoAttempted: true, refs: [q.sourceId], instruction: { kind: "randomize", text: ex[0], questionId: q.sourceId, options: q.options.filter(special).map((o) => o.sourceId) } });
     } else if (q.options.some(special)) {
-      issues.push({ location: `${q.sourceId} · randomization`, type: "ambiguous", severity: "low", message: `${q.sourceId} says to randomize its options but not whether ${q.options.filter(special).map((o) => `“${o.label}”`).join(", ")} keep their place.`, suggestion: "Usually Other / None / Don't know stay fixed at the end.", autoAttempted: true, refs: [q.sourceId], instruction: { kind: "randomize", text: "randomize", questionId: q.sourceId, options: q.options.filter(special).map((o) => o.sourceId) } });
+      /* 2026-11-10: only the substantive options are shuffled unless the document says otherwise — Other, None, Don't
+         know, Not applicable, Prefer not to say and No preference stay where the document put them (the clarification
+         still asks, and "Randomize every option" undoes this) */
+      q.randomization = { anchorsTop: [], anchorsBottom: q.options.filter(special).map((o) => o.sourceId), undisplayed: [], sourceType: "document: randomize — special answers kept in place by default" };
+      issues.push({ location: `${q.sourceId} · randomization`, type: "ambiguous", severity: "low", message: `${q.sourceId} says to randomize its options but not whether ${q.options.filter(special).map((o) => `“${o.label}”`).join(", ")} keep their place. They were kept fixed at the end; the other options are randomized.`, suggestion: "Usually Other / None / Don't know stay fixed at the end.", autoAttempted: true, refs: [q.sourceId], instruction: { kind: "randomize", text: "randomize", questionId: q.sourceId, options: q.options.filter(special).map((o) => o.sourceId) } });
     }
   }
   if (/\bnot required\b|\boptional\b/i.test(said)) q.required = false;
@@ -341,6 +371,21 @@ function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode:
   for (const ins of d.instructions) {
     const text = ins.replace(/^[[(<]\s*|\s*[\])>]$/g, "").trim().replace(/^(?:programmer(?:'s)?\s+)?(?:note|instruction)s?\s*[:\-–]\s*/i, "");
     let m: RegExpExecArray | null;
+    /*
+     * 2026-11-10: "SHOW IMAGE: pack_shot.png" / "INSERT CONCEPT BOARD HERE". When the document carried the picture it
+     * is already in the question (attachImages). When it did not, the file is MISSING: a visible placeholder is left
+     * in the question and the import says so — nothing is invented and nothing is fetched.
+     */
+    const asset = /\bIF\b/i.test(text) ? null : ASSET_INSTRUCTION.exec(text);
+    if (asset) {
+      const kind = asset[1], name = asset[2].replace(/^["“'(]+|["”')]+$/g, "").trim();
+      if (/<img\s/i.test(q.text)) { q.notes.push(`“${text}”: the picture in the document is shown with the question`); continue; }
+      const mark = missingAssetPlaceholder(kind, name);
+      q.text = `${q.text}\n<p><em>${mark}</em></p>`;
+      q.notes.push(`“${text}”: the file was not in the document — a placeholder was left in the question`);
+      issues.push({ location: `${q.sourceId} · “${text}”`, type: "reference", severity: "high", message: `${q.sourceId} refers to ${/^[aeiou]/i.test(kind) ? "an" : "a"} ${kind.toLowerCase()}${name ? ` (${name})` : ""} that is not in the document. A placeholder “${mark}” was left in the question — nothing was substituted.`, suggestion: "Upload the file in Assets and place it in the question, or remove the placeholder if it is not needed.", autoAttempted: false, refs: [q.sourceId] });
+      continue;
+    }
     // display: ASK IF / SHOW IF / BASE: / ASK Qx ONLY IF / ask only for respondents who …
     if ((m = /^(?:ASK|SHOW|DISPLAY)\s+(?:(?:Q\w+)\s+)?(?:ONLY\s+)?(?:IF|WHEN|TO|FOR)\s+(.+)$/i.exec(text)) || (m = /^(?:BASE|FILTER)\s*:\s*(.+)$/i.exec(text)) || (m = /^IF\s+(.+?)\s*,?\s*(?:THEN\s+)?(?:ASK|SHOW)\b.*$/i.exec(text))) {
       const body = m[1].replace(/^(?:all\s+)?(?:respondents?|those|people|participants|anyone)\s+(?:who|that|with)\s+/i, "");

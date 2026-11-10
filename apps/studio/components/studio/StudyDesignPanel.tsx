@@ -2,11 +2,12 @@
 import React from "react";
 import {
   applySurveyActions, buildAnalysisFramework, coerceSurveyActions, designAdvice, parseAttributes, parseList, parsePrices, recommendMethodology,
-  CATEGORY_NAMES, STUDY_METHODOLOGIES, type MethodInputs, type Methodology, type MethodologyRecommendation, type StudyCategory,
+  CATEGORY_NAMES, METHOD_FAMILIES, STUDY_METHODOLOGIES, methodFamily, methodGuide, type MethodInputs, type Methodology, type MethodologyRecommendation,
 } from "@rescript/engine";
 import { registerBuiltinDesignGenerators } from "@rescript/designs";
 import { runSimulation } from "@rescript/templates";
 import { useStudio } from "./store";
+import { useCommands } from "./CommandContext";
 import { takePendingMethodology } from "../../lib/intelligent/methodologyRequest";
 import { HeardNote, VoiceButton } from "../intelligent/VoiceButton";
 import { MethodLibrary, type LibraryGroup } from "./MethodLibrary";
@@ -20,7 +21,10 @@ registerBuiltinDesignGenerators();
  *   1 OBJECTIVE      the business problem in the researcher's words → the research category, the recommended method
  *                    with why, the alternatives and when each fits, what is still missing — and a warning when the
  *                    method the researcher named does not answer the objective (recommendMethodology, deterministic)
- *   2 METHOD         Intelligent: the recommendation; Manual: any method of the registry, by category
+ *   2 METHOD         the library on the LEFT (five research families, searchable); the chosen method's details on the
+ *                    RIGHT, changing as soon as a method is clicked (2026-11-10 — they used to sit far below the list):
+ *                    its research guide (nine questions, methodGuide), what the platform does not do for it, where
+ *                    its work continues (Qualitative, Data Analytics), then the set-up below
  *   3 INPUTS         the method's own parameters (product, prices, concepts, brands, items, attributes & levels …)
  *   4 DESIGN ADVICE  for conjoint / MaxDiff: the design type, tasks, concepts per task, versions and the minimum sample
  *                    from the standard rule, against the sample and time the researcher has
@@ -31,7 +35,6 @@ registerBuiltinDesignGenerators();
  *                    review, modify, regenerate and export
  */
 type Fields = Record<string, string>;
-const CATS = Object.keys(CATEGORY_NAMES) as StudyCategory[];
 
 function inputsFrom(m: Methodology, f: Fields): MethodInputs {
   const out: MethodInputs = {};
@@ -56,13 +59,28 @@ export function StudyDesignPanel() {
   const [rec, setRec] = React.useState<MethodologyRecommendation | null>(pending?.objective ? recommendMethodology(pending.objective) : null);
   /* a method picked in Design Generators → Methods arrives chosen */
   const [methodId, setMethodId] = React.useState<string>(pending?.methodId ?? rec?.recommended.id ?? "van_westendorp");
-  const libraryGroups = React.useMemo<LibraryGroup[]>(() => CATS.map((c) => ({ key: c, label: CATEGORY_NAMES[c], methods: STUDY_METHODOLOGIES.filter((x) => x.category === c).map((x) => ({ id: x.id, name: x.name, description: x.fit })) })), []);
+  const cmd = useCommands();
+  const libraryGroups = React.useMemo<LibraryGroup[]>(() => METHOD_FAMILIES.map((f) => ({ key: f.key, label: f.label, methods: STUDY_METHODOLOGIES.filter((x) => methodFamily(x) === f.key).map((x) => ({ id: x.id, name: x.name, description: `${x.fit} ${CATEGORY_NAMES[x.category]}` })) })), []);
+  const detailRef = React.useRef<HTMLDivElement>(null);
   const [fields, setFields] = React.useState<Fields>({});
   const [sample, setSample] = React.useState("");
   const [minutes, setMinutes] = React.useState("");
   const [preview, setPreview] = React.useState<null | { ok: boolean; next: ReturnType<typeof applySurveyActions>["def"] | null; results: string[]; errors: string[]; warnings: string[]; designs: number; questions: number; tests: string[]; crosstabs: number; sim: { produced: number; ok: boolean; problems: string[]; endings: Record<string, number> } | null }>(null);
   const [added, setAdded] = React.useState<string | null>(null);
-  const m = STUDY_METHODOLOGIES.find((x) => x.id === methodId)!;
+  const m = STUDY_METHODOLOGIES.find((x) => x.id === methodId) ?? STUDY_METHODOLOGIES[0];
+  const guide = React.useMemo(() => methodGuide(m), [m]);
+  const family = METHOD_FAMILIES.find((f) => f.key === methodFamily(m))!;
+  /* a newly chosen method is read from its top: the details panel scrolls on its own, so reset it */
+  React.useEffect(() => { detailRef.current?.scrollTo?.({ top: 0 }); }, [methodId]);
+  /* the chosen method is visible in the list when the panel opens (or a recommendation chooses one): the LIST scrolls, not the page */
+  const listRef = React.useRef<HTMLElement>(null);
+  React.useEffect(() => {
+    const list = listRef.current, item = list?.querySelector<HTMLElement>(`[data-testid="method-${methodId}"]`);
+    if (!list || !item || list.scrollHeight <= list.clientHeight) return;
+    const top = item.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    if (top < 60 || top > list.clientHeight - 60) list.scrollTop += top - list.clientHeight / 3;
+  }, [methodId]);
+  const jump = (id: string) => { const el = detailRef.current?.querySelector<HTMLElement>(`#${id}`); if (el && detailRef.current) detailRef.current.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" }); };
 
   const recommend = () => { const r = recommendMethodology(objective); setRec(r); setPreview(null); setAdded(null); if (r) setMethodId(r.recommended.id); };
   const inputs = inputsFrom(m, fields);
@@ -128,57 +146,90 @@ export function StudyDesignPanel() {
         </section>
       )}
 
-      <section className="sd-step">
-        <b>2. Method</b>
-        {/* 2026-11-09: a readable, grouped list instead of a native drop-down (whose group headings browsers draw pale) */}
-        <MethodLibrary compact groups={libraryGroups} selected={methodId} onSelect={(id) => { setMethodId(id); setPreview(null); }} testId="sd-method" />
-        <div className="sd-chosen" data-testid="sd-chosen">Chosen: <b>{m.name}</b> — {CATEGORY_NAMES[m.category]}</div>
-        <p className="muted sd-fit">{m.fit} · sample {m.sample.note} · {m.loi}</p>
-        <div className="sd-pros"><div><b>Strengths</b><ul>{m.strengths.map((x) => <li key={x}>{x}</li>)}</ul></div><div><b>Trade-offs</b><ul>{m.tradeoffs.map((x) => <li key={x}>{x}</li>)}</ul></div><div><b>Analysis</b><ul>{m.analysis.map((x) => <li key={x}>{x}</li>)}</ul></div></div>
-      </section>
+      <div className="sd-cols" data-testid="sd-cols">
+        <aside className="sd-list" aria-label="Methodologies" ref={listRef}>
+          <b>2. Method</b>
+          <MethodLibrary compact groups={libraryGroups} selected={methodId} onSelect={(id) => { setMethodId(id); setPreview(null); setAdded(null); }} testId="sd-method" />
+        </aside>
 
+        <div className="sd-detail" ref={detailRef} data-testid="sd-detail" data-method={m.id}>
+          <header className="sd-detail-head">
+            <div className="sd-chosen" data-testid="sd-chosen"><b>{m.name}</b><span className="chip">{family.label}</span><span className="chip ghost">{CATEGORY_NAMES[m.category]}</span></div>
+            <p className="muted sd-fit">Sample {m.sample.note} · {m.loi}</p>
+            <nav className="sd-jump" aria-label="In this panel">
+              <button type="button" className="btn tiny" onClick={() => jump("sd-guide")}>Research guide</button>
+              <button type="button" className="btn tiny" onClick={() => jump("sd-setup")} data-testid="sd-jump-setup">Set up and build</button>
+            </nav>
+          </header>
+
+          {m.caution && <div className="sd-caution" role="note" data-testid="sd-caution"><b>Planning guidance only.</b> {m.caution}</div>}
+          {m.workflow && (
+            <div className="sd-workflow" data-testid="sd-workflow">
+              <span>{m.workflow.note}</span>
+              <button type="button" className="btn small" data-testid="sd-workflow-open" onClick={() => cmd?.context.setTab(m.workflow!.kind === "qualitative" ? "qualitative" : "data")}>{m.workflow.label}</button>
+            </div>
+          )}
+
+          {guide && (
+            <section className="sd-guide" id="sd-guide" data-testid="sd-guide" aria-label={`Research guide: ${m.name}`}>
+              <div className="sd-g wide" data-part="what"><h5>What it is</h5><p>{guide.what}</p></div>
+              <div className="sd-g" data-part="when"><h5>When to use it</h5><p>{guide.when}</p></div>
+              <div className="sd-g" data-part="solves"><h5>The problem it solves</h5><p>{guide.solves}</p></div>
+              <div className="sd-g" data-part="data"><h5>Data it needs</h5><ul>{guide.data.map((x) => <li key={x}>{x}</li>)}</ul></div>
+              <div className="sd-g" data-part="structure"><h5>How the study is structured</h5><ul>{guide.structure.map((x) => <li key={x}>{x}</li>)}</ul></div>
+              <div className="sd-g" data-part="considerations"><h5>Design considerations</h5><ul>{guide.considerations.map((x) => <li key={x}>{x}</li>)}</ul></div>
+              <div className="sd-g" data-part="analysis"><h5>Analysis techniques</h5><ul>{guide.analysis.map((x) => <li key={x}>{x}</li>)}</ul></div>
+              <div className="sd-g" data-part="outputs"><h5>Outputs and insights</h5><ul>{guide.outputs.map((x) => <li key={x}>{x}</li>)}</ul></div>
+              <div className="sd-g wide example" data-part="example"><h5>A practical example</h5><p>{guide.example}</p></div>
+            </section>
+          )}
+
+          <div id="sd-setup" className="sd-setup">
       <section className="sd-step">
-        <b>3. Inputs</b>
-        <div className="sd-grid">
-          {m.inputs.map((i) => (
-            <label key={i.key} className="f"><span>{i.label}{i.required ? " *" : ""}</span>
-              {i.kind === "attributes" || i.kind === "list"
-                ? <textarea className="ta" rows={i.kind === "attributes" ? 4 : 3} data-testid={`sd-in-${i.key}`} value={fields[i.key] ?? ""} onChange={(e) => setFields({ ...fields, [i.key]: e.target.value })} placeholder={i.kind === "attributes" ? (i.example ?? "Attribute: level, level, level") : (i.example ?? "One per line")} />
-                : <input className="input" data-testid={`sd-in-${i.key}`} value={fields[i.key] ?? ""} onChange={(e) => setFields({ ...fields, [i.key]: e.target.value })} placeholder={i.example ?? ""} />}
-            </label>
-          ))}
-          <label className="f"><span>Completes you can afford</span><input className="input" type="number" data-testid="sd-sample" value={sample} onChange={(e) => setSample(e.target.value)} /></label>
-          <label className="f"><span>Minutes available for this part</span><input className="input" type="number" value={minutes} onChange={(e) => setMinutes(e.target.value)} /></label>
+            <b>3. Inputs</b>
+            <div className="sd-grid">
+              {m.inputs.map((i) => (
+                <label key={i.key} className="f"><span>{i.label}{i.required ? " *" : ""}</span>
+                  {i.kind === "attributes" || i.kind === "list"
+                    ? <textarea className="ta" rows={i.kind === "attributes" ? 4 : 3} data-testid={`sd-in-${i.key}`} value={fields[i.key] ?? ""} onChange={(e) => setFields({ ...fields, [i.key]: e.target.value })} placeholder={i.kind === "attributes" ? (i.example ?? "Attribute: level, level, level") : (i.example ?? "One per line")} />
+                    : <input className="input" data-testid={`sd-in-${i.key}`} value={fields[i.key] ?? ""} onChange={(e) => setFields({ ...fields, [i.key]: e.target.value })} placeholder={i.example ?? ""} />}
+                </label>
+              ))}
+              <label className="f"><span>Completes you can afford</span><input className="input" type="number" data-testid="sd-sample" value={sample} onChange={(e) => setSample(e.target.value)} /></label>
+              <label className="f"><span>Minutes available for this part</span><input className="input" type="number" value={minutes} onChange={(e) => setMinutes(e.target.value)} /></label>
+            </div>
+            {Number(sample) > 0 && Number(sample) < m.sample.min && <div className="sd-warn" data-testid="sd-sample-warn">{sample} completes is below what {m.name} needs ({m.sample.note}).</div>}
+          </section>
+
+          {advice && (
+            <section className="sd-step sd-advice" data-testid="sd-advice" data-method={advice.method}>
+              <b>4. Design advice</b>
+              <p>{advice.why}</p>
+              <p className="muted">{advice.tasks} tasks{advice.alternatives ? ` · ${advice.alternatives} concepts per task` : ""}{advice.perTask ? ` · ${advice.perTask} items per task` : ""} · minimum ≈ {advice.minSample} completes · ≈ {advice.minutes} min</p>
+              {advice.warnings.map((w) => <div key={w} className="sd-warn">{w}</div>)}
+            </section>
+          )}
+
+          <div className="row" style={{ gap: 8, margin: "8px 0" }}>
+            <button type="button" className="btn primary" data-testid="sd-preview" disabled={missingRequired.length > 0} title={missingRequired.length ? `Needed: ${missingRequired.join(", ")}` : undefined} onClick={build}>Build and check the study</button>
+            {missingRequired.length > 0 && <span className="muted">Needed: {missingRequired.join(", ")}</span>}
+          </div>
+
+          {preview && (
+            <section className={`sd-preview ${preview.ok ? "ok" : "bad"}`} data-testid="sd-result" data-ok={preview.ok ? "1" : "0"}>
+              {!preview.ok ? <><b>It could not be built:</b><ul>{preview.errors.map((e) => <li key={e}>{e}</li>)}</ul></> : <>
+                <b>Ready to add: {preview.questions} question{preview.questions === 1 ? "" : "s"}{preview.designs ? `, ${preview.designs} generated design file${preview.designs === 1 ? "" : "s"}` : ""}.</b>
+                <ul>{preview.results.slice(0, 12).map((x, k) => <li key={k}>{x}</li>)}</ul>
+                {preview.warnings.length > 0 && <details><summary>Checks ({preview.warnings.length})</summary><ul>{preview.warnings.slice(0, 12).map((w, k) => <li key={k}>{w}</li>)}</ul></details>}
+                <p data-testid="sd-analysis"><b>Analysis plan</b> the engine derives: {preview.tests.length ? preview.tests.join(", ") : "frequencies"}{preview.crosstabs ? ` · ${preview.crosstabs} crosstabs` : ""}.</p>
+                {preview.sim && <p data-testid="sd-sim"><b>Simulation</b> — {preview.sim.produced} respondents through the real logic: {Object.entries(preview.sim.endings).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ")}; {preview.sim.ok ? "no problems found." : `${preview.sim.problems.length} problem(s): ${preview.sim.problems.join("; ")}`}</p>}
+                <button type="button" className="btn primary" data-testid="sd-add" onClick={add}>Add to the survey</button>
+              </>}
+            </section>
+          )}
+          </div>
         </div>
-        {Number(sample) > 0 && Number(sample) < m.sample.min && <div className="sd-warn" data-testid="sd-sample-warn">{sample} completes is below what {m.name} needs ({m.sample.note}).</div>}
-      </section>
-
-      {advice && (
-        <section className="sd-step sd-advice" data-testid="sd-advice" data-method={advice.method}>
-          <b>4. Design advice</b>
-          <p>{advice.why}</p>
-          <p className="muted">{advice.tasks} tasks{advice.alternatives ? ` · ${advice.alternatives} concepts per task` : ""}{advice.perTask ? ` · ${advice.perTask} items per task` : ""} · minimum ≈ {advice.minSample} completes · ≈ {advice.minutes} min</p>
-          {advice.warnings.map((w) => <div key={w} className="sd-warn">{w}</div>)}
-        </section>
-      )}
-
-      <div className="row" style={{ gap: 8, margin: "8px 0" }}>
-        <button type="button" className="btn primary" data-testid="sd-preview" disabled={missingRequired.length > 0} title={missingRequired.length ? `Needed: ${missingRequired.join(", ")}` : undefined} onClick={build}>Build and check the study</button>
-        {missingRequired.length > 0 && <span className="muted">Needed: {missingRequired.join(", ")}</span>}
       </div>
-
-      {preview && (
-        <section className={`sd-preview ${preview.ok ? "ok" : "bad"}`} data-testid="sd-result" data-ok={preview.ok ? "1" : "0"}>
-          {!preview.ok ? <><b>It could not be built:</b><ul>{preview.errors.map((e) => <li key={e}>{e}</li>)}</ul></> : <>
-            <b>Ready to add: {preview.questions} question{preview.questions === 1 ? "" : "s"}{preview.designs ? `, ${preview.designs} generated design file${preview.designs === 1 ? "" : "s"}` : ""}.</b>
-            <ul>{preview.results.slice(0, 12).map((x, k) => <li key={k}>{x}</li>)}</ul>
-            {preview.warnings.length > 0 && <details><summary>Checks ({preview.warnings.length})</summary><ul>{preview.warnings.slice(0, 12).map((w, k) => <li key={k}>{w}</li>)}</ul></details>}
-            <p data-testid="sd-analysis"><b>Analysis plan</b> the engine derives: {preview.tests.length ? preview.tests.join(", ") : "frequencies"}{preview.crosstabs ? ` · ${preview.crosstabs} crosstabs` : ""}.</p>
-            {preview.sim && <p data-testid="sd-sim"><b>Simulation</b> — {preview.sim.produced} respondents through the real logic: {Object.entries(preview.sim.endings).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ")}; {preview.sim.ok ? "no problems found." : `${preview.sim.problems.length} problem(s): ${preview.sim.problems.join("; ")}`}</p>}
-            <button type="button" className="btn primary" data-testid="sd-add" onClick={add}>Add to the survey</button>
-          </>}
-        </section>
-      )}
       {added && <div className="auth-note" data-testid="sd-added">{added}</div>}
     </div>
   );

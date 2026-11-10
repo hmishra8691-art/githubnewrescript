@@ -47,10 +47,10 @@ export function AlertBell() {
       {open && (
         <>
           <div className="menu-scrim" onClick={() => setOpen(false)} />
-          <div className="menu" role="dialog" aria-label="Alerts" style={{ width: 380, maxHeight: 420, overflow: "auto", right: 0 }} data-testid="bell-list">
+          <div className="menu bell-list" role="dialog" aria-label="Alerts" data-testid="bell-list">
             {!alerts.length && <div className="menu-item ql-muted">No alerts.</div>}
             {alerts.map((a) => (
-              <a key={a.id} className="menu-item" href={a.link ?? "#"} data-testid="bell-item" data-severity={a.severity} data-read={a.read ? "1" : "0"} style={{ display: "block", whiteSpace: "normal" }}>
+              <a key={a.id} className="menu-item" href={a.link ?? "#"} data-testid="bell-item" data-severity={a.severity} data-read={a.read ? "1" : "0"}>
                 <b style={{ color: a.severity === "critical" ? "var(--red, #b42318)" : undefined }}>{a.title}</b>
                 <div style={{ fontSize: 12 }}>{a.text}</div>
                 <div className="ql-muted" style={{ fontSize: 11 }}>{new Date(a.createdAt).toLocaleString()}</div>

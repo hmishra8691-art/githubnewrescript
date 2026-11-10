@@ -55,7 +55,7 @@
  * and its absence from the results looks like a bug in the analysis.
  */
 import type { DesignGeneratorPlugin } from "@rescript/schema";
-import { mulberry32, seededShuffle, subSeed } from "@rescript/engine";
+import { mulberry32, seededShuffle, subSeed, maxdiffOptOutsOf, MAXDIFF_OPT_OUT_LABELS } from "@rescript/engine";
 
 /** What the respondent picks in each task. Anchoring is orthogonal (`anchored`). */
 export type MaxDiffResponseMode = "best_worst" | "best_only";
@@ -109,6 +109,17 @@ export interface MaxDiffConfig {
    * balance counts and from the analysis.
    */
   practiceTask?: boolean;
+  /**
+   * TASK OPT-OUTS (2026-11-10): a control under each set that answers it without a best / worst. They are switches
+   * on the design, never items: not rows of the file, not counted in the balance. See @rescript/engine
+   * maxdiffOptOut.ts for what each means in the data and the analysis.
+   */
+  optOutNone?: boolean;
+  optOutNoneLabel?: string;
+  optOutNoPreference?: boolean;
+  optOutNoPreferenceLabel?: string;
+  optOutCannotChoose?: boolean;
+  optOutCannotChooseLabel?: string;
 }
 
 export const DEFAULT_ANCHOR_PROMPT =
@@ -736,6 +747,30 @@ export const maxdiffPlugin: DesignGeneratorPlugin<MaxDiffConfig> = {
       help: "Start each version with one practice task (task 0). It is exported but not analysed or counted in the balance.",
     },
     {
+      name: "optOutNone",
+      label: "Opt-out: None of these",
+      type: "boolean",
+      default: false,
+      help: "Adds “None of these” under each set, for a respondent to whom no item in the set matters. It is not an item: it is never rotated or counted in the balance, and a set answered with it is reported, not modelled as a choice. In an anchored design it counts as the anchor answer “none”.",
+    },
+    { name: "optOutNoneLabel", label: "“None of these” wording", type: "text", help: `Default "${MAXDIFF_OPT_OUT_LABELS.none}".` },
+    {
+      name: "optOutNoPreference",
+      label: "Opt-out: No preference",
+      type: "boolean",
+      default: false,
+      help: "Adds “No preference between these” under each set, for a respondent to whom the items in the set are equal. Reported; not modelled as a choice.",
+    },
+    { name: "optOutNoPreferenceLabel", label: "“No preference” wording", type: "text", help: `Default "${MAXDIFF_OPT_OUT_LABELS.no_preference}".` },
+    {
+      name: "optOutCannotChoose",
+      label: "Opt-out: I cannot choose",
+      type: "boolean",
+      default: false,
+      help: "Adds “I cannot choose” under each set — a non-substantive answer, treated as non-response for that set and reported.",
+    },
+    { name: "optOutCannotChooseLabel", label: "“I cannot choose” wording", type: "text", help: `Default "${MAXDIFF_OPT_OUT_LABELS.cannot_choose}".` },
+    {
       name: "anchored",
       label: "Anchored (dual-response)",
       type: "boolean",
@@ -1045,6 +1080,8 @@ export const maxdiffPlugin: DesignGeneratorPlugin<MaxDiffConfig> = {
         ...(c.appearancesPerItem !== null ? { appearancesPerItem: c.appearancesPerItem } : {}),
         ...(c.prohibited.pairs.length ? { prohibitedPairs: c.prohibited.pairs.map(([a, b]) => [c.items[a], c.items[b]]) } : {}),
         ...(c.practiceTask ? { practiceTask: true } : {}),
+        /* opt-outs are reported with the design they belong to; they add no rows and change no count above */
+        ...(maxdiffOptOutsOf(config).length ? { optOuts: maxdiffOptOutsOf(config).map((o) => ({ kind: o.kind, label: o.label })) } : {}),
         ...(c.itemsPerVersion
           ? {
               itemsPerVersion: c.itemsPerVersion,

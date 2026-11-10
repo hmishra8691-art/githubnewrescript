@@ -412,6 +412,8 @@ export interface MaxDiffSpec {
   prohibitedPairs?: MaxDiffPair[]; addProhibitedPairs?: MaxDiffPair[]; removeProhibitedPairs?: MaxDiffPair[];
   bestLabel?: string | null; worstLabel?: string | null; instructions?: string | null;
   practice?: boolean; itemsPerVersion?: number | null; balance?: "optimized" | "greedy";
+  /** task opt-outs (2026-11-10): the kinds to offer under each set, and their wording (null = the default wording) */
+  optOuts?: MaxDiffOptOut[]; optOutLabels?: Partial<Record<MaxDiffOptOut, string | null>>;
   seed?: number; name?: string;
 }
 export interface ConjointSpec {

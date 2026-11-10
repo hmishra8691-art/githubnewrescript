@@ -1,3 +1,4 @@
+import { MAXDIFF_OPT_OUTS, MAXDIFF_OPT_OUT_KEYS, maxdiffOptOutsOf, type MaxDiffOptOut } from "./maxdiffOptOut.js";
 import type { DesignReference, Question, SurveyDefinition } from "@rescript/schema";
 import { designGeneratorRegistry } from "@rescript/schema";
 import type { IdMinter } from "./questionOps.js";
@@ -58,6 +59,8 @@ export interface MaxDiffSpec {
   prohibitedPairs?: MaxDiffPair[]; addProhibitedPairs?: MaxDiffPair[]; removeProhibitedPairs?: MaxDiffPair[];
   bestLabel?: string | null; worstLabel?: string | null; instructions?: string | null;
   practice?: boolean; itemsPerVersion?: number | null; balance?: "optimized" | "greedy";
+  /** task opt-outs (2026-11-10): the kinds to offer under each set, and their wording (null = the default wording) */
+  optOuts?: MaxDiffOptOut[]; optOutLabels?: Partial<Record<MaxDiffOptOut, string | null>>;
   seed?: number; name?: string;
 }
 export type ConjointMethodName = "cbc" | "menu" | "acbc" | "cva";
@@ -306,6 +309,28 @@ function maxdiffSpecOf(o: Record<string, unknown>, partial: boolean): MaxDiffSpe
   if (bool(o.anchored) !== undefined) spec.anchored = bool(o.anchored);
   if (o.balance !== undefined) { const b = str(o.balance)?.toLowerCase(); if (b !== "optimized" && b !== "greedy") return "balance is optimized (recommended) or greedy"; spec.balance = b; }
   if (bool(o.practice ?? o.practiceTask) !== undefined) spec.practice = bool(o.practice ?? o.practiceTask);
+  /* task opt-outs: optOuts: ["none", "no_preference", "cannot_choose"] (or false / [] for none); noneOption: true is "none" */
+  const rawOpt = o.optOuts ?? o.optOut ?? o.opt_outs ?? (bool(o.noneOption ?? o.none) === true ? ["none"] : bool(o.noneOption ?? o.none) === false ? [] : undefined);
+  if (rawOpt !== undefined) {
+    const listed = rawOpt === false || rawOpt === null ? [] : rawOpt === true ? ["none"] : Array.isArray(rawOpt) ? rawOpt : [rawOpt];
+    const kinds: MaxDiffOptOut[] = [];
+    for (const x of listed) {
+      const k = String(x ?? "").toLowerCase().replace(/[\s-]+/g, "_").replace(/^i_/, "");
+      const kind: MaxDiffOptOut | null = /^none|^nota$/.test(k) ? "none" : /^no_pref|^indifferen|^no_difference/.test(k) ? "no_preference" : /^can_?not|^cant|^unable|^dont_know|^don't_know|^dk$/.test(k) ? "cannot_choose" : null;
+      if (!kind) return `optOuts is a list of none, no_preference and cannot_choose — not “${String(x)}”`;
+      if (!kinds.includes(kind)) kinds.push(kind);
+    }
+    spec.optOuts = kinds;
+  }
+  if (o.optOutLabels !== undefined) {
+    if (!o.optOutLabels || typeof o.optOutLabels !== "object" || Array.isArray(o.optOutLabels)) return "optOutLabels is { none, no_preference, cannot_choose } → wording";
+    const labels: Partial<Record<MaxDiffOptOut, string | null>> = {};
+    for (const [k, v] of Object.entries(o.optOutLabels as Record<string, unknown>)) {
+      if (!(MAXDIFF_OPT_OUTS as readonly string[]).includes(k)) return `optOutLabels: “${k}” is not an opt-out (none, no_preference, cannot_choose)`;
+      if (v === null || v === "") labels[k as MaxDiffOptOut] = null; else { const t = str(v, 200); if (!t) return `optOutLabels.${k} is text`; labels[k as MaxDiffOptOut] = t; }
+    }
+    spec.optOutLabels = labels;
+  }
   for (const k of ["anchorPrompt", "bestLabel", "worstLabel", "instructions"] as const) {
     if (o[k] === null || o[k] === "") spec[k] = null;
     else if (o[k] !== undefined) { const s = str(o[k], k === "instructions" ? 1000 : 200); if (!s) return `${k} is text`; spec[k] = s; }
@@ -726,6 +751,8 @@ function maxdiffConfig(def: SurveyDefinition, env: MethodEnv, s: MaxDiffSpec, pr
   if (s.responseMode) c.responseMode = s.responseMode;
   if (s.anchored !== undefined) c.anchored = s.anchored;
   if (s.practice !== undefined) c.practiceTask = s.practice;
+  if (s.optOuts) for (const k of MAXDIFF_OPT_OUTS) { if (s.optOuts.includes(k)) c[MAXDIFF_OPT_OUT_KEYS[k].on] = true; else delete c[MAXDIFF_OPT_OUT_KEYS[k].on]; }
+  if (s.optOutLabels) for (const [k, v] of Object.entries(s.optOutLabels) as [MaxDiffOptOut, string | null][]) { if (v === null) delete c[MAXDIFF_OPT_OUT_KEYS[k].label]; else c[MAXDIFF_OPT_OUT_KEYS[k].label] = v; }
   if (s.balance) c.balance = s.balance;
   for (const k2 of ["anchorPrompt", "bestLabel", "worstLabel", "instructions"] as const) {
     if (s[k2] === null) delete c[k2]; else if (s[k2] !== undefined) c[k2] = s[k2];
@@ -781,6 +808,7 @@ export function maxdiffDesignWords(config: Cfg, file: DesignFile): string {
     V > 1 && d.pairs ? `across the ${V} versions ${d.pairs.min}–${d.pairs.max} times (${STATUS_WORDS[d.pairs.status] ?? d.pairs.status})` : !d.pairs ? "" : `(${STATUS_WORDS[d.pairs.status] ?? d.pairs.status})`,
     d.prohibited?.pairs ? `${plural(d.prohibited.pairs, "prohibited pair")} ${d.prohibited.violations ? `VIOLATED ${d.prohibited.violations} times` : "never shown together (checked on the rows)"}` : "",
     config.practiceTask ? "plus a practice task (not counted)" : "",
+    maxdiffOptOutsOf(config).length ? `each set can be answered with ${maxdiffOptOutsOf(config).map((o) => `“${o.label}”`).join(" or ")} instead of a choice (an opt-out, not an item: not rotated, not counted in the balance, reported in the analysis)` : "",
   ].filter(Boolean);
   // the measured verdict: "balanced" only when the generator's measurement earned it (items AND pairs as even as the counts allow)
   const verdict = d.balanced ? "balanced (as even as the counts allow)" : d.items && d.items.status !== "exact" && d.items.status !== "best_possible" ? `items ${STATUS_WORDS[d.items.status] ?? d.items.status}` : "";
@@ -1196,7 +1224,7 @@ export function describeDesignQuestion(def: SurveyDefinition, q: Question): stri
   const c = (d.config ?? {}) as Cfg;
   if (d.kind === "maxdiff") {
     const pairs = (c.prohibitedPairs as MaxDiffPair[] | undefined) ?? [];
-    return `${q.code} MaxDiff [design ${d.name}, v${d.version}, seed ${d.seed}]: ${(c.items as string[] ?? []).length} items (${(c.items as string[] ?? []).slice(0, 25).join(" | ")}), ${c.itemsPerTask ?? "?"} per task, ${c.tasks ?? "auto"} tasks, ${c.versions ?? 1} versions, ${c.responseMode ?? "best_worst"}${c.anchored ? ", anchored" : ""}${c.practiceTask ? ", practice task" : ""}${pairs.length ? `, prohibited ${pairs.map((p) => `${p[0]}/${p[1]}`).join(", ")}` : ""}${c.bestLabel || c.worstLabel ? `, labels ${c.bestLabel ?? "Most"}/${c.worstLabel ?? "Least"}` : ""}`;
+    return `${q.code} MaxDiff [design ${d.name}, v${d.version}, seed ${d.seed}]: ${(c.items as string[] ?? []).length} items (${(c.items as string[] ?? []).slice(0, 25).join(" | ")}), ${c.itemsPerTask ?? "?"} per task, ${c.tasks ?? "auto"} tasks, ${c.versions ?? 1} versions, ${c.responseMode ?? "best_worst"}${c.anchored ? ", anchored" : ""}${c.practiceTask ? ", practice task" : ""}${maxdiffOptOutsOf(c).length ? `, opt-outs ${maxdiffOptOutsOf(c).map((o) => o.kind).join("/")}` : ""}${pairs.length ? `, prohibited ${pairs.map((p) => `${p[0]}/${p[1]}`).join(", ")}` : ""}${c.bestLabel || c.worstLabel ? `, labels ${c.bestLabel ?? "Most"}/${c.worstLabel ?? "Least"}` : ""}`;
   }
   if (d.kind === "menu") return `${q.code} menu-based conjoint [design ${d.name}, v${d.version}]: ${((c.items as { name: string; levels: string[] }[]) ?? []).map((i) => `${i.name} (${i.levels.join("/")})`).join("; ")}, ${c.tasks ?? 8} tasks, ${c.versions ?? 1} versions${c.noneOption === false ? "" : ", buy-nothing offered"}${Array.isArray(c.exclusiveGroups) && c.exclusiveGroups.length ? `; one-of sections ${(c.exclusiveGroups as string[]).join("; ")}` : ""}${((c.simulations as { name: string }[] | undefined) ?? []).length ? `; simulator scenarios: ${((c.simulations as { name: string }[]) ?? []).map((x) => x.name).join(", ")}` : ""}`;
   if (d.kind === "conjoint" || d.kind === "acbc" || d.kind === "cva") {

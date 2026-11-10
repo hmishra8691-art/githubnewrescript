@@ -1,4 +1,5 @@
 import type { SurveyAction, OptionSpec, ScaleSpec } from "./surveyActions.js";
+import { EXTRA_METHODOLOGIES } from "./studyMethodologyExtra.js";
 
 /**
  * THE RESEARCH METHODOLOGY ENGINE (2026-11-09 — Rapid Studio phase 2).
@@ -19,13 +20,40 @@ import type { SurveyAction, OptionSpec, ScaleSpec } from "./surveyActions.js";
  * design parameter or a sample size. Extensible: a methodology is one entry in STUDY_METHODOLOGIES.
  */
 
-export type StudyCategory = "pricing" | "product" | "brand" | "advertising" | "employee" | "customer" | "segmentation" | "usage" | "shopper" | "healthcare" | "opinion" | "media" | "market_entry" | "innovation";
+export type StudyCategory = "pricing" | "product" | "brand" | "advertising" | "employee" | "customer" | "segmentation" | "usage" | "shopper" | "healthcare" | "opinion" | "media" | "market_entry" | "innovation"
+  | "quant" | "education" | "social" | "clinical" | "qualitative";
 export const CATEGORY_NAMES: Record<StudyCategory, string> = {
   pricing: "Pricing & price sensitivity", product: "Product & concept testing", brand: "Brand research", advertising: "Advertising & communication",
   employee: "Employee & organisational", customer: "Customer experience (CX, CSAT, NPS)", segmentation: "Market segmentation", usage: "Usage & attitude (U&A)",
   shopper: "Shopper & retail", healthcare: "Healthcare", opinion: "Political & public opinion", media: "Media, entertainment & audience",
   market_entry: "Market entry & competitive intelligence", innovation: "Product innovation",
+  quant: "Advanced quantitative methods", education: "Education & assessment", social: "Social science & policy",
+  clinical: "Clinical & epidemiological research (planning)", qualitative: "Qualitative research",
 };
+
+/**
+ * THE FIVE FAMILIES the library is read in (2026-11-10). A category says what a study is ABOUT; a family says what
+ * kind of research it is, which is how a researcher looks for a method. A few methods sit in a family other than
+ * their category's (conjoint and MaxDiff are pricing or product studies AND advanced quantitative techniques — they
+ * are listed with the techniques).
+ */
+export type MethodFamily = "market" | "quantitative" | "academic" | "medical" | "qualitative";
+export const METHOD_FAMILIES: { key: MethodFamily; label: string; note: string }[] = [
+  { key: "market", label: "Market & consumer research", note: "Markets, customers, brands, products, advertising and the people inside organisations." },
+  { key: "quantitative", label: "Advanced quantitative research", note: "Choice modelling, pricing techniques, experiments and the multivariate analyses a study can be designed for." },
+  { key: "academic", label: "Academic & social science research", note: "Education and assessment, attitudes and behaviour, public opinion, policy, evaluation and study designs over time." },
+  { key: "medical", label: "Medical & healthcare research", note: "Patient and provider research, outcomes, and planning instruments for clinical and epidemiological designs. Planning guidance — not a regulated trial system." },
+  { key: "qualitative", label: "Qualitative research", note: "Interviews, groups, observation and diaries, and the analysis of what people said." },
+];
+const FAMILY_BY_CATEGORY: Record<StudyCategory, MethodFamily> = {
+  pricing: "quantitative", product: "market", brand: "market", advertising: "market", employee: "market", customer: "market", segmentation: "market", usage: "market",
+  shopper: "market", media: "market", market_entry: "market", innovation: "market", opinion: "academic", healthcare: "medical",
+  quant: "quantitative", education: "academic", social: "academic", clinical: "medical", qualitative: "qualitative",
+};
+const FAMILY_OVERRIDE: Record<string, MethodFamily> = { maxdiff: "quantitative", treatment_preference: "medical" };
+export function methodFamily(m: Pick<Methodology, "id" | "category">): MethodFamily {
+  return FAMILY_OVERRIDE[m.id] ?? (/conjoint|acbc/.test(m.id) ? "quantitative" : FAMILY_BY_CATEGORY[m.category]);
+}
 
 export interface MethodInput { key: string; label: string; kind: "text" | "list" | "prices" | "attributes" | "number"; required?: boolean; example?: string }
 export interface MethodInputs { product?: string; currency?: string; prices?: number[]; concepts?: string[]; brands?: string[]; items?: string[]; attributes?: { name: string; levels: string[] }[]; statements?: string[]; organisation?: string; sample?: number; minutes?: number }
@@ -45,6 +73,14 @@ export interface Methodology {
   analysis: string[];
   alternatives: string[];
   build(i: MethodInputs): SurveyAction[];
+  /**
+   * Where the method's main work happens when it is not the questionnaire: a qualitative method is run in Research
+   * Tools → Qualitative, an analysis technique in Data Analytics. `build` still writes what the survey side needs (a
+   * screener, the measurement battery, the open questions).
+   */
+  workflow?: { kind: "qualitative" | "analysis"; label: string; note: string };
+  /** what the platform does NOT do for this method — shown with it wherever it is offered (clinical designs, validated instruments) */
+  caution?: string;
 }
 
 /* ------------------------------------------------------------ blueprint helpers */
@@ -225,7 +261,7 @@ export const STUDY_METHODOLOGIES: Methodology[] = [
   /* ---- customer ---- */
   { id: "nps_cx", name: "NPS with drivers (relationship CX)", category: "customer",
     fit: "loyalty and what drives it", strengths: ["benchmarkable KPI", "drivers and verbatims by NPS group"], tradeoffs: ["coarse on its own — the why questions matter"],
-    signals: [[/\b(?:nps|net promoter|recommend|loyalty|customer experience|cx|churn)\b/, 3]],
+    signals: [[/\b(?:nps|net promoter|recommend|loyalty|customer experience|cx|churn)\b/, 3], [/\b(?:how satisfied are (?:our|the) customers|why (?:do |are )?(?:they|customers|clients) (?:leave|leaving|cancel|switch))\b/, 3]],
     inputs: [{ key: "product", label: "Company or product", kind: "text", required: true }],
     sample: { min: 300, note: "300+ for a ±5-point NPS" }, loi: "≈ 4 minutes", analysis: ["NPS with margin of error", "key drivers of the score", "coded reasons by group"], alternatives: ["csat_ces"],
     build: (i) => { const b = "Loyalty"; const p = P(i, "us"); return [block(b), q(b, "nps", `How likely are you to recommend ${p} to a friend or colleague?`), q(b, "long_text", "What is the main reason for your score?", { required: false }), q(b, "matrix_single", `How satisfied are you with ${p} on…`, { rows: ["Product quality", "Price / value", "Customer service", "Ease of doing business", "Reliability"], scale: sat5 })]; } },
@@ -287,6 +323,7 @@ export const STUDY_METHODOLOGIES: Methodology[] = [
     inputs: [{ key: "items", label: "Ideas (8–30)", kind: "list", required: true }],
     sample: { min: 300, note: "300+ completes" }, loi: "≈ 6 minutes", analysis: ["MaxDiff scores per idea", "purchase intent on the top ideas", "TURF for a portfolio"], alternatives: ["sequential_monadic", "maxdiff"],
     build: (i) => [{ op: "create_maxdiff", items: list(i.items, []) } as SurveyAction] },
+  ...EXTRA_METHODOLOGIES,
 ];
 
 const byId = new Map(STUDY_METHODOLOGIES.map((m) => [m.id, m]));

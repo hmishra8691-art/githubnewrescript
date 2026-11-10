@@ -51,6 +51,7 @@ import {
   type ValidationError,
   dontKnowEnabled,
   dontKnowKey,
+  maxdiffOptOutsOf, maxdiffTaskOptOut,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { DualResponseFollowUp } from "./variants/conjointSuite";
@@ -2052,6 +2053,8 @@ function DesignTasks(p: QRProps) {
   const mdInstructions = isMaxdiff ? (mdCfg.instructions ?? "").trim() : "";
   const practiceTasks = new Set(rows.filter((r) => Number(r.practice) === 1).map((r) => String(r.task)));
   const realTasks = tasks.filter((t) => !practiceTasks.has(t));
+  /* TASK OPT-OUTS (2026-11-10): the design's switches — never items of the set (see @rescript/engine maxdiffOptOut.ts) */
+  const mdOptOuts = isMaxdiff ? maxdiffOptOutsOf(design.config) : [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -2116,6 +2119,8 @@ function DesignTasks(p: QRProps) {
                           delete next[other];
                           notice = `“${label}” can't be both ${bestLabel} and ${worstLabel}. It is now your ${side === "best" ? bestLabel : worstLabel} choice — pick a different item for ${other === "best" ? bestLabel : worstLabel}.`;
                         }
+                        /* a best or worst is a choice: it replaces an opt-out given for this set */
+                        delete next.optOut;
                         setMdNotice((m) => ({ ...m, [t]: notice }));
                         p.onChange({ ...vals, [t]: next });
                       };
@@ -2179,12 +2184,35 @@ function DesignTasks(p: QRProps) {
               </table>
             </div>
             {!isMaxdiff && <DualResponseFollowUp def={p.def} q={p.q} task={t} value={vals} onChange={p.onChange} readOnly={!!p.q.settings.readOnly} />}
+            {isMaxdiff && mdOptOuts.length > 0 && (
+              /*
+               * The opt-out sits UNDER the set, apart from the items: it answers the set as a whole. Choosing it clears
+               * the set's best / worst (and its anchor answer — "none" already says it); a checkbox, so it can be undone.
+               */
+              <div className="rs-md-optout" role="group" aria-label="Instead of choosing" data-testid={`md-optouts-${t}`} style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 14 }}>
+                {mdOptOuts.map((o) => {
+                  const on = maxdiffTaskOptOut(design.config, vals[t]) === o.kind;
+                  return (
+                    <label key={o.kind} className="rs-md-optout-choice" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input type="checkbox" checked={on} disabled={!!p.q.settings.readOnly} data-testid={`md-optout-${t}-${o.kind}`}
+                        onChange={() => {
+                          setMdNotice((m) => ({ ...m, [t]: "" }));
+                          const next = { ...vals };
+                          if (on) delete next[t]; else next[t] = { optOut: o.kind };
+                          p.onChange(next);
+                        }} />
+                      <span>{o.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
             {isMaxdiff && mdNotice[t] && (
               <div role="status" className="rs-md-notice rs-error-msg" data-testid={`md-conflict-${t}`} style={{ marginTop: 8 }}>
                 {mdNotice[t]}
               </div>
             )}
-            {isMaxdiff && anchored && (
+            {isMaxdiff && anchored && maxdiffTaskOptOut(design.config, vals[t]) === null && (
               /*
                * ANCHORED (DUAL-RESPONSE) MAXDIFF (§17).
                *

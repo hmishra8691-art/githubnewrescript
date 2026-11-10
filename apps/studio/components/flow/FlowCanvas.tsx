@@ -150,8 +150,10 @@ export function FlowCanvas() {
     ro.observe(el); setSize({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
   }, []);
-  const fit = React.useCallback(() => setView(fitTransform(layout.width, layout.height, size.w, size.h)), [layout.width, layout.height, size]);
-  React.useEffect(() => { if (!fitted.current && size.w > 100) { fitted.current = true; fit(); } }, [size, fit]);
+  const fit = React.useCallback((maxScale = 2) => setView(fitTransform(layout.width, layout.height, size.w, size.h, 24, maxScale)), [layout.width, layout.height, size]);
+  /* 2026-11-10: the map OPENS at its natural size at most. A short survey used to open enlarged to 200 % — two giant,
+     mostly empty boxes in a mostly empty canvas. A long one is still shrunk to fit; the Fit button can still enlarge. */
+  React.useEffect(() => { if (!fitted.current && size.w > 100) { fitted.current = true; fit(1); } }, [size, fit]);
   const zoomBy = (factor: number, cx = size.w / 2, cy = size.h / 2) => setView((v) => {
     const k = Math.max(0.05, Math.min(3, v.k * factor));
     return { k, tx: cx - (cx - v.tx) * (k / v.k), ty: cy - (cy - v.ty) * (k / v.k) };
@@ -287,7 +289,7 @@ export function FlowCanvas() {
             <button onClick={() => zoomBy(1 / 1.2)} title="Zoom out (−)" data-testid="flow-zoom-out">−</button>
             <ZoomInput k={view.k} onApply={zoomTo} />
             <button onClick={() => zoomBy(1.2)} title="Zoom in (+)" data-testid="flow-zoom-in">+</button>
-            <button onClick={fit} title="Fit to screen (0)" data-testid="flow-fit">Fit</button>
+            <button onClick={() => fit()} title="Fit to screen (0)" data-testid="flow-fit">Fit</button>
             <button onClick={() => zoomTo(1)} title="Reset to 100% (1)" data-testid="flow-zoom-reset">1:1</button>
           </div>
           <button className={`fc-chip${inspectorOpen ? " on" : ""}`} onClick={() => savePrefs({ ...prefs, inspector: !inspectorOpen })} title="Inspector" data-testid="flow-inspector-toggle"><Icon name="info" size={12} /></button>

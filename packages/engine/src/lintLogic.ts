@@ -1,3 +1,4 @@
+import { missingAssetsIn } from "./missingAsset.js";
 import type {
   ComparisonOperator,
   Condition,
@@ -1356,6 +1357,13 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
     try { issues.push(...extra(def)); } catch { /* a registered check never breaks the survey's own check */ }
   }
   issues.push(...lintStructure(def));
+  /* 2026-11-10: a stimulus the imported questionnaire referred to but did not include is still a placeholder */
+  for (const q of def.questions ?? []) {
+    const where: [string, unknown][] = [["text", q.text], ...(q.options ?? []).map((o, i): [string, unknown] => [`options[${i}].label`, o.label]), ...(q.rows ?? []).map((r, i): [string, unknown] => [`rows[${i}].label`, (r as { label?: unknown }).label])];
+    for (const [path, text] of where) for (const a of missingAssetsIn(text)) {
+      issues.push({ level: "warning", questionId: q.id, questionCode: q.code, path, message: `${q.code} still shows a placeholder for ${/^[aeiou]/.test(a.kind) ? "an" : "a"} ${a.kind} that is not in the survey${a.name ? ` (${a.name})` : ""}. Add the file in Assets and put it in the question, or remove the placeholder, before fielding.` });
+    }
+  }
   /* a calculation reading a name nothing defines is null for every respondent, silently — an error, like a pipe from nowhere */
   for (const u of unknownCalculationNames(def)) {
     issues.push({ level: "error", questionCode: "Calc", path: `calculations[${u.index}].expression`, message: u.message });

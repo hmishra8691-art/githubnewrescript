@@ -1,3 +1,4 @@
+import { maxdiffOptOutsOf, MAXDIFF_OPT_OUT_MEANING } from "./maxdiffOptOut.js";
 import { GAMIFICATION_VARIABLES } from "./gamification.js";
 import { IAT_VARIABLES } from "./iatScore.js";
 import { dontKnowEnabled } from "./dontKnow.js";
@@ -470,6 +471,13 @@ export function questionVariables(
               push({ name: `${q.variableName}_T${t}_ANCHOR`, label: `${q.code} — ${taskName} anchor (all / some / none important)`, dataType: "text",
                 valueCodes: ["all", "some", "none"],
                 notes: "The dual-response follow-up asked after this set. Places the utility scale's zero point." });
+            }
+            // 2026-11-10: the task opt-out (None of these / No preference / I cannot choose), when the design offers one
+            const optOuts = maxdiffOptOutsOf(design?.config);
+            if (optOuts.length) {
+              push({ name: `${q.variableName}_T${t}_OPTOUT`, label: `${q.code} — ${taskName} opt-out`, dataType: "text",
+                valueCodes: optOuts.map((o) => o.kind), valueLabels: Object.fromEntries(optOuts.map((o) => [o.kind, o.label])),
+                notes: `Set when the respondent chose an opt-out instead of a best${mdCfg.responseMode === "best_only" ? "" : " and a worst"} for this set; BEST${mdCfg.responseMode === "best_only" ? " is" : " and WORST are"} then empty. ${optOuts.map((o) => `${o.kind} = ${MAXDIFF_OPT_OUT_MEANING[o.kind]}`).join("; ")}. Opted-out sets are not choice observations.` });
             }
             // METHOD-14: what the respondent actually saw, top to bottom (the design's own `position` is re-shuffled per respondent)
             push({ name: `${q.variableName}_T${t}_ORDER`, label: `${q.code} — ${taskName} shown order (item indices, top to bottom)`, dataType: "text",

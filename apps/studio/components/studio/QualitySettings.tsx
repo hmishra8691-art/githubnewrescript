@@ -59,6 +59,9 @@ export function QualitySettings() {
   };
   const level = cfg.strictness === "custom" ? "standard" : cfg.strictness;
   const [openCats, setOpenCats] = React.useState<Record<string, boolean>>({});
+  /* scoring and the built-in rules open first (they decide the verdict); a group already in use opens too */
+  const [openGroups, setOpenGroups] = React.useState<Record<GroupId, boolean>>(() => rememberedGroups ?? { scoring: true, rules: true, custom: cfg.customRules.length > 0, attention: false, telemetry: false, impact: false });
+  const toggleGroup = (id: GroupId) => setOpenGroups((o) => { const next = { ...o, [id]: !o[id] }; rememberedGroups = next; return next; });
   const [impact, setImpact] = React.useState<{ busy: boolean; result?: any; error?: string }>({ busy: false });
   const hash = configFingerprint(cfg);
 
@@ -102,7 +105,10 @@ export function QualitySettings() {
 
       {cfg.enabled && (
         <>
-          {/* ------------------------------------------------ strictness + profiles */}
+          {/* 2026-11-10: six named groups, each with what it is for and a one-line state, opened one at a time —
+              the page used to be one unbroken run of bands, evidence, rules, custom rules and telemetry. */}
+          <QsGroup id="scoring" title="Scoring" desc="How strict the checks are, and how risk points become PASS, REVIEW or FLAGGED."
+            meta={`${LEVELS.find((l) => l.value === cfg.strictness)?.label ?? cfg.strictness}${cfg.profile ? ` · ${cfg.profile}` : ""}`} open={openGroups.scoring} onToggle={toggleGroup}>
           <div className="qs-grid2">
             <label className="f"><span>Quality strictness</span>
               <select className="select" data-testid="quality-strictness" value={cfg.strictness}
@@ -117,16 +123,16 @@ export function QualitySettings() {
             })} />
           </div>
 
-          {/* ------------------------------------------------ bands */}
-          <h3 className="sec">Classification bands <span className="qs-sec-sub">fraud risk 0–100</span></h3>
+          <h4 className="qs-sub">Classification bands <span className="qs-sec-sub">fraud risk 0–100</span></h4>
           <Bands cfg={cfg} onChange={(b) => set("edit classification bands", (q) => { q.bands = b; })} />
 
-          {/* ------------------------------------------------ evidence */}
-          <h3 className="sec">Evidence &amp; verdict <span className="qs-sec-sub">how signals add up to PASS / REVIEW / FLAGGED</span></h3>
+          <h4 className="qs-sub">Evidence &amp; verdict <span className="qs-sec-sub">how signals add up to PASS / REVIEW / FLAGGED</span></h4>
           <Evidence cfg={cfg} onChange={(e) => set("edit evidence rules", (q) => { q.evidence = e; })} />
 
-          {/* ------------------------------------------------ rules */}
-          <h3 className="sec">Rules</h3>
+          </QsGroup>
+
+          <QsGroup id="rules" title="Built-in rules" desc="The platform's own checks, by kind: timing, straight-lining, open ends, consistency, duplicates and devices."
+            meta={`${RULES.filter((r) => cfg.rules[r.id]?.enabled ?? r.enabledIn[level]).length} of ${RULES.length} on${Object.keys(cfg.rules).length ? ` · ${Object.keys(cfg.rules).length} customised` : ""}`} open={openGroups.rules} onToggle={toggleGroup}>
           <p className="qs-help">
             Defaults shown are for <strong>{LEVELS.find((l) => l.value === level)?.label}</strong>. Change anything here and the survey
             keeps your value; “Reset” returns a rule to the preset. Weight multiplies a rule's risk points; severity scales them too.
@@ -167,8 +173,10 @@ export function QualitySettings() {
             })}
           </div>
 
-          {/* ------------------------------------------------ custom rules */}
-          <h3 className="sec">Custom rules</h3>
+          </QsGroup>
+
+          <QsGroup id="custom" title="Custom rules" desc="Your own IF … THEN checks for this survey, on answers and on the quality metrics."
+            meta={cfg.customRules.length ? `${cfg.customRules.filter((r) => r.enabled).length} of ${cfg.customRules.length} on` : "none yet"} open={openGroups.custom} onToggle={toggleGroup}>
           <p className="qs-help">
             Your own IF … THEN rules over the answers and the quality metrics — the same condition builder and expression syntax as
             display logic. Metrics are available as calculations: <span className="mono">calc.SYSTEM_DURATION_RATIO &lt; 0.3 AND calc.SYSTEM_ATTENTION_FAILED &gt;= 1</span>.
@@ -195,12 +203,16 @@ export function QualitySettings() {
             </details>
           </div>
 
-          {/* ------------------------------------------------ attention checks */}
-          <h3 className="sec">Attention checks</h3>
-          <AttentionSummary />
+          </QsGroup>
 
-          {/* ------------------------------------------------ telemetry & privacy */}
-          <h3 className="sec">Telemetry &amp; privacy</h3>
+          <QsGroup id="attention" title="Attention checks" desc="Questions in this survey with a known right answer, and what failing one counts for."
+            meta="" open={openGroups.attention} onToggle={toggleGroup}>
+          <AttentionSummary />
+          </QsGroup>
+
+
+          <QsGroup id="telemetry" title="Telemetry & privacy" desc="Which behavioural signals are recorded, the idle prompt, the respondent disclosure and how long raw telemetry is kept."
+            meta={`${TELEMETRY.filter(([k]) => (cfg.telemetry as any)[k] !== false).length} of ${TELEMETRY.length} signals recorded`} open={openGroups.telemetry} onToggle={toggleGroup}>
           <p className="qs-help">
             Everything recorded is derived metadata. Switch off anything your study or jurisdiction does not permit — rules that
             need it are skipped, never failed.
@@ -254,8 +266,10 @@ export function QualitySettings() {
             <span>Link quality history across studies<span className="qs-help">Same external respondent id; needs consent.</span></span>
           </label>
 
-          {/* ------------------------------------------------ impact */}
-          <h3 className="sec">Preview rule impact</h3>
+          </QsGroup>
+
+          <QsGroup id="impact" title="Preview rule impact" desc="Re-score the responses you already have with these settings, before you rely on them."
+            meta="" open={openGroups.impact} onToggle={toggleGroup}>
           <div className="qs-impact">
             <button className="btn small" data-testid="q-preview-impact" disabled={impact.busy} onClick={previewImpact}>
               {impact.busy ? "Re-assessing…" : "↻ Re-assess existing responses with these settings"}
@@ -279,6 +293,7 @@ export function QualitySettings() {
               </div>
             </div>
           )}
+          </QsGroup>
           <p className="qs-foot" data-testid="q-config-fingerprint" data-config-hash={hash}>
             Settings fingerprint <span className="mono">{hash}</span> — Data → Quality shows the fingerprint of the saved settings and every
             assessment records the one it ran with, so the three can be compared. Test links use the saved draft at once; the live link
@@ -287,6 +302,30 @@ export function QualitySettings() {
         </>
       )}
     </div>
+  );
+}
+
+/* ================================================================ a named, collapsible group */
+
+type GroupId = "scoring" | "rules" | "custom" | "attention" | "telemetry" | "impact";
+/** which groups the researcher left open — kept while the page is open, so leaving Survey Settings and coming back does not close them */
+let rememberedGroups: Record<GroupId, boolean> | null = null;
+
+/**
+ * One group of the quality settings: a heading that says what the group is, a line that says what it is for, its
+ * current state at a glance, and the controls — shown when the group is open. The body stays mounted while closed
+ * (hidden), so nothing typed in it is lost and a closed group's values can still be read.
+ */
+function QsGroup({ id, title, desc, meta, open, onToggle, children }: { id: GroupId; title: string; desc: string; meta: string; open: boolean; onToggle(id: GroupId): void; children: React.ReactNode }) {
+  return (
+    <section className={`qs-group${open ? " open" : ""}`} data-testid={`qs-group-${id}`} data-open={open ? "1" : "0"}>
+      <button type="button" className="qs-group-head" aria-expanded={open} aria-controls={`qs-group-body-${id}`} onClick={() => onToggle(id)} data-testid={`qs-group-head-${id}`}>
+        <span className="qs-caret" aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="qs-group-title"><strong>{title}</strong><span className="qs-group-desc">{desc}</span></span>
+        {meta && <span className="chip qs-group-meta">{meta}</span>}
+      </button>
+      <div className="qs-group-body" id={`qs-group-body-${id}`} hidden={!open}>{children}</div>
+    </section>
   );
 }
 

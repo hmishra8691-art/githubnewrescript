@@ -60,3 +60,11 @@
 .qp-theme .btn.tiny:not(.ghost) { justify-self: start; }
 @media (max-width: 760px) { .qp-theme > .ql-row { flex-wrap: wrap; } }
 .qp-theme > .ql-row .select { padding-right: 28px; }
+
+/* codebook checks (2026-11-10) */
+.ql-checks > summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; cursor: pointer; list-style: none; }
+.ql-checks > summary::-webkit-details-marker { display: none; }
+.ql-checks[open] > summary { margin-bottom: 8px; }
+.ql-check-list { display: grid; gap: 8px; }
+.ql-check-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; font-size: 13px; line-height: 1.45; }
+.ql-check-list .btn.tiny { margin-left: 4px; }

@@ -405,7 +405,7 @@ export function StudioProvider({
     void fetch(`/api/surveys/sandbox/script-audit`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ definition: latest.current, baseline: true }), cache: "no-store",
-    }).catch(() => undefined);
+    }).then((r) => r.text()).catch(() => undefined); // the reply is read so the request ends (2026-11-10: left unread it stayed open for the life of the page)
   }, [sandbox]);
 
   const persistDraft = React.useCallback((): Promise<boolean> => saveQueue(async (): Promise<boolean> => {
@@ -423,7 +423,7 @@ export function StudioProvider({
       void fetch(`/api/surveys/sandbox/script-audit`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ definition: latest.current }), cache: "no-store",
-      }).catch(() => undefined);
+      }).then((r) => r.text()).catch(() => undefined);
       return true;
     }
     // never overlap two writes to the same row: `saveQueue` runs this after the previous write has settled

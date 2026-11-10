@@ -154,7 +154,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ live: block(false), test: block(true) });
   }
 
-  const { data: survey } = await db.from("surveys").select("current_version_id").eq("id", params.id).single();
+  const { data: survey } = await db.from("surveys").select("current_version_id, draft_definition").eq("id", params.id).single();
   if (!survey?.current_version_id) return NextResponse.json({ error: "no version" }, { status: 404 });
   const { data: ver } = await db.from("survey_versions").select("definition, version").eq("id", survey.current_version_id).single();
   const parsed = ver ? SurveyDefinition.safeParse(ver.definition) : null;
@@ -303,11 +303,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     },
   });
 
+  /* the working draft: only read when a row's answers are not described by the version it is stamped with (lib/exportVersions.ts) */
+  const draftParsed = (survey as { draft_definition?: unknown }).draft_definition ? SurveyDefinition.safeParse((survey as { draft_definition?: unknown }).draft_definition) : null;
+  const exportDraft = draftParsed?.success ? draftParsed.data : null;
   const versioned = await resolveExportVersions(db, (resp ?? []) as any[], {
     versionId: survey.current_version_id,
     version: String(ver!.version),
     def: parsed.data,
-  });
+  }, undefined, exportDraft);
+  if (versioned.draftRead || versioned.undefinedKeys.length) {
+    console.warn("[rescript:export] answers outside the stamped version", JSON.stringify({ surveyId: params.id, readThroughDraft: versioned.draftRead, undefinedQuestionIds: versioned.undefinedKeys.length }));
+  }
   if (versioned.union.mixed) {
     console.info("[rescript:export] multi-version export", JSON.stringify({
       surveyId: params.id,

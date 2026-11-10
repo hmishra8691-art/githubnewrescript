@@ -48,7 +48,8 @@ test("sizes and caching: the system prompt is unchanged and under its cap; the g
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800, `${COPILOT_SYSTEM_PROMPT.length}`);
   /* F4 2026-10-22: + CVA, dual-response None, labelled / brand-specific CBC, summed price, menu sections, simulate_conjoint (was < 4,600) */
   /* Design Generators phase 2 2026-11-09: + partial-profile CBC, create_experiment (was < 9,000) */
-  assert.ok(COPILOT_METHODS_GUIDE.length < 10_000, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
+  /* 2026-11-10: + MaxDiff task opt-outs (was < 10,000) */
+  assert.ok(COPILOT_METHODS_GUIDE.length < 10_200, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
   assert.ok(COPILOT_LIST_FILL_GUIDE.length < 4_200, `List Fill guide ${COPILOT_LIST_FILL_GUIDE.length}`);
   const prompt = copilotUserPrompt({ ...base, message: BRIEF[0], methods: true, listFill: true });
   const [system, user] = copilotCall(prompt);

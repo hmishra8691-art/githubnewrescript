@@ -282,3 +282,6 @@ export { importQuestions } from "./questionImport.js";
 export type { ImportResult } from "./questionImport.js";
 export { programmingAuditRows } from "./programmingAudit.js";
 export type { ProgrammingAuditRow, AuditSeverity } from "./programmingAudit.js";
+export * from "./methodGuides.js";
+export * from "./maxdiffOptOut.js";
+export * from "./missingAsset.js";

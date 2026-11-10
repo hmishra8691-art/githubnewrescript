@@ -114,6 +114,8 @@ test("fitTransform scales the whole graph into the viewport with a margin, never
   assert.ok(Math.abs(t.k - (1000 - 48) / 2000) < 1e-9);
   assert.ok(t.tx >= 0);
   assert.equal(fitTransform(100, 100, 1000, 800).k, 2, "a tiny graph is not blown up past 2×");
+  assert.equal(fitTransform(100, 100, 1000, 800, 24, 1).k, 1, "the opening fit never enlarges (2026-11-10)");
+  assert.ok(fitTransform(4000, 1000, 1000, 800, 24, 1).k < 1, "and still shrinks a large graph into view");
 });
 
 test("the Master Demo lays out cleanly, and the 600-question fixture inside budget", () => {

@@ -55,6 +55,13 @@ await page.click('[data-testid="qrule-timing.overall_speeding"] >> text=edit');
 await page.fill('[data-testid="qrule-timing.overall_speeding"] [data-testid="qparam-ratio"]', "0.55");
 await page.selectOption('[data-testid="qrule-timing.overall_speeding"] [data-testid="qrule-severity"]', "critical");
 // telemetry switch + disclosure
+/* 2026-11-10: the settings are in named groups; telemetry, custom rules and the impact preview open on demand */
+assert.equal(await page.getAttribute('[data-testid="qs-group-scoring"]', "data-open"), "1");
+assert.equal(await page.getAttribute('[data-testid="qs-group-telemetry"]', "data-open"), "0");
+assert.equal(await page.isVisible('[data-testid="qtel-clipboard"]'), false, "a closed group shows no controls");
+await page.click('[data-testid="qs-group-head-telemetry"]');
+await page.click('[data-testid="qs-group-head-custom"]');
+await page.click('[data-testid="qs-group-head-impact"]');
 await page.click('[data-testid="qtel-clipboard"]');
 await page.fill('[data-testid="qtel-disclosure"]', "We record timing to protect data quality.");
 // custom rule

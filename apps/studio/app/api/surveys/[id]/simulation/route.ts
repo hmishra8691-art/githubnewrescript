@@ -13,7 +13,8 @@ export const maxDuration = 300;
  * SIMULATED TEST RESPONDENTS, KEPT AS TEST DATA (2026-11-09).
  *
  *   GET                         the simulation runs stored on this survey (TEST data only): run id, respondents, when
- *   POST { action: "store", config }   run the simulation on the SAVED version (the one the test link serves) — the same
+ *   POST { action: "store", config }   run the simulation on the build the test link serves (the autosaved draft when there
+ *                               is one, otherwise the saved version — lib/qualityDef.ts) — the same
  *                               engine walk as the preview in the Studio — and store every respondent as a TEST response
  *                               through the ordinary import transaction (`rescript_import_responses`, p_test = true):
  *                               respondent codes SIM-<run>-0001…, embedded SIMULATED_RUN / SIMULATED_PROFILE. TEST

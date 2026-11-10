@@ -3,7 +3,7 @@ import React from "react";
 import "./qual.css";
 import { guideMinutes, lintQualStudy, measurementOf } from "@rescript/engine";
 import {
-  themeFrequency, themeSummaries, themeSentiment, codersOf, reviewStatus, formatTimestamp, FREQUENCY_NOTE,
+  themeFrequency, themeSummaries, themeSentiment, codersOf, reviewStatus, validateCoding, formatTimestamp, FREQUENCY_NOTE,
   type QualOp, type QualExcerpt, type QualCode,
 } from "@rescript/analytics";
 import { useStudio } from "../store";
@@ -375,6 +375,7 @@ function CodingTab({ ws, api, run, setWs }: { ws: WorkspaceView; api: QualApi; r
   const coders = codersOf(ws.state);
   const agr = pair.a && pair.b && pair.a !== pair.b ? agreementOf(ws, pair.a, pair.b) : null;
   const rs = reviewStatus(ws.state);
+  const checks = React.useMemo(() => validateCoding(ws.state, segs), [ws.state, segs]);
   const who = (id: string) => ws.people[id] ?? (id === "sandbox-user" ? "You" : id.slice(0, 8));
   return (
     <div data-testid="qual-coding" data-version={ws.version}>
@@ -384,6 +385,26 @@ function CodingTab({ ws, api, run, setWs }: { ws: WorkspaceView; api: QualApi; r
         <span className="badge success">{rs.excerpts.human_reviewed} excerpts reviewed</span><span className="badge warning">{rs.excerpts.ai_suggested} to review</span>
         <span className="ql-muted">codebook v{cb.version}</span>
       </div>
+      {/* 2026-11-10: the checks a second analyst would run — duplicates, overlap, definitions, uncoded passages, contradictions */}
+      {(cb.codes.length > 0 || segs.length > 0) && (
+        <details className="card ql-section ql-checks" data-testid="qual-checks" data-ok={checks.ok ? "1" : "0"} data-count={checks.checks.length} open={!checks.ok}>
+          <summary>
+            <span className="eyebrow">Codebook checks</span>
+            <span className={`badge ${checks.checks.length === 0 ? "success" : checks.ok ? "warning" : "danger"}`}>{checks.checks.length === 0 ? "No problems found" : `${checks.checks.length} to look at`}</span>
+            <span className="ql-muted">{checks.coverage.coded} of {checks.coverage.participantSegments} participant passages coded ({Math.round(checks.coverage.share * 100)}%)</span>
+          </summary>
+          {checks.checks.length === 0
+            ? <p className="ql-muted">No duplicate or overlapping codes, every code is defined and used, no contradictions, and every substantial participant passage has a code.</p>
+            : <ul className="ql-list ql-check-list">{checks.checks.map((c, i) => (
+              <li key={i} data-testid="qual-check" data-kind={c.kind} data-severity={c.severity}>
+                <span className={`badge ${c.severity === "high" ? "danger" : c.severity === "medium" ? "warning" : ""}`}>{c.severity}</span>
+                <span><b>{c.message}</b> <span className="ql-muted">{c.action}</span>
+                  {c.codeIds?.length ? <> {c.codeIds.slice(0, 4).map((id) => cb.codes.find((x) => x.id === id)).filter(Boolean).map((x) => <button key={x!.id} type="button" className="btn tiny" onClick={() => setFocus(x!.id)}>{x!.name}</button>)}</> : null}
+                </span>
+              </li>
+            ))}</ul>}
+        </details>
+      )}
       {ws.can.code && (
         <div className="card ql-section" data-testid="qual-ai">
           <div className="eyebrow">AI codebook proposal</div>

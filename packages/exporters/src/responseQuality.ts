@@ -262,6 +262,9 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
       + "A blank in a column may mean the question did not exist in that respondent's version; the Data Dictionary says which versions each column had.",
     ]);
     for (const w of opts.versionNote.warnings) info.addRow(["⚠ Between versions", w]);
+  } else if (opts.versionNote?.warnings.length) {
+    /* one version, and still something to say (answers no version defines): a warning is never dropped for want of a second version */
+    for (const w of opts.versionNote.warnings) info.addRow(["⚠ Questionnaire", w]);
   }
   styleHeader(info);
 

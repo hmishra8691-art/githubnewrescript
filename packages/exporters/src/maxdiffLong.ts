@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { designFor, designVersionFor, shuffleAlternatives } from "@rescript/engine";
+import { designFor, designVersionFor, shuffleAlternatives, maxdiffTaskOptOut } from "@rescript/engine";
 import { csvRow } from "./csvCell.js";
 import type { ResponseStateLike } from "./csv.js";
 
@@ -21,7 +21,7 @@ import type { ResponseStateLike } from "./csv.js";
  */
 export const MAXDIFF_LONG_COLUMNS = [
   "RESP_ID", "SESSION_ID", "QUESTION_ID", "QUESTION", "LOOP", "VERSION", "TASK", "PRACTICE",
-  "POSITION", "ITEM_INDEX", "ITEM_LABEL", "BEST", "WORST", "ANCHOR",
+  "POSITION", "ITEM_INDEX", "ITEM_LABEL", "BEST", "WORST", "ANCHOR", "OPT_OUT",
 ] as const;
 
 export type MaxDiffLongRow = Record<(typeof MAXDIFF_LONG_COLUMNS)[number], string | number>;
@@ -55,7 +55,10 @@ export function maxdiffChoiceRows(
           if (!raw || typeof raw !== "object") continue;
           const bw = raw as { best?: unknown; worst?: unknown; anchor?: unknown };
           const given = (v: unknown) => v != null && v !== "";
-          if (!given(bw.best) && !given(bw.worst)) continue;
+          /* 2026-11-10: a set answered with an opt-out is kept — its items with OPT_OUT set and BEST / WORST empty — so
+             a choice tool can see the set was shown and drop or model it deliberately, rather than never hearing of it */
+          const optOut = maxdiffTaskOptOut(def.designs?.find((d) => d.id === q.settings.designRef)?.config, raw);
+          if (!given(bw.best) && !given(bw.worst) && !optOut) continue;
           const shown = shuffleAlternatives(versionRows.filter((r) => String(r.task) === task), seed, `${q.id}:${task}`);
           shown.forEach((r, i) => {
             const item = String(r.item_index ?? "");
@@ -71,9 +74,10 @@ export function maxdiffChoiceRows(
               POSITION: i + 1,
               ITEM_INDEX: Number.isFinite(Number(item)) ? Number(item) : item,
               ITEM_LABEL: String(r.item_label ?? item),
-              BEST: given(bw.best) ? (String(bw.best) === item ? 1 : 0) : "",
-              WORST: given(bw.worst) ? (String(bw.worst) === item ? 1 : 0) : "",
+              BEST: !optOut && given(bw.best) ? (String(bw.best) === item ? 1 : 0) : "",
+              WORST: !optOut && given(bw.worst) ? (String(bw.worst) === item ? 1 : 0) : "",
               ANCHOR: given(bw.anchor) ? String(bw.anchor) : "",
+              OPT_OUT: optOut ?? "",
             });
           });
         }
