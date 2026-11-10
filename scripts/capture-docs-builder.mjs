@@ -154,10 +154,19 @@ for (const ex of examples) {
         if (all && (await all.isChecked())) { await all.uncheck(); await page.waitForTimeout(600); }
         await page.evaluate(() => window.scrollTo(0, 0));
       }
+      /* the pointer off every preset card: pointing at one previews it ("a proposed look — not applied yet") */
+      await page.mouse.move(1440 - 4, 1100 - 4);
       await page.waitForTimeout(700);
       await viewShot(`${ex.id}.png`);
     } else {
       if (ex.builder.sub) { await page.click(`[data-testid="ide-body"] button:text-is("${ex.builder.sub}")`); await page.waitForTimeout(1200); }
+      if (ex.builder.element) {
+        const el = await page.waitForSelector(`[data-testid="${ex.builder.element}"]`, { timeout: 15000 });
+        await shot(el, `${ex.id}.png`, 1000);
+        done.push(ex.id);
+        console.log(`  ok   ${ex.id}`);
+        continue;
+      }
       /* a tool: open every collapsed flow card so the structure shows, then photograph the tool */
       if (tab === "Survey Flow") {
         for (let k = 0; k < 4; k++) {
@@ -190,6 +199,17 @@ for (const sc of screens) {
     await page.waitForTimeout(1500);
     if (sc.click) { await page.click(`[data-testid="ide-body"] button:text-is("${sc.click}")`); await page.waitForTimeout(800); }
     if (sc.run) { await page.click(`[data-testid="${sc.run}"]`); await page.waitForFunction((id) => !document.querySelector(`[data-testid="${id}"]`)?.disabled, sc.run, { timeout: 60000 }); await page.waitForTimeout(1200); }
+    if (sc.element) {
+      const el = await page.waitForSelector(`[data-testid="${sc.element}"]`, { timeout: 15000 });
+      await el.scrollIntoViewIfNeeded();
+      await page.evaluate((y) => window.scrollBy(0, y), Math.max(0, (await el.boundingBox()).y - 110));
+      await page.waitForTimeout(300);
+      const b = await el.boundingBox();
+      await page.screenshot({ path: join(OUT_SCREENS, `${sc.id}.png`), clip: { x: Math.max(0, b.x - 6), y: Math.max(0, b.y - 6), width: Math.min(b.width + 12, 1440), height: Math.min(b.height + 12, sc.height ?? 900) } });
+      doneScreens.push(sc.id);
+      console.log(`  ok   screen:${sc.id}`);
+      continue;
+    }
     await page.evaluate(() => window.scrollTo(0, 0));
     const body = await page.$('[data-testid="ide-body"]');
     const box = await body.boundingBox();

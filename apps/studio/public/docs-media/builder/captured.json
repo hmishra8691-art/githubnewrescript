@@ -1,9 +1,11 @@
 {
-  "capturedAt": "2026-11-10T13:04:44.605Z",
+  "capturedAt": "2026-11-10T13:35:11.234Z",
   "examples": [
     "acbc",
     "actions-in-practice",
+    "ai-conversational",
     "alerts-webhooks",
+    "analytics-results",
     "answer-randomization",
     "auto-punch",
     "behaviours",
@@ -23,6 +25,7 @@
     "exclusive-options",
     "experimental-designs",
     "gabor-granger",
+    "gamification",
     "grid-questions",
     "im-edit",
     "im-logic",
@@ -52,6 +55,7 @@
     "rating-conjoint",
     "rating-scales",
     "redirects",
+    "section-navigation",
     "single-select",
     "skip-logic",
     "survey-flow",

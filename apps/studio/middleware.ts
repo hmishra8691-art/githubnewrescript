@@ -25,10 +25,9 @@ import { NextResponse, type NextRequest } from "next/server";
  */
 
 /*
- * `/platform` (§45) is public HERE and gated in the route: it is open outside
- * production and platform-admin-only in it. Bouncing it to a login would make
- * it unusable in the one case it exists for — checking an instance while it is
- * being set up, before there is an account to sign in with.
+ * `/platform` (§45) is NOT public (2026-11-10): it is for platform administrators only, in every environment. A
+ * visitor without a session cookie is sent to the login here; the page itself (app/platform/page.tsx) and
+ * /api/platform check the session and the platform_admin role on the server.
  */
 /*
  * `/d` is the qualitative media download link, and it is public for the same
@@ -39,7 +38,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * after 48 hours) and refuses everything else with a 410.
  */
 /* `/docs` (and its screenshots under `/docs-media`), `/robots.txt` and `/sitemap.xml` are the public developer documentation (Phase 7; Developer Docs 2026-11-09): read by people who are not users yet and by search engines; they read no data. */
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/platform", "/d", "/docs", "/docs-media", "/robots.txt", "/sitemap.xml"];
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/d", "/docs", "/docs-media", "/robots.txt", "/sitemap.xml"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

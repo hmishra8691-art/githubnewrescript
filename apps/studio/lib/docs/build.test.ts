@@ -63,3 +63,15 @@ test("Developer Docs phase 3: branding examples go through set_theme; translatio
   assert.equal(Object.keys(tr.def.localization!.translations.fr ?? {}).length, 5);
   assert.ok(JSON.parse(tr.json).localization);
 });
+
+test("Developer Docs phase 4: the interviewer, section navigation, gamification and the analysis example", () => {
+  for (const id of ["ai-conversational", "section-navigation", "gamification", "analytics-results"]) assert.deepEqual(buildExample(id)!.errors, [], id);
+  assert.equal(buildExample("ai-conversational")!.def.branding.aiConversation?.conversation, "conversational");
+  assert.equal(buildExample("section-navigation")!.def.navigation?.sectionNav, "visited");
+  const g = buildExample("gamification")!.def.gamification!;
+  assert.equal(g.points.perAnswer, 10); assert.equal(g.badges.length, 1); assert.equal(g.levels.length, 2);
+  const a = buildExample("analytics-results")!;
+  assert.equal(a.output?.length, 3);
+  assert.ok(a.output!.every((o) => !o.error && o.n === 150), JSON.stringify(a.output!.map((o) => [o.name, o.error])));
+  assert.equal(a.output![0].table?.rows[0].m, "NPS");
+});

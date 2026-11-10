@@ -600,3 +600,32 @@ export async function projectPageGate(
   } catch { /* keep the default */ }
   return { ok: false, kind: "forbidden", message };
 }
+
+/**
+ * PLATFORM-ADMINISTRATOR PAGES (2026-11-10) — the page-side twin of `requireAdmin`, for a server component that has
+ * `cookies()` rather than a request. Signed out (or a dead session) → "signed_out": the page redirects to the login
+ * with `next`. Signed in without the platform_admin role → "forbidden": the page shows Access denied and renders
+ * nothing of the tool. A session store that cannot be reached → "unavailable" (503 is "could not check", never "not
+ * signed in" — see `projectPageGate`).
+ */
+export type AdminPageGate =
+  | { ok: true; user: AuthedUser }
+  | { ok: false; kind: "signed_out" | "forbidden" | "unavailable"; message: string };
+
+export async function adminPageGate(sessionId: string | null): Promise<AdminPageGate> {
+  if (!sessionId) return { ok: false, kind: "signed_out", message: "Please sign in." };
+  let user: AuthedUser | GuardFailure;
+  try {
+    user = await userForSession(sessionId);
+  } catch (e) {
+    /* the session store is not configured or threw: cannot check — fail closed, never "signed in" */
+    console.error("[rescript:auth] admin page gate could not check the session", (e as Error).message);
+    return { ok: false, kind: "unavailable", message: "We could not check your session just now. Reload in a moment." };
+  }
+  if (isFailure(user)) {
+    if (user.response.status === 503) return { ok: false, kind: "unavailable", message: "We could not check your session just now. Reload in a moment." };
+    return { ok: false, kind: "signed_out", message: "Please sign in." };
+  }
+  if (!user.isPlatformAdmin) return { ok: false, kind: "forbidden", message: "This page is for platform administrators only." };
+  return { ok: true, user };
+}

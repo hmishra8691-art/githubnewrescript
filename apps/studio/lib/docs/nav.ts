@@ -66,22 +66,24 @@ export const DOC_NAV: NavCategory[] = [
   },
   {
     key: "branding", letter: "F", label: "Branding and survey customization", guides: true,
-    summary: "Presets, colours, typography, page and logo, answer styles, backgrounds, buttons, numbering, phone sizes, header and footer — each shown in the Branding workspace and on the live survey.",
+    summary: "Presets, colours, typography, page and logo, answer styles, backgrounds, buttons, section navigation, numbering, phone sizes, the AI interviewer, gamification, header and footer — each shown in the Studio and on the live survey.",
     groups: [
       { label: "Start", slugs: ["branding-overview"] },
       { label: "The look", slugs: ["brand-colours", "typography", "page-layout-and-logo", "answer-styles", "backgrounds"] },
-      { label: "Behaviour and devices", slugs: ["buttons-and-navigation", "respondent-experience", "phone-and-tablet"] },
+      { label: "Behaviour and devices", slugs: ["buttons-and-navigation", "section-navigation", "respondent-experience", "phone-and-tablet"] },
+      { label: "Interviewer and engagement", slugs: ["ai-interviewer", "gamification"] },
       { label: "Code", slugs: ["header-and-footer", "custom-css", "custom-javascript", "custom-html-components"] },
       { label: "Reference", slugs: ["custom-code"] },
     ],
   },
   {
     key: "platform", letter: "G", label: "Project management and platform", guides: true,
-    summary: "Roles and collaborators, versions and deployment, distribution and fieldwork, testing, data and downloads, translation and assets.",
+    summary: "Roles and collaborators, versions and deployment, distribution and fieldwork, testing, data and downloads, response quality, analysing results, translation and assets.",
     groups: [
       { label: "Project", slugs: ["projects-and-roles", "versions-and-deploy"] },
       { label: "Fieldwork", slugs: ["distribution-and-fieldwork", "testing-and-simulation", "panel-integrations", "quotas"] },
-      { label: "Data, languages and media", slugs: ["data-and-downloads", "translation", "assets"] },
+      { label: "Data and analysis", slugs: ["data-and-downloads", "response-quality", "analysing-results"] },
+      { label: "Languages and media", slugs: ["translation", "assets"] },
       { label: "Reference", slugs: ["analytics", "data-and-exports", "localization-and-quotas", "api"] },
     ],
   },

@@ -69,7 +69,7 @@ test("Developer Docs: every guide (A–G) has its live example, steps, and the s
   const GUIDED = ["fundamentals", "advanced", "intelligent", "actions", "designs", "branding", "platform"];
   const reference = new Set(DOC_NAV.filter((c) => c.key === "reference").flatMap((c) => c.groups.flatMap((g) => g.slugs)));
   const guides = pages.filter((p) => GUIDED.includes(p.category) && !reference.has(p.slug) && p.group !== "Reference");
-  assert.ok(guides.length >= 36 + 24 + 17, `${guides.length} guides`);
+  assert.ok(guides.length >= 36 + 24 + 17 + 5, `${guides.length} guides`);
   const ids = new Set(DOC_EXAMPLES.map((e) => e.id));
   const used = new Set<string>();
   for (const g of guides) {

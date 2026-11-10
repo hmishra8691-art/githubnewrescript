@@ -542,7 +542,7 @@ const PUBLIC_PAGES = {
   "docs/[slug]/page.tsx": "the public developer documentation (Phase 7): one shipped markdown file by slug (validated against [a-z0-9-]), no database, no account",
   "sandbox/overview/page.tsx": "the sandbox's project overview: renders the client component for the id \"sandbox\" only, which reads /api/surveys/sandbox/overview — a route that answers nothing without a session; no database, no service role",
 };
-const PAGE_GUARDS = ["projectPageGate", "requireUser", "requireProject", "userForSession"];
+const PAGE_GUARDS = ["projectPageGate", "adminPageGate", "requireUser", "requireProject", "userForSession"];
 
 const pageFiles = [];
 (function walkPages(dir) {

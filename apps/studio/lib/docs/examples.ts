@@ -22,6 +22,8 @@ export interface BuilderShot {
   section?: string;
   /** Branding: the settings group to open (Colours, Text…: "colors", "text", "page", "answers", "background", "buttons", "experience", "devices", "code") or "start" for Start from */
   group?: string;
+  /** a tool: photograph only this element (its data-testid), scrolled into view — e.g. one card of Survey Settings */
+  element?: string;
   /** a tool's own tab to click after opening it (its button text, e.g. "Translate") */
   sub?: string;
   /** what to say under the picture */
@@ -55,7 +57,7 @@ export interface DocExample {
    * real survey) and these analyses on its responses — the shape of the output, never findings. `plan` runs the
    * survey's analysis plan instead.
    */
-  analysis?: { kind: string; variables: string[]; options?: Record<string, unknown>; label?: string }[] | "plan";
+  analysis?: { kind: string; variables: string[]; rows?: string[]; columns?: string[]; options?: Record<string, unknown>; label?: string }[] | "plan";
   /** how many simulated respondents (default 150) */
   simulate?: number;
   /** show the respondent view with the phone or tablet sizes (branding.responsive), as the Studio's device preview does */
@@ -751,6 +753,60 @@ export const DOC_EXAMPLES: DocExample[] = [
     ],
     tryIt: "Switch the language above the survey to French: the question and answer texts change, the codes and the stored answers do not. Answer in either language — STAGE is stored as the same code.",
     builder: { tab: "Translation", sub: "Translate", caption: "Research Tools → Translation → Translate: each element's source text beside its translation, with its status (AI, edited, reviewed, approved)." },
+  },
+
+  /* ---------------------------------------------------------------- phase 4 · the gaps: interviewer, navigation, engagement, analysis */
+  {
+    id: "ai-conversational", title: "The AI interviewer: a conversational presentation of the same survey",
+    actions: [
+      { op: "create_question", type: "single_select", code: "Q1", variable: "STAGE", text: "Which of these best describes you?", options: ["Just browsing", "Ready to buy", "Already a customer"], required: true },
+      { op: "create_question", type: "rating", code: "Q2", variable: "SAT", text: "How satisfied are you with the app so far?", scale: { points: 5, low: "Very dissatisfied", high: "Very satisfied" }, required: true },
+      { op: "create_question", type: "long_text", code: "Q3", variable: "BETTER", text: "What would make it better for you?" },
+    ],
+    patch: (d) => { d.branding.aiConversation = { enabled: true, interaction: "text", conversation: "conversational" }; },
+    tryIt: "The three questions are on one page, but the conversational presentation asks them one at a time: answer and press Next, and each answer moves up into the transcript above the next question. Same questions, same logic, same stored variables.",
+    builder: { tab: "Branding", group: "ai", caption: "Branding → AI interviewer: switch the interviewer on, choose how respondents interact (text, voice or both) and how the conversation behaves (standard, conversational, adaptive)." },
+  },
+  {
+    id: "section-navigation", title: "Section navigation: jump back to any section already visited",
+    actions: [
+      { op: "create_block", title: "About you" },
+      { op: "create_question", block: "About you", type: "single_select", code: "Q1", variable: "STAGE", text: "Which of these best describes you?", options: ["Just browsing", "Ready to buy", "Already a customer"], required: true },
+      { op: "create_block", title: "Your phone" },
+      { op: "create_question", block: "Your phone", type: "single_select", code: "Q2", variable: "BRAND", text: "Which brand of phone do you use?", options: ["Apple", "Samsung", "Google", "Other"], required: true },
+      { op: "create_question", block: "Your phone", type: "rating", code: "Q3", variable: "SAT", text: "How satisfied are you with it?", scale: { points: 5, low: "Very dissatisfied", high: "Very satisfied" } },
+      { op: "create_block", title: "Wrap-up" },
+      { op: "create_question", block: "Wrap-up", type: "long_text", code: "Q4", variable: "ELSE", text: "Anything else you would like to tell us?" },
+      { op: "set_navigation", sectionNav: "visited", position: "top" },
+    ],
+    tryIt: "The navigator above the questions lists the three sections with how many questions are answered in each. Answer “About you” and “Your phone”, then click “About you” to go back — sections not yet reached are locked, and clicking one says why.",
+    builder: { tab: "Branding", group: "buttons", caption: "Branding → Buttons & navigation: section navigation off, “visited” or “free”, as a bar above the page or a side rail." },
+  },
+  {
+    id: "gamification", title: "Points, a badge and levels",
+    actions: [
+      { op: "create_question", type: "single_select", code: "Q1", variable: "STAGE", text: "Which of these best describes you?", options: ["Just browsing", "Ready to buy", "Already a customer"], required: true },
+      { op: "create_question", type: "single_select", code: "Q2", variable: "BRAND", text: "Which brand of phone do you use?", options: ["Apple", "Samsung", "Google", "Other"], required: true, newPage: true },
+      { op: "create_question", type: "rating", code: "Q3", variable: "SAT", text: "How satisfied are you with it?", scale: { points: 5, low: "Very dissatisfied", high: "Very satisfied" }, required: true, newPage: true },
+      { op: "set_gamification", enabled: true, perAnswer: 10, badges: [{ id: "halfway", title: "Halfway there", icon: "star", minPoints: 20 }], levels: [{ name: "Starter", minPoints: 0 }, { name: "Insider", minPoints: 30 }], hud: { show: true, position: "top-right" } },
+    ],
+    tryIt: "Each answered question is worth 10 points — watch the points in the corner. At 20 points the “Halfway there” badge pops up; at 30 the level changes to “Insider”. POINTS, LEVEL and BADGES are stored as calculated variables.",
+    builder: { tab: "Survey Settings", element: "gamification-card", caption: "Survey Settings → Points, badges and levels: points per answered question (and per correct answer), the badges and their rules, the levels, and where the points are shown." },
+  },
+  {
+    id: "analytics-results", title: "NPS, a crosstab and a significance test on one survey",
+    actions: [
+      { op: "create_question", type: "single_select", code: "Q1", variable: "PLAN", text: "Which plan are you on?", options: ["Prepaid", "Contract"], required: true },
+      { op: "create_question", type: "nps", code: "Q2", variable: "NPS", text: "How likely are you to recommend us to a friend or colleague?", required: true, newPage: true },
+      { op: "create_question", type: "rating", code: "Q3", variable: "SAT", text: "Overall, how satisfied are you with our service?", scale: { points: 5, low: "Very dissatisfied", high: "Very satisfied" }, required: true },
+    ],
+    analysis: [
+      { kind: "nps", variables: ["NPS"], label: "Net Promoter Score" },
+      { kind: "crosstab", variables: ["SAT"], rows: ["SAT"], columns: ["PLAN"], label: "Satisfaction by plan" },
+      { kind: "test", variables: ["SAT", "PLAN"], label: "Does satisfaction differ by plan?" },
+    ],
+    tryIt: "Answer as a respondent would. Below, the same three analyses Data Analytics runs — NPS, a crosstab and a significance test — on 150 simulated respondents.",
+    builder: { question: "Q2", caption: "The survey's NPS question (Q2) — Data Analytics reads its variable, NPS, by name. Analytics itself opens from the project's Results." },
   },
 
 ];

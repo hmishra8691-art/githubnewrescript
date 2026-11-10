@@ -164,7 +164,7 @@ export function sampleOutput(ex: DocExample, def: SurveyDefinition): { output: S
   const ds = buildDataset(def, rows, { spec });
   const defs = ex.analysis === "plan"
     ? plannedAnalyses(def, spec).map((p) => p.definition)
-    : ex.analysis.map((a) => ({ name: a.label ?? a.kind, kind: a.kind, dataset: spec, variables: a.variables, ...(a.options ? { options: a.options } : {}) }));
+    : ex.analysis.map((a) => ({ name: a.label ?? a.kind, kind: a.kind, dataset: spec, variables: a.variables, ...(a.rows ? { rows: a.rows } : {}), ...(a.columns ? { columns: a.columns } : {}), ...(a.options ? { options: a.options } : {}) }));
   const output: SampleOutput[] = [];
   for (const d of defs.slice(0, 3)) {
     let res: Record<string, any>;

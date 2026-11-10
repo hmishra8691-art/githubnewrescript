@@ -2,10 +2,10 @@
 import * as React from "react";
 import type { Question, SurveyDefinition } from "@rescript/schema";
 import {
-  advance, answerKey, autoNextReady, resolveAuthorHtml, createResponseState, languageName, localizeDefinition, offeredLanguages, otherTextsOf, setAnswer, setOtherText, setOtherTextFor, start, surveyLanguages, validatePage, visibleQuestions,
+  advance, answerKey, autoNextReady, resolveAuthorHtml, effectiveAiConversation, resolvePiping, questionTextTemplate, sectionNavMode, sectionOutline, goToPage, createResponseState, languageName, localizeDefinition, offeredLanguages, otherTextsOf, setAnswer, setOtherText, setOtherTextFor, start, surveyLanguages, validatePage, visibleQuestions,
   type NavigationResult, type ResponseState, type ValidationError,
 } from "@rescript/engine";
-import { ProgressIndicator, QuestionRenderer, SafeImage, UxLayer, brandingClasses, brandingResponsiveCss, brandingVars, widthModeClass } from "@rescript/renderer";
+import { GamificationHud, ProgressIndicator, QuestionRenderer, SafeImage, UxLayer, brandingClasses, brandingResponsiveCss, brandingVars, widthModeClass } from "@rescript/renderer";
 
 /**
  * THE RESPONDENT VIEW OF A DOCS EXAMPLE (Developer Docs, 2026-11-09): the survey as a respondent meets it — the real
@@ -19,6 +19,11 @@ import { ProgressIndicator, QuestionRenderer, SafeImage, UxLayer, brandingClasse
  * overrides, as the Studio's device preview does), auto-advance, and — when the survey has more than one language —
  * the language selector over `localizeDefinition`. The survey-wide custom CSS is not injected here: it is written
  * for a whole page and would restyle these docs (the Custom CSS guide uses scoped UX styles instead).
+ *
+ * Phase 4: the AI interviewer's CONVERSATIONAL presentation (one question at a time, the answers so far above it as a
+ * transcript — the runtime's markup and classes), the SECTION NAVIGATOR (the engine's `sectionOutline` and
+ * `goToPage`, drawn with the runtime navigator's markup) and the GAMIFICATION HUD (the renderer's own). Follow-up probes
+ * written by the language model and the voice are not run here: the docs make no model or speech calls.
  */
 type Snap = { state: ResponseState; nav: NavigationResult };
 const END_TEXT: Record<string, string> = {
@@ -39,6 +44,9 @@ export function LiveSurvey({ def: sourceDef, embedded = {}, viewport }: { def: S
   const history = React.useRef<Snap[]>([]);
   const cur = React.useRef<Snap | null>(null);
   const shellRef = React.useRef<HTMLDivElement | null>(null);
+  /* conversational presentation: which of the page's visible questions is on screen, per page */
+  const convo = React.useRef<{ key: string; index: number }>({ key: "", index: 0 });
+  const [navNote, setNavNote] = React.useState<string | null>(null);
 
   if (!cur.current || (cur.current as Snap & { run?: number }).run !== run) {
     const state = createResponseState(def, { embedded: { ...embedded }, seed: Math.floor(Math.random() * 2 ** 31) });
@@ -47,7 +55,7 @@ export function LiveSurvey({ def: sourceDef, embedded = {}, viewport }: { def: S
     history.current = [];
   }
   const { state, nav } = cur.current;
-  const restart = () => { setErrors([]); setRun((r) => r + 1); };
+  const restart = () => { setErrors([]); setNavNote(null); setRun((r) => r + 1); };
   const b = def.branding;
   const shellCls = `rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)} ${brandingClasses(b, { pageBackground: true })}`;
   const themeId = `docs-${sourceDef.meta.id}`.replace(/["\\]/g, "");
@@ -84,7 +92,40 @@ export function LiveSurvey({ def: sourceDef, embedded = {}, viewport }: { def: S
   const pageKey = `${run}:${step.pageId}:${loop ? JSON.stringify((loop as { index?: number }).index ?? "") : ""}`;
   const hasUx = !!def.ux && ((def.ux.styles?.length ?? 0) + (def.ux.behaviors?.length ?? 0) + (def.ux.animations?.length ?? 0)) > 0;
 
+  const ai = effectiveAiConversation(def);
+  const conversational = ai.enabled && ai.conversation !== "standard";
+  if (convo.current.key !== pageKey) convo.current = { key: pageKey, index: 0 };
+  const convoIndex = conversational ? Math.min(convo.current.index, Math.max(0, qs.length - 1)) : 0;
+  const shown = conversational ? qs.slice(convoIndex, convoIndex + 1) : qs;
+  /* what has been asked so far: earlier pages' visible questions, then this page's earlier ones — as the runtime builds it */
+  const transcript = conversational
+    ? [
+      ...nav.steps.slice(0, nav.stepIndex).flatMap((x) => (x.kind === "page" ? visibleQuestions(def, x, state).map((q) => ({ q, loop: x.loop ?? null })) : [])),
+      ...qs.slice(0, convoIndex).map((q) => ({ q, loop })),
+    ].filter(({ q }) => q.type !== "html" && !q.settings.hidden)
+      .map(({ q, loop: l }) => ({ q, loop: l, answer: resolvePiping(`{{${q.code}}}`, { ...ctx, loop: l }).trim() }))
+    : [];
+  const navMode = sectionNavMode(def);
+  const outline = navMode !== "off" ? sectionOutline(def, state, {}) : [];
+  const jump = (sectionId: string) => {
+    const before = { state: structuredClone(state), nav: structuredClone(nav) };
+    const r = goToPage(def, state, sectionId, {}, {}, { as: "section" });
+    if (!r.ok) { setNavNote(r.reason ?? "That section is not available."); return; }
+    history.current.push(before);
+    setNavNote(null); setErrors([]);
+    cur.current = Object.assign({ state, nav: r }, { run });
+    force();
+  };
+
   const next = () => {
+    if (conversational && convoIndex < qs.length - 1) {
+      const errs = validatePage(def, shown, ctx).filter((e) => e.severity !== "warning");
+      setErrors(errs);
+      if (errs.length) return;
+      convo.current.index = convoIndex + 1;
+      force();
+      return;
+    }
     const errs = validatePage(def, qs, ctx).filter((e) => e.severity !== "warning");
     setErrors(errs);
     if (errs.length) return;
@@ -105,6 +146,7 @@ export function LiveSurvey({ def: sourceDef, embedded = {}, viewport }: { def: S
     setTimeout(() => { if (cur.current?.nav.stepIndex === at) next(); }, 450);
   };
   const back = () => {
+    if (conversational && convoIndex > 0) { convo.current.index = convoIndex - 1; setErrors([]); force(); return; }
     const prev = history.current.pop();
     if (!prev) return;
     setErrors([]);
@@ -131,12 +173,42 @@ export function LiveSurvey({ def: sourceDef, embedded = {}, viewport }: { def: S
           </div>
         )}
         {b.layout.progressBar === "top" && progress}
+        {def.gamification && <GamificationHud def={def} state={state} rootRef={shellRef} tick={state.calculated.POINTS} />}
+        {outline.length > 1 && (
+          <nav className={`rs-section-nav rs-section-nav-${def.navigation?.position ?? "top"}`} aria-label="Sections" data-testid="docs-live-section-nav">
+            <ol className="rs-section-nav-list">
+              {outline.map((x) => {
+                const st = x.current ? "current" : x.locked ? "locked" : x.visited ? "visited" : "open";
+                return (
+                  <li key={x.id} className="rs-section-nav-li">
+                    <button type="button" className={`rs-section-nav-item is-${st}`} data-testid="docs-live-section" data-section={x.id} data-state={st}
+                      aria-current={x.current ? "step" : undefined} aria-disabled={x.locked ? true : undefined} onClick={() => { if (!x.current) jump(x.id); }}>
+                      <span className="rs-section-nav-title">{x.title}</span>
+                      <span className="rs-section-nav-count">{x.answered} of {x.total} answered</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+            <p className="rs-section-nav-note" role="status" data-testid="docs-live-section-note">{navNote ?? ""}</p>
+          </nav>
+        )}
+        {conversational && transcript.length > 0 && (
+          <div className="rs-convo-transcript" data-testid="docs-live-transcript" aria-label="Earlier questions and your answers">
+            {transcript.map(({ q, loop: l, answer }) => (
+              <div key={answerKey(q.id, l)} className="rs-convo-turn">
+                <div className="rs-bubble rs-bubble-q" dangerouslySetInnerHTML={{ __html: resolvePiping(questionTextTemplate(q, { ...ctx, loop: l }), { ...ctx, loop: l }) }} />
+                <div className={`rs-bubble rs-bubble-a${answer ? "" : " empty"}`}>{answer || "(no answer)"}</div>
+              </div>
+            ))}
+          </div>
+        )}
         {hasUx && (
           <UxLayer contained def={def} rootRef={shellRef} values={values} allValues={state.answers as Record<string, unknown>} state={state} shown={qs.map((q) => q.id)} pageKey={pageKey}
             pageId={step.pageId} pageIndex={history.current.length + 1} onNavigate={() => ({ ok: false, reason: "not in the docs preview" })} />
         )}
-        <div id="rs-questions">
-          {qs.map((q: Question) => (
+        <div id="rs-questions" className={conversational ? "rs-convo-current" : undefined}>
+          {shown.map((q: Question) => (
             <QuestionRenderer key={`${pageKey}:${q.id}`} def={def} q={q} state={state} loop={loop} value={values[q.id]}
               errors={errors.filter((e) => e.questionId === q.id)}
               otherValues={otherTextsOf(state, q, loop)}
@@ -153,8 +225,8 @@ export function LiveSurvey({ def: sourceDef, embedded = {}, viewport }: { def: S
         </div>
         {errors.some((e) => !e.questionId) && <div className="rs-error">{errors.filter((e) => !e.questionId).map((e) => e.message).join(" ")}</div>}
         <div className="rs-nav">
-          {b.buttons.showBack && <button type="button" className={`rs-btn secondary ${b.buttons.style}`} onClick={back} disabled={!history.current.length} data-testid="docs-live-back">{b.buttons.backLabel}</button>}
-          <button type="button" className={`rs-btn ${b.buttons.style}`} onClick={next} data-testid="docs-live-next">{isLast ? b.buttons.submitLabel : b.buttons.nextLabel}</button>
+          {b.buttons.showBack && <button type="button" className={`rs-btn secondary ${b.buttons.style}`} onClick={back} disabled={!history.current.length && !(conversational && convoIndex > 0)} data-testid="docs-live-back">{b.buttons.backLabel}</button>}
+          <button type="button" className={`rs-btn ${b.buttons.style}`} onClick={next} data-testid="docs-live-next">{isLast && (!conversational || convoIndex >= qs.length - 1) ? b.buttons.submitLabel : b.buttons.nextLabel}</button>
         </div>
         {b.layout.progressBar === "bottom" && progress}
         {b.footerHtml && <div className="rs-footer" data-testid="docs-live-footer" dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(b.footerHtml, ctx) }} />}

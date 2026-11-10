@@ -12,7 +12,12 @@
  *                            FAKE provider (scripts/eval/hooks.mjs), the real runner, the real cap bookkeeping
  * and, unintercepted, the real admin APIs must refuse a visitor without a session.
  *
- * Proves: both panels render for an administrator and not for anyone else; the cache panel shows the measured
+ * /platform IS FOR PLATFORM ADMINISTRATORS ONLY (2026-11-10), checked on the server: this suite always proves the gate
+ * (signed out → the login, with next=/platform; /api/platform → 401). The panel checks need a real administrator's
+ * session — PLATFORM_ADMIN_SESSION=<the rescript_session cookie value> — and are skipped (said so) without one: the
+ * page can no longer be rendered by mocking its API, which is the point.
+ *
+ * Proves (with an administrator session): both panels render for an administrator; the cache panel shows the measured
  * totals, the saving and the small-sample warning; the eval panel lists ≤10 cases with an estimate, refuses a cap
  * below the estimate, runs the cases one request each with progress, and shows the report (pass rate, cost,
  * latency); the real admin endpoints answer 401 without a session.
@@ -77,8 +82,11 @@ const browser = await chromium.launch();
 let pass = 0;
 const ok = (name) => { pass++; console.log(`  ok   ${name}`); };
 const errors = [];
+const ADMIN_SESSION = process.env.PLATFORM_ADMIN_SESSION ?? "";
 async function pageAs(admin) {
-  const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
+  const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
+  if (admin && ADMIN_SESSION) await context.addCookies([{ name: "rescript_session", value: ADMIN_SESSION, url: STUDIO }]);
+  const page = await context.newPage();
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("**/api/platform", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
@@ -113,15 +121,34 @@ console.log("\nTHE ADMIN APIS REFUSE A VISITOR WITHOUT A SESSION (real routes)")
   ok("GET /api/admin/ai-cache, GET and POST /api/admin/ai-eval answer 401/403 without a session");
 }
 
-console.log("\nNOT AN ADMINISTRATOR: NO PANELS");
+console.log("\nTHE PAGE IS FOR PLATFORM ADMINISTRATORS ONLY (server-side)");
 {
-  const page = await pageAs(false);
-  await page.goto(`${STUDIO}/platform`, { waitUntil: "networkidle" });
-  await page.waitForSelector('[data-testid="platform-page"]');
-  assert.equal(await page.$('[data-testid="platform-ai-cache"]'), null);
-  assert.equal(await page.$('[data-testid="platform-ai-eval"]'), null);
-  ok("the cache and evaluation panels are not on the page for a non-administrator");
-  await page.close();
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await page.goto(`${STUDIO}/platform`, { waitUntil: "load" });
+  assert.match(page.url(), /\/login\?next=%2Fplatform$/, `a signed-out visitor is sent to the login: ${page.url()}`);
+  for (const m of ["GET", "POST"]) {
+    const r = m === "GET" ? await ctx.request.get(`${STUDIO}/api/platform`) : await ctx.request.post(`${STUDIO}/api/platform`, { data: { action: "test_mail" } });
+    assert.ok([401, 403].includes(r.status()), `${m} /api/platform answered ${r.status()}`);
+  }
+  /* a cookie that is not a live session is no better than none: the page asks the session store, not the cookie */
+  await ctx.addCookies([{ name: "rescript_session", value: "f".repeat(64), url: STUDIO }]);
+  await page.goto(`${STUDIO}/platform`, { waitUntil: "load" });
+  /* with a database a forged cookie is an unknown session → the login; without one (this container) the session cannot be
+     checked → "Cannot check your access". Either way it fails closed: nothing of the page is rendered */
+  const denied = /\/login/.test(page.url()) || !!(await page.$('[data-testid="platform-denied"]'));
+  assert.ok(denied, `a forged cookie is refused: ${page.url()}`);
+  assert.equal(await page.$('[data-testid="platform-page"]'), null);
+  await ctx.close();
+  ok("/platform: signed out → the login (next=/platform); a forged cookie is refused; nothing of the page rendered; GET and POST /api/platform → 401");
+}
+
+if (!ADMIN_SESSION) {
+  console.log("\n  skip the panel checks — they need a platform administrator's session (PLATFORM_ADMIN_SESSION); this container has none");
+  assert.deepEqual(errors, [], `page errors: ${errors.join("; ")}`);
+  await browser.close();
+  console.log(`\n${pass} checks passed`);
+  process.exit(0);
 }
 
 console.log("\nAI COST AND CACHE — MEASURED FROM BILLING");

@@ -21,7 +21,6 @@ export function DocShell({ pages, current, toc, children }: { pages: DocPage[]; 
         <DocsSearch />
         <nav className="docs-top" aria-label="Site">
           <Link href="/help" data-testid="docs-to-help">Help</Link>
-          <Link href="/platform" data-testid="docs-to-app">Open the app</Link>
           <Link href="/login">Sign in</Link>
         </nav>
       </header>

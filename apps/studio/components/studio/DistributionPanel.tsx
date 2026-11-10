@@ -91,7 +91,7 @@ export function DistributionPanel() {
   const [qr, setQr] = React.useState<{ svg: string; url: string } | null>(null);
   /*
    * Whether this instance can send at all, and whether it can reach real
-   * people. Read once from /api/platform rather than assumed: the button has
+   * people. Read once from /api/mail-status rather than assumed: the button has
    * to say what it will actually do, and on a staging instance what it will
    * actually do is send everything to one address.
    */
@@ -125,7 +125,7 @@ export function DistributionPanel() {
   React.useEffect(refresh, [refresh]);
 
   React.useEffect(() => {
-    fetch("/api/platform", { cache: "no-store" })
+    fetch("/api/mail-status", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (d?.mail) setMail(d.mail); })
       .catch(() => {});

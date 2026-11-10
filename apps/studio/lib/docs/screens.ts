@@ -16,6 +16,8 @@ export interface DocScreen {
   run?: string;
   /** load this docs example's survey first (an id in examples.ts) */
   load?: string;
+  /** photograph only this element of the tool (its data-testid), scrolled into view */
+  element?: string;
   /** how tall the picture may be, in CSS pixels (default 900) */
   height?: number;
   caption: string;
@@ -30,6 +32,8 @@ export const DOC_SCREENS: DocScreen[] = [
     caption: "Research Tools → Tests after “Run the simulation”: 100 simulated respondents through the real survey — their endings, coverage of questions, pages and conditions, and each respondent's path." },
   { id: "data-formats", title: "Data — downloads and formats", tab: "Data", click: "⋯ More formats", load: "maxdiff", height: 430,
     caption: "Results → Data with More formats open: test, live or all data; CSV and XLSX; export presets and the data dictionary; SPSS, SAS and Stata; the timing and MaxDiff choice files; and how coded answers are written." },
+  { id: "quality-settings", title: "Survey Settings — response quality", tab: "Survey Settings", element: "quality-settings", height: 1100,
+    caption: "Survey Settings → Response quality: switch scoring on, choose the strictness, open a category to tune its rules, and add your own rules." },
   { id: "assets", title: "Assets", tab: "Assets",
     caption: "Research Tools → Assets: uploaded images, logos, video, audio and documents, chosen wherever media goes — question media, option images, the branding logo." },
 ];

@@ -7,6 +7,7 @@ import { EXAMPLE_SPLIT } from "@/lib/docs/markdown";
 import { buildExample } from "@/lib/docs/build";
 import { LiveExample } from "@/components/docs/LiveExample";
 import { RolesCatalog } from "@/components/docs/RolesCatalog";
+import { AnalysisCatalog, QualityRulesCatalog } from "@/components/docs/EngineCatalogs";
 import { DocScreenFigure } from "@/components/docs/DocScreenFigure";
 import { MethodCatalog } from "@/components/docs/MethodCatalog";
 import { DocShell } from "../DocShell";
@@ -45,6 +46,8 @@ export default function DocPage({ params }: { params: { slug: string } }) {
           if (i % 2 === 0) return <div key={i} dangerouslySetInnerHTML={{ __html: part }} />;
           if (part === "catalog-methodologies") return <MethodCatalog key={i} />;
           if (part === "catalog-roles") return <RolesCatalog key={i} />;
+          if (part === "catalog-analyses") return <AnalysisCatalog key={i} />;
+          if (part === "catalog-quality-rules") return <QualityRulesCatalog key={i} />;
           if (part.startsWith("screen-")) return <DocScreenFigure key={i} id={part.slice(7)} />;
           const ex = buildExample(part);
           if (!ex) return <p key={i} className="docs-ex-missing">Example “{part}” is not defined.</p>;

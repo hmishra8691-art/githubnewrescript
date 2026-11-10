@@ -300,6 +300,62 @@ for (const slug of guides3) {
 }
 ok(`${guides3.length} F–G pages load; ${ex3} live examples with screenshots, ${sc3} Studio screens`);
 
+console.log("\n5d — phase 4: interviewer, navigation, engagement, quality, analysis");
+await go("/docs/ai-interviewer");
+const AI = live("ai-conversational");
+assert.equal(await p.$$eval(`${AI} #rs-questions > *`, (q) => q.length), 1, "one question at a time");
+await p.click(`${AI} label:has-text("Ready to buy")`); await p.click(`${AI} [data-testid="docs-live-next"]`);
+await p.waitForSelector(`${AI} [data-testid="docs-live-transcript"]`);
+assert.match(await p.textContent(`${AI} [data-testid="docs-live-transcript"]`), /Which of these best describes you\?\s*Ready to buy/);
+assert.match(await p.textContent(`${AI} #rs-questions`), /How satisfied/);
+ok("AI interviewer: one question at a time; the answer moves into the transcript above the next question");
+
+await go("/docs/section-navigation");
+const SN = live("section-navigation");
+const states = () => p.$$eval(`${SN} [data-testid="docs-live-section"]`, (b) => b.map((x) => x.getAttribute("data-state")));
+assert.deepEqual(await states(), ["current", "locked", "locked"]);
+/* a locked section is aria-disabled but still clickable (so it can say why) — Playwright refuses aria-disabled, so click it directly */
+await p.$$eval(`${SN} [data-testid="docs-live-section"]`, (b) => b[2].click());
+await p.waitForFunction((s) => document.querySelector(`${s} [data-testid="docs-live-section-note"]`)?.textContent.trim().length > 0, SN);
+await p.click(`${SN} label:has-text("Ready to buy")`); await p.click(`${SN} [data-testid="docs-live-next"]`);
+await p.waitForFunction((s) => /Which brand of phone/.test(document.querySelector(s).textContent), SN);
+await p.click(`${SN} [data-testid="docs-live-section"] >> nth=0`);
+await p.waitForFunction((s) => /Which of these best describes you/.test(document.querySelector(`${s} #rs-questions`).textContent), SN);
+ok("section navigation: a locked section says why; after answering, the navigator jumps back to “About you”");
+
+await go("/docs/gamification");
+const GM = live("gamification");
+await p.click(`${GM} label:has-text("Ready to buy")`); await p.click(`${GM} [data-testid="docs-live-next"]`);
+await p.click(`${GM} label:has-text("Samsung")`);
+await p.waitForFunction((s) => /20 points/.test(document.querySelector(`${s} .rs-gam-points`)?.textContent ?? ""), GM);
+await p.waitForFunction((s) => /Halfway there/.test(document.querySelector(s).textContent), GM);
+ok("gamification: two answers → the HUD shows 20 points, and the “Halfway there” badge (POINTS ≥ 20) pops up");
+
+await go("/docs/response-quality");
+const qr = await p.$$eval('[data-testid="docs-quality-rules"] tbody tr', (r) => r.length);
+assert.ok(qr >= 40, `quality rules ${qr}`);
+await go("/docs/analysing-results");
+const ak = await p.$$eval('[data-testid="docs-analyses"] tbody tr', (r) => r.length);
+assert.ok(ak >= 25, `analyses ${ak}`);
+assert.equal(await p.$$eval('[data-testid="docs-ex-results"] .docs-out-item', (x) => x.length), 3);
+ok(`catalogs from the engines: ${qr} quality rules, ${ak} kinds of analysis; NPS, crosstab and test on simulated respondents`);
+
+console.log("\n5e — no way into the platform page from the docs; the page is for administrators only");
+await go("/docs");
+assert.equal(await p.$('[data-testid="docs-to-app"]'), null, "no Open the app link");
+assert.doesNotMatch(await p.textContent(".docs-head"), /Open the app/i);
+assert.equal(await p.$('.docs-head a[href="/platform"], .docs-head a[href^="/platform/"]'), null);
+{
+  const ctx = await browser.newContext();
+  const q = await ctx.newPage();
+  await q.goto(`${STUDIO}/platform`, { waitUntil: "load" });
+  assert.match(q.url(), /\/login\?next=%2Fplatform$/, q.url());
+  assert.equal((await ctx.request.get(`${STUDIO}/api/platform`)).status(), 401);
+  assert.equal((await ctx.request.get(`${STUDIO}/docs`)).status(), 200, "the docs stay public");
+  await ctx.close();
+}
+ok("docs header: no “Open the app”; /platform signed out → the login (next=/platform); /api/platform → 401; the docs stay public");
+
 console.log("\n6 — Help → Help | Developer Docs");
 await p.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "load" });
 await p.waitForSelector('[data-testid="studio-help-button"]', { timeout: 60000 });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
-import { isFailure, requireUser } from "@/lib/guard";
-import { platformInfo, platformTier } from "@/lib/platform";
+import { isFailure, requireAdmin } from "@/lib/guard";
+import { platformInfo } from "@/lib/platform";
 import { mailConfig, sendMail } from "@/lib/mail";
 import { testEmail } from "@rescript/mail";
 import { capabilityStatusReport } from "@/lib/capabilityStatus";
@@ -21,9 +21,8 @@ export const dynamic = "force-dynamic";
  * means shell access, which means the people who most need the answer cannot
  * get it.
  *
- * WHO MAY SEE IT. The same rule the per-project diagnostics use, and for the
- * same reason: readable outside production, and in production only by a
- * platform admin. What comes back is safe to screenshot — a tier, a Supabase
+ * WHO MAY SEE IT. Platform administrators only, in every environment (since
+ * 2026-11-10; before that it was readable by anyone outside production). What comes back is safe to screenshot — a tier, a Supabase
  * project reference (the public part of a URL every respondent's browser
  * already sees), presence flags for configuration, and a migration level
  * inferred by asking the database what it has. No key, no token, no
@@ -154,11 +153,8 @@ async function readMarks(db: ReturnType<typeof supabaseAdmin>): Promise<string[]
 
 export async function GET(_req: NextRequest) {
   /*
-   * `requireUser` rather than a bare cookie read: it is the platform's one
-   * session resolver, and it applies the expiry, revocation and takeover
-   * rules. A signed-out caller is not an error here — outside production this
-   * endpoint is readable, which is what makes it usable while setting an
-   * instance up, before there is an account to sign in with.
+   * `requireAdmin` rather than a bare cookie read: it runs the platform's one
+   * session resolver (expiry, revocation and takeover rules), then the role.
    *
    * It is the FIRST statement, before the tier is even read. That ordering is
    * enforced by `scripts/auth-guard-audit.mjs` and the reason is not this
@@ -166,19 +162,17 @@ export async function GET(_req: NextRequest) {
    * has already acted on an unauthenticated request, and the audit cannot
    * tell a harmless env-var read from a harmful one.
    */
-  const resolved = await requireUser(_req);
-  const user = isFailure(resolved) ? null : resolved;
-  const isAdmin = !!user?.isPlatformAdmin;
-  const { tier } = platformTier();
-
   /*
-   * In production this is admin-only, and the refusal is a 404 rather than a
-   * 403 — the same shape the diagnostics route uses. A signed-out stranger
-   * learns nothing from it, including whether the endpoint exists.
+   * PLATFORM ADMINISTRATORS ONLY, IN EVERY ENVIRONMENT (2026-11-10). This used to be readable by anyone outside
+   * production (so an instance could be checked before it had an account) and admin-only in it. It is now admin-only
+   * everywhere, like the page: signed out → 401, signed in without the platform_admin role → 403. An instance being
+   * set up is checked by its first administrator after they sign in. The Studio's Distribution panel, which only
+   * needs to know whether mail can be sent, reads /api/mail-status instead.
    */
-  if (tier === "production" && !isAdmin) {
-    return NextResponse.json({ error: "Not available." }, { status: 404 });
-  }
+  const resolved = await requireAdmin(_req);
+  if (isFailure(resolved)) return resolved.response;
+  const user = resolved;
+  const isAdmin = true;
 
   const info = platformInfo();
   /* §11: the capability registry's readiness from this server's environment — names and yes / no only */
@@ -299,14 +293,10 @@ export async function GET(_req: NextRequest) {
  * spam folder. That is a DNS problem, and it is the most common one.
  */
 export async function POST(req: NextRequest) {
-  const resolved = await requireUser(req);
+  /* platform administrators only, in every environment — the same gate as GET and the page */
+  const resolved = await requireAdmin(req);
   if (isFailure(resolved)) return resolved.response;
   const user = resolved;
-  const { tier } = platformTier();
-
-  if (tier === "production" && !user.isPlatformAdmin) {
-    return NextResponse.json({ error: "Not available." }, { status: 404 });
-  }
 
   const body = (await req.json().catch(() => ({}))) as { action?: string };
   if (body.action !== "test_mail") {
