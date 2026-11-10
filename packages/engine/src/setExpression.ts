@@ -133,7 +133,7 @@ export function evaluateSetExpr(
        */
       const loop = findLoopScope(ctx.loop, expr.scope ?? null);
       if (!loop) return [];
-      const v = loopValue(loop, expr.ref || "code");
+      const v = loopValue(loop, expr.ref || "code", ctx);
       return v == null ? [] : [v as string | number];
     }
 

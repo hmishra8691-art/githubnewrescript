@@ -49,15 +49,15 @@ export const LOOP_ALIAS_NAMES: readonly string[] = Object.keys(LOOP_ALIASES);
 
 /** A name as seen from inside an iteration, or `undefined` when the name is not the loop's to answer. */
 export function loopScopedName(def: SurveyDefinition, state: ResponseState, loop: LoopContext, n: string): unknown {
-  if (n in LOOP_ALIASES) return loopValue(loop, LOOP_ALIASES[n]);
+  if (n in LOOP_ALIASES) return loopValue(loop, LOOP_ALIASES[n], { def, state });
   const dot = n.indexOf(".");
   if (dot > 0) {
     const head = n.slice(0, dot);
     const prop = n.slice(dot + 1);
-    if (head === "loop" || head === "CURRENT_ITEM") return loopValue(loop, prop);
+    if (head === "loop" || head === "CURRENT_ITEM") return loopValue(loop, prop, { def, state });
     if (!getQuestionByCodeOrVar(def, head)) {
       const outer = findLoopScope(loop, head);
-      if (outer) return loopValue(outer, prop);
+      if (outer) return loopValue(outer, prop, { def, state });
     }
     return undefined;
   }

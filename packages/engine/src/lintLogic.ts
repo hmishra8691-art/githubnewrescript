@@ -26,6 +26,7 @@ import {
 import { conditionDepth, forEachConditionRoot, stripVacuous } from "./conditionWalk.js";
 import { MAX_CONDITION_DEPTH } from "./evaluate.js";
 import { LOOP_BUILTIN_REFS, getQuestionByCodeOrVar } from "./state.js";
+import { validateExpression } from "./calc.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
 import { registerBareNameResolver, lintPipingTokens } from "./piping.js";
 import { describeCycle, detectLogicCycles, orderIndex, unknownCalculationNames } from "./dependencies.js";
@@ -1707,10 +1708,25 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
           if (BUILTIN.has(c.name)) push("error", "references.columns", `Loop "${n.loopVar}": "${c.name}" is what the item itself is called; a column cannot shadow it.`);
         }
 
+        /* dynamic references (2026-11-10): the source must point at something that exists */
+        for (const c of columns) {
+          const src = c.source;
+          if (!src || src.kind === "static") continue;
+          if (src.kind === "answer" && !getQuestionByCodeOrVar(def, src.question)) push("error", `references.columns.${c.name}`, `Loop "${n.loopVar}": reference "${c.name}" reads the answer to "${src.question}", which is not a question in this survey.`);
+          if (src.kind === "text" && !src.text.trim()) push("warning", `references.columns.${c.name}`, `Loop "${n.loopVar}": reference "${c.name}" has no text yet.`);
+          if (src.kind === "calculation") {
+            if (!src.expr.trim()) push("warning", `references.columns.${c.name}`, `Loop "${n.loopVar}": reference "${c.name}" has no calculation yet.`);
+            else { const bad = validateExpression(src.expr); if (bad) push("error", `references.columns.${c.name}`, `Loop "${n.loopVar}": reference "${c.name}" — the calculation does not parse: ${bad}`); }
+          }
+          if (src.kind === "item" && (src.part === "other" || src.part === "displayed") && n.source.kind !== "question") push("warning", `references.columns.${c.name}`, `Loop "${n.loopVar}": reference "${c.name}" reads the item's Other text, but this loop's items do not come from a question — it will be ${src.part === "other" ? "empty" : "the label"}.`);
+          if (src.kind === "variable" && !src.name.trim()) push("warning", `references.columns.${c.name}`, `Loop "${n.loopVar}": reference "${c.name}" names no variable.`);
+        }
+
         // required values present for every item the source can produce
         const items = possibleLoopItems(def, n);
         if (items) {
-          for (const c of columns.filter((c) => c.required)) {
+          /* a dynamic column has no typed values — its value is resolved for each respondent */
+          for (const c of columns.filter((c) => c.required && !(c.source && c.source.kind !== "static"))) {
             const missing = items.filter((it) => { const v = n.references?.values?.[it.code]?.[c.name]; return v === undefined || v === null || v === ""; });
             if (missing.length) push("warning", `references.values.${c.name}`, `Loop "${n.loopVar}": required column "${c.name}" has no value for ${missing.length === items.length ? "any item" : missing.map((m) => m.label || m.code).join(", ")}.`);
           }

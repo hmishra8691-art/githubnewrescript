@@ -98,7 +98,40 @@ export interface LoopReferenceColumn {
   /** every item the loop can produce must have a value (lint, not runtime) */
   required?: boolean;
   description?: string;
+  /**
+   * WHERE THE VALUE COMES FROM (2026-11-10). Absent or `static` is every reference so far: the value typed into
+   * this column's cell for each item (`LoopReferences.values`). Every other source is resolved AT RUNTIME, for the
+   * current iteration, wherever the reference is read — `{{loop.Name}}`, `loop.Name = "…"`, calculations, scripts:
+   *
+   *   text         text with piping — static words, a delimiter such as a newline, and any `{{…}}` token
+   *                (`{{Q1.other}}`, `{{calc.X}}`, `{{loop.label}}`, another reference), resolved per item
+   *   calculation  a calculation expression, evaluated inside the iteration (it can read `loop.code`, answers…)
+   *   answer       a question's answer — its value, its label(s), its Other-specify text, or the answer as the
+   *                respondent saw it (labels piped; an "Other" choice shown as what they typed)
+   *   item         the loop's current item — its label, code, the Other-specify text the respondent typed for it,
+   *                or its displayed value (that text when there is one, else the label)
+   *   variable     a calculated, embedded or answer variable by name
+   */
+  source?: LoopReferenceSource;
 }
+
+export type LoopReferenceSource =
+  | { kind: "static" }
+  | { kind: "text"; text: string }
+  | { kind: "calculation"; expr: string }
+  | { kind: "answer"; question: string; part?: "value" | "label" | "other" | "displayed"; join?: string }
+  | { kind: "item"; part: "label" | "code" | "other" | "displayed" }
+  | { kind: "variable"; name: string };
+
+export const LoopReferenceSource: z.ZodType<LoopReferenceSource> = z.union([
+  z.object({ kind: z.literal("static") }),
+  z.object({ kind: z.literal("text"), text: z.string().max(4000) }),
+  z.object({ kind: z.literal("calculation"), expr: z.string().max(2000) }),
+  z.object({ kind: z.literal("answer"), question: z.string().min(1), part: z.enum(["value", "label", "other", "displayed"]).optional(), join: z.string().max(20).optional() }),
+  z.object({ kind: z.literal("item"), part: z.enum(["label", "code", "other", "displayed"]) }),
+  z.object({ kind: z.literal("variable"), name: z.string().min(1) }),
+]);
+
 
 /**
  * The reference table itself: columns in display order, and one row of values
@@ -211,6 +244,7 @@ export const LoopReferenceColumn: z.ZodType<LoopReferenceColumn> = z.object({
   dataType: LoopReferenceType.optional(),
   required: z.boolean().optional(),
   description: z.string().optional(),
+  source: LoopReferenceSource.optional(),
 });
 
 export const LoopReferences: z.ZodType<LoopReferences> = z.object({

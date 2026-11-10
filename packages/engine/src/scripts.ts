@@ -1,5 +1,5 @@
 import type { SurveyDefinition, CustomScript } from "@rescript/schema";
-import type { ResponseState, LoopContext } from "./state.js";
+import type { ResponseState, LoopContext, LoopReferenceEnv, LoopReferenceValue } from "./state.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { evaluateCondition } from "./evaluate.js";
@@ -164,11 +164,14 @@ export interface ScriptRunResult {
 }
 
 /** what a script sees of one iteration (shared with the sandbox snapshot, logicSandbox.ts) */
-export function loopItemView(l: LoopContext): LoopItemView {
+export function loopItemView(l: LoopContext, env?: LoopReferenceEnv | null): LoopItemView {
+  /* dynamic references resolved now, when the survey and the respondent's data are given (else their last-compiled value) */
+  const references: Record<string, LoopReferenceValue> = { ...(l.references ?? {}) };
+  if (env && l.dynamic) for (const name of Object.keys(l.dynamic)) references[name] = loopValue(l, name, env);
   return {
     code: l.code, label: l.label, item: l.label, index: l.index, count: l.count ?? 0,
     first: loopValue(l, "first") === true, last: loopValue(l, "last") as boolean | null, depth: loopDepth(l),
-    references: { ...(l.references ?? {}) },
+    references,
   };
 }
 
@@ -179,7 +182,7 @@ export function createScriptCtx(
   result: ScriptRunResult,
 ): ScriptCtx {
   const refToId = (ref: string) => getQuestionByCodeOrVar(def, ref)?.id ?? ref;
-  const viewOf = loopItemView;
+  const viewOf = (l: LoopContext) => loopItemView(l, { def, state });
   /*
    * Built once per script run and cached, because a script in a loop calls
    * these per iteration and walking the whole definition each time would turn
@@ -259,7 +262,7 @@ export function createScriptCtx(
     getLoopCount: (scope) => findLoopScope(loop, scope)?.count ?? 0,
     getCurrentLoopReference(name, scope) {
       const l = findLoopScope(loop, scope);
-      return l ? loopValue(l, name) : null;
+      return l ? loopValue(l, name, { def, state }) : null;
     },
     getLoopItems(scope) {
       /*

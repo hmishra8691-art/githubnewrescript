@@ -1,6 +1,7 @@
 import type { SurveyDefinition, CustomScript } from "@rescript/schema";
 import type { ResponseState, LoopContext } from "./state.js";
 import { createScriptCtx, loopItemView, selectScripts, type LoopItemView, type ElementView } from "./scripts.js";
+import { withResolvedReferences } from "./loopReferences.js";
 import { codeGate, gateReason, LOGIC_PARAMS, logicScriptBody } from "./codeGate.js";
 import { elementIndex } from "./elementIds.js";
 import { loopContexts, loopNodes } from "./loops.js";
@@ -140,7 +141,7 @@ export function logicSnapshot(def: SurveyDefinition, state: ResponseState, loop:
     for (let l: LoopContext | null | undefined = loop; l; l = l.parent) {
       if (!l.loopId || loopItems[l.loopId]) continue;
       const node = loopNodes(def).find((x) => x.node.id === l!.loopId)?.node;
-      if (node) loopItems[l.loopId] = loopContexts(def, state, node, l.parent ?? null).map(loopItemView);
+      if (node) loopItems[l.loopId] = loopContexts(def, state, node, l.parent ?? null).map((x) => loopItemView(x, { def, state }));
     }
   }
   return {
@@ -148,7 +149,8 @@ export function logicSnapshot(def: SurveyDefinition, state: ResponseState, loop:
     calculated: clone(state.calculated) as Record<string, unknown>,
     embedded: clone(state.embedded) as Record<string, unknown>,
     flags: [...state.flags],
-    loop: loop ? clone(loop) : null,
+    /* dynamic loop references resolved now — the frame cannot reach the survey or the data to resolve them itself */
+    loop: loop ? clone(withResolvedReferences({ def, state }, loop)) : null,
     loopItems, exprs, pipes,
     ...(value !== undefined ? { value: clone(value) } : {}),
   };

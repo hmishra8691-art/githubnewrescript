@@ -68,7 +68,7 @@ const say = async (message) => {
 };
 const viewText = () => page.$eval('[data-testid="intelligent-view"]', (e) => e.innerText);
 
-await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
+await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "load" });
 await page.waitForSelector(".menubar");
 await loadDef(FIXTURE);
 ok("fixture loaded");
@@ -144,7 +144,7 @@ await intelligent();
 
 /* ============================================================ 2. the research design editor */
 const RD = '.settings-wrap [data-testid="research-design"]'; // the visible one: the right panel's fallback mounts SurveySettings too, hidden on this tab
-await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
+await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "load" });
 await page.waitForSelector(".menubar");
 await loadDef(FIXTURE);
 await openTab(page, "Survey Settings");

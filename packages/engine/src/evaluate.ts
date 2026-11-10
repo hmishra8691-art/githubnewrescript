@@ -234,7 +234,7 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
        */
       const l = findLoopScope(ctx.loop, source.scope);
       if (!l) return null;
-      return loopValue(l, source.ref || "code");
+      return loopValue(l, source.ref || "code", ctx);
     }
     /* S4b (LO-07): a respondent-behaviour value — time on page, elapsed, device, timed out (timers.ts) */
     case "behavior":

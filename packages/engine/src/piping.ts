@@ -258,7 +258,7 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
   if (t.kind === "loop") {
     const l = findLoopScope(ctx.loop, t.scope);
     if (!l) return "";
-    const v = loopValue(l, t.ref || "label");
+    const v = loopValue(l, t.ref || "label", ctx);
     // escaped like every other branch — this was the one pipe that was not,
     // and a reference column is programmer-entered text landing in HTML
     return v == null ? "" : escapeHtml(String(v));
@@ -277,7 +277,7 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
     if (scoped) {
       // the "property" is whatever followed the dot — a reference column name
       // is not one of the question properties, and that is fine here
-      const v = loopValue(scoped, String(t.property));
+      const v = loopValue(scoped, String(t.property), ctx);
       return v == null ? "" : escapeHtml(String(v));
     }
   }

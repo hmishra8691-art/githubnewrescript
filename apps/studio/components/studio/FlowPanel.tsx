@@ -21,7 +21,7 @@ import {
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { InsertPipedText } from "./InsertPipedText";
 import { gridMove, insertAt } from "@/lib/flow/flowEd";
-import { lintEmbeddedPiping, branchBlockChoices, moveBlockIntoBranch } from "@rescript/engine";
+import { lintEmbeddedPiping, branchBlockChoices, moveBlockIntoBranch, loopInsertChoices, moveIntoLoop } from "@rescript/engine";
 
 /* ==========================================================================
  * Survey Flow — one recursive tree over the canonical definition.
@@ -256,6 +256,8 @@ interface FlowOps {
   blockNumber(id: string): number | null;
   /** bring an EXISTING block into a branch path (engine moveBlockIntoBranch — blocks only, never a lone question) */
   adoptBlock(blockId: string, branchId: string, slot: string): void;
+  /** move an existing block or question into a loop (engine moveIntoLoop) */
+  adoptIntoLoop(ref: string, loopId: string, label: string): void;
 }
 const OpsCtx = React.createContext<FlowOps | null>(null);
 const useOps = () => {
@@ -515,8 +517,10 @@ function ContainerCard({ node, depth }: { node: FlowNode; depth: number }) {
       {open && (
         <div className="fc-body">
           <NodeEditor node={node} onChange={(n) => ops.patch(node.id, n)} />
-          <div className="flabel" style={{ marginTop: 8 }}>
-            inside this {(ELEMENT_LABELS[node.type] ?? node.type).toLowerCase()}
+          <div className="flabel row" style={{ marginTop: 8, alignItems: "center" }}>
+            <span>inside this {(ELEMENT_LABELS[node.type] ?? node.type).toLowerCase()}</span>
+            <span className="grow" />
+            {node.type === "loop" && <ExistingIntoLoopPicker loopId={node.id} />}
           </div>
           <FlowChildren nodes={kids} depth={depth + 1} what={node.type === "loop" ? "loop" : "randomizer"}
             container={{ ownerId: node.id, slot: "children" }} />
@@ -640,6 +644,60 @@ function ExistingBlockPicker({ branchId, slot, pathName }: { branchId: string; s
   );
 }
 
+/**
+ * SELECT AN EXISTING BLOCK OR QUESTION FOR A LOOP (2026-11-10) — the alternative to dragging. Lists every block and
+ * every question beneath it, selectable or greyed with the reason (already in the loop; the loop's own source question;
+ * a block containing the loop). A block moves in whole; a question moves onto a page of its own in the loop. Nothing is
+ * copied — the questions keep their options, piping, validation and logic, and are asked once per iteration.
+ * Engine: loopInsertChoices / moveIntoLoop.
+ */
+function ExistingIntoLoopPicker({ loopId }: { loopId: string }) {
+  const s = useStudio();
+  const ops = useOps();
+  const [open, setOpen] = React.useState(false);
+  const [find, setFind] = React.useState("");
+  const choices = React.useMemo(() => (open ? loopInsertChoices(s.def, loopId) : null), [open, s.def, loopId]);
+  const f = find.trim().toLowerCase();
+  const match = (t: string) => !f || t.toLowerCase().includes(f);
+  return (
+    <span className="ebp" onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="btn small ghost" data-testid="loop-existing-open" onClick={() => setOpen((v) => !v)}
+        title="Put a block or question that already exists into this loop">+ Existing block or question</button>
+      {open && choices && (
+        <div className="ebp-pop" role="dialog" aria-label="Existing blocks and questions for this loop" data-testid="loop-existing-picker">
+          <div className="row" style={{ gap: 6, marginBottom: 6 }}>
+            <strong style={{ fontSize: 13 }}>Existing blocks and questions → this loop</strong>
+            <span className="grow" />
+            <button type="button" className="btn small ghost" onClick={() => setOpen(false)} aria-label="Close">✕</button>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }} data-testid="loop-existing-note">{choices.note}</div>
+          <input className="input" placeholder="Find a block or question…" value={find} onChange={(e) => setFind(e.target.value)} style={{ marginBottom: 6 }} data-testid="loop-existing-find" />
+          <div className="ebp-list">
+            {choices.blocks.filter((b) => match(b.title) || b.questionCodes.some(match)).map((b) => (
+              <div key={b.id} className={`ebp-block ${b.selectable ? "" : "off"}`} data-testid="loop-existing-block" data-block={b.id} data-selectable={b.selectable ? "1" : "0"}>
+                <button type="button" className="ebp-pick" disabled={!b.selectable} title={b.reason ?? `Move ${b.title} into the loop`} data-testid="loop-existing-block-pick"
+                  onClick={() => { ops.adoptIntoLoop(b.id, loopId, b.title); setOpen(false); }}>
+                  <span className="badge neutral">BLOCK {b.number}</span> <strong>{b.title}</strong>
+                  <span className="muted"> · {b.questionCodes.length} question{b.questionCodes.length === 1 ? "" : "s"} · {b.where}</span>
+                </button>
+                {b.reason && <div className="ebp-reason">{b.reason}</div>}
+                <div className="ebp-qs">
+                  {choices.questions.filter((q) => q.blockId === b.id).map((q) => (
+                    <button key={q.id} type="button" className={`ebp-q${q.selectable ? " pickable" : ""}`} disabled={!q.selectable}
+                      title={q.reason ?? `Move ${q.code} into the loop, on a page of its own — ${q.text}`} data-testid="loop-existing-question" data-code={q.code}
+                      onClick={() => { ops.adoptIntoLoop(q.id, loopId, q.code); setOpen(false); }}>{q.code}</button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {!choices.blocks.length && <div className="muted">The survey has no blocks yet.</div>}
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
 /** A leaf element: embedded data, quota check, redirect, end. */
 function ElementCard({ node }: { node: FlowNode }) {
   const ops = useOps();
@@ -700,6 +758,9 @@ export function FlowPanel() {
     adoptBlock(blockId, branchId, slot) {
       const b = listBlocks(flow as any[]).find((x) => x.id === blockId);
       applyFlow(`move ${b?.title || "block"} into the branch`, () => moveBlockIntoBranch(s.def, blockId, branchId, slot));
+    },
+    adoptIntoLoop(ref, loopId, label) {
+      applyFlow(`move ${label} into the loop`, () => moveIntoLoop(s.def, ref, loopId));
     },
     insert(type, target) {
       applyFlow(`add ${ELEMENT_LABELS[type] ?? type}`, (f) => insertFlowNode(f, makeNode(type), target));

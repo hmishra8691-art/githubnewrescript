@@ -1,4 +1,4 @@
-import type { SurveyDefinition, Question } from "@rescript/schema";
+import type { SurveyDefinition, Question, LoopReferenceColumn } from "@rescript/schema";
 
 /**
  * Answer value shapes:
@@ -53,8 +53,21 @@ export interface LoopContext {
   loopId?: string;
   count?: number;
   references?: Record<string, LoopReferenceValue>;
+  /**
+   * The columns of THIS loop whose value is resolved at runtime (a `source` other than static), by name — plain
+   * data, so a context still clones and serialises. `references` holds their value as of the last compile (what
+   * ordering, positional exports and the script sandbox read); `loopValue` with an environment resolves them live.
+   */
+  dynamic?: Record<string, LoopReferenceColumn>;
   parent?: LoopContext | null;
 }
+
+/** what a dynamic reference needs to resolve: the survey and the respondent's data */
+export interface LoopReferenceEnv { def: SurveyDefinition; state: ResponseState; quotaCounts?: Record<string, Record<string, number>> }
+type LoopReferenceResolver = (env: LoopReferenceEnv, loop: LoopContext, name: string) => LoopReferenceValue;
+let loopReferenceResolver: LoopReferenceResolver | null = null;
+/** registered by loopReferences.ts on load — piping and calculations sit above this module, so they cannot be imported here */
+export function registerLoopReferenceResolver(fn: LoopReferenceResolver): void { loopReferenceResolver = fn; }
 
 /**
  * The suffix that scopes an answer or page id to an iteration.
@@ -136,7 +149,7 @@ export function loopDepth(loop: LoopContext | null | undefined): number {
  * brand name into the sentence, and that is precisely the kind of quiet wrong
  * answer a survey cannot afford. The lint names the unknown column instead.
  */
-export function loopValue(loop: LoopContext, ref: string): LoopReferenceValue {
+export function loopValue(loop: LoopContext, ref: string, env?: LoopReferenceEnv | null): LoopReferenceValue {
   switch (ref) {
     case "code": return loop.code;
     case "label": case "item": return loop.label;
@@ -148,6 +161,8 @@ export function loopValue(loop: LoopContext, ref: string): LoopReferenceValue {
     case "last": return typeof loop.count === "number" && loop.count > 0 ? loop.index === loop.count : null;
     case "depth": return loopDepth(loop);
     default: {
+      /* a dynamic column, read where the survey and the respondent's data are known: resolved now, for this iteration */
+      if (env && loop.dynamic && Object.prototype.hasOwnProperty.call(loop.dynamic, ref) && loopReferenceResolver) return loopReferenceResolver(env, loop, ref);
       const refs = loop.references;
       return refs && Object.prototype.hasOwnProperty.call(refs, ref) ? refs[ref] : null;
     }

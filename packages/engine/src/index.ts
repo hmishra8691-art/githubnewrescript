@@ -104,6 +104,8 @@ export * from "./listFill.js";
 export * from "./listFillLint.js";
 import "./listFillSettled.js";
 export * from "./loops.js";
+export * from "./loopReferences.js";
+export * from "./loopInsert.js";
 export * from "./loopDescribe.js";
 export * from "./quotaDashboard.js";
 export * from "./countCondition.js";

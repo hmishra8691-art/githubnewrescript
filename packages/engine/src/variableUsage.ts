@@ -315,8 +315,14 @@ export function variableUsages(def: SurveyDefinition, name: string, scope: Usage
     for (const key of Object.keys(node)) {
       const v = node[key];
       if (typeof v !== "string") continue;
+      /* a loop reference's variable source names a variable exactly (2026-11-10) */
+      if (key === "name" && node.kind === "variable" && v === name && /\.references\.columns\[/.test(path)) {
+        add({ kind: "expression", where: `${words} — a loop reference's variable`, path: `${path}.${key}`, rewrite: "auto", detail: v });
+        continue;
+      }
       const isExpr =
         EXPRESSION_KEYS.has(key) ||
+        (key === "expr" && node.kind === "calculation" && /\.references\.columns\[/.test(path)) ||
         (key === "value" && typeof node.kind === "string" && EXPR_VALUE_KINDS.has(node.kind)) ||
         (key === "value" && node.source === "expression");
       if (!isExpr) continue;
@@ -661,9 +667,12 @@ export function applyRename(
 
         const isExprField =
           EXPRESSION_KEYS.has(key) ||
+          (key === "expr" && node.kind === "calculation" && /\.references\.columns\[/.test(path)) ||
           (key === "value" && typeof node.kind === "string" && EXPR_VALUE_KINDS.has(node.kind)) ||
           (key === "value" && node.source === "expression");
         if (isExprField) node[key] = rewriteExpression(node[key]);
+        /* a loop reference's variable / answer source names a variable or question exactly (2026-11-10) */
+        if (/\.references\.columns\[/.test(path) && ((key === "name" && node.kind === "variable") || (key === "question" && node.kind === "answer")) && v === oldName) node[key] = newName;
 
         if (key === "ref" && node.kind === "expr") node[key] = rewriteExpression(node[key]);
         else if (key === "ref" && typeof node.kind === "string" && v === oldName) node[key] = newName;

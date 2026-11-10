@@ -3095,6 +3095,14 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .ebp-reason { font-size: 11.5px; color: var(--subtle); margin-top: 2px; }
 .ebp-qs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .ebp-q { font-family: var(--mono, monospace); font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--panel2); color: var(--subtle); cursor: not-allowed; }
+button.ebp-q { border: 1px solid transparent; }
+button.ebp-q.pickable { cursor: pointer; color: var(--primary, #4f46e5); background: var(--panel); border-color: var(--border); }
+button.ebp-q.pickable:hover { border-color: var(--primary, #4f46e5); }
+/* loop references (2026-11-10): the + icon and dynamic cells */
+/* the + stays in view however many references the table has */
+.loop-ref-add-cell { position: sticky; right: 0; background: var(--panel, #fff); z-index: 1; box-shadow: -6px 0 6px -6px rgba(0,0,0,.15); }
+.loop-ref-add { width: 30px; height: 30px; padding: 0; font-size: 18px; line-height: 1; border-radius: 8px; }
+.loop-ref-dynamic { font-size: 12px; white-space: nowrap; }
 .dl-grid { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
 .dl-grid th, .dl-grid td { border: 1px solid var(--border); padding: 4px 6px; vertical-align: top; text-align: left; }
 .dl-grid th { background: var(--panel2); font-weight: 600; white-space: nowrap; }

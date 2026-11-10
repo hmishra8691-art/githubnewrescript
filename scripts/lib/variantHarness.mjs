@@ -44,7 +44,8 @@ export async function openHarness({
     await page.waitForTimeout(400);
   };
 
-  await page.goto(`${studio}/sandbox`, { waitUntil: "networkidle" });
+  /* "load", then the menubar: a background save-log POST can keep the network busy indefinitely, and nothing here waits on it */
+  await page.goto(`${studio}/sandbox`, { waitUntil: "load" });
   await page.waitForSelector(".menubar");
   // start from a clean, minimal survey
   await loadDef({

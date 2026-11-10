@@ -8,7 +8,7 @@ import { listFillLoopItems, listFillVariableNames } from "./listFill.js";
 import type { QuotaCounts } from "./quotas.js";
 import { hashString, mulberry32, seededShuffle, subSeed } from "./random.js";
 import {
-  getQuestion, getQuestionByCodeOrVar, lookupAnswer, loopKeySuffix,
+  getQuestion, getQuestionByCodeOrVar, lookupAnswer, loopKeySuffix, loopValue,
   type LoopContext, type LoopReferenceValue, type ResponseState,
 } from "./state.js";
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode, type LoopNodeInfo } from "./loopModel.js";
@@ -128,7 +128,8 @@ export function referenceRow(refs: LoopReferences | undefined, code: string): Re
   const out: Record<string, LoopReferenceValue> = {};
   if (!refs) return out;
   const row = refs.values?.[code] ?? {};
-  for (const col of refs.columns) out[col.name] = coerceReference(row[col.name], col);
+  /* a dynamic column's value is resolved at runtime (loopReferences.ts); cells typed before it became dynamic are ignored */
+  for (const col of refs.columns) out[col.name] = col.source && col.source.kind !== "static" ? null : coerceReference(row[col.name], col);
   return out;
 }
 
@@ -422,8 +423,22 @@ export function contextFor(
     index,
     count,
     references: item.references,
+    ...(dynamicOf(node) ? { dynamic: dynamicOf(node) } : {}),
     parent: parent ?? null,
   };
+}
+
+/** the loop's dynamic reference columns by name (cached per node object), or undefined when it has none */
+const DYN_CACHE = new WeakMap<object, Record<string, LoopReferenceColumn> | null>();
+function dynamicOf(node: LoopFlowNode): Record<string, LoopReferenceColumn> | undefined {
+  const key = (node.references ?? node) as object;
+  let v = DYN_CACHE.get(key);
+  if (v === undefined) {
+    const dyn = (node.references?.columns ?? []).filter((c) => c.source && c.source.kind !== "static");
+    v = dyn.length ? Object.fromEntries(dyn.map((c) => [c.name, c])) : null;
+    DYN_CACHE.set(key, v);
+  }
+  return v ?? undefined;
 }
 
 /* ------------------------------------------------------------ order */
@@ -580,6 +595,21 @@ export function resolveLoopItems(
   }
 
   let items = candidates(def, state, node, parent, quotaCounts);
+  /*
+   * DYNAMIC REFERENCES (2026-11-10): a column with a runtime source (text with piping, a calculation, an answer, the
+   * item, a variable) gets its value for each candidate now, so ordering by it, eligibility on it and the positional
+   * exports see real values. Readers that know the survey and the data resolve it again, live (`loopValue` with an
+   * environment), so an answer given after this compile is still reflected where the reference is piped.
+   */
+  const dyn = (node.references?.columns ?? []).filter((c) => c.source && c.source.kind !== "static");
+  if (dyn.length) {
+    items = items.map((it) => {
+      const probe = contextFor(node, it, 0, 0, parent);
+      const references = { ...it.references };
+      for (const c of dyn) references[c.name] = loopValue(probe, c.name, { def, state, quotaCounts });
+      return { ...it, references };
+    });
+  }
 
   /*
    * Eligibility narrows whatever the filter produced (§12). It is evaluated

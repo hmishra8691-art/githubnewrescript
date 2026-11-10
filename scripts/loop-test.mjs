@@ -104,21 +104,31 @@ const refsRoot = '[data-node-id="LOOP_001"] [data-testid="loop-references"]';
   assert.deepEqual(rows, ["1", "2", "3", "4", "5"]);
   ok("the reference table has one row per option of the source");
 
-  // + Add Reference Column, with the name the requirement uses
-  await page.fill(`${refsRoot} [data-testid="loop-ref-new-name"]`, "Product_ID");
+  // the + icon adds a reference at once (Reference_1), named in place
   await page.click(`${refsRoot} [data-testid="loop-ref-add"]`);
+  await page.waitForSelector(`${refsRoot} [data-testid="loop-ref-cell"][data-column="Reference_1"]`);
+  const rename = async (from, to) => {
+    const input = `${refsRoot} [data-testid="loop-ref-column"][data-column="${from}"] [data-testid="loop-ref-column-name"]`;
+    await page.fill(input, to);
+    await page.press(input, "Enter");
+    await page.waitForTimeout(150);
+  };
+  await rename("Reference_1", "Product_ID");
   await page.waitForSelector(`${refsRoot} [data-testid="loop-ref-cell"][data-column="Product_ID"]`);
-  ok("+ Add Reference Column creates a dynamic column");
+  assert.equal(await page.getAttribute(`${refsRoot} [data-testid="loop-ref-add"]`, "aria-label"), "Add a reference");
+  assert.equal((await page.textContent(`${refsRoot} [data-testid="loop-ref-add"]`)).trim(), "+");
+  ok("the + icon adds a reference; it is renamed in place to Product_ID");
 
   // a bad name is refused with a reason, not silently
-  await page.fill(`${refsRoot} [data-testid="loop-ref-new-name"]`, "9 lives");
   await page.click(`${refsRoot} [data-testid="loop-ref-add"]`);
-  const err = await page.textContent(`${refsRoot} [data-testid="loop-ref-error"]`);
-  assert.match(err, /identifier/);
-  await page.fill(`${refsRoot} [data-testid="loop-ref-new-name"]`, "label");
-  await page.click(`${refsRoot} [data-testid="loop-ref-add"]`);
+  await page.waitForSelector(`${refsRoot} [data-testid="loop-ref-column"][data-column="Reference_2"]`);
+  await rename("Reference_2", "9 lives");
+  assert.match(await page.textContent(`${refsRoot} [data-testid="loop-ref-error"]`), /identifier/);
+  await rename("Reference_2", "label");
   assert.match(await page.textContent(`${refsRoot} [data-testid="loop-ref-error"]`), /item itself/);
-  ok("a column name that would not fit {{loop.Name}}, or would shadow the item, is refused with a reason");
+  await page.click(`${refsRoot} [data-testid="loop-ref-column"][data-column="Reference_2"] [data-testid="loop-ref-remove"]`);
+  await page.waitForFunction((r) => !document.querySelector(`${r} [data-testid="loop-ref-column"][data-column="Reference_2"]`), refsRoot);
+  ok("a reference name that would not fit {{loop.Name}}, or would shadow the item, is refused with a reason");
 
   // populate values by hand (§17)
   await page.fill(`${refsRoot} [data-testid="loop-ref-cell"][data-code="1"][data-column="Product_ID"]`, "PROD_001");
@@ -232,6 +242,78 @@ console.log("\nSTUDIO — a question inside the loop can build logic on the loop
 
 /* ============================================================ runtime */
 
+console.log("\nSTUDIO — dynamic references and existing blocks (2026-11-10)");
+{
+  await h.loadDef(baseDef({ references: REFS }));
+  await h.goTab("Survey Flow");
+  await page.waitForSelector(refsRoot);
+  /* seven references, each with its own source — no small limit */
+  for (let k = 0; k < 7; k++) await page.click(`${refsRoot} [data-testid="loop-ref-add"]`);
+  await page.waitForFunction((r) => document.querySelectorAll(`${r} [data-testid="loop-ref-column"]`).length === 11, refsRoot);
+  const src = (name) => `${refsRoot} [data-testid="loop-ref-column"][data-column="${name}"]`;
+  await page.selectOption(`${src("Reference_5")} [data-testid="loop-ref-source-kind"]`, "text");
+  await page.fill(`${src("Reference_5")} [data-testid="loop-ref-text"]`, "{{loop.label}} / {{loop.Brand_Nickname}}");
+  await page.selectOption(`${src("Reference_6")} [data-testid="loop-ref-source-kind"]`, "calculation");
+  await page.fill(`${src("Reference_6")} [data-testid="loop-ref-expr"]`, "loop.code * 10");
+  await page.selectOption(`${src("Reference_7")} [data-testid="loop-ref-source-kind"]`, "item");
+  await page.selectOption(`${src("Reference_8")} [data-testid="loop-ref-source-kind"]`, "answer");
+  await page.selectOption(`${src("Reference_8")} [data-testid="loop-ref-question"]`, { label: "Q2" });
+  await page.waitForTimeout(250);
+  assert.ok(await page.$(`${refsRoot} [data-testid="loop-ref-dynamic"][data-code="1"][data-column="Reference_5"]`), "a dynamic column's cells say it is resolved per respondent");
+  const def = await h.readDef();
+  const cols = def.flow.find((n) => n.type === "loop").references.columns;
+  assert.equal(cols.length, 11);
+  assert.deepEqual(cols.find((c) => c.name === "Reference_5").source, { kind: "text", text: "{{loop.label}} / {{loop.Brand_Nickname}}" });
+  assert.deepEqual(cols.find((c) => c.name === "Reference_6").source, { kind: "calculation", expr: "loop.code * 10" });
+  assert.deepEqual(cols.find((c) => c.name === "Reference_7").source, { kind: "item", part: "displayed" });
+  assert.equal(cols.find((c) => c.name === "Reference_8").source.question, "q2", "stored by the question id, which a rename cannot change");
+  ok("seven more references (11 in all), each with its own source — text with piping, calculation, the item, an answer — stored on the loop");
+
+  /* the simulator resolves them with the runtime's own engine */
+  await h.goTab("Survey Flow");
+  await page.waitForSelector(refsRoot);
+  const simRoot = '[data-node-id="LOOP_001"] [data-testid="loop-simulator"]';
+  if (!(await page.$(`${simRoot} [data-testid="loop-sim-result"]`))) await page.click(`${simRoot} [data-testid="loop-sim-toggle"]`);
+  for (const c of ["1", "3"]) { const box = `${simRoot} [data-testid="loop-sim-option"][data-code="${c}"]`; if (!(await page.isChecked(box))) await page.check(box); }
+  await page.waitForSelector(`${simRoot} [data-testid="loop-sim-iteration"]`);
+  const first = await page.textContent(`${simRoot} [data-testid="loop-sim-iteration"]`);
+  assert.match(first, /Reference_5 = Apple \/ APPLE/);
+  assert.match(first, /Reference_6 = 10/);
+  assert.match(first, /Reference_7 = Apple/);
+  ok("the loop simulator resolves them: Reference_5 = “Apple / APPLE”, Reference_6 = 10, Reference_7 = Apple");
+
+  /* an existing question and an existing block, moved into the loop without dragging */
+  await h.loadDef({ ...baseDef(), flow: [
+    { type: "page", id: "p1", questionIds: ["q2"] },
+    { type: "block", id: "bx", title: "Follow-ups", children: [{ type: "page", id: "px", questionIds: ["q8"] }] },
+    { type: "loop", id: "LOOP_001", loopVar: "brand", source: { kind: "question", questionId: "q2", filter: "selected" },
+      children: [{ type: "block", id: "b2", title: "Block 2", children: [{ type: "page", id: "p6", questionIds: ["q6", "q7"] }] }] },
+    { type: "page", id: "p9", questionIds: ["q9"] },
+    { type: "end", id: "e", status: "complete" },
+  ] });
+  await h.goTab("Survey Flow");
+  const loopCard = '[data-node-id="LOOP_001"]';
+  await page.click(`${loopCard} [data-testid="loop-existing-open"]`);
+  await page.waitForSelector(`${loopCard} [data-testid="loop-existing-picker"]`);
+  assert.equal(await page.isDisabled(`${loopCard} [data-testid="loop-existing-question"][data-code="Q2"]`), true, "the loop's own source question is not offered");
+  await page.click(`${loopCard} [data-testid="loop-existing-question"][data-code="Q9"]`);
+  await page.waitForTimeout(300);
+  let d2 = await h.readDef();
+  let lp = d2.flow.find((n) => n.type === "loop");
+  assert.ok(lp.children.some((k) => k.type === "page" && k.questionIds.includes("q9")), "Q9 is on a page inside the loop");
+  assert.equal(d2.flow.some((n) => n.id === "p9"), false, "its emptied page was removed");
+  await h.goTab("Survey Flow");
+  await page.click(`${loopCard} [data-testid="loop-existing-open"]`);
+  await page.click(`${loopCard} [data-testid="loop-existing-block"][data-block="bx"] [data-testid="loop-existing-block-pick"]`);
+  await page.waitForTimeout(300);
+  d2 = await h.readDef();
+  lp = d2.flow.find((n) => n.type === "loop");
+  assert.ok(lp.children.some((k) => k.id === "bx"), "the Follow-ups block is in the loop");
+  assert.equal(d2.flow.some((n) => n.id === "bx"), false, "moved, not copied");
+  assert.deepEqual(d2.questions.find((q) => q.id === "q8").displayLogic, baseDef().questions.find((q) => q.id === "q8").displayLogic, "its display logic is unchanged");
+  ok("“+ Existing block or question”: Q9 moved onto a page in the loop, the Follow-ups block moved in whole — display logic intact; Q2 refused");
+}
+
 console.log("\nRUNTIME — a preview respondent runs the loop");
 
 const runPreview = (def) =>
@@ -313,6 +395,31 @@ const textOf = (pv, qid) => pv.$eval(`[data-qid="${qid}"]`, (e) => e.textContent
 }
 
 /* -------------------------------------------------- not selected + count */
+
+console.log("\nRUNTIME — dynamic references resolve for the respondent (2026-11-10)");
+{
+  const def = baseDef({ references: { columns: [
+    { name: "Shown", source: { kind: "item", part: "displayed" } },
+    { name: "Line", source: { kind: "text", text: "{{loop.label}} #{{loop.index}}" } },
+    { name: "Score", dataType: "number", source: { kind: "calculation", expr: "loop.code * 10" } },
+  ], values: {} } });
+  def.questions.find((q) => q.id === "q2").options = [...BRANDS, { code: "97", label: "Other (please specify)", flags: ["other_specify"] }];
+  def.questions.find((q) => q.id === "q6").text = "How satisfied are you with {{loop.Shown}}? [{{loop.Line}} / {{loop.Score}}]";
+  const pv = await runPreview(def);
+  await pv.click('[data-qid="q2"] input[value="2"]');
+  await pv.click('[data-qid="q2"] input[value="97"]');
+  const box = await pv.waitForSelector('[data-qid="q2"] [data-testid="rs-other-input"]');
+  await box.fill("Nokia");
+  await h.next(pv);
+  await pv.waitForSelector('[data-qid="q6"]');
+  assert.match(await textOf(pv, "q6"), /satisfied are you with Samsung\? \[Samsung #1 \/ 20\]/);
+  await pv.click('[data-qid="q6"] input[value="1"]');
+  await h.next(pv);
+  await pv.waitForFunction(() => /Nokia/.test(document.querySelector('[data-qid="q6"]')?.textContent ?? ""));
+  assert.match(await textOf(pv, "q6"), /satisfied are you with Nokia\? \[Other \(please specify\) #2 \/ 970\]/);
+  await pv.close();
+  ok("in the runtime: the Other item pipes what the respondent typed (Nokia); text and calculation references resolve per iteration");
+}
 
 console.log("\nRUNTIME — not-selected filter, count and order");
 {

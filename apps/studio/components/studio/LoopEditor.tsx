@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { Condition, LoopCountValue, LoopOrder, LoopReferenceColumn, LoopReferences, LoopSource } from "@rescript/schema";
+import type { Condition, LoopCountValue, LoopOrder, LoopReferenceColumn, LoopReferenceSource, LoopReferences, LoopSource } from "@rescript/schema";
 import {
   LOOP_BUILTIN_REFS, createResponseState, describeLoop, loopVariablePrefix, parseDelimited, possibleLoopItems, simulateLoop,
   type LoopFlowNode, type LoopSimulation,
@@ -87,16 +87,13 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
 
   const setRefs = (next: LoopReferences) => set({ references: next.columns.length || Object.keys(next.values).length ? next : undefined });
 
-  const [newCol, setNewCol] = React.useState<LoopReferenceColumn>({ name: "", dataType: "text" });
   const [colError, setColError] = React.useState<string | null>(null);
+  /* the + icon: a new reference at once, with a free default name to rename in place — as many as the loop needs */
   const addColumn = () => {
-    const name = newCol.name.trim();
-    if (!IDENT.test(name)) return setColError("A column name is an identifier: letters, digits and underscores, not starting with a digit — it has to fit inside {{loop.Name}}.");
-    if ((LOOP_BUILTIN_REFS as readonly string[]).includes(name)) return setColError(`"${name}" is what the item itself is called; pick another name.`);
-    if (columns.some((c) => c.name === name)) return setColError(`"${name}" already exists on this loop.`);
+    let n = columns.length + 1;
+    while (columns.some((c) => c.name === `Reference_${n}`)) n++;
     setColError(null);
-    setRefs({ ...refs, columns: [...columns, { ...newCol, name }] });
-    setNewCol({ name: "", dataType: "text" });
+    setRefs({ ...refs, columns: [...columns, { name: `Reference_${n}`, dataType: "text" }] });
   };
   const removeColumn = (name: string) => {
     const values: LoopReferences["values"] = {};
@@ -108,8 +105,12 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
   };
   const renameColumn = (from: string, to: string) => {
     const name = to.trim();
-    if (name === from) return;
-    if (!IDENT.test(name) || columns.some((c) => c.name === name)) return;
+    if (name === from) { setColError(null); return; }
+    /* refused with the reason, not silently — the name has to fit inside {{loop.Name}} */
+    if (!IDENT.test(name)) return setColError("A reference name is an identifier: letters, digits and underscores, not starting with a digit — it has to fit inside {{loop.Name}}.");
+    if ((LOOP_BUILTIN_REFS as readonly string[]).includes(name)) return setColError(`"${name}" is what the item itself is called; pick another name.`);
+    if (columns.some((c) => c.name === name)) return setColError(`"${name}" already exists on this loop.`);
+    setColError(null);
     // values are keyed by column NAME (so the JSON is self-describing, §38),
     // which is why a rename rewrites every row's key here, in one place
     const values: LoopReferences["values"] = {};
@@ -514,6 +515,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
           </p>
         )}
 
+        {colError && <div className="muted" data-testid="loop-ref-error" style={{ color: "var(--red)", fontSize: 12.5, margin: "4px 0" }}>{colError}</div>}
         <div style={{ overflowX: "auto" }}>
           <table className="loop-ref-table" data-testid="loop-ref-table">
             <thead>
@@ -521,36 +523,30 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
                 <th style={{ minWidth: 140 }}>Item</th>
                 <th>Code</th>
                 {columns.map((c, i) => (
-                  <th key={c.name} data-testid="loop-ref-column">
+                  <th key={c.name} data-testid="loop-ref-column" data-column={c.name} style={{ minWidth: 230, verticalAlign: "top" }}>
                     <div className="row" style={{ gap: 2 }}>
-                      <input className="input mono" style={{ width: 120, fontWeight: 600 }} defaultValue={c.name} key={c.name}
-                        data-testid="loop-ref-column-name"
-                        onBlur={(e) => renameColumn(c.name, e.target.value)} title={c.description ?? "click to rename"} />
-                      <button className="btn small" title="move left" disabled={i === 0} onClick={() => moveColumn(c.name, -1)}>‹</button>
-                      <button className="btn small" title="move right" disabled={i === columns.length - 1} onClick={() => moveColumn(c.name, 1)}>›</button>
-                      <button className="btn small danger" title="remove column and its values" data-testid="loop-ref-remove" onClick={() => removeColumn(c.name)}>×</button>
+                      <input className="input mono" style={{ width: 130, fontWeight: 600 }} defaultValue={c.name} key={c.name}
+                        data-testid="loop-ref-column-name" aria-label="Reference name"
+                        onBlur={(e) => { renameColumn(c.name, e.target.value); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} title={c.description ?? "click to rename"} />
+                      <button className="btn small" title="move left" aria-label="Move left" disabled={i === 0} onClick={() => moveColumn(c.name, -1)}>‹</button>
+                      <button className="btn small" title="move right" aria-label="Move right" disabled={i === columns.length - 1} onClick={() => moveColumn(c.name, 1)}>›</button>
+                      <button className="btn small danger" title="remove this reference and its values" aria-label={`Remove ${c.name}`} data-testid="loop-ref-remove" onClick={() => removeColumn(c.name)}>×</button>
                     </div>
-                    <div className="row" style={{ gap: 4, marginTop: 2 }}>
-                      <select className="select small" value={c.dataType ?? "text"} onChange={(e) => patchColumn(c.name, { dataType: e.target.value as LoopReferenceColumn["dataType"] })}>
+                    <div className="row" style={{ gap: 4, marginTop: 4 }}>
+                      <select className="select small" aria-label="Type" value={c.dataType ?? "text"} onChange={(e) => patchColumn(c.name, { dataType: e.target.value as LoopReferenceColumn["dataType"] })}>
                         <option value="text">text</option><option value="number">number</option><option value="boolean">yes/no</option>
                       </select>
                       <label className="muted" style={{ fontSize: 12.5 }}>
                         <input type="checkbox" checked={!!c.required} onChange={(e) => patchColumn(c.name, { required: e.target.checked })} /> required
                       </label>
                     </div>
+                    <ReferenceSourceField column={c} others={columns.filter((x) => x.name !== c.name).map((x) => x.name)}
+                      onChange={(source) => patchColumn(c.name, { source })} />
                   </th>
                 ))}
-                <th style={{ minWidth: 180 }}>
-                  <div className="row" style={{ gap: 4 }}>
-                    <input className="input mono" data-testid="loop-ref-new-name" style={{ width: 120 }} placeholder="Column_Name"
-                      value={newCol.name} onChange={(e) => setNewCol({ ...newCol, name: e.target.value })}
-                      onKeyDown={(e) => { if (e.key === "Enter") addColumn(); }} />
-                    <select className="select small" value={newCol.dataType ?? "text"} onChange={(e) => setNewCol({ ...newCol, dataType: e.target.value as LoopReferenceColumn["dataType"] })}>
-                      <option value="text">text</option><option value="number">number</option><option value="boolean">yes/no</option>
-                    </select>
-                    <button className="btn small primary" data-testid="loop-ref-add" onClick={addColumn}>+ Add Reference Column</button>
-                  </div>
-                  {colError && <div className="muted" data-testid="loop-ref-error" style={{ color: "var(--red)", fontSize: 12.5 }}>{colError}</div>}
+                <th className="loop-ref-add-cell" style={{ width: 44, verticalAlign: "top" }}>
+                  <button type="button" className="btn small primary loop-ref-add" data-testid="loop-ref-add" aria-label="Add a reference" title="Add a reference" onClick={addColumn}>+</button>
                 </th>
               </tr>
             </thead>
@@ -560,6 +556,14 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
                   <td>{it.label}</td>
                   <td className="mono">{it.code}</td>
                   {columns.map((c) => {
+                    if (c.source && c.source.kind !== "static") {
+                      return (
+                        <td key={c.name}>
+                          <span className="muted loop-ref-dynamic" data-testid="loop-ref-dynamic" data-code={it.code} data-column={c.name}
+                            title="This reference is resolved for each respondent when the survey runs — see the loop simulator for what it gives.">↻ {sourceSummary(c.source, (r) => String(def.questions.find((q) => q.id === r || q.code === r)?.code ?? r))}</span>
+                        </td>
+                      );
+                    }
                     const v = refs.values[it.code]?.[c.name];
                     const missing = c.required && (v === undefined || v === "" || v === null);
                     return (
@@ -660,5 +664,115 @@ function CountValueField({ value, onChange, label }: { value: LoopCountValue; on
       )}
       {label ? <span className="muted" style={{ fontSize: 12.5 }}>{label}</span> : null}
     </span>
+  );
+}
+
+/* ================================================== dynamic references (2026-11-10) */
+
+const SOURCE_KINDS: { kind: LoopReferenceSource["kind"]; label: string; hint: string }[] = [
+  { kind: "static", label: "Typed values (per item)", hint: "the value typed into this column for each item below" },
+  { kind: "text", label: "Text with piping", hint: "words, a delimiter such as a new line, and any {{…}} token — resolved per item at runtime" },
+  { kind: "calculation", label: "Calculation", hint: "an expression evaluated inside the iteration — it can read loop.code, answers, calculations" },
+  { kind: "answer", label: "Answer to a question", hint: "a question's answer: its value, labels, Other-specify text, or as the respondent saw it" },
+  { kind: "item", label: "The loop item", hint: "the current item's label or code, the Other-specify text typed for it, or its displayed value" },
+  { kind: "variable", label: "Variable", hint: "a calculated, embedded or answer variable by name" },
+];
+
+/** a short reading of a dynamic source, for the cells of the table */
+export function sourceSummary(s: LoopReferenceSource, codeOf: (ref: string) => string = (r) => r): string {
+  switch (s.kind) {
+    case "text": return s.text.trim() ? `text: ${s.text.replace(/\n/g, "⏎").slice(0, 40)}${s.text.length > 40 ? "…" : ""}` : "text (empty)";
+    case "calculation": return s.expr.trim() ? `= ${s.expr.slice(0, 40)}` : "calculation (empty)";
+    case "answer": return `${codeOf(s.question)} · ${({ value: "value", label: "labels", other: "Other text", displayed: "as displayed" } as const)[s.part ?? "displayed"]}`;
+    case "item": return `item · ${({ label: "label", code: "code", other: "Other text", displayed: "displayed" } as const)[s.part]}`;
+    case "variable": return s.name ? `variable ${s.name}` : "variable (none)";
+    default: return "typed";
+  }
+}
+
+/** where one reference's value comes from, and that source's own settings */
+function ReferenceSourceField({ column, others, onChange }: { column: LoopReferenceColumn; others: string[]; onChange(s: LoopReferenceSource | undefined): void }) {
+  const s = useStudio();
+  const def = s.def;
+  const src: LoopReferenceSource = column.source ?? { kind: "static" };
+  const questions = def.questions.filter((q) => q.type !== "html");
+  const variables = [...new Set([...(def.embeddedData ?? []).map((e) => e.name), ...(def.calculations ?? []).map((c) => c.targetVariable).filter(Boolean)])];
+  const textRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const change = (kind: LoopReferenceSource["kind"]) => {
+    /* by id: a question's code can be renamed, its id cannot */
+    const firstQ = questions[0]?.id ?? "";
+    const next: LoopReferenceSource =
+      kind === "text" ? { kind, text: "{{loop.label}}" }
+      : kind === "calculation" ? { kind, expr: "" }
+      : kind === "answer" ? { kind, question: firstQ, part: "displayed" }
+      : kind === "item" ? { kind, part: "displayed" }
+      : kind === "variable" ? { kind, name: variables[0] ?? "" }
+      : { kind: "static" };
+    onChange(kind === "static" ? undefined : next);
+  };
+  /* insert a token where the cursor is, so piping is composed rather than remembered */
+  const insert = (token: string) => {
+    if (src.kind !== "text") return;
+    const el = textRef.current;
+    const at = el ? el.selectionStart ?? src.text.length : src.text.length;
+    const end = el ? el.selectionEnd ?? at : at;
+    onChange({ kind: "text", text: src.text.slice(0, at) + token + src.text.slice(end) });
+  };
+  const tokens = [
+    "{{loop.label}}", "{{loop.code}}", "{{loop.index}}",
+    ...others.map((n) => `{{loop.${n}}}`),
+    ...questions.slice(0, 40).flatMap((q) => [`{{${q.code}}}`, ...(q.options.some((o) => (o.flags ?? []).includes("other_specify")) ? [`{{${q.code}.other}}`] : [])]),
+    ...variables.slice(0, 20).map((v) => `{{${v}}}`),
+  ];
+  return (
+    <div className="loop-ref-source" data-testid="loop-ref-source" style={{ marginTop: 6, fontWeight: 400 }}>
+      <select className="select small" data-testid="loop-ref-source-kind" aria-label="Where the value comes from" value={src.kind}
+        title={SOURCE_KINDS.find((k) => k.kind === src.kind)?.hint} onChange={(e) => change(e.target.value as LoopReferenceSource["kind"])}>
+        {SOURCE_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+      </select>
+      {src.kind === "text" && (
+        <>
+          <textarea ref={textRef} className="input mono" data-testid="loop-ref-text" rows={2} style={{ width: "100%", fontSize: 12.5, marginTop: 4 }}
+            placeholder="{{loop.label}} — {{Q3}}" value={src.text} onChange={(e) => onChange({ kind: "text", text: e.target.value })} />
+          <select className="select small" data-testid="loop-ref-insert" aria-label="Insert a piped value" value="" onChange={(e) => { if (e.target.value) insert(e.target.value); }}>
+            <option value="">+ insert a piped value…</option>
+            {tokens.map((t) => <option key={t} value={t}>{t}</option>)}
+            <option value={"\n"}>a new line</option>
+          </select>
+        </>
+      )}
+      {src.kind === "calculation" && (
+        <input className="input mono" data-testid="loop-ref-expr" style={{ width: "100%", marginTop: 4 }} placeholder="Q3 * 2  ·  loop.code"
+          value={src.expr} onChange={(e) => onChange({ kind: "calculation", expr: e.target.value })} />
+      )}
+      {src.kind === "answer" && (
+        <div className="row" style={{ gap: 4, marginTop: 4, flexWrap: "wrap" }}>
+          <select className="select small" data-testid="loop-ref-question" aria-label="Question"
+            value={questions.find((q) => q.id === src.question || q.code === src.question || q.variableName === src.question)?.id ?? ""}
+            onChange={(e) => onChange({ ...src, question: e.target.value })}>
+            {questions.map((q) => <option key={q.id} value={q.id}>{q.code}</option>)}
+          </select>
+          <select className="select small" data-testid="loop-ref-part" aria-label="Which value" value={src.part ?? "displayed"} onChange={(e) => onChange({ ...src, part: e.target.value as "value" })}>
+            <option value="displayed">as displayed</option><option value="label">labels</option><option value="value">value / codes</option><option value="other">Other-specify text</option>
+          </select>
+          {(src.part ?? "displayed") !== "other" && (
+            <input className="input mono" style={{ width: 54 }} aria-label="Joined with" title="joins several answers" placeholder=", " value={src.join ?? ""} onChange={(e) => onChange({ ...src, join: e.target.value || undefined })} />
+          )}
+        </div>
+      )}
+      {src.kind === "item" && (
+        <select className="select small" data-testid="loop-ref-part" aria-label="Which value of the item" style={{ marginTop: 4 }} value={src.part} onChange={(e) => onChange({ kind: "item", part: e.target.value as "label" })}>
+          <option value="displayed">displayed (Other text, else label)</option><option value="label">label</option><option value="code">code</option><option value="other">Other-specify text</option>
+        </select>
+      )}
+      {src.kind === "variable" && (
+        <>
+          <input className="input mono" data-testid="loop-ref-variable" list={`loop-ref-vars-${column.name}`} style={{ width: "100%", marginTop: 4 }} placeholder="VARIABLE_NAME"
+            value={src.name} onChange={(e) => onChange({ kind: "variable", name: e.target.value })} />
+          <datalist id={`loop-ref-vars-${column.name}`}>{variables.map((v) => <option key={v} value={v} />)}</datalist>
+        </>
+      )}
+      <div className="muted" style={{ fontSize: 11.5, marginTop: 2, whiteSpace: "normal" }}>{SOURCE_KINDS.find((k) => k.kind === src.kind)?.hint}</div>
+    </div>
   );
 }
