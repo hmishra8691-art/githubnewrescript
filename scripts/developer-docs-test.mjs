@@ -149,6 +149,75 @@ for (const slug of guides) {
 }
 ok(`${guides.length} guides: each draws its live survey and its builder screenshots`);
 
+console.log("\n5b — phase 2: Intelligent Mode, actions and integrations, design generators");
+await go("/docs/intelligent-mode-guide");
+const said = await p.$$eval('[data-testid="docs-example"] [data-testid="docs-say"] > li', (l) => l.map((x) => x.getAttribute("data-kind")));
+assert.deepEqual(said, ["actions", "actions", "actions"]);
+assert.ok((await p.$$('.docs-flow .docs-flow-step')).length >= 4, "the flow draws its steps");
+await p.click('[data-testid="docs-say-actions"] >> nth=0');
+assert.ok(JSON.parse(await p.textContent('[data-testid="docs-say"] pre')).length >= 1, "the actions behind a sentence are real JSON");
+ok("Intelligent Mode: three sentences read by the engine (all proposed), their actions, and the flow");
+
+await go("/docs/intelligent-validation");
+const kinds = await p.$$eval('[data-testid="docs-say"] > li', (l) => l.map((x) => x.getAttribute("data-kind")));
+assert.ok(kinds.length >= 3 && kinds.every((k) => k === "refused"), JSON.stringify(kinds));
+ok(`Intelligent validation: ${kinds.length} sentences refused with their reasons`);
+
+await go("/docs/maxdiff");
+await p.waitForSelector('[data-testid="docs-ex-design"]');
+const outRows = await p.$$eval('[data-testid="docs-ex-results"] table tbody tr', (r) => r.length);
+assert.equal(outRows, 10, `MaxDiff output rows ${outRows}`);
+const M = live("maxdiff");
+await p.waitForSelector(`${M} .rs-md`);
+await p.click(`${M} .rs-md tbody tr:nth-child(1) .rs-md-pick >> nth=0`);
+await p.click(`${M} .rs-md tbody tr:nth-child(2) .rs-md-pick >> nth=1`);
+await p.click(`${M} [data-testid="docs-live-next"]`);
+await p.waitForFunction((s) => /Task 2 of/.test(document.querySelector(s).textContent), M);
+const wrapOk = await p.$$eval(`${M} .rs-md td.rowlabel`, (c) => c.every((x) => x.getBoundingClientRect().width >= 60));
+assert.ok(wrapOk, "MaxDiff item labels keep whole words in the narrow pane");
+ok("MaxDiff: the design preview, the 10-item output, and the respondent answers task 1 and reaches task 2");
+
+await go("/docs/study-methodologies");
+const stated = Number((await p.textContent(".docs-catalog")).match(/(\d+) study methodologies/)[1]);
+const rows = await p.$$eval(".docs-catalog tbody tr", (r) => r.length);
+assert.ok(stated >= 10 && rows === stated, `catalog ${rows} rows, states ${stated}`);
+ok(`methodology catalogue: all ${rows} methodologies from the registry`);
+
+await go("/docs/behaviours");
+const B = live("behaviours");
+await p.click(`${B} label:has-text("Other (please specify)")`);
+await p.waitForFunction((s) => /please tell us where/.test(document.querySelector(s).textContent), B);
+ok("behaviour: picking Other shows the message");
+
+await go("/docs/auto-punch");
+const AP = live("auto-punch");
+await p.fill(`${AP} input`, "25"); await p.click(`${AP} [data-testid="docs-live-next"]`);
+await p.waitForFunction((s) => /SEG\s*=\s*1/.test(document.querySelector(s).textContent), AP);
+assert.match(await p.textContent('[data-testid="docs-ex-expression"]'), /IF Q1 < 35 THEN SELECT SEG\.1/);
+ok("auto-punch: age 25 → SEG = 1, and the rule shows in the Programming view");
+
+await go("/docs/panel-integrations");
+const PN = live("panel-integration");
+await p.fill(`${PN} input`, "30"); await p.click(`${PN} [data-testid="docs-live-next"]`);
+await p.click(`${PN} label:has-text("Daily")`); await p.click(`${PN} [data-testid="docs-live-next"]`);
+await p.waitForSelector(`${PN} [data-testid="docs-live-redirect"]`);
+const back = await p.textContent(`${PN} [data-testid="docs-live-redirect"]`);
+assert.match(back, /C1A2B3/);
+ok(`panel: completing sends the respondent back with the completion code (${back})`);
+
+const guides2 = idx.pages.filter((x) => /Intelligent Mode|Actions and integrations|Research design generators/.test(x.category)).map((x) => x.slug);
+assert.ok(guides2.length >= 24, `C–E pages ${guides2.length}`);
+let withEx = 0;
+for (const slug of guides2) {
+  await go(`/docs/${slug}`);
+  if (!(await p.$('[data-testid="docs-example"]'))) continue;
+  withEx++;
+  await p.waitForSelector('[data-testid="docs-example"] [data-testid="docs-live"], [data-testid="docs-example"] [data-testid="docs-live-end"]', { timeout: 10000 });
+  const imgs = await imagesLoaded('[data-testid="docs-ex-builder"]');
+  assert.ok(imgs.length >= 1 && imgs.every(Boolean), `${slug}: screenshots ${JSON.stringify(imgs)}`);
+}
+ok(`${guides2.length} C–E pages load; the ${withEx} with examples draw their live survey and screenshots`);
+
 console.log("\n6 — Help → Help | Developer Docs");
 await p.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "load" });
 await p.waitForSelector('[data-testid="studio-help-button"]', { timeout: 60000 });

@@ -6,6 +6,7 @@ import { homeOf } from "@/lib/docs/nav";
 import { EXAMPLE_SPLIT } from "@/lib/docs/markdown";
 import { buildExample } from "@/lib/docs/build";
 import { LiveExample } from "@/components/docs/LiveExample";
+import { MethodCatalog } from "@/components/docs/MethodCatalog";
 import { DocShell } from "../DocShell";
 
 export const dynamic = "force-dynamic";
@@ -40,9 +41,10 @@ export default function DocPage({ params }: { params: { slug: string } }) {
       <article className="docs-article" data-testid="docs-article">
         {parts.map((part, i) => {
           if (i % 2 === 0) return <div key={i} dangerouslySetInnerHTML={{ __html: part }} />;
+          if (part === "catalog-methodologies") return <MethodCatalog key={i} />;
           const ex = buildExample(part);
           if (!ex) return <p key={i} className="docs-ex-missing">Example “{part}” is not defined.</p>;
-          return <LiveExample key={i} ex={{ id: ex.id, title: ex.title, tryIt: ex.tryIt, def: ex.def, logic: ex.logic, json: ex.json, builder: ex.builder, embedded: ex.embedded }} />;
+          return <LiveExample key={i} ex={{ id: ex.id, title: ex.title, tryIt: ex.tryIt, def: ex.def, logic: ex.logic, json: ex.json, builder: ex.builder, embedded: ex.embedded, said: ex.said, output: ex.output, simulated: ex.simulated, designs: ex.designs }} />;
         })}
       </article>
       {related.length > 0 && (

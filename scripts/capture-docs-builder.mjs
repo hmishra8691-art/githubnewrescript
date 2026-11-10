@@ -8,6 +8,9 @@
  *
  *   node scripts/capture-docs-builder.mjs            (studio on :3000 with AI_API_URL=fake:)
  *   node scripts/capture-docs-builder.mjs piping     (only the examples named)
+ *
+ * An Intelligent Mode example (`builder.intelligent`) loads the survey as it was BEFORE its sentences and types the
+ * sentence, so the picture is the proposal the reader would get.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,7 +27,7 @@ mkdirSync(OUT, { recursive: true });
 /* the examples, built by the same code the docs pages use */
 const dump = execFileSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "-e",
   `import("./lib/docs/examples.ts").then(async ({ DOC_EXAMPLES }) => { const { buildExampleDef } = await import("./lib/docs/build.ts");
-   process.stdout.write(JSON.stringify(DOC_EXAMPLES.map((e) => ({ id: e.id, builder: e.builder, ...buildExampleDef(e) })))); })`], { cwd: STUDIO_DIR, maxBuffer: 64 * 1024 * 1024 }).toString();
+   process.stdout.write(JSON.stringify(DOC_EXAMPLES.map((e) => { const b = buildExampleDef(e); return { id: e.id, builder: e.builder, def: e.builder.intelligent ? buildExampleDef({ ...e, say: [] }).def : b.def, errors: b.errors }; }))); })`], { cwd: STUDIO_DIR, maxBuffer: 64 * 1024 * 1024 }).toString();
 const only = process.argv.slice(2);
 const examples = JSON.parse(dump).filter((e) => !only.length || only.includes(e.id));
 
@@ -36,6 +39,8 @@ await page.waitForSelector(".block-badge", { timeout: 60000 });
 await switchMode(page, "studio").catch(() => {});
 /* confirmations ("Definition applied from JSON") are not part of the builder being shown */
 await page.addStyleTag({ content: ".toast { display: none !important; }" });
+/* the sandbox restores its last draft shortly after it opens: let that happen before the first example is loaded */
+await page.waitForTimeout(3000);
 
 const load = async (def) => {
   await openTab(page, "JSON");
@@ -66,7 +71,32 @@ for (const ex of examples) {
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300);
   try {
+    if (ex.builder.intelligent) {
+      /* the Intelligent conversation lives as long as the page: each example starts a fresh one, or the previous
+         example's proposals would be on screen (and revised by this sentence) */
+      await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "load" });
+      await page.waitForSelector(".block-badge", { timeout: 60000 });
+      await switchMode(page, "studio").catch(() => {});
+      await page.addStyleTag({ content: ".toast { display: none !important; }" });
+      await page.waitForTimeout(3000);
+    }
     await load(ex.def);
+    if (ex.builder.intelligent) {
+      await openTab(page, "Questions");
+      await switchMode(page, "intelligent");
+      await page.waitForSelector('[data-testid="intelligent-view"]', { timeout: 20000 });
+      const n = await page.$$eval('[data-testid="cp-turn"]', (t) => t.length);
+      await page.fill('[data-testid="iq-input"]', ex.builder.intelligent);
+      await page.keyboard.press("Enter");
+      await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 30000 });
+      await page.waitForTimeout(900);
+      const view = await page.$('[data-testid="intelligent-view"]');
+      await shot(view, `${ex.id}-say.png`, 1000);
+      await switchMode(page, "studio").catch(() => {});
+      done.push(ex.id);
+      console.log(`  ok   ${ex.id}`);
+      continue;
+    }
     const tab = ex.builder.tab ?? "Questions";
     await openTab(page, tab);
     await page.waitForTimeout(700);

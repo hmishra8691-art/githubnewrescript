@@ -2217,6 +2217,41 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .docs-live-end-title { font-weight: 650; }
 .docs-article .docs-live-url { display: block; word-break: break-all; }
 .docs-live-note { font-size: 12.5px; color: var(--c-text-2); margin: 0 !important; }
+.docs-say { list-style: none; padding: 0 !important; margin: 0 0 10px; display: grid; gap: 10px; }
+.docs-say-item { margin: 0; display: grid; gap: 4px; }
+.docs-say-you { justify-self: end; max-width: 92%; background: var(--c-primary-600); color: #fff; border-radius: 12px 12px 2px 12px; padding: 6px 10px; font-size: 13px; }
+.docs-say-who { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; opacity: .8; margin-right: 6px; }
+.docs-say-eng { border: 1px solid var(--c-border); border-radius: 12px 12px 12px 2px; padding: 8px 10px; font-size: 13px; background: var(--c-surface-2); max-width: 96%; }
+.docs-say-badge { display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 5px; margin-right: 6px; background: #dcfce7; color: #166534; }
+.docs-say-badge.k-refused { background: #fee2e2; color: #991b1b; } .docs-say-badge.k-model { background: #e0e7ff; color: #3730a3; } .docs-say-badge.k-clarify, .docs-say-badge.k-answer { background: #fef3c7; color: #92400e; }
+.docs-say-und { color: var(--c-text); }
+.docs-say-applied { list-style: none; padding: 0 !important; margin: 4px 0 0; color: #166534; font-size: 12.5px; }
+.docs-say-applied li { margin: 0; }
+.docs-say-note { margin: 4px 0 0 !important; color: var(--c-text-2); font-size: 12.5px; }
+.docs-ex-results { margin: 0 14px 14px; }
+.docs-ex-design { margin: 0 0 10px; overflow: auto; }
+.docs-catalog table td:first-child { min-width: 160px; }
+.docs-catalog-note { color: var(--c-text-2); font-size: 13.5px; }
+.docs-ex-design .dp { font-size: 12.5px; }
+.docs-out-note { font-size: 12.5px; color: var(--c-text-2); margin: 0 0 8px !important; }
+.docs-out-item { border-top: 1px dashed var(--c-border); padding-top: 8px; margin-top: 8px; }
+.docs-out-name { font-weight: 650; font-size: 13.5px; margin-bottom: 6px; }
+.docs-out-err { color: #92400e; font-size: 12.5px; }
+.docs-out-bars { display: grid; gap: 3px; margin-bottom: 8px; }
+.docs-out-bar { display: grid; grid-template-columns: minmax(80px, 200px) 1fr 60px; gap: 8px; align-items: center; font-size: 12px; }
+.docs-out-bl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-out-track { background: var(--c-surface-2); border-radius: 4px; height: 10px; overflow: hidden; }
+.docs-out-track span { display: block; height: 100%; background: var(--c-primary-600); border-radius: 4px; }
+.docs-out-bv { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--c-text-2); }
+.docs-out-table { overflow: auto; }
+.docs-out-tt { font-size: 12px; color: var(--c-text-3); margin-bottom: 4px; }
+.docs-article .docs-out-table table { font-size: 12px; margin: 0; }
+.docs-out-ins { font-size: 12.5px; color: var(--c-text-2); margin: 6px 0 0; }
+.docs-flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0 0 16px; counter-reset: flow; }
+.docs-flow-step { counter-increment: flow; position: relative; border: 1px solid var(--c-border); background: var(--c-surface-2); border-radius: 10px; padding: 8px 12px 8px 40px; font-size: 13px; }
+.docs-flow-step::before { content: counter(flow); position: absolute; left: 10px; top: 9px; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--c-primary-600); color: #fff; font-size: 11px; font-weight: 700; }
+.docs-flow-step b { display: block; font-size: 13.5px; }
+.docs-flow-arrow { display: none; }
 .docs-zoom { position: fixed; inset: 0; background: rgba(15,23,42,.8); display: grid; place-items: center; z-index: 60; padding: 24px; gap: 12px; cursor: zoom-out; }
 .docs-zoom img { max-width: 96vw; max-height: 86vh; border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.4); background: #fff; }
 @media (max-width: 1280px) { .docs-body { grid-template-columns: 250px minmax(0, 1fr); } .docs-toc { display: none; } }

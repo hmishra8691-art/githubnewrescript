@@ -26,3 +26,23 @@ test("the expression view is the engine's: display logic, skips, validation, pip
   assert.match(txt("quotas"), /Quota Gender — Women \(limit 200\)/);
   assert.match(txt("conditional-logic"), /AND/);
 });
+
+test("phase 2: sentences are read by the engine and applied; refusals change nothing; designs and simulated output are real", () => {
+  const im = buildExample("im-overview")!;
+  assert.deepEqual(im.said.map((l) => l.kind), ["actions", "actions", "actions"]);
+  assert.ok(im.said[1].applied.join(" ").includes("Q3 shown only when Q2 in [1, 2]"), im.said[1].applied.join(" | "));
+  assert.match(im.logic.map((l) => `${l.label}: ${l.text}`).join("\n"), /Display Q3 if: Q2 in \[1, 2\]/);
+  const v = buildExample("im-validation")!;
+  assert.ok(v.said.every((l) => l.kind === "refused" && l.note && !l.applied.length));
+  assert.equal(v.logic.length, buildExample("im-troubleshooting")!.logic.length, "nothing was applied");
+  const md = buildExample("maxdiff")!;
+  assert.equal(md.designs[0].kind, "maxdiff");
+  assert.equal(md.output![0].table!.rows.length, 10);
+  assert.equal(md.simulated, 150);
+  const pp = buildExample("cbc-partial")!;
+  assert.equal((pp.designs[0].file.summary as any).partialProfile.attributesPerTask, 4);
+  const vw = buildExample("van-westendorp")!;
+  assert.ok(vw.output!.length >= 1 && !vw.output![0].error);
+  assert.ok(buildExample("panel-integration")!.json.includes("\"preset\": \"prolific\""));
+  assert.ok(buildExample("alerts-webhooks")!.json.includes("response.completed"));
+});

@@ -63,19 +63,21 @@ test("the pages: every page in the navigation exists, has a title and renders; a
   }
 });
 
-test("Developer Docs: every A and B guide has its live example, steps, and the sections a reader needs; related pages exist", () => {
+test("Developer Docs: every guide (A–E) has its live example, steps, and the sections a reader needs; related pages exist", () => {
   const pages = listDocs();
-  const guides = pages.filter((p) => p.category === "fundamentals" || p.category === "advanced");
-  assert.ok(guides.length >= 36, `${guides.length} guides`);
+  const GUIDED = ["fundamentals", "advanced", "intelligent", "actions", "designs"];
+  const reference = new Set(DOC_NAV.filter((c) => c.key === "reference").flatMap((c) => c.groups.flatMap((g) => g.slugs)));
+  const guides = pages.filter((p) => GUIDED.includes(p.category) && !reference.has(p.slug) && p.group !== "Reference");
+  assert.ok(guides.length >= 36 + 24, `${guides.length} guides`);
   const ids = new Set(DOC_EXAMPLES.map((e) => e.id));
   const used = new Set<string>();
   for (const g of guides) {
     const doc = renderDoc(g.slug)!;
-    assert.ok(doc.examples.length >= 1, `${g.slug} has a live example`);
+    if (doc.meta.example !== "none") assert.ok(doc.examples.length >= 1, `${g.slug} has a live example`);
     for (const e of doc.examples) { assert.ok(ids.has(e), `${g.slug}: example ${e} exists`); used.add(e); }
     assert.ok(doc.html.includes("docs-steps"), `${g.slug} has step-by-step instructions`);
     for (const h of ["Common mistakes", "Troubleshooting"]) assert.ok(doc.headings.some((x) => x.text === h), `${g.slug}: ${h}`);
-    assert.ok(doc.headings.some((x) => /^When to use it$|^The flow elements$/.test(x.text)), `${g.slug}: when to use it`);
+    assert.ok(doc.headings.some((x) => /^When (?:and why )?to use it$|^The flow elements$|^Two kinds of method$|^How to use one$|^When something does not go as expected$|^What is checked$|^Available action types$|^Action types$|^Supported presets$|^Channels and events$|^Available triggers and effects$|^The review in four places$/.test(x.text)), `${g.slug}: when to use it`);
     for (const r of (doc.meta.related ?? "").split(",").map((x) => x.trim()).filter(Boolean)) assert.ok(pages.some((p) => p.slug === r), `${g.slug} relates to ${r}`);
   }
   assert.deepEqual(DOC_EXAMPLES.map((e) => e.id).filter((e) => !used.has(e)), [], "every example is placed on a page");
@@ -96,4 +98,12 @@ test("Developer Docs markdown: front matter, examples, steps, callouts and highl
   assert.ok(r.html.includes('<span class="tk-k">const</span>') && r.html.includes('<span class="tk-s">&quot;&lt;i&gt;&quot;</span>') && r.html.includes('<span class="tk-c">// c</span>'));
   assert.ok(r.html.includes('<span class="tk-k">AND</span>') && r.html.includes('<span class="tk-c">-- note</span>'));
   assert.ok(!/<(?:b|i|script)>/.test(r.html), "no author tag survives");
+});
+
+test("Developer Docs markdown: a ::: flow is a row of steps joined by arrows, escaped", () => {
+  const r = renderMarkdown("::: flow How a change is made\n1. **You** — type <b>a sentence</b>\n2. Engine — reads it\n3. Approve\n:::");
+  assert.ok(r.html.includes('data-testid="docs-flow"') && r.html.includes('aria-label="How a change is made"'));
+  assert.equal((r.html.match(/docs-flow-step/g) ?? []).length, 3);
+  assert.equal((r.html.match(/docs-flow-arrow/g) ?? []).length, 2);
+  assert.ok(r.html.includes("type &lt;b&gt;a sentence&lt;/b&gt;"));
 });

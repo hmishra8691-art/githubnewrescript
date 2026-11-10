@@ -14,6 +14,8 @@
 export interface BuilderShot {
   /** the Studio tool to open (the menubar label) — default Questions */
   tab?: string;
+  /** Intelligent Mode: type this sentence and photograph the proposal it gets */
+  intelligent?: string;
   /** Questions: the question (code) whose editor is opened */
   question?: string;
   /** Questions: the Properties section to open and show beside it (its id, e.g. "display-logic") */
@@ -38,9 +40,31 @@ export interface DocExample {
   builder: BuilderShot;
   /** embedded values the live survey starts with (as if they came on the link) */
   embedded?: Record<string, string>;
+  /**
+   * INTELLIGENT MODE (phase 2): sentences, in order, read by the engine's own `interpretRequest` on the survey as it
+   * stands after the actions (and the sentences before). What the engine proposes is applied exactly as Intelligent
+   * Mode applies it on approval; a sentence the engine hands to the language model or refuses is shown as such.
+   */
+  say?: string[];
+  /**
+   * SAMPLE OUTPUT (phase 2): run the Studio's own respondent simulation (`runSimulation`, random answers that walk the
+   * real survey) and these analyses on its responses — the shape of the output, never findings. `plan` runs the
+   * survey's analysis plan instead.
+   */
+  analysis?: { kind: string; variables: string[]; options?: Record<string, unknown>; label?: string }[] | "plan";
+  /** how many simulated respondents (default 150) */
+  simulate?: number;
 }
 
 const opts = (...labels: string[]) => labels;
+
+/** the small survey the Intelligent Mode examples talk to */
+const IM_BASE = (): Record<string, unknown>[] => [
+  { op: "create_question", type: "single_select", code: "Q1", variable: "BRAND", text: "Which brand of phone do you use?", options: ["Apple", "Samsung", "Google", { label: "Other", code: 99 }] },
+  { op: "create_question", type: "rating", code: "Q2", variable: "SAT", text: "How satisfied are you with your phone?", scale: { points: 5, low: "Very dissatisfied", high: "Very satisfied" }, newPage: true },
+  { op: "create_question", type: "long_text", code: "Q3", variable: "WHY", text: "Why do you say that?", newPage: true },
+  { op: "create_question", type: "integer", code: "Q4", variable: "AGE", text: "How old are you?", newPage: true },
+];
 
 export const DOC_EXAMPLES: DocExample[] = [
   /* ---------------------------------------------------------------- A · question types */
@@ -425,6 +449,200 @@ export const DOC_EXAMPLES: DocExample[] = [
     ],
     tryIt: "Type a name and press Next: the HTML block pipes it; its <style> applies to this block only.",
     builder: { question: "INFO", caption: "A Text / HTML block: HTML (sanitised) with piping; a <style> inside it is scoped to the block." },
+  },
+
+  /* ================================================================ C · Intelligent Mode (phase 2) */
+  {
+    id: "im-overview", title: "Three sentences, read by the engine and applied",
+    actions: IM_BASE(),
+    say: ["make Q1 and Q2 required", "show Q3 only if Q2 is 1 or 2", "terminate if Q4 < 18"],
+    tryIt: "The survey below is the result of the three sentences. Rate 1 or 2 at Q2 to see Q3; enter an age under 18 at Q4 to be terminated.",
+    builder: { intelligent: "show Q3 only if Q2 is 1 or 2", caption: "Mode → Intelligent: the sentence, the card saying how it was read, and the proposed change waiting for Apply." },
+  },
+  {
+    id: "im-edit", title: "Changing questions in words",
+    actions: IM_BASE(),
+    say: ["add Don't know to Q1", "change Q2 to a 7 point scale", "rename Q3 to WHY_SAT", "duplicate Q3", "add a 5-point satisfaction question about the battery"],
+    tryIt: "Q1 now ends with an exclusive “Don't know”, Q2 is a 7-point scale and Q3 has a copy. The last sentence needed wording, so it went to the language model (not run here).",
+    builder: { intelligent: "change Q2 to a 7 point scale", caption: "The card states exactly what will change — here, that the 7-point scale replaces Q2's five current options." },
+  },
+  {
+    id: "im-logic", title: "Logic, routing and randomization in words",
+    actions: IM_BASE(),
+    say: ["randomize Q1 options keeping Other last", "show Q3 only if Q2 is 1 or 2", "skip to Q4 if Q2 = 5", "Q4 must be between 18 and 99", "terminate if Q4 < 18"],
+    tryIt: "Try Q2 = 5 (Q3 is skipped), Q2 = 1 (Q3 shown), an age of 12 (refused by the range rule) and 16 (terminated). Restart to see Q1's options reshuffled with Other last.",
+    builder: { intelligent: "randomize Q1 options keeping Other last", caption: "A randomization request read without a model: Q1's options shuffled, “Other” kept last." },
+  },
+  {
+    id: "im-review", title: "How a sentence was read, before anything changes",
+    actions: IM_BASE(),
+    say: ["add an open end asking why after Q2", "delete Q2"],
+    tryIt: "Nothing is applied until Apply: in this example both proposals were approved, so Q3 sits after Q2 and Q2 is gone. The first card shows the engine saying how it read an unusual sentence.",
+    builder: { intelligent: "delete Q2", caption: "A destructive change: the card names the impact (what depends on Q2) and Changes asks for confirmation before Apply." },
+  },
+  {
+    id: "im-validation", title: "What the gate refuses, and the fix it suggests",
+    actions: IM_BASE(),
+    say: ["make Q9 required", "show Q1 only if Q4 > 30", "skip to Q1 if Q4 = 30", "make Q4 optional"],
+    tryIt: "None of these four sentences changed the survey — each was refused with the reason and what to say instead. The survey below is unchanged.",
+    builder: { intelligent: "show Q1 only if Q4 > 30", caption: "Refused before anything is applied: Q4 is asked after Q1, with the two ways to fix it." },
+  },
+  {
+    id: "im-troubleshooting", title: "When the engine hands over, asks back or declines",
+    actions: IM_BASE(),
+    say: ["help", "rewrite Q3 in a friendlier tone", "write me a poem"],
+    tryIt: "A bare request is answered with a question, rewording goes to the language model (not run in these docs), and a request outside research is declined with what Intelligent Mode does.",
+    builder: { intelligent: "help", caption: "Nothing to act on yet: Intelligent Mode asks one focused question with choices." },
+  },
+
+  /* ================================================================ E · Research design generators (phase 2) */
+  {
+    id: "maxdiff", title: "A MaxDiff of ten phone features",
+    actions: [{ op: "create_maxdiff", code: "MD", variable: "MD", text: "Of these features, which is the MOST and which is the LEAST important to you?", items: ["Battery life", "Camera quality", "Price", "Screen size", "Storage", "Design", "Brand", "Water resistance", "5G", "Warranty"] }],
+    analysis: [{ kind: "maxdiff", variables: ["MD"], label: "MaxDiff scores" }],
+    tryIt: "Pick the most and least important feature in each set and press Next — each respondent sees the sets of their own design version.",
+    builder: { question: "MD", caption: "The MaxDiff question with its attached design (items per task, tasks, versions); the design itself lives in Design Generators." },
+  },
+  {
+    id: "cbc", title: "A choice-based conjoint for smartphones",
+    actions: [{ op: "create_conjoint", code: "CBC", variable: "CBC", method: "cbc", text: "If these were your only options, which would you choose?", none: true,
+      attributes: [{ name: "Brand", levels: ["Alpha", "Beta", "Gamma"] }, { name: "Screen", levels: ["6.1 inch", "6.7 inch"] }, { name: "Battery", levels: ["1 day", "2 days"] }, { name: "Price", levels: ["$499", "$699", "$899"] }] }],
+    analysis: [{ kind: "conjoint", variables: ["CBC"], label: "Conjoint utilities and importance" }],
+    tryIt: "Choose an option (or None) in each task and press Next; every respondent gets the tasks of one design version.",
+    builder: { question: "CBC", caption: "The CBC question and its design: attributes, alternatives per task, tasks, versions and the None option." },
+  },
+  {
+    id: "cbc-partial", title: "Partial-profile CBC: 4 of 8 attributes per task",
+    actions: [{ op: "create_conjoint", code: "PP", variable: "PP", method: "cbc", attributesPerTask: 4, text: "Which car would you choose?",
+      attributes: [{ name: "Brand", levels: ["Volta", "Ampère", "Faraday"] }, { name: "Body", levels: ["Hatchback", "SUV"] }, { name: "Range", levels: ["300 km", "450 km"] }, { name: "Charging", levels: ["45 min", "20 min"] },
+        { name: "Warranty", levels: ["5 years", "8 years"] }, { name: "Seats", levels: ["5", "7"] }, { name: "Home charger", levels: ["Not included", "Included"] }, { name: "Price", levels: ["$32,000", "$40,000", "$48,000"] }] }],
+    tryIt: "Each task shows only four of the eight attributes — the others are left out of that task, balanced across the design.",
+    builder: { question: "PP", caption: "A CBC with “attributes shown per task” set to 4." },
+  },
+  {
+    id: "acbc", title: "Adaptive CBC: build your own, screening, tournament",
+    actions: [{ op: "create_conjoint", code: "ACBC", variable: "ACBC", method: "acbc", text: "Let's find the laptop that suits you best.",
+      attributes: [{ name: "Brand", levels: ["Acme", "Globex", "Initech"] }, { name: "Screen", levels: ["13 inch", "14 inch", "16 inch"] }, { name: "Battery", levels: ["8 h", "12 h", "18 h"] }, { name: "Price", levels: ["$699", "$999", "$1,299"] }] }],
+    tryIt: "Build your ideal laptop, then accept or reject the near alternatives, answer the must-have / unacceptable checks, and pick winners in the tournament.",
+    builder: { question: "ACBC", caption: "The ACBC question: the attributes, screening tasks, concepts per screen and the tournament settings." },
+  },
+  {
+    id: "menu-conjoint", title: "A menu-based conjoint for mobile add-ons",
+    actions: [{ op: "create_conjoint", code: "MENU", variable: "MENU", method: "menu", text: "Build the plan you would buy: tick the add-ons you want at these prices.", tasks: 6,
+      items: [{ name: "Extra data 10 GB", prices: ["$3", "$5", "$7"] }, { name: "International calls", prices: ["$4", "$6", "$9"] }, { name: "Device insurance", prices: ["$6", "$9", "$12"] }, { name: "Music streaming", prices: ["$5", "$8"] }] }],
+    analysis: [{ kind: "conjoint", variables: ["MENU"], label: "Menu take rates by price" }],
+    tryIt: "Tick the add-ons you would buy at the prices shown; the prices change from task to task.",
+    builder: { question: "MENU", caption: "The menu question: each item with its price points, the number of tasks and versions." },
+  },
+  {
+    id: "rating-conjoint", title: "A rating-based conjoint (CVA)",
+    actions: [{ op: "create_conjoint", code: "CVA", variable: "CVA", method: "cva", text: "How likely would you be to buy this product? (0 = not at all, 10 = certainly)",
+      attributes: [{ name: "Brand", levels: ["Alpha", "Beta"] }, { name: "Battery", levels: ["1 day", "2 days", "3 days"] }, { name: "Price", levels: ["$199", "$299", "$399"] }] }],
+    tryIt: "Rate each product profile from 0 to 10; each respondent rates the profiles of one design version.",
+    builder: { question: "CVA", caption: "The CVA question: attributes, profiles per version, single or paired mode." },
+  },
+  {
+    id: "experimental-designs", title: "Three ads in a carry-over balanced (Williams) order",
+    actions: [
+      { op: "create_block", title: "Ad A" }, { op: "create_question", block: "Ad A", type: "rating", code: "Q1", variable: "LIKE_A", text: "How much do you like Ad A?", scale: { points: 5, low: "Not at all", high: "A lot" }, required: true },
+      { op: "create_block", title: "Ad B" }, { op: "create_question", block: "Ad B", type: "rating", code: "Q2", variable: "LIKE_B", text: "How much do you like Ad B?", scale: { points: 5, low: "Not at all", high: "A lot" }, required: true },
+      { op: "create_block", title: "Ad C" }, { op: "create_question", block: "Ad C", type: "rating", code: "Q3", variable: "LIKE_C", text: "How much do you like Ad C?", scale: { points: 5, low: "Not at all", high: "A lot" }, required: true },
+      { op: "create_randomizer", blocks: ["Ad A", "Ad B", "Ad C"], title: "Ad order", order: "williams" },
+      { op: "create_experiment", designType: "williams", treatments: ["Ad A", "Ad B", "Ad C"], name: "Ad order (Williams)" },
+    ],
+    flow: ["randomizer"],
+    tryIt: "Rate the three ads, then Restart a few times: the order follows the Williams rows, so every ad is seen in every position and after every other ad equally often.",
+    builder: { tab: "Survey Flow", caption: "Survey Flow: the Randomizer ordering the three ad blocks by a Williams design; the design file is in Design Generators." },
+  },
+  {
+    id: "van-westendorp", title: "Van Westendorp price sensitivity with Newton–Miller–Smith",
+    actions: [{ op: "add_method_template", template: "pricing_psm", product: "the Aurora kettle", currency: "$" }],
+    patch: (d) => { for (const q of d.questions) if (/^PSM_/.test(q.code)) q.settings = { ...(q.settings ?? {}), minValue: 0, maxValue: 200 }; },
+    analysis: "plan",
+    tryIt: "Enter four prices (too cheap, a bargain, getting expensive, too expensive) and the two purchase likelihoods — the second page pipes your own prices.",
+    builder: { question: "PSM_TOO_CHEAP", caption: "The first of the four price questions the template adds, with the analysis plan item that reads all four." },
+  },
+  {
+    id: "gabor-granger", title: "An adaptive Gabor–Granger price ladder",
+    actions: [{ op: "add_method_template", template: "price_ladder", product: "the Plus plan", currency: "$", prices: [5, 8, 12, 15, 20] }],
+    analysis: "plan",
+    tryIt: "Say Yes or No to the price shown: Yes moves the next price up, No moves it down, until the highest accepted price is found.",
+    builder: { question: "PRICE_LADDER", caption: "The Price Ladder question: the prices, where the ladder starts, and the yes / no labels." },
+  },
+  {
+    id: "concept-testing", title: "A sequential monadic test of three concepts",
+    actions: [{ op: "add_method_template", template: "sequential_monadic", concepts: ["Fresh", "Bold", "Calm"] }],
+    analysis: "plan",
+    tryIt: "Each concept is shown and rated on its own page; Restart to see another Williams order of the three concepts.",
+    builder: { tab: "Survey Flow", caption: "Survey Flow: the template's randomizer of one block per concept, in a Williams order recorded for the order-effect test." },
+  },
+  {
+    id: "kano-model", title: "A Kano study of three app features",
+    actions: [{ op: "add_method_template", template: "kano", product: "the Volt app", features: ["Offline mode", "Dark theme", "Live chat"], importance: true }],
+    analysis: "plan",
+    tryIt: "Answer how you would feel if each feature were there, then if it were not — the pair classifies each feature for you.",
+    builder: { question: "KANO_FUNC", caption: "The functional grid the Kano template adds; the dysfunctional grid uses the same rows." },
+  },
+  {
+    id: "brand-research", title: "A brand funnel: awareness to preference",
+    actions: [{ op: "add_method_template", template: "brand_funnel", product: "coffee", brands: ["Alpha", "Beta", "Gamma", "Delta"] }],
+    analysis: [{ kind: "brand", variables: ["AWARE", "CONSIDER", "PURCHASED", "PREFER"], label: "Brand funnel" }],
+    tryIt: "Name a brand unprompted, then pick the brands you know — later stages offer only the brands from the stage before.",
+    builder: { question: "AWARE", caption: "Aided awareness, carried forward into consideration, purchase and preference." },
+  },
+
+  /* ================================================================ D · Actions and integrations (phase 2) */
+  {
+    id: "actions-in-practice", title: "Sentences become actions, checked and applied",
+    actions: IM_BASE(),
+    say: ["make Q1 and Q2 required", "Q4 must be between 18 and 99", "add Don't know to Q1"],
+    tryIt: "The survey below carries the three batches of actions. Open “The actions” under each sentence to see exactly what was applied.",
+    builder: { intelligent: "make Q1 and Q2 required", caption: "The proposed actions, shown as a change to approve; Apply makes them one undoable change in History." },
+  },
+  {
+    id: "behaviours", title: "A behaviour: when “Other” is picked, open and focus its box, with a message",
+    actions: [
+      { op: "create_question", type: "single_select", code: "Q1", variable: "SOURCE", text: "Where did you hear about us?", options: ["Search engine", "Social media", "A friend", { label: "Other (please specify)", other: true, code: 99 }], required: true },
+      { op: "create_behavior", label: "Guide the Other answer", target: "Q1.option:99", on: "select_option",
+        effects: [{ do: "show_message", target: "Q1", message: "Thanks — please tell us where, in a few words." }, { do: "focus", target: "Q1.other_text" }] },
+      { op: "create_behavior", label: "Clear the message", target: "Q1.option:99", on: "deselect_option", effects: [{ do: "hide_message", target: "Q1" }] },
+    ],
+    tryIt: "Pick “Other (please specify)”: the message appears and the cursor goes into the box. Pick another answer and the message goes away.",
+    builder: { question: "Q1", section: "ux", caption: "Properties → Styles, animations & scripts: two behaviours on the Other option — the event, and the effects that follow." },
+  },
+  {
+    id: "auto-punch", title: "Auto-punch: code a segment from an answer",
+    actions: [
+      { op: "create_question", type: "integer", code: "Q1", variable: "AGE", text: "How old are you?", required: true },
+      { op: "create_question", type: "hidden", code: "SEG", variable: "SEG", text: "Age segment (coded)", options: [{ label: "Under 35", code: 1 }, { label: "35 and over", code: 2 }], newPage: true },
+      { op: "create_question", type: "single_select", code: "Q2", variable: "PLAN", text: "Which plan are you on?", options: ["Prepaid", "Contract"], required: true },
+      { op: "add_punch", target: "SEG", when: "Q1 < 35", action: "select", codes: [1] },
+      { op: "add_punch", target: "SEG", mode: "else", action: "select", codes: [2] },
+    ],
+    tryIt: "Enter an age and press Next: SEG is coded 1 (under 35) or 2 without being asked — see “Stored” under the survey.",
+    builder: { question: "SEG", section: "auto-punch", caption: "Properties → Auto punch on the hidden SEG question: IF Q1 < 35 THEN select 1, ELSE select 2." },
+  },
+  {
+    id: "panel-integration", title: "A Prolific panel: entry ID captured, outcomes sent back",
+    actions: [
+      { op: "create_question", type: "integer", code: "Q1", variable: "AGE", text: "How old are you?", required: true },
+      { op: "add_skip", from: "Q1", when: "Q1 < 18", to: "screened" },
+      { op: "create_question", type: "single_select", code: "Q2", variable: "USE", text: "How often do you use a streaming service?", options: ["Daily", "Weekly", "Rarely"], newPage: true, required: true },
+      { op: "connect_panel", preset: "prolific", completionCode: "C1A2B3", codes: { screenout: "S9X8Y7" }, targets: ["survey"] },
+    ],
+    embedded: { PROLIFIC_PID: "5f1e…demo", STUDY_ID: "demo-study", SESSION_ID: "demo-session" },
+    tryIt: "The link carries Prolific's IDs (captured as embedded data). Finish the survey to see where the respondent is sent back, with the completion code in the URL.",
+    builder: { tab: "Survey Flow", caption: "Survey Flow after connecting the panel: the embedded IDs at the start and the panel redirects on each end." },
+  },
+  {
+    id: "alerts-webhooks", title: "Alerts and a per-response webhook",
+    actions: [
+      { op: "create_question", type: "single_select", code: "Q1", variable: "NPSGRP", text: "How likely are you to recommend us?", options: ["Promoter", "Passive", "Detractor"], required: true },
+      { op: "configure_alerts", events: ["quota.full"], channels: [{ kind: "email", to: "@team" }], digest: "immediate" },
+      { op: "configure_alerts", events: ["response.completed"], channels: [{ kind: "webhook", to: "#crm-sync" }], responses: { enabled: true, events: ["completed"], includeAnswers: true } },
+    ],
+    tryIt: "Answering here sends nothing — alerts and webhooks fire for real responses on a live link. The stored JSON shows the two rules and the response-event settings.",
+    builder: { tab: "Survey Flow", caption: "Alerts are part of the survey definition (no secrets in it); they are set from Qualitative → Alerts & panels or by Intelligent Mode." },
   },
 ];
 

@@ -37,19 +37,32 @@ export const DOC_NAV: NavCategory[] = [
     ],
   },
   {
-    key: "intelligent", letter: "C", label: "Intelligent Mode", guides: false,
-    summary: "Programming in plain language: how requests are read, proposed, checked and approved.",
-    groups: [{ label: "Reference", slugs: ["intelligent-mode", "actions-reference"] }],
+    key: "intelligent", letter: "C", label: "Intelligent Mode", guides: true,
+    summary: "Programming in plain language: how sentences are read, proposed, checked and approved — with real sentences read by the engine.",
+    groups: [
+      { label: "Guides", slugs: ["intelligent-mode-guide", "intelligent-editing", "intelligent-logic", "intelligent-review", "intelligent-validation", "intelligent-troubleshooting"] },
+      { label: "Reference", slugs: ["intelligent-mode", "actions-reference"] },
+    ],
   },
   {
-    key: "actions", letter: "D", label: "Actions and integrations", guides: false,
-    summary: "The closed vocabulary of operations every change goes through, and the HTTP API.",
-    groups: [{ label: "Reference", slugs: ["actions-reference", "api"] }],
+    key: "actions", letter: "D", label: "Actions and integrations", guides: true,
+    summary: "The actions every change goes through, behaviours and auto-punch inside the survey, and the panels, alerts and webhooks that connect it to other systems.",
+    groups: [
+      { label: "Inside the survey", slugs: ["actions", "behaviours", "auto-punch"] },
+      { label: "Integrations", slugs: ["panel-integrations", "alerts-and-webhooks"] },
+      { label: "Reference", slugs: ["actions-reference", "api"] },
+    ],
   },
   {
-    key: "designs", letter: "E", label: "Research design generators", guides: false,
-    summary: "MaxDiff, conjoint, experimental designs and the study methodologies.",
-    groups: [{ label: "Reference", slugs: ["research-engine", "capabilities"] }],
+    key: "designs", letter: "E", label: "Research design generators", guides: true,
+    summary: "MaxDiff, conjoint, experimental designs, pricing, concept, Kano and brand research — the design, the respondent's screens and a sample of the output.",
+    groups: [
+      { label: "Start", slugs: ["design-generators", "study-methodologies"] },
+      { label: "Choice designs", slugs: ["maxdiff", "choice-based-conjoint", "adaptive-cbc", "menu-based-conjoint", "rating-based-conjoint", "custom-experimental-designs"] },
+      { label: "Pricing", slugs: ["van-westendorp", "gabor-granger"] },
+      { label: "Product, concept and brand", slugs: ["concept-testing", "kano-model", "brand-research"] },
+      { label: "Reference", slugs: ["research-engine", "capabilities"] },
+    ],
   },
   {
     key: "branding", letter: "F", label: "Branding and survey customization", guides: false,

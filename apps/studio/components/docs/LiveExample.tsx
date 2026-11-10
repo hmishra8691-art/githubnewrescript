@@ -2,6 +2,7 @@
 import * as React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { LiveSurvey } from "./LiveSurvey";
+import { DesignPreview } from "../studio/DesignPreview";
 
 /**
  * ONE FEATURE, THREE VIEWS (Developer Docs, 2026-11-09): how it is configured in the builder (a screenshot of the real
@@ -16,6 +17,64 @@ export interface LiveExampleData {
   json: string;
   builder: { images: string[]; caption: string; tab: string; question?: string; section?: string };
   embedded: Record<string, string>;
+  said?: { text: string; kind: string; understood: string; actions: string; applied: string[]; note?: string }[];
+  output?: { name: string; n: number; table?: { title: string; columns: { key: string; label: string }[]; rows: Record<string, string>[] }; bars?: { label: string; value: number }[]; insights: string[]; warnings: string[]; error?: string }[] | null;
+  simulated?: number;
+  designs?: { kind: string; name: string; file: { columns: string[]; rows: Record<string, unknown>[]; summary?: Record<string, unknown> } }[];
+}
+
+const KIND_LABEL: Record<string, string> = { actions: "Proposed", refused: "Refused", model: "To the language model", clarify: "Asked back", answer: "Answered" };
+
+function Said({ said }: { said: NonNullable<LiveExampleData["said"]> }) {
+  const [open, setOpen] = React.useState<number | null>(null);
+  return (
+    <ol className="docs-say" data-testid="docs-say">
+      {said.map((l, i) => (
+        <li key={i} className={`docs-say-item k-${l.kind}`} data-kind={l.kind}>
+          <div className="docs-say-you"><span className="docs-say-who">You</span>{l.text}</div>
+          <div className="docs-say-eng">
+            <span className={`docs-say-badge k-${l.kind}`}>{KIND_LABEL[l.kind] ?? l.kind}</span>
+            {l.understood && <span className="docs-say-und">{l.understood}</span>}
+            {l.applied.length > 0 && <ul className="docs-say-applied">{l.applied.map((a, k) => <li key={k}>✓ {a}</li>)}</ul>}
+            {l.note && <p className="docs-say-note">{l.note}</p>}
+            {l.actions && (
+              <div className="docs-ex-json-bar">
+                <button type="button" className="linkish" onClick={() => setOpen(open === i ? null : i)} aria-expanded={open === i} data-testid="docs-say-actions">{open === i ? "▾" : "▸"} The actions</button>
+                <CopyButton text={l.actions} label="Copy" />
+              </div>
+            )}
+            {open === i && <pre className="docs-ex-pre"><code>{l.actions}</code></pre>}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function Output({ output, n }: { output: NonNullable<LiveExampleData["output"]>; n: number }) {
+  return (
+    <div className="docs-out" data-testid="docs-output">
+      <p className="docs-out-note"><b>Simulated respondents.</b> {n} test respondents from the Studio's own <i>Simulate</i> feature walked this survey with random answers, and the analysis ran on their responses. The numbers show the shape of the output — they are not findings.</p>
+      {output.map((o, i) => (
+        <div key={i} className="docs-out-item">
+          <div className="docs-out-name">{o.name} <span className="muted">n = {o.n}</span></div>
+          {o.error && <p className="docs-out-err">{o.error}</p>}
+          {o.bars && o.bars.length > 0 && (() => {
+            const max = Math.max(...o.bars.map((b) => Math.abs(b.value)), 1e-9);
+            return <div className="docs-out-bars">{o.bars.map((b, k) => <div key={k} className="docs-out-bar"><span className="docs-out-bl">{b.label}</span><span className="docs-out-track"><span style={{ width: `${Math.max(2, (Math.abs(b.value) / max) * 100)}%` }} /></span><span className="docs-out-bv">{Math.round(b.value * 100) / 100}</span></div>)}</div>;
+          })()}
+          {o.table && (
+            <div className="docs-out-table">
+              <div className="docs-out-tt">{o.table.title}</div>
+              <table><thead><tr>{o.table.columns.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
+                <tbody>{o.table.rows.map((r, k) => <tr key={k}>{o.table!.columns.map((c) => <td key={c.key}>{r[c.key]}</td>)}</tr>)}</tbody></table>
+            </div>
+          )}
+          {o.insights.length > 0 && <ul className="docs-out-ins">{o.insights.map((x, k) => <li key={k}>{x}</li>)}</ul>}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
@@ -63,13 +122,20 @@ export function LiveExample({ ex }: { ex: LiveExampleData }) {
           <div className="docs-ex-arrow" aria-hidden>↓ stored as</div>
           <div className="docs-ex-pane" data-testid="docs-ex-expression">
             <div className="docs-ex-stage"><span className="docs-ex-n">2</span> Programming view <span className="docs-ex-where">expression and definition</span></div>
+            {ex.said && ex.said.length > 0 && <Said said={ex.said} />}
+            {ex.designs?.map((d) => (
+              <div key={d.name} className="docs-ex-design" data-testid="docs-ex-design">
+                <div className="docs-ex-logic-l">The generated design — {d.name} (version 1 shown)</div>
+                <DesignPreview kind={d.kind} file={d.file} tasks={2} />
+              </div>
+            ))}
             {ex.logic.length > 0 ? (
               <ul className="docs-ex-logic">
                 {ex.logic.map((l, i) => (
                   <li key={i}><span className="docs-ex-logic-l">{l.label}</span><code className="docs-ex-logic-t">{l.text}</code><CopyButton text={l.text} /></li>
                 ))}
               </ul>
-            ) : <p className="docs-ex-cap">No logic — the feature is in the question's stored settings below.</p>}
+            ) : !ex.said?.length ? <p className="docs-ex-cap">No logic — the feature is in the question's stored settings below.</p> : null}
             <div className="docs-ex-json">
               <div className="docs-ex-json-bar">
                 <button type="button" className="linkish" onClick={() => setShowJson((s) => !s)} aria-expanded={showJson} data-testid="docs-ex-json-toggle">{showJson ? "▾" : "▸"} Stored JSON (survey definition)</button>
@@ -88,6 +154,12 @@ export function LiveExample({ ex }: { ex: LiveExampleData }) {
           </div>
         </div>
       </div>
+      {ex.output && ex.output.length > 0 && (
+        <div className="docs-ex-pane docs-ex-results" data-testid="docs-ex-results">
+          <div className="docs-ex-stage"><span className="docs-ex-n">4</span> Sample output <span className="docs-ex-where">the analysis, on simulated respondents</span></div>
+          <Output output={ex.output} n={ex.simulated ?? 0} />
+        </div>
+      )}
       {zoom && (
         <div className="docs-zoom" role="dialog" aria-label="Screenshot" onClick={() => setZoom(null)} data-testid="docs-zoom">
           {/* eslint-disable-next-line @next/next/no-img-element */}

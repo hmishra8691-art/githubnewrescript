@@ -1040,8 +1040,8 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 
 /* MaxDiff (MD-P1): the item column wraps instead of forcing a scroll, and the best/worst radios
    sit in a 40px tap target, so a task of 4–5 items fits a 390px phone without horizontal scroll */
-.rs-md td.rowlabel, .rs-md th.rowlabel { min-width: 0; overflow-wrap: anywhere; }
-.rs-md th:not(.rowlabel), .rs-md td:not(.rowlabel) { width: 64px; padding: 4px; }
+.rs-md td.rowlabel, .rs-md th.rowlabel { min-width: 0; overflow-wrap: break-word; hyphens: auto; }
+.rs-md th:not(.rowlabel), .rs-md td:not(.rowlabel) { width: 48px; padding: 4px; }
 .rs-md .rs-md-pick { display: flex; align-items: center; justify-content: center; min-height: 40px; min-width: 40px; cursor: pointer; }
 .rs-md input[type="radio"] { width: 20px; height: 20px; }
 .rs-md-instructions { margin-bottom: 2px; }

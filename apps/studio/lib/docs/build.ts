@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { SurveyDefinition } from "@rescript/schema";
-import { applySurveyActions, coerceSurveyActions, formatCondition, formatSetExpression } from "@rescript/engine";
+import { applySurveyActions, coerceSurveyActions, formatCondition, formatSetExpression, interpretRequest, allPunchRules, formatPunchExpression } from "@rescript/engine";
+import { registerBuiltinDesignGenerators } from "@rescript/designs";
+import { buildDataset, plannedAnalyses, runAnalysis, type AnalyticsRow } from "@rescript/analytics";
+import { runSimulation } from "@rescript/templates";
 import { DOC_EXAMPLES, exampleById, type DocExample } from "./examples.ts";
 
 /**
@@ -10,6 +13,12 @@ import { DOC_EXAMPLES, exampleById, type DocExample } from "./examples.ts";
  * screenshots captured for it. Server-side; the page passes the result to the client example.
  */
 export interface LogicLine { label: string; text: string }
+/** one sentence as Intelligent Mode reads it */
+export interface SaidLine { text: string; kind: string; understood: string; actions: string; applied: string[]; note?: string }
+/** one analysis on simulated respondents, trimmed for the page */
+export interface SampleOutput { name: string; n: number; table?: { title: string; columns: { key: string; label: string }[]; rows: Record<string, string>[] }; bars?: { label: string; value: number }[]; insights: string[]; warnings: string[]; error?: string }
+
+registerBuiltinDesignGenerators();
 export interface BuiltExample {
   id: string; title: string; tryIt: string;
   def: SurveyDefinition;
@@ -18,6 +27,11 @@ export interface BuiltExample {
   builder: { images: string[]; caption: string; tab: string; question?: string; section?: string };
   embedded: Record<string, string>;
   errors: string[];
+  said: SaidLine[];
+  /** the generated design file(s), as the Design Generators preview reads them */
+  designs: { kind: string; name: string; file: { columns: string[]; rows: Record<string, unknown>[]; summary?: Record<string, unknown> } }[];
+  output: SampleOutput[] | null;
+  simulated: number;
 }
 
 const EMPTY = () => SurveyDefinition.parse({ meta: { id: "docs-example", code: "DOCS", title: "Docs example" }, questions: [], flow: [{ type: "end", id: "end_complete", status: "complete" }] });
@@ -41,7 +55,7 @@ function walk(nodes: unknown[], out: Record<string, unknown>[]) {
   }
 }
 
-export function buildExampleDef(ex: DocExample): { def: SurveyDefinition; errors: string[] } {
+export function buildExampleDef(ex: DocExample): { def: SurveyDefinition; errors: string[]; said: SaidLine[] } {
   let n = 0;
   const ids = (prefix: string) => `${prefix}_${++n}`;
   const c = coerceSurveyActions(ex.actions);
@@ -49,15 +63,30 @@ export function buildExampleDef(ex: DocExample): { def: SurveyDefinition; errors
   const r = applySurveyActions(EMPTY(), c.actions, { ids, now: "2026-11-09T00:00:00.000Z" });
   errors.push(...r.errors);
   let def = r.def;
+  const said: SaidLine[] = [];
+  for (const text of ex.say ?? []) {
+    const it = interpretRequest(def, text) as Record<string, any>;
+    const line: SaidLine = { text, kind: it.kind, understood: String(it.understood ?? ""), actions: it.actions ? JSON.stringify(it.actions, null, 2) : "", applied: [] };
+    if (it.kind === "actions") {
+      const cc = coerceSurveyActions(it.actions);
+      const o = applySurveyActions(def, cc.actions, { ids, now: "2026-11-09T00:00:00.000Z" });
+      if (o.errors.length) line.note = `Refused at the gate: ${o.errors.join("; ")}`;
+      else { def = o.def; line.applied = o.results.map((x) => x.description); }
+    } else if (it.kind === "refused") line.note = String(it.reason ?? "");
+    else if (it.kind === "model") line.note = `Handed to the language model: ${String(it.reason ?? "")}`;
+    else if (it.kind === "clarify") line.note = `Asked back: ${String(it.question ?? "")}`;
+    else if (it.kind === "answer") line.note = String(it.answer ?? "").slice(0, 400);
+    said.push(line);
+  }
   if (ex.patch) {
     const raw = JSON.parse(JSON.stringify(def)) as Record<string, any>;
     const q = (code: string) => { const x = (raw.questions as Record<string, any>[]).find((y) => y.code === code); if (!x) throw new Error(`${ex.id}: no question ${code}`); return x; };
-    try { ex.patch(raw, q); } catch (e) { errors.push(`patch: ${(e as Error).message}`); return { def, errors }; }
+    try { ex.patch(raw, q); } catch (e) { errors.push(`patch: ${(e as Error).message}`); return { def, errors, said }; }
     const parsed = SurveyDefinition.safeParse(raw);
     if (!parsed.success) errors.push(`schema: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
     else def = parsed.data;
   }
-  return { def, errors };
+  return { def, errors, said };
 }
 
 function logicOf(def: SurveyDefinition): LogicLine[] {
@@ -92,8 +121,43 @@ function logicOf(def: SurveyDefinition): LogicLine[] {
     if (nd.type === "quota_check") lines.push({ label: "Quota check", text: `quotas ${(nd.quotaIds ?? []).join(", ")}; when full: ${nd.onFull?.kind ?? "terminate"}` });
     if (nd.type === "redirect") lines.push({ label: "Redirect to", text: nd.url });
   }
+  /* auto-punch rules, written exactly as the builder's Auto punch editor shows them */
+  const punches = new Map<string, string[]>();
+  for (const { target, rule } of allPunchRules(def)) punches.set(target.code, [...(punches.get(target.code) ?? []), formatPunchExpression(def, target, rule)]);
+  for (const [c, rules] of punches) lines.push({ label: `Auto-punch on ${c}`, text: rules.join("\n") });
   for (const qt of (def.quotas ?? []) as Record<string, any>[]) for (const cell of qt.cells ?? []) lines.push({ label: `Quota ${qt.name} — ${cell.label} (limit ${cell.limit})`, text: formatCondition(def, cell.when) });
   return lines;
+}
+
+const fmt = (v: unknown): string => (v == null || v === "" ? "" : typeof v === "number" ? String(Math.round(v * 1000) / 1000) : typeof v === "object" ? JSON.stringify(v) : String(v));
+
+/** the example's analyses on the Studio's own simulated respondents */
+export function sampleOutput(ex: DocExample, def: SurveyDefinition): { output: SampleOutput[]; n: number } | null {
+  if (!ex.analysis) return null;
+  const count = ex.simulate ?? 150;
+  const report = runSimulation(def, { count, seed: 20261109, edgeRate: 0, completeShare: 1, probeInvalid: false });
+  const rows: AnalyticsRow[] = report.journeys.map((j, i) => ({ id: `sim${i}`, session_id: `sim${i}`, status: j.endStatus === "complete" ? "complete" : j.endStatus, answers: j.answers, calculated: j.calculated, embedded: {}, flags: [] }) as AnalyticsRow);
+  const spec = { environment: "LIVE" as const, dataset: "all" as const };
+  const ds = buildDataset(def, rows, { spec });
+  const defs = ex.analysis === "plan"
+    ? plannedAnalyses(def, spec).map((p) => p.definition)
+    : ex.analysis.map((a) => ({ name: a.label ?? a.kind, kind: a.kind, dataset: spec, variables: a.variables, ...(a.options ? { options: a.options } : {}) }));
+  const output: SampleOutput[] = [];
+  for (const d of defs.slice(0, 3)) {
+    let res: Record<string, any>;
+    try { res = runAnalysis(d as never, ds) as unknown as Record<string, any>; } catch (e) { output.push({ name: String(d.name), n: 0, insights: [], warnings: [], error: (e as Error).message }); continue; }
+    const t = res.tables?.[0];
+    const chart = res.chart ?? {};
+    const series = chart.series?.[0];
+    output.push({
+      name: String(d.name), n: res.base?.n ?? 0,
+      ...(t ? { table: { title: t.title, columns: t.columns.slice(0, 8).map((c: { key: string; label: string }) => ({ key: c.key, label: c.label })), rows: t.rows.slice(0, 12).map((row: Record<string, unknown>) => Object.fromEntries(t.columns.slice(0, 8).map((c: { key: string }) => [c.key, fmt(row[c.key])]))) } } : {}),
+      ...(series && Array.isArray(chart.categories) ? { bars: chart.categories.slice(0, 12).map((label: unknown, i: number) => ({ label: String(label), value: Number(series.values?.[i] ?? 0) || 0 })) } : {}),
+      insights: (res.insights ?? []).slice(0, 3), warnings: (res.warnings ?? []).slice(0, 2),
+      ...(res.error ? { error: res.error.message } : {}),
+    });
+  }
+  return { output, n: report.journeys.length };
 }
 
 const MEDIA = () => {
@@ -101,10 +165,14 @@ const MEDIA = () => {
   return cands.find((d) => existsSync(d)) ?? cands[0];
 };
 
+const CACHE = new Map<string, BuiltExample>();
 export function buildExample(id: string): BuiltExample | null {
+  const hit = CACHE.get(id);
+  if (hit && process.env.NODE_ENV === "production") return hit;
   const ex = exampleById(id);
   if (!ex) return null;
-  const { def, errors } = buildExampleDef(ex);
+  const { def, errors, said } = buildExampleDef(ex);
+  const sample = sampleOutput(ex, def);
   const show = ex.show ? def.questions.filter((q) => ex.show!.includes(String(q.code))) : def.questions;
   const nodes: Record<string, unknown>[] = [];
   walk(def.flow as unknown[], nodes);
@@ -115,15 +183,21 @@ export function buildExample(id: string): BuiltExample | null {
   const extra: Record<string, unknown> = {};
   if (def.embeddedData?.length) extra.embeddedData = def.embeddedData;
   if (def.quotas?.length) extra.quotas = def.quotas;
+  if ((def as Record<string, any>).panels?.length) extra.panels = (def as Record<string, any>).panels;
+  if ((def as Record<string, any>).alerts) extra.alerts = (def as Record<string, any>).alerts;
+  if (def.designs?.length) extra.designs = def.designs.map((d) => ({ id: d.id, kind: d.kind, name: d.name, version: d.version, seed: d.seed, config: d.config, file: `${d.file?.rows?.length ?? 0} rows (shown above as the design)` }));
   if (def.ux && ((def.ux.styles?.length ?? 0) + (def.ux.behaviors?.length ?? 0)) > 0) extra.ux = { styles: def.ux.styles, behaviors: def.ux.behaviors };
   const json = JSON.stringify(compact({ questions: show, ...(flow.length ? { flow } : {}), ...extra }), null, 2);
   const dir = MEDIA();
   const pick = (base: string) => [`${base}.webp`, `${base}.png`].find((f) => existsSync(join(dir, f)));
-  const images = [pick(`${id}-panel`), pick(id)].filter((f): f is string => !!f).map((f) => `/docs-media/builder/${f}`);
-  return {
-    id, title: ex.title, tryIt: ex.tryIt, def, logic: logicOf(def), json, embedded: ex.embedded ?? {}, errors,
-    builder: { images, caption: ex.builder.caption, tab: ex.builder.tab ?? "Questions", question: ex.builder.question, section: ex.builder.section },
+  const images = [pick(`${id}-say`), pick(`${id}-panel`), pick(id)].filter((f): f is string => !!f).map((f) => `/docs-media/builder/${f}`);
+  const built: BuiltExample = {
+    id, title: ex.title, tryIt: ex.tryIt, def, logic: logicOf(def), json, embedded: ex.embedded ?? {}, errors, said, output: sample?.output ?? null,
+    designs: (def.designs ?? []).filter((d) => d.file?.rows?.length).map((d) => ({ kind: d.kind, name: d.name, file: { columns: d.file!.columns ?? [], rows: (d.file!.rows as Record<string, unknown>[]).slice(0, 3000), ...(d.file!.summary ? { summary: d.file!.summary as Record<string, unknown> } : {}) } })), simulated: sample?.n ?? 0,
+    builder: { images, caption: ex.builder.caption, tab: ex.builder.intelligent ? "Intelligent Mode" : ex.builder.tab ?? "Questions", question: ex.builder.question, section: ex.builder.section },
   };
+  CACHE.set(id, built);
+  return built;
 }
 
 export const allExampleIds = () => DOC_EXAMPLES.map((e) => e.id);
