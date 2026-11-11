@@ -236,7 +236,7 @@ export function DataPanel() {
       <>
       {showExports && (
         <div data-testid="export-panel"
-          style={{ marginBottom: 10, padding: "12px 14px", border: "1px solid var(--border, #e5e9f0)", borderRadius: 8, background: "var(--surface-2, #fafbfc)" }}>
+          style={{ marginBottom: 10, padding: "12px 14px", border: "1px solid var(--border, #e5e9f0)", borderRadius: 8, background: "var(--c-surface-2)" }}>
           {/* ---------------------------------------------- saved deliveries */}
           <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>Export presets</div>
           <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 6 }} data-testid="export-presets">

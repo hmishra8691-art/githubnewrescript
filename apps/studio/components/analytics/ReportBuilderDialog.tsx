@@ -110,7 +110,7 @@ export function ReportBuilderDialog({ api, analyses, onClose, onCreated, initial
                 <label className="ax-toggle"><input type="checkbox" checked={!excluded.has(i.id)} onChange={() => setExcluded((x) => { const n = new Set(x); if (n.has(i.id)) n.delete(i.id); else n.add(i.id); return n; })} /> <b>{i.name}</b> <span className="muted">— {ROLE_WORD[i.role]}</span></label>
                 <div className="muted" style={{ fontSize: 12.5, marginLeft: 22 }}>Chart: <b>{i.chart.replace(/_/g, " ")}</b> — {i.chartReason}. {i.denominator}</div>
                 {i.answers.length > 0 && <div className="muted" style={{ fontSize: 12.5, marginLeft: 22 }}>Answers: {i.answers.map((q) => `“${q}”`).join("; ")}</div>}
-                {i.notes.map((n, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 22, color: "#b45309" }}>{n}</div>)}
+                {i.notes.map((n, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 22, color: "var(--c-warning-fg)" }}>{n}</div>)}
               </li>))}
           </ul>
           {draft.skipped.length > 0 && <><div className="flabel" style={{ marginTop: 8 }}>Left out ({draft.skipped.length})</div>

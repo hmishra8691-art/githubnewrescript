@@ -3,6 +3,8 @@ import type { Metadata, Viewport } from "next";
 // painted by exactly the rules that paint it for a respondent
 import "@rescript/renderer/questions.css";
 import "./globals.css";
+import { THEME_BOOT_SCRIPT } from "@/lib/theme/themes";
+import { ThemeBoot } from "@/lib/theme/client";
 import { platformBadge } from "@/lib/platform";
 
 export const metadata: Metadata = {
@@ -52,13 +54,16 @@ function EnvironmentBanner() {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        {/* the person's theme, before the first paint (lib/theme) — data-theme on <html> is why hydration warnings are off for this one element */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
       </head>
       <body>
+        <ThemeBoot />
         <EnvironmentBanner />
         {children}
       </body>

@@ -56,7 +56,7 @@ export default function AlertSettingsPage() {
           <div className="eyebrow">Organisation rules (every study)</div>
           {!settings.rules.length && <p className="muted">None: a study's own rules apply, and without any rule high-priority events go to each project team's bell.</p>}
           {settings.rules.map((r) => (
-            <div key={r.id} className="row" style={{ gap: 8, borderTop: "1px solid #eee", padding: "6px 0" }}>
+            <div key={r.id} className="row" style={{ gap: 8, borderTop: "1px solid var(--c-border)", padding: "6px 0" }}>
               <span><b>{r.events.map((e) => events.find((x) => x.type === e)?.label ?? e).join(", ")}</b> → {r.channels.map((c) => `${c.kind} ${c.to}`).join(", ")}{r.digest !== "immediate" ? ` (${r.digest})` : ""}</span>
               <span style={{ flex: 1 }} />
               {canManage && <button type="button" className="btn small" onClick={() => save({ ...settings, rules: settings.rules.filter((x) => x.id !== r.id) })}>Remove</button>}

@@ -200,7 +200,7 @@ export default function FraudPage() {
       <AccountHeader active="fraud" user={user} onSignOut={signOut} />
 
       {data?.calibration && (
-        <div className="auth-note" data-testid="fraud-calibration" style={{ borderLeft: "3px solid #b54708" }}>
+        <div className="auth-note" data-testid="fraud-calibration" style={{ borderLeft: "3px solid var(--c-warning-fg)" }}>
           <strong>These scores have not been validated.</strong>{" "}
           {data.calibration} Clearing a case is as useful to the platform as upholding one — both teach it
           something, and only resolved cases can measure whether any of this works.

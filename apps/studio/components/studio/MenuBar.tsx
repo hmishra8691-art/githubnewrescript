@@ -1,4 +1,6 @@
 "use client";
+import { DEFAULT_THEME, STUDIO_THEMES, studioTheme } from "@/lib/theme/themes";
+import { chooseTheme, previewTheme, useStudioTheme } from "@/lib/theme/client";
 import React from "react";
 import { Icon, type IconName } from "../ui/Icon";
 import { useMode } from "./ModeContext";
@@ -111,7 +113,7 @@ export function MenuBar({ nav, tab, setTab, counts, analyticsHref, after }: Menu
   const folded = groups.slice(visible);
 
   /* ------------------------------------------------------------ keyboard */
-  const allKeys = React.useMemo(() => [...shown.map((g) => g.key), ...(folded.length ? ["more"] : []), "mode"], [shown, folded.length]);
+  const allKeys = React.useMemo(() => [...shown.map((g) => g.key), ...(folded.length ? ["more"] : []), "mode", "theme"], [shown, folded.length]);
   const onKeyDown = (e: React.KeyboardEvent) => {
     const target = e.target as HTMLElement;
     const btn = target.closest<HTMLElement>("[data-group-button]");
@@ -147,6 +149,9 @@ export function MenuBar({ nav, tab, setTab, counts, analyticsHref, after }: Menu
   const renderItems = (g: MenuGroupDef) => g.items.map((it) => <ToolItem key={it.key} item={it} active={it.key === tab} count={it.countKey ? counts[it.countKey] : undefined} icon={iconOf.get(it.key) ?? "layers"} onChoose={choose} />);
   const tokens = (g: MenuGroupDef) => g.items.map((i) => i.label.replace(/\s+/g, "_")).join(" ");
   const keys = (g: MenuGroupDef) => g.items.map((i) => i.key).join(" ");
+  const theme = useStudioTheme();
+  /* a preview lasts only while the Theme menu is open: closing it any way puts the chosen theme back */
+  React.useEffect(() => { if (open !== "theme") previewTheme(null); }, [open]);
   const modeLabel = modeInfo(mode?.mode ?? "studio");
   const splitLabel = mode?.split ? modeInfo(mode.split) : null;
 
@@ -184,6 +189,13 @@ export function MenuBar({ nav, tab, setTab, counts, analyticsHref, after }: Menu
           detail={<><span className="mode-index">0{modeLabel.index}</span><span className="menubar-btn-detail">{modeLabel.label}{splitLabel ? ` + ${splitLabel.label}` : ""}</span></>}
           testId="mode-cluster">
           <ModeMenu onDone={closeAll} />
+        </Group>
+        {/* THEME — between Mode and Project spend (2026-11-11): the person's own colour theme for the Studio */}
+        <Group id="theme" label="Theme" active={false} open={open === "theme"} fixed items={STUDIO_THEMES.map((t) => t.label).join(" ")}
+          onEnter={onGroupEnter} onLeave={onGroupLeave} onClick={onGroupClick}
+          detail={<span className="menubar-btn-detail" data-testid="theme-current">{studioTheme(theme.saved).label}</span>}
+          testId="theme-cluster">
+          <ThemeMenu saved={theme.saved} preview={theme.preview} onDone={closeAll} />
         </Group>
         {after}
       </div>
@@ -246,6 +258,49 @@ function ToolItem({ item, active, count, icon, onChoose }: { item: MenuItemDef; 
       data-testid={`nav-${item.key}`} data-tab={item.key} onClick={() => onChoose(item.key)}>
       {body}
     </button>
+  );
+}
+
+/* ---------------------------------------------------------- the Theme menu */
+
+/**
+ * The Theme menu: every theme as a radio item with a preview chip in the theme's own colours. Pointing at one (or
+ * focusing it) shows the whole Studio in it; clicking chooses it — drawn at once, remembered on this browser and
+ * saved to the account. Leaving the menu without clicking puts the chosen theme back.
+ */
+function ThemeMenu({ saved, preview, onDone }: { saved: string; preview: string | null; onDone(): void }) {
+  return (
+    <div className="menubar-sections theme-menu" data-testid="theme-menu" onPointerLeave={() => previewTheme(null)}>
+      <section className="menubar-section" aria-label="Colour theme">
+        <div className="menubar-section-title">Colour theme<span className="menubar-section-note"> — point to preview, click to keep</span></div>
+        <div className="theme-grid" role="group" aria-label="Colour theme">
+          {STUDIO_THEMES.map((t) => {
+            const active = saved === t.id;
+            return (
+              <button key={t.id} type="button" role="menuitemradio" aria-checked={active} tabIndex={-1}
+                className={`nav-item theme-option${active ? " active" : ""}${preview === t.id ? " previewing" : ""}`} data-testid={`theme-${t.id}`} data-theme-id={t.id}
+                title={`${t.label} — ${t.description}`}
+                onPointerEnter={() => previewTheme(t.id)} onFocus={() => previewTheme(t.id)}
+                onClick={() => { chooseTheme(t.id); onDone(); }}>
+                <span className="theme-chip" aria-hidden="true" style={{ background: t.swatch[0], borderColor: t.dark ? t.swatch[1] : "rgba(0,0,0,.14)" }}>
+                  <span className="theme-chip-card" style={{ background: t.swatch[1] }}>
+                    <span className="theme-chip-line" style={{ background: t.swatch[3] }} />
+                    <span className="theme-chip-btn" style={{ background: t.swatch[2] }} />
+                  </span>
+                </span>
+                <span className="nav-body"><span className="nav-label">{t.label}{active && <span className="nav-count">current</span>}</span><span className="nav-desc">{t.description}</span></span>
+                {active && <Icon name="check" size={13} />}
+              </button>
+            );
+          })}
+        </div>
+        {saved !== DEFAULT_THEME && (
+          <button type="button" role="menuitem" tabIndex={-1} className="nav-item theme-option compact off" data-testid="theme-reset" onPointerEnter={() => previewTheme(DEFAULT_THEME)} onClick={() => { chooseTheme(DEFAULT_THEME); onDone(); }}>
+            <span className="nav-ico"><Icon name="close" size={13} /></span><span className="nav-body"><span className="nav-label">Back to the default theme</span></span>
+          </button>
+        )}
+      </section>
+    </div>
   );
 }
 
