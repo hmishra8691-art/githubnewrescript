@@ -2,7 +2,7 @@
 import React from "react";
 import {
   applySurveyActions, buildAnalysisFramework, coerceSurveyActions, designAdvice, parseAttributes, parseList, parsePrices, recommendMethodology,
-  CATEGORY_NAMES, METHOD_FAMILIES, STUDY_METHODOLOGIES, methodFamily, methodGuide, type MethodInputs, type Methodology, type MethodologyRecommendation,
+  CATEGORY_NAMES, METHOD_FAMILIES, STUDY_METHODOLOGIES, methodFamily, methodGuide, readDesignBrief, type MethodInputs, type Methodology, type MethodologyRecommendation,
 } from "@rescript/engine";
 import { registerBuiltinDesignGenerators } from "@rescript/designs";
 import { runSimulation } from "@rescript/templates";
@@ -82,7 +82,26 @@ export function StudyDesignPanel() {
   }, [methodId]);
   const jump = (id: string) => { const el = detailRef.current?.querySelector<HTMLElement>(`#${id}`); if (el && detailRef.current) detailRef.current.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" }); };
 
-  const recommend = () => { const r = recommendMethodology(objective); setRec(r); setPreview(null); setAdded(null); if (r) setMethodId(r.recommended.id); };
+  /* 2026-11-10: the description is READ, not only classified — what it already says (attributes and levels, prices,
+     items, the sample) fills the method's inputs, and what it does not say is asked for. Nothing is assumed. */
+  const [briefText, setBriefText] = React.useState<string | null>(pending?.objective ? pending.objective : null);
+  const brief = React.useMemo(() => (briefText ? readDesignBrief(briefText, { methodId }) : null), [briefText, methodId]);
+  const applyBrief = (text: string, id?: string) => {
+    const b = readDesignBrief(text, id ? { methodId: id } : {});
+    if (!b) return;
+    setFields((f) => ({ ...f, ...b.fields }));
+    if (b.inputs.sample) setSample(String(b.inputs.sample));
+    if (b.inputs.minutes) setMinutes(String(b.inputs.minutes));
+  };
+  const recommend = () => { const r = recommendMethodology(objective); setRec(r); setPreview(null); setAdded(null); setBriefText(r ? objective : null); if (r) { setMethodId(r.recommended.id); applyBrief(objective, r.recommended.id); } };
+  /* another method chosen for the same description: its own inputs are read from the same words (fields already typed are kept) */
+  const chooseMethod = (id: string) => {
+    setMethodId(id); setPreview(null); setAdded(null);
+    if (!briefText) return;
+    const b = readDesignBrief(briefText, { methodId: id });
+    if (b) setFields((f) => ({ ...Object.fromEntries(Object.entries(b.fields).filter(([k]) => !(f[k] ?? "").trim())), ...f }));
+  };
+  const focusInput = (key: string) => { const el = detailRef.current?.querySelector<HTMLElement>(`[data-testid="sd-in-${key}"]`); if (el && detailRef.current) { detailRef.current.scrollTo({ top: Math.max(0, el.offsetTop - 120), behavior: "smooth" }); el.focus({ preventScroll: true }); } };
   const inputs = inputsFrom(m, fields);
   const needsDesign = m.inputs.some((i) => i.kind === "attributes") || (m.inputs.some((i) => i.key === "items") && /maxdiff|innovation/.test(m.id));
   const advice = needsDesign ? designAdvice({ ...(inputs.attributes?.length ? { attributes: inputs.attributes } : {}), ...(inputs.items?.length && !inputs.attributes?.length ? { items: inputs.items } : {}), ...(m.id === "menu_conjoint" ? { menu: true } : {}), ...(Number(sample) > 0 ? { sample: Number(sample) } : {}), ...(Number(minutes) > 0 ? { maxMinutes: Number(minutes) } : {}), ...(m.id === "rating_conjoint" ? { specialist: true } : {}) }) : null;
@@ -141,15 +160,37 @@ export function StudyDesignPanel() {
           <div className="sd-rec-head"><span className="chip">{rec.categoryName}</span><b>{rec.recommended.name}</b><span className="muted">confidence {rec.confidence}</span></div>
           {rec.proposed && !rec.proposed.fits && <div className="sd-warn" data-testid="sd-misfit"><b>{rec.proposed.method.name} does not answer this objective.</b> {rec.proposed.problem}</div>}
           <ul>{rec.why.map((w) => <li key={w}>{w}</li>)}</ul>
-          {rec.alternatives.length > 0 && <div className="sd-alts"><span className="muted">Alternatives:</span>{rec.alternatives.map((a) => <button key={a.method.id} type="button" className={`btn tiny ${methodId === a.method.id ? "primary" : ""}`} title={a.when} onClick={() => { setMethodId(a.method.id); setPreview(null); }} data-testid="sd-alt">{a.method.name}</button>)}</div>}
+          {rec.alternatives.length > 0 && <div className="sd-alts"><span className="muted">Alternatives:</span>{rec.alternatives.map((a) => <button key={a.method.id} type="button" className={`btn tiny ${methodId === a.method.id ? "primary" : ""}`} title={a.when} onClick={() => chooseMethod(a.method.id)} data-testid="sd-alt">{a.method.name}</button>)}</div>}
           {rec.missing.length > 0 && <div className="sd-missing" data-testid="sd-missing"><span className="muted">Still needed:</span> {rec.missing.join(" · ")}</div>}
+        </section>
+      )}
+
+      {brief && (
+        <section className="sd-brief" data-testid="sd-brief" data-ready={brief.ready ? "1" : "0"} data-method={brief.method.id}>
+          <div className="sd-brief-cols">
+            <div>
+              <b>Read from your description</b>
+              {brief.understood.length
+                ? <ul data-testid="sd-understood">{brief.understood.map((u) => <li key={u.key}><span className="muted">{u.label}:</span> {u.value}</li>)}</ul>
+                : <p className="muted">Only the objective — no attributes, prices, lists or sample were given.</p>}
+              <p className="muted">These are filled in under “Set up and build”, where you can correct them.</p>
+            </div>
+            <div>
+              <b>{brief.questions.length ? `Still needed for ${brief.method.name} (${brief.questions.length})` : "Nothing more is needed"}</b>
+              {brief.questions.length > 0
+                ? <ul data-testid="sd-questions">{brief.questions.map((q) => <li key={q.key}><button type="button" className="sd-q" onClick={() => focusInput(q.key)}>{q.question}</button>{q.example && <span className="muted"> For example: {q.example.split("\n")[0]}</span>}</li>)}</ul>
+                : <p className="muted">Every required input was in the description. Check them, then build.</p>}
+              <button type="button" className="btn small" data-testid="sd-brief-setup" onClick={() => jump("sd-setup")}>{brief.ready ? "Review and build" : "Answer in Set up"}</button>
+            </div>
+          </div>
+          <details className="sd-brief-why" open={brief.ready}><summary>How this study is designed</summary><ul data-testid="sd-explanation">{brief.explanation.map((x) => <li key={x}>{x}</li>)}</ul></details>
         </section>
       )}
 
       <div className="sd-cols" data-testid="sd-cols">
         <aside className="sd-list" aria-label="Methodologies" ref={listRef}>
           <b>2. Method</b>
-          <MethodLibrary compact groups={libraryGroups} selected={methodId} onSelect={(id) => { setMethodId(id); setPreview(null); setAdded(null); }} testId="sd-method" />
+          <MethodLibrary compact groups={libraryGroups} selected={methodId} onSelect={chooseMethod} testId="sd-method" />
         </aside>
 
         <div className="sd-detail" ref={detailRef} data-testid="sd-detail" data-method={m.id}>

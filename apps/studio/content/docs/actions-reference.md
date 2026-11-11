@@ -425,6 +425,8 @@ export interface ConjointSpec {
   levels?: Record<string, string[]>;
   alternatives?: number; tasks?: number | null; versions?: number; holdouts?: number;
   none?: boolean; noneLabel?: string | null;
+  /** fixed alternatives shown in every task (conjointFixed.ts): "Label", "Label | Attr: Level", "Label [specify]"; [] removes them */
+  fixedAlternatives?: (string | { label: string; levels?: Record<string, string>; specify?: boolean })[];
   prohibitions?: ConjointProhibitionInput[]; addProhibitions?: ConjointProhibitionInput[]; removeProhibitions?: ConjointProhibitionInput[];
   design?: "efficient" | "balanced";
   /* menu-based */

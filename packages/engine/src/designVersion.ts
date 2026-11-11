@@ -135,7 +135,9 @@ export function shuffleAlternatives<T extends Record<string, unknown>>(
   key: string,
 ): T[] {
   const none = alts.filter((a) => Number(a.none_option) === 1);
-  const real = alts.filter((a) => Number(a.none_option) !== 1);
+  /* 2026-11-10: fixed alternatives (conjointFixed.ts) are not shuffled among the designed concepts — they follow them, in their own order */
+  const fixed = alts.filter((a) => Number(a.none_option) !== 1 && Number(a.fixed_option) >= 1);
+  const real = alts.filter((a) => Number(a.none_option) !== 1 && !(Number(a.fixed_option) >= 1));
   let h = subSeed(seed, `altorder:${key}`);
   const out = [...real];
   // Fisher-Yates on a small deterministic stream — the same respondent and
@@ -145,5 +147,5 @@ export function shuffleAlternatives<T extends Record<string, unknown>>(
     const j = Math.abs(h) % (i + 1);
     [out[i], out[j]] = [out[j], out[i]];
   }
-  return [...out, ...none];
+  return [...out, ...fixed, ...none];
 }

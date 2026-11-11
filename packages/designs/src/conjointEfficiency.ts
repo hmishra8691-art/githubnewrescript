@@ -159,7 +159,7 @@ export interface ConjointEfficiency {
  * holdouts and the None row are ignored.
  */
 export function measureConjointDesign(attributes: EfficiencyAttribute[], rows: Record<string, unknown>[]): ConjointEfficiency {
-  const real = rows.filter((r) => Number(r.none_option) !== 1 && Number(r.is_holdout) !== 1);
+  const real = rows.filter((r) => Number(r.none_option) !== 1 && Number(r.is_holdout) !== 1 && !(Number(r.fixed_option) >= 1)); // fixed alternatives are not designed (2026-11-10)
   const byTask = new Map<string, Record<string, unknown>[]>();
   const byVersion = new Map<string, Map<string, Record<string, unknown>[]>>();
   for (const r of real) {

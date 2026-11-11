@@ -1,4 +1,4 @@
-import { maxdiffOptOutsOf, maxdiffTaskOptOut } from "@rescript/engine";
+import { maxdiffOptOutsOf, maxdiffTaskOptOut, fixedAlternativesOf, fixedOtherKey } from "@rescript/engine";
 import type { AnalysisDefinition, AnalysisResult, ResultTable } from "../types.js";
 import { categoricalColumn, categoriesOf, labelOf, type Dataset } from "../dataset.js";
 import { conditionalLogit, logitShares, type ChoiceSet } from "../stats/choice.js";
@@ -15,7 +15,7 @@ import { REPORT_LOCALE } from "../format.js";
 export type DualCoding = "dual" | "single_none" | "forced";
 export const dualCodingOf = (v: unknown): DualCoding => (v === "single_none" || v === "forced" ? v : "dual");
 
-const DESIGN_COLS = new Set(["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label"]);
+const DESIGN_COLS = new Set(["version", "task", "alt", "is_holdout", "none_option", "fixed_option", "position", "item_index", "item_label"]);
 
 function designFor(ds: Dataset, questionId: string) {
   const q = ds.def.questions.find((x) => x.id === questionId);
@@ -41,6 +41,8 @@ function designIndex(rows: Record<string, unknown>[]) {
  * every level column of its attribute, so part-worths sum to zero per
  * attribute), then a None constant when the design has a None row.
  */
+/** the pseudo-attribute a fixed alternative's constant is reported under */
+export const FIXED_ATTR = "Fixed alternative";
 export function cbcCoding(rows: Record<string, unknown>[], columns: string[], config: unknown, opts: { dual?: DualCoding } = {}) {
   const attrs = columns.filter((c) => !DESIGN_COLS.has(c));
   const levels: Record<string, string[]> = {};
@@ -48,7 +50,7 @@ export function cbcCoding(rows: Record<string, unknown>[], columns: string[], co
   const configured = ((config as { attributes?: { name: string; levels: string[] }[] } | undefined)?.attributes ?? []);
   for (const a of attrs) {
     /* "" is a not-applicable cell of a brand-specific design (F4): never a level, coded as zeros */
-    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1).map((r) => String(r[a] ?? "")).filter((l) => l !== ""))];
+    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1 && !(Number(r.fixed_option) >= 1)).map((r) => String(r[a] ?? "")).filter((l) => l !== ""))];
     const cfg = configured.find((x) => x.name === a)?.levels?.map(String).filter((l) => seen.includes(l));
     levels[a] = cfg && cfg.length === seen.length ? cfg : seen;
   }
@@ -60,10 +62,21 @@ export function cbcCoding(rows: Record<string, unknown>[], columns: string[], co
   let p = 0;
   for (const a of attrs) for (const l of levels[a].slice(1)) idx.push({ attr: a, level: l, i: p++ });
   const noneIdx = hasNone ? p++ : -1;
+  /*
+   * FIXED ALTERNATIVES (2026-11-10; @rescript/engine conjointFixed.ts): one constant each, after everything else — an
+   * alternative-specific constant on top of the part-worths of whatever levels the alternative specifies. Without it
+   * a fixed alternative with no levels would be forced to utility zero and its choices would bend every part-worth.
+   */
+  const fixedNums = [...new Set(rows.map((r) => Number(r.fixed_option)).filter((k) => Number.isInteger(k) && k >= 1))].sort((a, b) => a - b);
+  const fixedLabels = fixedAlternativesOf(config);
+  const fixed = fixedNums.map((k) => ({ num: k, label: fixedLabels[k - 1]?.label ?? `Fixed alternative ${k}`, i: p++ }));
   const featuresOf = (r: Record<string, unknown>): number[] => {
     const x = new Array(p).fill(0);
     if (Number(r.none_option) === 1) { if (noneIdx >= 0) x[noneIdx] = 1; return x; }
+    const fx = fixed.find((f) => f.num === Number(r.fixed_option));
+    if (fx) x[fx.i] = 1;
     for (const a of attrs) {
+      if (fx && String(r[a] ?? "") === "") continue; // a level the fixed alternative does not specify adds nothing
       const l = String(r[a]), ls = levels[a];
       const k = ls.indexOf(l);
       if (k === 0) for (const e of idx) { if (e.attr === a) x[e.i] = -1; }  // effects coding: reference = −1 on every level column
@@ -81,10 +94,12 @@ export function cbcCoding(rows: Record<string, unknown>[], columns: string[], co
       names.push(`${a}: ${l}`); attr.push(a); level.push(l); out.push(r);
     }
     if (noneIdx >= 0) { const r = new Array(p).fill(0); r[noneIdx] = 1; names.push("None"); attr.push(null); level.push("None"); out.push(r); }
+    /* named, not null: `attr === null` means the None constant to every reader of this table */
+    for (const f of fixed) { const r = new Array(p).fill(0); r[f.i] = 1; names.push(`${FIXED_ATTR}: ${f.label}`); attr.push(FIXED_ATTR); level.push(f.label); out.push(r); }
     return { names, attr, level, rows: out };
   };
   const noneVector = (): number[] => { const x = new Array(p).fill(0); if (noneIdx >= 0) x[noneIdx] = 1; return x; };
-  return { attrs, levels, idx, p, hasNone, noneIdx, featuresOf, levelRows, noneVector, dualDesign, dual: dualDesign ? (opts.dual ?? "dual") : null };
+  return { attrs, levels, idx, p, hasNone, noneIdx, fixed, featuresOf, levelRows, noneVector, dualDesign, dual: dualDesign ? (opts.dual ?? "dual") : null };
 }
 
 /**
@@ -225,6 +240,7 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const sets: ChoiceSet[] = [], holdouts: ChoiceSet[] = [];
   const noneCode = String(((design.config as { alternativesPerTask?: number })?.alternativesPerTask ?? Math.max(...rows.map((r) => Number(r.alt) || 0))) + (hasNone ? 1 : 0));
   let respondents = 0, tasksAnswered = 0, noneChosen = 0;
+  const fixedChosen = new Map<number, number>(), otherTexts: string[] = [];
   /* RAW COUNTS (not a model): per level, how often it was shown in an answered estimation task and how often the alternative carrying it was chosen */
   const shownN = new Map<string, number>(), chosenN = new Map<string, number>();
   const lk = (a: string, l: string) => `${a}\u0000${l}`;
@@ -243,11 +259,17 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       if (chosenIdx < 0) continue;
       const isNone = Number(alts[chosenIdx].none_option) === 1 || String(choice) === noneCode && Number(alts[chosenIdx].none_option) === 1;
       if (isNone) noneChosen++;
+      const fxNum = Number(alts[chosenIdx].fixed_option);
+      if (fxNum >= 1) {
+        fixedChosen.set(fxNum, (fixedChosen.get(fxNum) ?? 0) + 1);
+        const typed = String(ans[fixedOtherKey(task)] ?? "").trim();
+        if (typed) otherTexts.push(typed);
+      }
       /* dual-response None: "would not buy" is the None answer (F4) */
       if (coding.dualDesign && ans[`${task}_buy`] === "no") noneChosen++;
       if (Number(alts[0].is_holdout) !== 1) {
         for (let k = 0; k < alts.length; k++) {
-          if (Number(alts[k].none_option) === 1) continue;
+          if (Number(alts[k].none_option) === 1 || Number(alts[k].fixed_option) >= 1) continue; // level counts are of the designed concepts
           for (const a of attrs) {
             const key = lk(a, String(alts[k][a]));
             shownN.set(key, (shownN.get(key) ?? 0) + wOf(ci));
@@ -314,6 +336,24 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const countsAt = tables.length;
   tables.push({ id: "counts", title: "Counts — choice share of each level (raw, not a model)", columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "shown", label: "Times shown", type: "number", decimals: 0 }, { key: "chosen", label: "Times chosen", type: "number", decimals: 0 }, { key: "share", label: "Chosen when shown %", type: "pct", decimals: 1 }], rows: attrs.flatMap((a) => levels[a].map((l) => { const sh = shownN.get(lk(a, l)) ?? 0, ch = chosenN.get(lk(a, l)) ?? 0; return { attribute: a, level: l, shown: round(sh, 0), chosen: round(ch, 0), share: pct(sh ? (ch / sh) * 100 : 0) }; })), notes: ["Counts are descriptive: a level's share also reflects the levels it happened to be shown with. The part-worths table is the estimated model."] });
   void countsAt;
+  /* FIXED ALTERNATIVES (2026-11-10): each one's constant, its total utility with the levels it specifies, and how often it was chosen */
+  if (coding.fixed.length) {
+    const cfgFixed = fixedAlternativesOf(design.config);
+    tables.push({
+      id: "fixed", title: "Fixed alternatives (shown in every task; not part of the design)",
+      columns: [{ key: "alternative", label: "Alternative" }, { key: "levels", label: "Levels it carries" }, { key: "constant", label: "Constant", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "p", label: "p" }, { key: "utility", label: "Total utility", type: "number", decimals: 3 }, { key: "chosen", label: "Times chosen", type: "number", decimals: 0 }, { key: "share", label: "% of answered tasks", type: "pct", decimals: 1 }],
+      rows: coding.fixed.map((f) => {
+        const lv = cfgFixed[f.num - 1]?.levels ?? {};
+        const carried = attrs.map((a2) => { const given = Object.entries(lv).find(([k]) => k.toLowerCase() === a2.toLowerCase())?.[1]; const pw = partWorths.find((x) => x.attribute === a2)!; const l = given == null ? undefined : pw.levels.find((x) => x.level.toLowerCase() === given.toLowerCase()); return l ? { a: a2, l } : null; }).filter((x): x is { a: string; l: { level: string; utility: number; se: number | null; p: number | null } } => x !== null);
+        return { alternative: f.label, levels: carried.length ? carried.map((c) => `${c.a}: ${c.l.level}`).join("; ") : "none (its constant is its whole utility)", constant: round(fit.beta[f.i], 3), se: round(fit.se[f.i], 3), p: fmtP(fit.p[f.i]), utility: round(fit.beta[f.i] + carried.reduce((t, c) => t + c.l.utility, 0), 3), chosen: fixedChosen.get(f.num) ?? 0, share: pct(tasksAnswered ? ((fixedChosen.get(f.num) ?? 0) / tasksAnswered) * 100 : 0) };
+      }),
+      notes: [
+        "A fixed alternative is the same in every task, so it cannot be explained by the design: the model gives it its own constant, on top of the part-worths of any levels it carries. The constant is everything about the alternative that its listed levels do not capture — familiarity, switching cost, inertia.",
+        ...(otherTexts.length ? [`${otherTexts.length} typed answer${otherTexts.length === 1 ? "" : "s"} for the “specify” alternative are in the data as text (the _OTHER variables). They are not levels and are not in the model.`] : []),
+        "The market simulator works on designed concepts; fixed alternatives are not offered there.",
+      ],
+    } as ResultTable);
+  }
   const insights = [`${importance[0].attribute} is the most important attribute (${fmtPct(importance[0].importance, 0)} of total utility range)${importance.length > 1 ? `, followed by ${importance[1].attribute} (${fmtPct(importance[1].importance, 0)})` : ""}; ${importance[importance.length - 1].attribute} matters least (${fmtPct(importance[importance.length - 1].importance, 0)}).`];
   /*
    * THE MARKET SIMULATOR (F4 2026-10-22) — only when asked (options.simulator) or when scenarios are saved on the design

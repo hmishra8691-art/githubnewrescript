@@ -1,3 +1,4 @@
+import { missingAssetsIn, missingAssetPlaceholder } from "@rescript/engine";
 import type { CanonicalSurvey, CanonicalQuestion, CanonicalOption, CFlow, CanonicalKind, Issue, SourceFormat } from "../canonical.js";
 import { readDocument } from "./document.js";
 import type { DocBlock } from "./docx.js";
@@ -113,10 +114,12 @@ export function readTable(sheets: { name: string; rows: string[][] }[], meta: { 
   for (const q of questions) {
     const sec = sectionOf.get(q.sourceId);
     if (sec && sec !== lastSection) { lines.push({ kind: "para", text: `SECTION ${sec.replace(/^(?:section|block)\s*/i, "")}`, style: "heading 2" }); lastSection = sec; }
-    for (const l of logicLines.get(q.sourceId) ?? []) if (/^\s*(?:ask|show|display|base|filter)\b/i.test(l)) lines.push({ kind: "para", text: l.replace(/\n/g, " ") });
+    /* a display condition goes before its question; "SHOW IMAGE: …" is not one (2026-11-10: it used to be read as one and lost) */
+    const isCondition = (l: string) => /^\s*(?:ask|show|display|base|filter)\b/i.test(l) && !/^\s*(?:show|display)\s+(?:the\s+)?(?:image|picture|photo|video|audio|logo|stimulus|concept|pack)/i.test(l);
+    for (const l of logicLines.get(q.sourceId) ?? []) if (isCondition(l)) lines.push({ kind: "para", text: l.replace(/\n/g, " ") });
     lines.push({ kind: "para", text: `${q.sourceId}. ${q.text}` });
     for (const o of q.options) lines.push({ kind: "para", text: `${o.code}. ${o.label}` });
-    for (const l of logicLines.get(q.sourceId) ?? []) if (!/^\s*(?:ask|show|display|base|filter)\b/i.test(l)) for (const part of l.split(/\n|(?<=\.)\s+(?=IF\b)/i)) if (part.trim()) lines.push({ kind: "para", text: `[${part.trim()}]` });
+    for (const l of logicLines.get(q.sourceId) ?? []) if (!isCondition(l)) for (const part of l.split(/\n|(?<=\.)\s+(?=IF\b)/i)) if (part.trim()) lines.push({ kind: "para", text: `[${part.trim()}]` });
   }
   const read = readDocument(lines, { ...meta, title: meta.title ?? best.sheet });
   const readBy = new Map(read.questions.map((q) => [q.sourceId.toUpperCase(), q]));
@@ -127,6 +130,15 @@ export function readTable(sheets: { name: string; rows: string[][] }[], meta: { 
     q.skips = r.skips;
     if (r.confidence === "ambiguous") q.confidence = "ambiguous";
     // the document reader's options may carry annotations it understood (exclusive, specify)
+    /* 2026-11-10: a picture the sheet refers to but cannot carry — the reader's placeholder goes into this question too */
+    for (const m of missingAssetsIn(r.text)) { const mark = missingAssetPlaceholder(m.kind, m.name); if (!q.text.includes(mark)) q.text = `${q.text}\n<p><em>${mark}</em></p>`; }
+    /* 2026-11-10: RANDOMIZE in the routing column — and which answers keep their place — is read by the document reader
+       too; its option ids are translated to this sheet's by position */
+    if (r.randomizeOptions && r.options.length === q.options.length) {
+      q.randomizeOptions = true;
+      const mine = (id: string) => q.options[r.options.findIndex((o) => o.sourceId === id)]?.sourceId;
+      if (r.randomization) q.randomization = { ...r.randomization, anchorsTop: r.randomization.anchorsTop.map(mine).filter((x): x is string => !!x), anchorsBottom: r.randomization.anchorsBottom.map(mine).filter((x): x is string => !!x), undisplayed: [] };
+    }
     if (r.options.length === q.options.length) q.options = q.options.map((o, i) => ({ ...r.options[i], code: o.code, sourceId: o.sourceId, label: o.label.replace(/\s*\([^)]*\)\s*$/, "") || o.label }));
     if (q.kind === "unknown" || (!q.options.length && r.kind !== "textarea")) q.kind = r.kind;
   }

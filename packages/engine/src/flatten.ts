@@ -1,3 +1,4 @@
+import { fixedAlternativesOf, isFixedOtherKey, FIXED_OTHER_SUFFIX } from "./conjointFixed.js";
 import { maxdiffTaskOptOut } from "./maxdiffOptOut.js";
 import { dontKnowEnabled, responseStatus } from "./dontKnow.js";
 import type { SurveyDefinition, Question } from "@rescript/schema";
@@ -233,6 +234,8 @@ function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varNam
   const version = String(out[`${varName}_VERSION`] ?? out[`${q.variableName}_VERSION`] ?? "1");
   for (const [task, v] of Object.entries(vals)) {
     if (v == null || v === "") continue;
+    /* 2026-11-10: the text typed for a fixed "specify" alternative — its own column, never a choice */
+    if (design?.kind === "conjoint" && isFixedOtherKey(task) && fixedAlternativesOf(design.config).some((f) => f.specify)) { const t = String(v).trim(); if (t) out[`${varName}_T${task.slice(0, -FIXED_OTHER_SUFFIX.length)}_OTHER`] = t; continue; }
     if (isDual && isDualKey(task)) { out[`${varName}_T${task.slice(0, -DUAL_SUFFIX.length)}_BUY`] = v === "yes" ? 1 : v === "no" ? 0 : String(v); continue; }
     if (isCva) { const n = Number(v); out[`${varName}_T${task}`] = Number.isFinite(n) ? n : String(v); continue; }
     if (q.type === "maxdiff_task") {

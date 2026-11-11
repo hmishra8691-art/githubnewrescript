@@ -167,6 +167,44 @@ console.log("\n2 — Study design: list left, details right, a guide for every m
   ok("search finds a method; the layout stacks without sideways scroll at 700px");
 }
 
+console.log("\n2b — a study from a description: what was read, what is asked, how it is designed");
+{
+  await p.fill('[data-testid="sd-objective"]', "I need a conjoint study to find the best price and features for our new fitness app");
+  await p.click('[data-testid="sd-recommend"]');
+  await p.waitForSelector('[data-testid="sd-brief"]');
+  assert.equal(await p.getAttribute('[data-testid="sd-brief"]', "data-ready"), "0");
+  assert.match(await p.textContent('[data-testid="sd-questions"]'), /What are the attributes and their levels\?/);
+  assert.equal(await p.inputValue('[data-testid="sd-in-attributes"]'), "", "no attributes were invented");
+  assert.equal(await p.isDisabled('[data-testid="sd-preview"]'), true, "it cannot be built until they are given");
+  ok("a conjoint without levels is asked for its levels — nothing is filled in for the researcher");
+  await p.fill('[data-testid="sd-objective"]', "We are launching a premium subscription and need to know how much customers would pay and which features justify the price. Conjoint, 400 respondents, about 10 minutes.\nPrice: $9, $14, $19\nStorage: 50 GB, 200 GB, 1 TB\nSupport: Email, 24/7 chat");
+  await p.click('[data-testid="sd-recommend"]');
+  await p.waitForSelector('[data-testid="sd-brief"][data-ready="1"]');
+  assert.match(await p.textContent('[data-testid="sd-understood"]'), /Price \(\$9, \$14, \$19\); Storage \(50 GB, 200 GB, 1 TB\); Support \(Email, 24\/7 chat\)/);
+  assert.equal(await p.inputValue('[data-testid="sd-in-attributes"]'), "Price: $9, $14, $19\nStorage: 50 GB, 200 GB, 1 TB\nSupport: Email, 24/7 chat");
+  assert.equal(await p.inputValue('[data-testid="sd-sample"]'), "400");
+  assert.match(await p.textContent('[data-testid="sd-explanation"]'), /Method: Choice-based conjoint.*Design:.*tasks.*It will build:.*choice exercise.*3 attributes.*Analysis:/s);
+  await p.click('[data-testid="sd-preview"]');
+  await p.waitForSelector('[data-testid="sd-result"]', { timeout: 30000 });
+  assert.equal(await p.getAttribute('[data-testid="sd-result"]', "data-ok"), "1", await p.textContent('[data-testid="sd-result"]'));
+  assert.match(await p.textContent('[data-testid="sd-result"]'), /1 generated design file/);
+  ok("a complete brief fills the inputs, explains the design and builds through the real generator");
+}
+
+console.log("\n2c — Survey Settings in five sections");
+{
+  await openTab(p, "Survey Settings");
+  await p.waitForSelector('main.center [data-testid="ss-nav"]');
+  const secs = await p.$$eval('main.center [data-testid^="ss-head-"]', (b) => b.map((x) => ({ title: x.querySelector("strong").textContent, desc: x.querySelector(".ss-desc").textContent.length, open: x.getAttribute("aria-expanded") })));
+  assert.deepEqual(secs.map((x) => x.title), ["Survey and link", "Who can take this survey", "Response quality", "Assessment and rewards", "Research design"]);
+  assert.ok(secs.every((x) => x.desc > 40 && x.open === "true"));
+  await p.click('main.center [data-testid="ss-head-identity"]');
+  assert.equal(await p.isVisible('main.center [data-testid="custom-domain"]'), false, "a folded section hides its fields");
+  await p.click('main.center [data-testid="ss-nav"] button:has-text("Survey and link")');
+  await p.waitForSelector('main.center [data-testid="custom-domain"]', { state: "visible" });
+  ok("five titled sections with descriptions; fold one away, jump back to it from the bar");
+}
+
 console.log("\n3 — Survey Settings: quality checks in named groups");
 {
   await openTab(p, "Survey Settings");

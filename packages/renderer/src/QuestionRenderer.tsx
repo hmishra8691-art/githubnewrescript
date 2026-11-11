@@ -51,7 +51,7 @@ import {
   type ValidationError,
   dontKnowEnabled,
   dontKnowKey,
-  maxdiffOptOutsOf, maxdiffTaskOptOut,
+  maxdiffOptOutsOf, maxdiffTaskOptOut, fixedAlternativeOfRow, fixedOtherKey,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { DualResponseFollowUp } from "./variants/conjointSuite";
@@ -2038,7 +2038,7 @@ function DesignTasks(p: QRProps) {
     (anchorCfg.anchorPrompt ?? "").trim() ||
     "Thinking about the items in this set, how many of them are important to you?";
   const attrCols = design.file.columns.filter(
-    (c) => !["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label", "practice"].includes(c),
+    (c) => !["version", "task", "alt", "is_holdout", "none_option", "fixed_option", "position", "item_index", "item_label", "practice"].includes(c),
   );
   /*
    * MAXDIFF METHOD AND WORDING (MD-P1), from the design's config like the
@@ -2072,7 +2072,7 @@ function DesignTasks(p: QRProps) {
          * PARTIAL PROFILE (2026-11-09): an attribute left out of this task (empty in every concept) is not shown at all.
          * A brand-specific cell that is empty in only some concepts keeps its column and shows "—".
          */
-        const taskAttrCols = isMaxdiff ? attrCols : attrCols.filter((a) => alts.some((alt) => Number(alt.none_option) !== 1 && String(alt[a] ?? "") !== ""));
+        const taskAttrCols = isMaxdiff ? attrCols : attrCols.filter((a) => alts.some((alt) => Number(alt.none_option) !== 1 && !(Number(alt.fixed_option) >= 1) && String(alt[a] ?? "") !== ""));
         return (
           <div key={t} className="rs-card" style={{ margin: 0 }}>
             <div style={{ fontWeight: 600, marginBottom: 10 }} data-testid={isMaxdiff ? `md-task-${t}` : undefined}>
@@ -2161,11 +2161,13 @@ function DesignTasks(p: QRProps) {
                     /* F4 2026-10-22: a LABELLED design names each alternative by its brand */
                     const lab = design.config as { labelled?: boolean; brandAttribute?: string } | undefined;
                     const brandCol = lab?.labelled ? (attrCols.find((c) => c === lab.brandAttribute) ?? attrCols.find((c) => /^brand/i.test(c)) ?? attrCols[0]) : undefined;
-                    const optLabel = isNone ? noneText : brandCol && alt[brandCol] ? String(alt[brandCol]) : `Option ${i < 26 ? String.fromCharCode(65 + i) : i + 1}`;
+                    /* 2026-11-10: a FIXED alternative (the same in every task, not designed) is shown under its own label */
+                    const fixedAlt = isNone ? null : fixedAlternativeOfRow(design.config, alt);
+                    const optLabel = isNone ? noneText : fixedAlt ? fixedAlt.label : brandCol && alt[brandCol] ? String(alt[brandCol]) : `Option ${i < 26 ? String.fromCharCode(65 + i) : i + 1}`;
                     const isChosen = vals[t] != null && String(vals[t]) === altKey;
                     return (
                       <tr key={altKey} className={isChosen ? "rs-cbc-chosen" : undefined} data-testid="cbc-alt"
-                        data-task={t} data-alt={altKey} data-position={i + 1} data-none={isNone ? "1" : undefined}>
+                        data-task={t} data-alt={altKey} data-position={i + 1} data-none={isNone ? "1" : undefined} data-fixed={fixedAlt ? String(fixedAlt.index) : undefined}>
                         <td className="rowlabel">{optLabel}</td>
                         {taskAttrCols.map((a) => <td key={a} data-label={a}>{isNone || alt[a] === "" ? "—" : String(alt[a] ?? "")}</td>)}
                         <td className="rs-cbc-choose">
@@ -2173,7 +2175,7 @@ function DesignTasks(p: QRProps) {
                             <input type="radio" name={`${p.q.id}_${t}`} aria-label={`Choose ${optLabel}`}
                               data-testid={`cbc-choose-${t}-${altKey}`}
                               checked={isChosen}
-                              onChange={() => p.onChange({ ...vals, [t]: altKey })} />
+                              onChange={() => { const next: Record<string, unknown> = { ...vals, [t]: altKey }; if (!fixedAlt?.specify) delete next[fixedOtherKey(t)]; p.onChange(next); }} />
                             <span className="rs-mcap" aria-hidden="true">Choose</span>
                           </label>
                         </td>
@@ -2183,6 +2185,21 @@ function DesignTasks(p: QRProps) {
                 </tbody>
               </table>
             </div>
+            {!isMaxdiff && (() => {
+              /* the text box of a fixed "specify" alternative, shown once it is the choice: the respondent's own words, kept as text */
+              const chosenRow = alts.find((a) => vals[t] != null && String(a.alt) === String(vals[t]));
+              const fx = chosenRow ? fixedAlternativeOfRow(design.config, chosenRow) : null;
+              if (!fx?.specify) return null;
+              return (
+                <label className="rs-cbc-other" style={{ display: "block", marginTop: 10 }}>
+                  <span style={{ display: "block", marginBottom: 4 }}>{fx.label} — please specify</span>
+                  <input type="text" className="rs-input" maxLength={300} data-testid={`cbc-other-${t}`} disabled={!!p.q.settings.readOnly}
+                    aria-label={`${fx.label} — please specify`}
+                    value={String(vals[fixedOtherKey(t)] ?? "")}
+                    onChange={(e) => p.onChange({ ...vals, [fixedOtherKey(t)]: e.target.value })} />
+                </label>
+              );
+            })()}
             {!isMaxdiff && <DualResponseFollowUp def={p.def} q={p.q} task={t} value={vals} onChange={p.onChange} readOnly={!!p.q.settings.readOnly} />}
             {isMaxdiff && mdOptOuts.length > 0 && (
               /*

@@ -1,3 +1,4 @@
+import { fixedAlternativesOf } from "./conjointFixed.js";
 import { maxdiffOptOutsOf, MAXDIFF_OPT_OUT_MEANING } from "./maxdiffOptOut.js";
 import { GAMIFICATION_VARIABLES } from "./gamification.js";
 import { IAT_VARIABLES } from "./iatScore.js";
@@ -503,6 +504,12 @@ export function questionVariables(
             // conjoint audit 2026-10-17: what this respondent saw, top to bottom — the position randomisation, recorded
             push({ name: `${q.variableName}_T${t}_ORDER`, label: `${q.code} — task ${t} shown order (design alternatives, top to bottom)`, dataType: "text",
               notes: "Design alternative numbers in the order this respondent saw them, joined by '|' (None last). Use it to test position effects; the stacked choice export has the same as a `position` column." });
+            /* 2026-11-10: fixed alternatives — which alternative numbers they are, and the typed text of a "specify" one */
+            const fixedAlts = fixedAlternativesOf(design?.config);
+            if (fixedAlts.some((f) => f.specify)) {
+              push({ name: `${q.variableName}_T${t}_OTHER`, label: `${q.code} — task ${t}: what the respondent typed for “${fixedAlts.find((f) => f.specify)!.label}”`, dataType: "text",
+                notes: "The respondent's own words for a fixed “specify” alternative. Text only: it is not an attribute level and is not in the choice model." });
+            }
             /* F4 2026-10-22: dual-response None — the follow-up, one column per task */
             if ((design?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true) {
               push({ name: `${q.variableName}_T${t}_BUY`, label: `${q.code} — task ${t}: would buy the chosen option`, dataType: "numeric",

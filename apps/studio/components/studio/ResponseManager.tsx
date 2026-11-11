@@ -476,7 +476,16 @@ function Cell({ rec, column, def, disabled, surveyDbId, onSaved, onError }: {
     setEditing(true);
   };
 
+  /* 2026-11-11: one save per edit. Enter saves; saving disables the field, which blurs it, and blur saves too — the
+     second save went out with the revision the first had just replaced and came back as a conflict, so a cell that
+     HAD been saved was reported as refused. */
+  const committing = React.useRef(false);
   const commit = async () => {
+    if (!target || committing.current) return;
+    committing.current = true;
+    try { await commitOnce(); } finally { committing.current = false; }
+  };
+  const commitOnce = async () => {
     if (!target) return;
     const before = target.rowCode
       ? (rec.answers[target.q.id] as Record<string, unknown> | undefined)?.[target.rowCode]

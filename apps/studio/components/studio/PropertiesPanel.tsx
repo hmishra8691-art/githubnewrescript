@@ -1198,13 +1198,49 @@ function ListLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
  * save" was the most common report. It has its own Settings tab now, always
  * reachable, and the same component is reused in the empty Properties state.
  */
+/* ------------------------------------------------------------ Survey Settings, in sections (2026-11-10) */
+type SettingsSectionId = "identity" | "access" | "quality" | "scoring" | "research";
+const SETTINGS_SECTIONS: { id: SettingsSectionId; title: string; desc: string }[] = [
+  { id: "identity", title: "Survey and link", desc: "The survey's title and code, and the address respondents open." },
+  { id: "access", title: "Who can take this survey", desc: "How respondents get in, whether they can take it again, and dictation for open-text answers." },
+  { id: "quality", title: "Response quality", desc: "The checks every finished response is scored with: strictness, rules, your own rules, telemetry and privacy." },
+  { id: "scoring", title: "Assessment and rewards", desc: "Marking the survey as a test or quiz, and points, badges and levels for respondents." },
+  { id: "research", title: "Research design", desc: "The objective, hypotheses, population and constructs the analysis framework, the findings and the report are built on. The copilot writes here too; what you type is what it reads." },
+];
+/** which sections were folded — kept while the page is open, so leaving Survey Settings and coming back does not reopen them */
+let rememberedSections: Record<SettingsSectionId, boolean> | null = null;
+
+function SettingsSection({ id, anchor, open, onToggle, children }: { id: SettingsSectionId; anchor?: string; open: boolean; onToggle(id: SettingsSectionId): void; children: React.ReactNode }) {
+  const meta = SETTINGS_SECTIONS.find((x) => x.id === id)!;
+  return (
+    <section className={`ss-sec${open ? " open" : ""}`} id={`ss-${id}`} data-testid={`ss-sec-${id}`} data-open={open ? "1" : "0"}>
+      {anchor && <span id={anchor} className="ss-anchor" />}
+      <button type="button" className="ss-head" aria-expanded={open} aria-controls={`ss-body-${id}`} onClick={() => onToggle(id)} data-testid={`ss-head-${id}`}>
+        <span className="ss-caret" aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="ss-title"><strong>{meta.title}</strong><span className="ss-desc">{meta.desc}</span></span>
+      </button>
+      {/* folded, not unmounted: what was typed stays, and a folded section's fields can still be read */}
+      <div className="ss-body" id={`ss-body-${id}`} hidden={!open}>{children}</div>
+    </section>
+  );
+}
+
 export function SurveySettings() {
   const s = useStudio();
   const dep = s.def.deployment;
   const mode = dep.access.mode;
+  const [open, setOpen] = React.useState<Record<SettingsSectionId, boolean>>(() => rememberedSections ?? { identity: true, access: true, quality: true, scoring: true, research: true });
+  const remember = (next: Record<SettingsSectionId, boolean>) => { rememberedSections = next; return next; };
+  const toggle = (id: SettingsSectionId) => setOpen((o) => remember({ ...o, [id]: !o[id] }));
 
   return (
-    <div data-testid="survey-settings">
+    <div data-testid="survey-settings" className="ss">
+      {/* 2026-11-10: the page in five named sections — what each is for, a way to jump to it, and each can be folded away.
+          It used to be one unbroken run from the title to the research design. */}
+      <nav className="ss-nav" aria-label="Survey settings sections" data-testid="ss-nav">
+        {SETTINGS_SECTIONS.map((x) => <button key={x.id} type="button" className="btn tiny" onClick={() => { setOpen((o) => remember({ ...o, [x.id]: true })); requestAnimationFrame(() => document.getElementById(`ss-${x.id}`)?.scrollIntoView({ block: "start", behavior: "smooth" })); }}>{x.title}</button>)}
+      </nav>
+      <SettingsSection id="identity" open={open.identity} onToggle={toggle}>
       {/*
         * Sept 21 follow-up: these used to be single fields stacked full
         * width in a 620px column. `.settings-grid` (design-system.css)
@@ -1221,7 +1257,7 @@ export function SurveySettings() {
             onChange={(e) => s.update((d) => { d.meta.code = e.target.value; })} /></label>
       </div>
 
-      <h3 className="sec">Survey URL</h3>
+      <h4 className="ss-sub">Survey URL</h4>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
         Must be unique across surveys — respondents get
         <span className="mono"> /s/{dep.clientSlug || "client"}/{dep.studySlug || "study-001"}</span>
@@ -1256,7 +1292,9 @@ export function SurveySettings() {
         </p>
       )}
 
-      <h3 className="sec">Who can take this survey</h3>
+      </SettingsSection>
+
+      <SettingsSection id="access" open={open.access} onToggle={toggle}>
       <div className="settings-grid">
         <label className="f"><span>Access mode</span>
           <select className="select" data-testid="access-mode" value={mode}
@@ -1313,20 +1351,24 @@ export function SurveySettings() {
         …and use our transcription service where the browser cannot (Firefox) — metered
       </label>
 
-      <QualitySettings />
+      </SettingsSection>
 
+      <SettingsSection id="quality" open={open.quality} onToggle={toggle}>
+      <QualitySettings />
+      </SettingsSection>
+
+      <SettingsSection id="scoring" open={open.scoring} onToggle={toggle}>
       {/* ASSESSMENT (K4 2026-10-25, ported 2026-10-29): one "this survey is a test or quiz" checkbox; marking, pass mark, results policy and report sections only once ticked */}
       <AssessmentSettingsCard />
       {/* S5a (GA-06/07): points, badges, levels */}
       <GamificationSettingsCard />
 
+      </SettingsSection>
+
       {/* the research design, editable by hand (Research Engine audit, Phase 1) — the Analysis tab reads it */}
-      <h3 className="sec" id="research-design">Research design</h3>
-      <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
-        The objective, hypotheses, population and constructs the analysis framework, the findings and the report are built on.
-        The copilot writes here too; what you type is what it reads.
-      </p>
+      <SettingsSection id="research" anchor="research-design" open={open.research} onToggle={toggle}>
       <ResearchDesignEditor />
+      </SettingsSection>
 
       <p className="muted" style={{ fontSize: 12.5 }}>
         Changes here autosave to your draft. They reach respondents only when you save a version

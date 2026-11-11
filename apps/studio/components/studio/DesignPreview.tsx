@@ -8,7 +8,7 @@ import React from "react";
  * generating, so what is shown is always what the generator produced.
  */
 type Row = Record<string, unknown>;
-const SYS = new Set(["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label", "run", "stage", "step", "items", "note", "item", "price", "price_index", "price_value", "required", "practice", "treatment"]);
+const SYS = new Set(["version", "task", "alt", "is_holdout", "none_option", "fixed_option", "position", "item_index", "item_label", "run", "stage", "step", "items", "note", "item", "price", "price_index", "price_value", "required", "practice", "treatment"]);
 
 export function DesignPreview({ kind, file, tasks = 2 }: { kind: string; file: { columns: string[]; rows: Row[]; summary?: Record<string, unknown> }; tasks?: number }) {
   const v1 = file.rows.filter((r) => r.version === undefined || Number(r.version) === 1);
@@ -42,7 +42,7 @@ function ChoiceTasks({ rows, columns, tasks, rating }: { rows: Row[]; columns: s
           <div key={t} className="dp-task" data-testid="design-task">
             <div className="dp-task-head">{rating ? `Profile ${t}` : `Task ${t}`}{alts.some((a) => Number(a.is_holdout) === 1) ? " · holdout" : ""}</div>
             <table className="dp-cards">
-              <thead><tr><th />{shown.map((a, i) => <th key={i}>{rating ? "Rate 0–10" : `Option ${i + 1}`}</th>)}{none && <th>None</th>}</tr></thead>
+              <thead><tr><th />{shown.map((a, i) => <th key={i}>{rating ? "Rate 0–10" : Number(a.fixed_option) >= 1 ? `Fixed ${Number(a.fixed_option)}` : `Option ${i + 1}`}</th>)}{none && <th>None</th>}</tr></thead>
               <tbody>{taskAttrs.map((a) => <tr key={a}><th>{a}</th>{shown.map((x, i) => <td key={i}>{String(x[a] ?? "")}</td>)}{none && <td className="dp-none">{a === taskAttrs[0] ? "I would choose none of these" : ""}</td>}</tr>)}</tbody>
             </table>
           </div>

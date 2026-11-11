@@ -285,3 +285,5 @@ export type { ProgrammingAuditRow, AuditSeverity } from "./programmingAudit.js";
 export * from "./methodGuides.js";
 export * from "./maxdiffOptOut.js";
 export * from "./missingAsset.js";
+export * from "./conjointFixed.js";
+export * from "./designBrief.js";

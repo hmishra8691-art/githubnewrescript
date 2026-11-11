@@ -25,6 +25,7 @@
  * Deterministic given (config, seed): all randomness flows through
  * mulberry32 / subSeed from @rescript/engine.
  */
+import { fixedAlternativesOf, MAX_FIXED_ALTERNATIVES } from "@rescript/engine";
 import type { DesignGeneratorPlugin } from "@rescript/schema";
 import { mulberry32, subSeed } from "@rescript/engine";
 import { twoWayBalance } from "./diagnostics.js";
@@ -121,6 +122,12 @@ export interface ConjointConfig {
   /** Text of the None alternative shown to respondents. Default "None of these". */
   noneLabel?: string;
   /**
+   * FIXED (CUSTOM) ALTERNATIVES (2026-11-10; @rescript/engine conjointFixed.ts): alternatives shown in every task that
+   * are not designed — "My current product", "Competitor X | Brand: X; Price: $12", "Another product [specify]".
+   * Added after the design is generated and measured; never part of the balance or efficiency figures.
+   */
+  fixedAlternatives?: (string | { label: string; levels?: Record<string, string>; specify?: boolean })[];
+  /**
    * DUAL-RESPONSE NONE (F4 2026-10-22): no None alternative inside the task — the respondent makes a
    * forced choice among the concepts, then answers "would you actually buy it?" (stored per task as
    * `<task>_buy` = "yes" | "no"). Replaces `noneOption`; the rows are the forced-choice tasks.
@@ -145,7 +152,7 @@ export interface ConjointConfig {
 }
 
 /** The design-file columns a CBC design writes besides its attributes — an attribute may not be named after one. */
-export const CONJOINT_RESERVED_COLUMNS = ["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label"] as const;
+export const CONJOINT_RESERVED_COLUMNS = ["version", "task", "alt", "is_holdout", "none_option", "fixed_option", "position", "item_index", "item_label"] as const;
 
 const MAX_REDRAWS = 30;
 
@@ -360,6 +367,7 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
     { name: "dualResponsePrompt", label: "Dual-response question text", type: "text", help: "Blank = “Would you actually buy the option you chose?”" },
     { name: "brandAttribute", label: "Brand attribute (alternative-specific / labelled designs)", type: "text", help: "The attribute whose level decides which other attributes a concept carries, e.g. Brand. Blank = an attribute named Brand, else the first." },
     { name: "labelled", label: "Labelled design (each brand once per task)", type: "boolean", default: false, help: "Alternatives per task must equal the number of brand levels; option k is always brand k." },
+    { name: "fixedAlternatives", label: "Fixed alternatives (shown in every task)", type: "list", help: "One per line — an alternative that is the same in every task and is not designed: “My current product”, “Competitor X | Brand: X; Price: $12” (its levels), “Another product [specify]” (a text box when chosen). Shown after the designed concepts, before None; each gets its own constant in the analysis. Not the None option." },
     { name: "alternativeSpecific", label: "Brand-specific attributes", type: "list", help: "One per line: Attribute: BrandLevel, BrandLevel — the attribute applies only to concepts of those brands (shown as — elsewhere)." },
   ],
 
@@ -480,6 +488,26 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
     /* F4 2026-10-22: dual-response None and alternative-specific designs (absent → nothing checked) */
     if (config.dualResponseNone === true && c.noneOption) {
       errors.push("Dual-response None replaces the None alternative inside the task — turn off “Include a None option”, or turn off dual-response.");
+    }
+    /* 2026-11-10: fixed alternatives — real labels, real levels, and not with dual-response (whose follow-up asks about a designed concept) */
+    {
+      const fixed = fixedAlternativesOf(config);
+      const raw = Array.isArray(config.fixedAlternatives) ? config.fixedAlternatives.filter((x) => (typeof x === "string" ? x.trim() : x)) : [];
+      if (raw.length !== fixed.length) errors.push("Each fixed alternative needs a label (one per line: Label, or Label | Attribute: Level; Attribute: Level).");
+      if (fixed.length > MAX_FIXED_ALTERNATIVES) errors.push(`At most ${MAX_FIXED_ALTERNATIVES} fixed alternatives (got ${fixed.length}) — more than that and the designed concepts are crowded out of the task.`);
+      const seenLabels = new Set<string>();
+      for (const f of fixed) {
+        const k = f.label.toLowerCase();
+        if (seenLabels.has(k)) errors.push(`Two fixed alternatives are called “${f.label}” — each needs its own label.`);
+        seenLabels.add(k);
+        for (const [a, l] of Object.entries(f.levels)) {
+          const attr = c.attributes.find((x) => x.name.toLowerCase() === a.toLowerCase());
+          if (!attr) errors.push(`Fixed alternative “${f.label}”: “${a}” is not an attribute of this design.`);
+          else if (!attr.levels.some((x) => String(x).toLowerCase() === l.toLowerCase())) errors.push(`Fixed alternative “${f.label}”: “${l}” is not a level of ${attr.name} (${attr.levels.join(", ")}). A fixed alternative can only carry levels the design estimates.`);
+        }
+      }
+      if (fixed.length && config.dualResponseNone === true) errors.push("Fixed alternatives cannot be combined with dual-response None: its follow-up asks whether the respondent would buy the designed concept they chose. Use the None option inside the task instead.");
+      if (fixed.filter((f) => f.specify).length > 1) errors.push("Only one fixed alternative can ask the respondent to specify — there is one text box per task.");
     }
     if (errors.length === 0) errors.push(...validateAltSpecific({ ...config, attributes: c.attributes, alternativesPerTask: c.alternativesPerTask }));
     if (errors.length === 0 && isAlternativeSpecific(config) && c.prohibitions.length) {
@@ -702,7 +730,7 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       );
     }
 
-    return {
+    return withFixedAlternatives({
       columns,
       rows,
       /*
@@ -737,9 +765,35 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
         noneOption: c.noneOption,
         ...(config.dualResponseNone === true ? { dualResponseNone: true } : {}),
       },
-    };
+    }, config, c.attributes);
   },
 };
+
+/**
+ * FIXED ALTERNATIVES ARE ADDED AFTER THE DESIGN (2026-11-10). The design — its balance, overlap and efficiency — is
+ * generated and measured on the designed concepts alone; this puts each fixed alternative into every task after them
+ * (and renumbers the None row to stay last). A configuration without fixed alternatives is returned untouched, so
+ * every existing design regenerates byte-identically.
+ */
+function withFixedAlternatives<T extends { columns: string[]; rows: Record<string, unknown>[]; summary?: Record<string, unknown> }>(out: T, config: ConjointConfig, attributes: ConjointAttribute[]): T {
+  const fixed = fixedAlternativesOf(config);
+  if (!fixed.length) return out;
+  const canon = (f: { levels: Record<string, string> }) => Object.fromEntries(attributes.map((a) => {
+    const given = Object.entries(f.levels).find(([k]) => k.toLowerCase() === a.name.toLowerCase())?.[1];
+    return [a.name, given == null ? "" : (a.levels.find((l) => String(l).toLowerCase() === given.toLowerCase()) ?? "")];
+  }));
+  const rows: Record<string, unknown>[] = [];
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const r of out.rows) { const k = `${r.version}\u0000${r.task}`; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(r); }
+  for (const g of groups.values()) {
+    const designed = g.filter((r) => Number(r.none_option) !== 1), none = g.filter((r) => Number(r.none_option) === 1);
+    let alt = Math.max(0, ...designed.map((r) => Number(r.alt) || 0));
+    for (const r of designed) rows.push({ ...r, fixed_option: 0 });
+    fixed.forEach((f, i) => rows.push({ version: g[0].version, task: g[0].task, alt: ++alt, is_holdout: g[0].is_holdout ?? 0, ...canon(f), none_option: 0, fixed_option: i + 1 }));
+    for (const r of none) rows.push({ ...r, alt: ++alt, fixed_option: 0 });
+  }
+  return { ...out, columns: [...out.columns, "fixed_option"], rows, summary: { ...(out.summary ?? {}), fixedAlternatives: fixed.map((f) => ({ label: f.label, levels: f.levels, specify: f.specify })), fixedNote: "Fixed alternatives are shown in every task after the designed concepts. They are not part of the experimental design: the balance and efficiency figures above are those of the designed concepts." } };
+}
 
 /** the legal alternative-specific concepts (for validation) */
 function generateAltSpecificLegal(c: NormalizedConjoint, config: ConjointConfig, brand: string): Record<string, string>[] | null {
@@ -805,7 +859,7 @@ function generateAlternativeSpecific(c: NormalizedConjoint, config: ConjointConf
   const diagnostics = twoWayBalance(c.attributes, estimationProfiles, possible);
   const efficiency = measureConjointDesign(c.attributes, rows);
   const warnings = [...diagnostics.warnings];
-  return {
+  return withFixedAlternatives({
     columns, rows,
     summary: {
       method: c.method, levelFrequencies, balanceScores, diagnostics, efficiency,
@@ -820,5 +874,5 @@ function generateAlternativeSpecific(c: NormalizedConjoint, config: ConjointConf
       versions: c.versions, tasksPerVersion: c.tasks, holdoutTasksPerVersion: c.holdoutTasks, alternativesPerTask: c.alternativesPerTask, noneOption: c.noneOption,
       ...(config.dualResponseNone === true ? { dualResponseNone: true } : {}),
     },
-  };
+  }, config, c.attributes);
 }

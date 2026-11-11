@@ -1,3 +1,4 @@
+import { fixedAlternativeOfRow, fixedAlternativesOf, fixedOtherKey } from "./conjointFixed.js";
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { designVersionFor, shuffleAlternatives } from "./designVersion.js";
 
@@ -26,7 +27,7 @@ import { designVersionFor, shuffleAlternatives } from "./designVersion.js";
  */
 
 /** design columns that are not attributes */
-const NON_ATTRIBUTE = new Set(["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label"]);
+const NON_ATTRIBUTE = new Set(["version", "task", "alt", "is_holdout", "none_option", "fixed_option", "position", "item_index", "item_label"]);
 
 export interface StackedChoiceState {
   sessionId?: string;
@@ -62,7 +63,8 @@ export function cbcAttributeLevels(def: SurveyDefinition, q: Question): { name: 
   const cols = (d?.file?.columns ?? []).filter((c) => !NON_ATTRIBUTE.has(c));
   const configured = ((d?.config as { attributes?: { name: string; levels: string[] }[] } | undefined)?.attributes ?? []);
   return cols.map((name) => {
-    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1).map((r) => String(r[name] ?? "")).filter((l) => l !== ""))];
+    /* a fixed alternative's levels are levels of the attribute already; a typo there must not invent one */
+    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1 && !(Number(r.fixed_option) >= 1)).map((r) => String(r[name] ?? "")).filter((l) => l !== ""))];
     const cfg = configured.find((a) => a.name === name)?.levels?.map(String);
     // the configured order when it covers every level the file shows; otherwise the file's own
     const levels = cfg && seen.every((l) => cfg.includes(l)) ? cfg : seen;
@@ -81,11 +83,14 @@ export function stackedChoiceData(def: SurveyDefinition, states: StackedChoiceSt
   }
   /* F4 2026-10-22: a dual-response design adds the follow-up, on every row of its task (1 = would buy the chosen option) */
   const dualQ = new Set(questions.filter((q) => (def.designs.find((x) => x.id === q.settings?.designRef)?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true).map((q) => q.id));
+  const fixedQ = new Set(questions.filter((q) => fixedAlternativesOf(def.designs.find((x) => x.id === q.settings?.designRef)?.config).length > 0).map((q) => q.id));
   const columns = [
     "respondent", "session_id", "question", "version", "task", "is_holdout",
     "alt", "concept_id", "position", "none", "chosen",
     ...attrNames, ...attrNames.map((a) => `${a}_code`),
     ...(dualQ.size ? ["buy"] : []),
+    /* 2026-11-10: fixed alternatives — which one a row is (0 for a designed concept), its label, and the typed text */
+    ...(fixedQ.size ? ["fixed", "fixed_label", "other_text"] : []),
   ];
   const rows: Record<string, unknown>[] = [];
   let skippedNoSeed = 0;
@@ -130,6 +135,11 @@ export function stackedChoiceData(def: SurveyDefinition, states: StackedChoiceSt
             row[a] = level;
             /* a not-applicable cell (alternative-specific design) is "" and code 0, like the None row */
             row[`${a}_code`] = none || !spec || level === "" ? 0 : spec.levels.indexOf(level) + 1;
+          }
+          if (fixedQ.size) {
+            const fx = fixedAlternativeOfRow(design.config, r);
+            row.fixed = fx ? fx.index : 0; row.fixed_label = fx ? fx.label : "";
+            row.other_text = fx?.specify && String(choice) === alt ? String((ans as Record<string, unknown>)[fixedOtherKey(t)] ?? "") : "";
           }
           if (dualQ.size) { const b = (ans as Record<string, unknown>)[`${t}_buy`]; row.buy = dualQ.has(q.id) ? (b === "yes" ? 1 : b === "no" ? 0 : "") : ""; }
           rows.push(row);

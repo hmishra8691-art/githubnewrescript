@@ -1,3 +1,4 @@
+import { fixedAlternativeOfRow, fixedOtherKey, isFixedOtherKey } from "./conjointFixed.js";
 import { maxdiffTaskOptOut } from "./maxdiffOptOut.js";
 import { uiText } from "./localization.js";
 import type { Question, ValidationRule, SurveyDefinition } from "@rescript/schema";
@@ -832,8 +833,15 @@ export function validateQuestion(
       /* F4 2026-10-22: a dual-response design stores "would you buy it?" beside the choice, under <task>_buy */
       const dual = (design?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true;
       const bad = Object.entries(value as Record<string, unknown>).filter(([t, v]) =>
-        v != null && v !== "" && !(dual && isDualKey(t)) && !mine.some((r) => String(r.task) === t && String(r.alt) === String(v)));
+        v != null && v !== "" && !(dual && isDualKey(t)) && !isFixedOtherKey(t) && !mine.some((r) => String(r.task) === t && String(r.alt) === String(v)));
       if (bad.length) push(`Task ${bad[0][0]}: that choice is not one of the options shown.`);
+      /* 2026-11-10: a fixed alternative with "specify" is not an answer until the respondent says what it is */
+      for (const [t, v] of Object.entries(value as Record<string, unknown>)) {
+        if (v == null || v === "" || isFixedOtherKey(t) || (dual && isDualKey(t))) continue;
+        const row = mine.find((r) => String(r.task) === t && String(r.alt) === String(v));
+        const fx = row ? fixedAlternativeOfRow(design?.config, row) : null;
+        if (fx?.specify && !String((value as Record<string, unknown>)[fixedOtherKey(t)] ?? "").trim()) { push(`Task ${t}: please say what “${fx.label}” is.`); break; }
+      }
       if (dual) {
         const badBuy = Object.entries(value as Record<string, unknown>).filter(([t, v]) => isDualKey(t) && v != null && v !== "" && v !== "yes" && v !== "no");
         if (badBuy.length) push(`Task ${badBuy[0][0].slice(0, -DUAL_SUFFIX.length)}: please answer whether you would buy it with yes or no.`);

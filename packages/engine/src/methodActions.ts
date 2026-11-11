@@ -1,3 +1,4 @@
+import { fixedAlternativesOf, parseFixedAlternatives } from "./conjointFixed.js";
 import { MAXDIFF_OPT_OUTS, MAXDIFF_OPT_OUT_KEYS, maxdiffOptOutsOf, type MaxDiffOptOut } from "./maxdiffOptOut.js";
 import type { DesignReference, Question, SurveyDefinition } from "@rescript/schema";
 import { designGeneratorRegistry } from "@rescript/schema";
@@ -92,6 +93,8 @@ export interface ConjointSpec {
   levels?: Record<string, string[]>;
   alternatives?: number; tasks?: number | null; versions?: number; holdouts?: number;
   none?: boolean; noneLabel?: string | null;
+  /** fixed alternatives shown in every task (conjointFixed.ts): "Label", "Label | Attr: Level", "Label [specify]"; [] removes them */
+  fixedAlternatives?: (string | { label: string; levels?: Record<string, string>; specify?: boolean })[];
   prohibitions?: ConjointProhibitionInput[]; addProhibitions?: ConjointProhibitionInput[]; removeProhibitions?: ConjointProhibitionInput[];
   design?: "efficient" | "balanced";
   /* menu-based */
@@ -464,6 +467,13 @@ function conjointSpecOf(o: Record<string, unknown>, partial: boolean): ConjointS
   else if (typeof none === "string" && none.trim() && !/dual/i.test(none)) { spec.none = true; spec.noneLabel = none.trim().slice(0, 200); }
   if (o.noneLabel === null || o.noneLabel === "") spec.noneLabel = null;
   else if (str(o.noneLabel)) { spec.noneLabel = str(o.noneLabel, 200); if (spec.none === undefined && !partial) spec.none = true; }
+  const rawFixed = o.fixedAlternatives ?? o.fixed ?? o.customAlternatives ?? o.statusQuo;
+  if (rawFixed !== undefined) {
+    const listed = rawFixed === null || rawFixed === false ? [] : Array.isArray(rawFixed) ? rawFixed : [rawFixed];
+    const parsed = parseFixedAlternatives(listed);
+    if (parsed.length !== listed.length) return "fixedAlternatives is a list of labels (“My current product”), labels with levels (“Competitor X | Brand: X; Price: $12”) or labels with [specify] — each needs a label";
+    spec.fixedAlternatives = parsed.map((f) => ({ label: f.label, ...(Object.keys(f.levels).length ? { levels: f.levels } : {}), ...(f.specify ? { specify: true } : {}) }));
+  }
   for (const k of ["prohibitions", "addProhibitions", "removeProhibitions"] as const) { const p = prohibitionsOf(o[k], k); if (typeof p === "string") return p; if (p) spec[k] = p; }
   if (o.design !== undefined || o.designMethod !== undefined) {
     const d = str(o.design ?? o.designMethod)?.toLowerCase().replace(/[\s-]+/g, "_");
@@ -648,7 +658,7 @@ const LABEL: Record<string, string> = { experiment: "experimental", maxdiff: "Ma
 /** the config keys whose change changes the generated rows (others — labels, instructions, the None text — are read at render time) */
 const GENERATION_KEYS: Record<string, string[]> = {
   maxdiff: ["items", "itemsPerTask", "tasks", "versions", "appearancesPerItem", "itemsPerVersion", "balance", "prohibitedPairs", "practiceTask"],
-  conjoint: ["attributes", "prohibitions", "tasks", "alternativesPerTask", "noneOption", "holdoutTasks", "versions", "method", "dualResponseNone", "brandAttribute", "labelled", "alternativeSpecific", "attributesPerTask"],
+  conjoint: ["attributes", "prohibitions", "tasks", "alternativesPerTask", "noneOption", "fixedAlternatives", "holdoutTasks", "versions", "method", "dualResponseNone", "brandAttribute", "labelled", "alternativeSpecific", "attributesPerTask"],
   menu: ["items", "requiredItems", "tasks", "versions", "noneOption", "exclusiveGroups"],
   acbc: ["attributes", "prohibitions", "screeningTasks", "conceptsPerScreen", "maxAttributesVaried", "unacceptableThreshold", "mustHaveThreshold", "tournamentAlternatives", "minTournamentConcepts", "priceBase", "priceIncrements", "priceVariation", "priceRound"],
   cva: ["attributes", "prohibitions", "mode", "profiles", "versions", "holdouts"],
@@ -955,6 +965,7 @@ function conjointConfig(method: ConjointMethodName, s: ConjointSpec, prev?: Cfg)
   if (s.holdouts !== undefined) c.holdoutTasks = s.holdouts;
   if (s.none !== undefined) c.noneOption = s.none;
   if (s.noneLabel !== undefined) { if (s.noneLabel === null) delete c.noneLabel; else c.noneLabel = s.noneLabel; }
+  if (s.fixedAlternatives !== undefined) { if (s.fixedAlternatives.length) c.fixedAlternatives = s.fixedAlternatives; else delete c.fixedAlternatives; }
   if (s.design) c.method = s.design; else if (c.method === undefined && !prev) c.method = "efficient";
   if (s.attributesPerTask !== undefined) { if (s.attributesPerTask === null) delete c.attributesPerTask; else c.attributesPerTask = s.attributesPerTask; }
   if (typeof c.attributesPerTask === "number" && c.attributesPerTask >= attrs.length) { delete c.attributesPerTask; assumed.push(`full profiles (every one of the ${attrs.length} attributes is shown in each task)`); }
@@ -1006,7 +1017,7 @@ export function conjointDesignWords(kind: string, config: Cfg, file: DesignFile)
   const counts = Object.values(freq).flatMap((m) => Object.values(m));
   const parts = [
     `${attrs.length} attributes (${attrs.map((a) => `${a.name} ${a.levels.length}`).join(", ")} levels)`,
-    `${s.alternativesPerTask ?? config.alternativesPerTask} alternatives${s.noneOption ? " + None" : ""} per task, ${s.tasksPerVersion ?? config.tasks} tasks${s.holdoutTasksPerVersion ? ` + ${s.holdoutTasksPerVersion} holdout` : ""}, ${plural(Number(s.versions ?? 1), "version")}, ${s.method === "efficient" ? "efficient (D-efficiency swapping)" : "level-balanced"}`,
+    `${s.alternativesPerTask ?? config.alternativesPerTask} alternatives${fixedAlternativesOf(config).length ? ` + ${fixedAlternativesOf(config).map((f) => `the fixed alternative “${f.label}”${f.specify ? " (with a text box)" : ""}`).join(" + ")} (shown in every task, not part of the design)` : ""}${s.noneOption ? " + None" : ""} per task, ${s.tasksPerVersion ?? config.tasks} tasks${s.holdoutTasksPerVersion ? ` + ${s.holdoutTasksPerVersion} holdout` : ""}, ${plural(Number(s.versions ?? 1), "version")}, ${s.method === "efficient" ? "efficient (D-efficiency swapping)" : "level-balanced"}`,
     e ? (typeof e.parameters === "number" && e.minVersionDegreesOfFreedom < e.parameters
       ? `D-efficiency ${pct(e.pooled)} pooled (one version alone is too short to identify the model)`
       : `D-efficiency ${pct(e.perVersion?.mean)} per version (worst ${pct(e.perVersion?.min)}), ${pct(e.pooled)} pooled`) : "",
