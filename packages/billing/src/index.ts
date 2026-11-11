@@ -23,3 +23,4 @@ export * from "./store-memory.js";
 export * from "./store-supabase.js";
 /* prompt caching measured from the usage events (2026-10-18) */
 export * from "./cacheReport.js";
+export * from "./commercial.js";
