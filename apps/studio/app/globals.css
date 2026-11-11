@@ -10,7 +10,7 @@
    "ALL (AND)" dropdown, which is the first thing you see and the last thing
    that makes sense. Everything must survive a ~380px panel, so controls
    shrink (min-width: 0) instead of overflowing. */
-.cond-group { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin: 6px 0; background: rgba(74, 58, 255,.04); }
+.cond-group { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin: 6px 0; background: rgba(23, 20, 63,.04); }
 .cond-group.op-or { border-left-color: var(--amber); background: rgba(138, 90, 0,.04); }
 .cond-group.op-not { border-left-color: var(--red); background: rgba(200, 50, 31,.04); }
 .cond-group.nested { margin: 4px 0 4px 6px; }
@@ -65,7 +65,7 @@
 
 .mb-bracket {
   border: 1px solid var(--border); border-left: 3px solid var(--accent2);
-  border-radius: 8px; background: rgba(74, 58, 255,.035); margin: 3px 0;
+  border-radius: 8px; background: rgba(23, 20, 63,.035); margin: 3px 0;
 }
 .mb-bracket-head {
   display: flex; align-items: center; gap: 7px; padding: 5px 8px;
@@ -235,7 +235,7 @@ textarea.xe-input:focus { border-color: var(--accent); }
 /* a group is a bracket, drawn as one */
 .lb-group {
   border: 1px solid var(--border); border-left: 3px solid var(--accent2);
-  border-radius: 8px; margin: 4px 0; background: rgba(74, 58, 255,.035);
+  border-radius: 8px; margin: 4px 0; background: rgba(23, 20, 63,.035);
 }
 .lb-group.op-or { border-left-color: var(--amber); background: rgba(138, 90, 0,.04); }
 .lb-group.op-not { border-left-color: var(--red); background: rgba(200, 50, 31,.04); }
@@ -266,8 +266,8 @@ textarea.xe-input:focus { border-color: var(--accent); }
 
 /* a group that has just been created gets pointed at, once */
 @keyframes lb-pulse {
-  0%   { box-shadow: 0 0 0 3px rgba(74, 58, 255,.35); }
-  100% { box-shadow: 0 0 0 3px rgba(74, 58, 255,0); }
+  0%   { box-shadow: 0 0 0 3px rgba(23, 20, 63,.35); }
+  100% { box-shadow: 0 0 0 3px rgba(23, 20, 63,0); }
 }
 .lb-group.just-created { animation: lb-pulse 1.6s ease-out; }
 
@@ -435,7 +435,7 @@ body.flow-dragging input, body.flow-dragging select, body.flow-dragging textarea
 .flow-dropzone .fdz-line {
   flex: 1; height: 2px; border-radius: 2px; background: transparent; transition: background .1s;
 }
-.flow-dropzone.valid .fdz-line { background: rgba(74, 58, 255, .28); }
+.flow-dropzone.valid .fdz-line { background: rgba(23, 20, 63, .28); }
 .flow-dropzone.invalid .fdz-line { background: rgba(200, 50, 31, .16); }
 /* Every zone takes its full height the moment a drag begins, not when it is
    hovered. Growing on hover reflowed the page under the cursor, so the target
@@ -656,7 +656,7 @@ textarea.compact-value.mono { font-family: var(--mono); font-size: 13.5px; }
    design-system.css; this rule used to re-declare a narrower max-width and win
    by source order, which is why the page had margins instead of content */
 .dash h1 { display: flex; align-items: center; gap: 12px; }
-.logo-mark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--c-violet)); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; color: white; }
+.logo-mark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--c-primary-600)); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; color: white; }
 
 .modal-back { position: fixed; inset: 0; background: rgba(21, 19, 46,.35); display: flex; align-items: center; justify-content: center; z-index: 90; }
 .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 520px; max-width: 92vw; max-height: 86vh; overflow-y: auto; box-shadow: 0 20px 48px rgba(21, 19, 46,.18); }
@@ -1467,7 +1467,7 @@ p.qs-help { margin: -2px 0 10px; }
 }
 .auth-card.wide { max-width: 560px; }
 .auth-brand { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--c-text-3); font-weight: 700; display: flex; align-items: center; gap: 10px; }
-.auth-brand::before { content: "R"; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--grad-brand); color: #fff; font-size: 15px; font-weight: 800; letter-spacing: 0; box-shadow: 0 4px 12px -4px rgba(74, 58, 255,.6); }
+.auth-brand::before { content: "R"; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--grad-brand); color: #fff; font-size: 15px; font-weight: 800; letter-spacing: 0; box-shadow: 0 4px 12px -4px rgba(23, 20, 63,.6); }
 .auth-title { font-size: 26px; font-weight: 750; letter-spacing: -.02em; margin: 16px 0 6px; }
 .auth-sub { color: var(--c-text-3); font-size: 15px; margin: 0 0 22px; line-height: 1.5; }
 .auth-field { margin-bottom: 16px; }
@@ -2198,7 +2198,7 @@ p.qs-help { margin: -2px 0 10px; }
 
 .lc-outline { position: absolute; pointer-events: none; border-radius: 7px; z-index: 4; }
 .lc-outline.hover { outline: 1.5px dashed var(--c-border-strong); outline-offset: 2px; }
-.lc-outline.selected { outline: 2px solid var(--c-primary); outline-offset: 2px; background: rgba(74, 58, 255, .05); }
+.lc-outline.selected { outline: 2px solid var(--c-primary); outline-offset: 2px; background: rgba(23, 20, 63, .05); }
 .lc-tag {
   position: absolute; top: -20px; left: -2px; font-size: 10.5px; font-weight: 700;
   letter-spacing: .06em; text-transform: uppercase; color: #fff; background: var(--c-primary);
@@ -2711,7 +2711,7 @@ p.qs-help { margin: -2px 0 10px; }
 .st-timeline { max-height: 78vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
 .st-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 6px 0 2px; }
 .st-thumb { border: 1px solid var(--border); border-radius: 8px; padding: 5px; cursor: pointer; background: var(--c-surface); }
-.st-thumb.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(74, 58, 255,.15); }
+.st-thumb.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(23, 20, 63,.15); }
 .st-thumb-meta { font-size: 11px; margin-top: 3px; }
 .st-thumb-title { font-size: 12px; line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .st-bad { color: var(--c-error-fg); font-weight: 600; }
@@ -3038,7 +3038,7 @@ textarea.code-fallback { font-family: var(--mono); font-size: 13px; line-height:
 .ax-tv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 14px; }
 .ax-tv-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; transition: box-shadow .12s, border-color .12s; }
 .ax-tv-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.06); }
-.ax-tv-card.on { border-color: var(--accent, var(--c-primary-500)); box-shadow: 0 0 0 2px var(--c-primary-100, rgba(74, 58, 255,.18)); }
+.ax-tv-card.on { border-color: var(--accent, var(--c-primary-500)); box-shadow: 0 0 0 2px var(--c-primary-100, rgba(23, 20, 63,.18)); }
 .ax-tv-card-head { appearance: none; border: 0; background: transparent; padding: 0; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 8px; min-width: 0; font: inherit; color: inherit; }
 .ax-tv-card-head:focus-visible { outline: 2px solid var(--accent, var(--c-primary-500)); outline-offset: 3px; border-radius: 4px; }
 .ax-tv-card-name { flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

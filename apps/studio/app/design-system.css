@@ -9,9 +9,9 @@
    Palette (2026-11-11): the ResLens.ai website's, taken from its own token
    sheet (reslens-website app/globals.css) so the product and the site are one
    identity — warm paper canvas, near-white raised surfaces, ink-indigo text,
-   one electric "volt" accent. Statuses use the site's semantic greens and
-   ambers. No gradient backgrounds: the primary button is solid volt, and the
-   only gradient is the site's own volt→violet "spectrum" on the brand mark.
+   one deep ink-indigo accent (the site's band colour, #17143f — chosen
+   2026-11-11 over the brighter volt). Statuses use the site's semantic greens and
+   ambers. No gradient backgrounds: the primary button is solid.
    ========================================================================== */
 :root {
   /* ---- colour: surfaces (site: --ground, --paper, --mist, --mist-2, --line, --line-strong) */
@@ -27,9 +27,9 @@
   --c-text-3: #5b5973;         /* metadata */
   --c-text-4: #807e96;         /* placeholders */
   /* ---- colour: brand (site: --indigo "volt", --indigo-700, --indigo-50, --band-2, --violet) */
-  --c-primary: #4a3aff;        /* volt */
-  --c-primary-600: #3626cf;    /* hover; accent text on paper */
-  --c-primary-700: #211d57;    /* pressed; section headings */
+  --c-primary: #17143f;        /* the site's deep ink-indigo band: buttons, links, active states */
+  --c-primary-600: #211d57;    /* hover (site --band-2) */
+  --c-primary-700: #15132e;    /* pressed; section headings (ink) */
   --c-primary-100: #eceaff;
   --c-primary-50: #f4f3ff;     /* the lightest tint of volt */
   /* the second accent: the site's teal data mark, with its "now" green for text and fills */
@@ -39,14 +39,14 @@
   --c-secondary-50: #edf8f4;
   --c-violet: #7b5cff;
   --c-lilac: #b9b0ff;          /* site data mark: soft accent borders */
-  --grad-brand: linear-gradient(97deg, #4a3aff 0%, #7b5cff 100%);   /* the site's --spectrum */
-  --grad-primary: linear-gradient(180deg, #4a3aff 0%, #4a3aff 100%); /* solid volt (kept a gradient value: it is read as background-image) */
+  --grad-brand: linear-gradient(135deg, #17143f 0%, #211d57 100%);  /* the site's band, --band to --band-2 */
+  --grad-primary: linear-gradient(180deg, #17143f 0%, #17143f 100%); /* solid (kept a gradient value: it is read as background-image) */
   --grad-surface: linear-gradient(180deg, #fdfcf9 0%, #fdfcf9 100%);
   /* ---- colour: semantic (site: --now / --now-bg, --soon / --soon-bg; error is a warm red the site has no token for) */
   --c-success: #0b7d61;  --c-success-bg: #dcf2ea;  --c-success-bd: #a8d9c8;  --c-success-fg: #0a6b53;
   --c-warning: #b37a00;  --c-warning-bg: #f9eac9;  --c-warning-bd: #ecd49a;  --c-warning-fg: #8a5a00;
   --c-error:   #c8321f;  --c-error-bg:   #fbe6df;  --c-error-bd:   #f2b8a8;  --c-error-fg:   #9a2414;
-  --c-info:    #4a3aff;  --c-info-bg:    #eceaff;  --c-info-bd:    #b9b0ff;  --c-info-fg:    #3626cf;
+  --c-info:    #17143f;  --c-info-bg:    #eceaff;  --c-info-bd:    #b9b0ff;  --c-info-fg:    #211d57;
 
   /* ---- legacy aliases (module CSS below reads these) */
   --bg: var(--c-bg);
@@ -92,7 +92,7 @@
   --sh-1: 0 1px 2px rgba(21, 19, 46, .05), 0 1px 1px rgba(21, 19, 46, .03);
   --sh-2: 0 1px 2px rgba(21, 19, 46, .05), 0 6px 18px -6px rgba(21, 19, 46, .10);
   --sh-3: 0 2px 4px rgba(21, 19, 46, .05), 0 18px 44px -12px rgba(21, 19, 46, .20);
-  --sh-focus: 0 0 0 3px rgba(74, 58, 255, .28);
+  --sh-focus: 0 0 0 3px rgba(23, 20, 63, .28);
 
   /* ---- motion */
   --dur-1: 120ms; --dur-2: 180ms; --dur-3: 260ms;
@@ -167,7 +167,7 @@ h3.sec { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing
 .btn:hover { --btn-bd: var(--c-border-strong); --btn-bg: var(--c-surface-2); color: var(--c-text); }
 .btn:active { transform: translateY(1px); box-shadow: none; }
 .btn:focus-visible { box-shadow: var(--sh-focus); }
-.btn.primary { --btn-bg: var(--c-primary); --btn-bd: var(--c-primary); --btn-fg: #fff; background: var(--grad-primary); font-weight: 600; box-shadow: 0 1px 2px rgba(74, 58, 255,.25), 0 6px 14px -6px rgba(74, 58, 255,.45); }
+.btn.primary { --btn-bg: var(--c-primary); --btn-bd: var(--c-primary); --btn-fg: #fff; background: var(--grad-primary); font-weight: 600; box-shadow: 0 1px 2px rgba(23, 20, 63,.25), 0 6px 14px -6px rgba(23, 20, 63,.45); }
 .btn.primary:hover { background: var(--c-primary-600); --btn-bd: var(--c-primary-600); color: #fff; }
 .btn.danger { --btn-fg: var(--c-error-fg); }
 .btn.danger:hover { --btn-bd: var(--c-error-bd); --btn-bg: var(--c-error-bg); color: var(--c-error-fg); }
@@ -455,7 +455,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .toast.ok { background: var(--c-success-bg); color: var(--c-success-fg); border-color: var(--c-success-bd); }
 
 /* ---------- brand mark ---------- */
-.logo-mark { width: 34px; height: 34px; border-radius: 10px; background: var(--grad-brand); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; color: white; letter-spacing: -.02em; box-shadow: 0 4px 12px -4px rgba(74, 58, 255,.5); }
+.logo-mark { width: 34px; height: 34px; border-radius: 10px; background: var(--grad-brand); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; color: white; letter-spacing: -.02em; box-shadow: 0 4px 12px -4px rgba(23, 20, 63,.5); }
 
 /* ---------- empty states ---------- */
 .empty { text-align: center; padding: 48px 24px; border: 1px dashed var(--c-border-strong); border-radius: var(--r-lg); background: var(--c-surface); color: var(--c-text-3); }
@@ -605,7 +605,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .topbar > .btn { --btn-bg: transparent; --btn-bd: transparent; box-shadow: none; color: var(--c-text-2); font-weight: 500; }
 .topbar > .btn:hover { --btn-bg: var(--c-surface-2); color: var(--c-text); }
 .topbar > .btn[data-testid="test-survey"], .topbar > .btn:has(.ico[data-icon="play"]) { --btn-bg: var(--c-surface); --btn-bd: var(--c-border); box-shadow: var(--sh-1); color: var(--c-text); }
-.topbar > .btn.primary { --btn-bg: var(--c-primary); --btn-bd: var(--c-primary); background: var(--grad-primary); color: #fff; font-weight: 600; box-shadow: 0 1px 2px rgba(74, 58, 255,.25), 0 6px 14px -6px rgba(74, 58, 255,.45); margin-left: 4px; }
+.topbar > .btn.primary { --btn-bg: var(--c-primary); --btn-bd: var(--c-primary); background: var(--grad-primary); color: #fff; font-weight: 600; box-shadow: 0 1px 2px rgba(23, 20, 63,.25), 0 6px 14px -6px rgba(23, 20, 63,.45); margin-left: 4px; }
 .topbar > .btn.primary:hover { color: #fff; }
 .topbar .avatar.sm { width: 28px; height: 28px; font-size: 11px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; }
 .ctx-title { font-size: 15.5px; }
@@ -808,7 +808,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .sg-row:hover .sg-cell.frozen { background: var(--c-bg); }
 .sg-cell.sg-col-code { border-right: 1px solid var(--c-border); box-shadow: 4px 0 8px -6px rgba(21, 19, 46, .18); }
 .sg-cell.editable { cursor: text; }
-.sg-cell.active { background: rgba(74, 58, 255, .06); }
+.sg-cell.active { background: rgba(23, 20, 63, .06); }
 .sg-code { font-weight: 600; font-size: 12px; color: var(--c-text-2); }
 .sg-type { color: var(--c-text-2); }
 .sg-opts { color: var(--c-text-2); }
@@ -1018,7 +1018,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .fc-node-sub { font-size: 11px; fill: var(--c-text-3); }
 .fc-node:hover rect { stroke: var(--c-primary-600); }
 .fc-node.selected rect { stroke: var(--c-primary-600); stroke-width: 2; }
-.fc-node.primary rect { stroke: var(--c-primary-700); stroke-width: 2.5; filter: drop-shadow(0 4px 10px rgba(74, 58, 255, .25)); }
+.fc-node.primary rect { stroke: var(--c-primary-700); stroke-width: 2.5; filter: drop-shadow(0 4px 10px rgba(23, 20, 63, .25)); }
 .fc-node.up rect { fill: var(--c-secondary-50); stroke: var(--c-secondary); }
 .fc-node.down rect { fill: var(--c-warning-bg); stroke: var(--c-warning); }
 .fc-node.dim { opacity: .38; }
@@ -1051,7 +1051,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .fc-minimap { position: absolute; right: 12px; bottom: 12px; background: rgba(255,255,255,.9); border: 1px solid var(--c-border); border-radius: 8px; box-shadow: var(--sh-2); cursor: pointer; }
 .fc-mm-node { fill: var(--c-border-strong); }
 .fc-mm-node.lit { fill: var(--c-primary-600); }
-.fc-mm-view { fill: rgba(74, 58, 255, .08); stroke: var(--c-primary-600); stroke-width: 6; }
+.fc-mm-view { fill: rgba(23, 20, 63, .08); stroke: var(--c-primary-600); stroke-width: 6; }
 
 /* ======================================================================
    INTELLIGENT MODE (.iq-*) — describe, review, apply
@@ -1436,7 +1436,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .st { display: flex; flex-direction: column; gap: 10px; }
 .st-empty { margin: 6px 0; font-size: 12.5px; }
 .st-block { border: var(--ide-hairline); border-radius: var(--ide-r); background: var(--c-surface); overflow: hidden; }
-.st-block.primary { border-color: var(--ide-accent); box-shadow: 0 0 0 2px rgba(74, 58, 255, .12); }
+.st-block.primary { border-color: var(--ide-accent); box-shadow: 0 0 0 2px rgba(23, 20, 63, .12); }
 .st-block.dim, .st-el.dim, .st-group.dim { opacity: .35; }
 .st-block-head, .st-el-head, .st-group-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--c-surface-2); border-bottom: var(--ide-hairline); cursor: pointer; font-size: 12.5px; }
 .st-block-head:hover, .st-el-head:hover, .st-group-head:hover { background: var(--c-bg); }
@@ -1538,7 +1538,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 /* ======================================================================
    FLOW — pages, badges, conditions (UI upgrade §10–§15)
    ====================================================================== */
-.fc-page rect { fill: rgba(74, 58, 255, .035); stroke: rgba(74, 58, 255, .22); stroke-width: 1; stroke-dasharray: 5 4; }
+.fc-page rect { fill: rgba(23, 20, 63, .035); stroke: rgba(23, 20, 63, .22); stroke-width: 1; stroke-dasharray: 5 4; }
 .fc-page.dim rect { opacity: .35; } .fc-page.dim-hard rect { opacity: .12; }
 .fc-page-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; fill: var(--c-primary-700); font-weight: 600; }
 .fc-node-cond { font-size: 10px; fill: var(--c-primary-700); }
