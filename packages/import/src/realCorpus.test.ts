@@ -15,6 +15,7 @@ import { analyzeImport } from "./index.js";
 import { walkSurvey } from "./verify.js";
 import { readExecAssignments, readDispatchers, inlineDispatchers, expandCounts, exclusive } from "./adapters/decipherExec.js";
 import { rewriteIdioms } from "./adapters/decipher.js";
+import { applyRecode, recogniseQualtricsJs } from "./jsPatterns.js";
 
 const file = (rel: string) => new Uint8Array(readFileSync(new URL(`../fixtures/corpus/${rel}`, import.meta.url)));
 const load = async (rel: string) => { const a = await analyzeImport(file(rel), rel.split("/").pop()!, { surveyId: "corpus" }); assert.ok(a.result?.def, `${rel} imports`); return a; };
@@ -114,8 +115,8 @@ test("Decipher exec, read by shape: chains, last-wins, lists, row loops — and 
 
 /* ------------------------------------------------------------ Qualtrics */
 
-/* what is left is custom JavaScript (kept, disabled, analysed), device-type branches, and counts on grids whose rows are carried from another question */
-const QUALTRICS_HIGH_CEILING: Record<number, number> = { 1: 0, 2: 42, 3: 15, 4: 0, 5: 2 };
+/* what is left, all in project 3: nine video gates (Next only after the video ends), one seeded split of a statement list across two questions, and a quota whose source has cells at zero */
+const QUALTRICS_HIGH_CEILING: Record<number, number> = { 1: 0, 2: 0, 3: 12, 4: 0, 5: 0 };
 
 for (const n of [1, 2, 3, 4, 5]) {
   test(`Qualtrics corpus ${n}: imports and stays under its ceiling of unconverted logic`, async () => {
@@ -149,4 +150,69 @@ test("Qualtrics corpus 4: a question named like another question's answer column
   assert.ok(a.result!.issues.some((i) => i.type === "renamed" && /AQ5_1/.test(i.message)));
   /* "this answer in every row" / "not in every row" on a grid, written per row */
   assert.ok(!a.result!.issues.some((i) => /SelectedAnswerCount/.test(i.message)));
+});
+
+/* ------------------------------------------------------------ Qualtrics question JavaScript (2026-11-11) */
+
+test("Qualtrics JavaScript, recognised by shape: whole scripts only, and nothing is run", () => {
+  const hook = (body: string) => `Qualtrics.SurveyEngine.addOnload(function()\n{\n\t/*Place your JavaScript here to run when the page loads*/\n\n});\nQualtrics.SurveyEngine.addOnReady(function()\n{\n${body}\n});\nQualtrics.SurveyEngine.addOnUnload(function()\n{\n});`;
+  const tick = `var qobj = this;\n var displayedChoices = [];\n jQuery.each(qobj.getChoices(), function(index, value) {\n if(qobj.getChoiceDisplayed(value)) displayedChoices.push(value);\n });\n for (var i=0; i<displayedChoices.length; i++)\n { qobj.setChoiceValue(displayedChoices[i], true); }\n jQuery("#"+this.questionId).hide()  //to hide question\n qobj.clickNextButton();`;
+  assert.deepEqual(recogniseQualtricsJs(hook(tick)), { kind: "select_displayed" });
+  /* the same script with one more statement is NOT the pattern: half a script converted is a different script */
+  assert.equal(recogniseQualtricsJs(hook(`${tick}\n Qualtrics.SurveyEngine.setEmbeddedData("seen", "1");`)), null);
+  assert.equal(recogniseQualtricsJs(hook(`fetch("https://example.com/x");\n${tick}`)), null);
+  const union = (assign: string) => hook(`jQuery("#"+this.questionId).hide();\narrC1="\${q://QID52/SelectedChoicesRecode}";\nvar tempArray1 = arrC1.split(",").map(item => item.trim());\nvar arrC1S = tempArray1.map(item => item.replace("x", ""));\n for(var i=0;i<arrC1S.length;i++)\n {\n ${assign}\n this.setChoiceValueByRecodeValue(choiceVal, true);\n }\n var qobj = this;\n qobj.clickNextButton();`);
+  assert.deepEqual(recogniseQualtricsJs(union('var choiceVal="";\n choiceVal=arrC1S[i];')), { kind: "recode_union", sources: [{ qid: "QID52", transform: { type: "same" } }] });
+  assert.deepEqual(recogniseQualtricsJs(union("var choiceVal = parseInt(arrC1S[i], 10) + 16;")), { kind: "recode_union", sources: [{ qid: "QID52", transform: { type: "add", n: 16 } }] });
+  assert.deepEqual(recogniseQualtricsJs(union('var choiceVal="";\n choiceVal=arrC1S[i]+0+3;')), { kind: "recode_union", sources: [{ qid: "QID52", transform: { type: "suffix", s: "03" } }] });
+  /* JavaScript's "7" + 0 + 3 is the text "703", not 10 */
+  assert.deepEqual([applyRecode(7, { type: "suffix", s: "03" }), applyRecode("7", { type: "add", n: 16 }), applyRecode(7, { type: "same" })], ["703", "23", "7"]);
+  assert.equal(recogniseQualtricsJs(hook("var x = 1;")), null);
+  assert.equal(recogniseQualtricsJs("alert(1)"), null);
+});
+
+test("Qualtrics corpus 2: every hidden-question script is native — the chain codes itself from the answers, with no script", async () => {
+  const a = await load("qualtrics/qualtrics_2.qsf");
+  const def = a.result!.def!;
+  assert.deepEqual(a.result!.quality, { errors: [], warnings: [], deployable: true });
+  assert.equal(a.report!.risks.high.length, 0);
+  const natives = a.result!.jsMigrations.filter((m) => m.verdict === "native");
+  assert.ok(natives.length >= 30, `${natives.length} scripts rebuilt natively`);
+  assert.ok(def.scripts.every((s) => s.enabled === false), "the source code is kept, and nothing of it is switched on");
+  const by = (code: string) => q(def, code);
+  for (const code of ["Cohort_flag", "hQ14_Moderate", "hQ14", "hQ15", "WORKFLOW_1", "hQ28"]) { assert.equal(by(code).settings.hidden, true, code); assert.ok(by(code).punches.length > 0, code); assert.equal(by(code).carryForward, undefined, `${code}: its choices are its own`); }
+  /* the journey: three workflows chosen, rated on two grids, then ranked */
+  const force: Record<string, unknown> = { [by("Q13").id]: [1, 3, 5], [by("Q14").id]: { 1: 4, 3: 6, 5: 4 }, [by("Q15").id]: { 1: 4, 3: 6, 5: 7 }, [by("Q17").id]: [21, 17, 19] };
+  const ans = walkSurvey(def, "deepest", 2, { force, keepState: true }).state!.answers as Record<string, unknown>;
+  assert.deepEqual(ans[by("hQ14_Moderate").id], ["1", "5"], "the rows of Q14 answered with column 4");
+  assert.deepEqual(ans[by("hQ14_Major").id], ["3"]);
+  assert.deepEqual(ans[by("hQ14").id], ["1", "5", "3"], "the union, by recode");
+  assert.deepEqual(ans[by("hQ15_Moderate").id], ["1"]);
+  assert.deepEqual(ans[by("hQ15").id], ["17", "19", "21"], "recode + 16, as the script computes it");
+  assert.deepEqual([ans[by("WORKFLOW_1").id], ans[by("WORKFLOW_2").id], ans[by("WORKFLOW_3").id]], ["21", "17", "19"], "the items ranked first, second, third");
+  /* a count over a grid whose rows are carried, and the device-flag branches */
+  assert.ok(!a.result!.issues.some((i) => /SelectedAnswerCount|count of rows with one answer/.test(i.message)));
+  assert.ok(a.result!.issues.filter((i) => i.type === "dropped" && /when the device is/.test(i.message)).length === 2, "a device flag is not set for everyone");
+});
+
+test("Qualtrics corpus 3: a field set inside a branch is set; a cross quota's cells are read one by one; the only choice shown is chosen", async () => {
+  const a = await load("qualtrics/qualtrics_3.qsf");
+  const def = a.result!.def!;
+  const by = (code: string) => q(def, code);
+  /* `cell = 0` / `cell = 1` under "cell N of the quota has not been met": the assignment was dropped as a duplicate field */
+  const run = walkSurvey(def, "first", 1, { keepState: true });
+  assert.ok(["0", "1"].includes(String((run.state!.embedded as Record<string, unknown>).cell)), "the respondent is assigned a cell");
+  assert.ok(run.pages > 0, "…and is not screened out for having none");
+  assert.ok(def.quotas.some((x) => /^Cell · /.test(x.name)) && def.quotas.filter((x) => /^Cell · /.test(x.name)).every((x) => x.cells.length === 1 && x.cells[0].limit === 200), "each cell keeps its own count");
+  const pick = (considered: number[]) => (walkSurvey(def, "deepest", 2, { force: { [by("Portfolio_Awareness").id]: [1, 3, 5], [by("Portfolio_Consideration").id]: considered, [by("Portfolio_Preference").id]: undefined }, keepState: true }).state!.answers as Record<string, unknown>)[by("Portfolio_Preference").id];
+  assert.equal(pick([3]), "3", "one brand considered → it is the preference");
+  assert.equal(pick([3, 5]), undefined, "two → the respondent chooses");
+  /* what is not reproduced is said for what it is */
+  assert.equal(a.report!.risks.high.filter((i) => /Next hidden until the video has played/.test(i.message)).length, 9);
+});
+
+test("Qualtrics corpus 5: a script that does nothing here is not a risk", async () => {
+  const a = await load("qualtrics/qualtrics_5.qsf");
+  assert.equal(a.report!.risks.high.length, 0);
+  assert.equal(a.result!.issues.filter((i) => i.type === "dropped" && /this question has no text box/.test(i.message)).length, 2);
 });

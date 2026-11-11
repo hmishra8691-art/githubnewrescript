@@ -39,7 +39,7 @@ export interface JsMigration {
   /** the logic-script body (compatible only) */
   translated?: { event: ScriptEvent; code: string; gate: { ok: boolean; reason?: string } };
   /** a native setting that reproduces the code exactly (native only) */
-  native?: { kind: "page_timer"; minSeconds: number; detail: string };
+  native?: { kind: "page_timer"; minSeconds: number; detail: string } | { kind: "rules"; detail: string };
   /** one sentence for the script's notes and the report */
   summary: string;
 }

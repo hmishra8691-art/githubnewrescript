@@ -4,6 +4,7 @@ import type {
   CanonicalEmbeddedField, CanonicalQuota, CFlow, CExpr, CRef, COp, CLoop, CanonicalKind, Issue, InventoryItem, CanonicalAsset,
   CanonicalSurveyOptions,
 } from "../canonical.js";
+import { applyRecode, recogniseQualtricsJs } from "../jsPatterns.js";
 import { plainText } from "../canonical.js";
 
 /**
@@ -97,6 +98,14 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
     if (p.QuestionType === "MC" && ["single", "multi", "dropdown", "multi_dropdown"].includes(q.kind) && !q.options.length && !p.DynamicChoices) issues.push({ location: qid, type: "structure", severity: "high", message: `${q.variable} is a choice question with no choices in the file — respondents could not answer it.`, suggestion: "Add its answers in Studio.", autoAttempted: false, refs: [qid] });
   }
 
+  /* a grid whose rows are carried from another question has that question's choices as rows ("x" + id in a locator) */
+  for (const [qid, p] of qsfQ) {
+    if (matrixRows.get(qid)?.length || str(p.QuestionType) !== "Matrix") continue;
+    const from = /q:\/\/(QID\d+)\/ChoiceGroup\/(?:SelectedChoices|AllChoices|DisplayedChoices)/.exec(str(p.DynamicChoices?.Locator));
+    const src = from ? questions.get(from[1]) : undefined;
+    if (src?.options.length) matrixRows.set(qid, src.options.map((o) => `x${o.sourceId}`));
+  }
+
   // logic, now that every question exists
   for (const [qid, p] of qsfQ) {
     const q = questions.get(qid)!;
@@ -137,6 +146,8 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
     }
   }
 
+  /* ------------------------------------------------------------ question JavaScript that is a known pattern */
+  convertKnownJs(questions, qsfQ, issues, inventory);
   /* ------------------------------------------------------------ blocks */
   interface QBlock { id: string; description: string; type: string; pages: string[][]; options: Json }
   const blocks = new Map<string, QBlock>();
@@ -187,6 +198,17 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
           break;
         }
         case "Branch": {
+          /*
+           * "If the device is mobile, set a field" — a device flag for the data, not routing. There is no device
+           * condition here, and importing the branch without one would set the field for everybody (both branches
+           * of a mobile / not-mobile pair would run). It is left out, and said: the platform records the device.
+           */
+          const kids = arr<Json>(f.Flow);
+          if (/"LogicType":"DeviceType"/.test(JSON.stringify(f.BranchLogic ?? "")) && kids.length > 0 && kids.every((k) => k.Type === "EmbeddedData")) {
+            const fields = kids.flatMap((k) => arr<Json>(k.EmbeddedData).map((e) => `${str(e.Field)} = ${str(e.Value)}`));
+            issues.push({ location: `Flow · Branch ${fid}`, type: "dropped", severity: "medium", message: `A branch that sets ${fields.join(", ") || "a field"} when the device is ${/Is ?Not/i.test(plainText(JSON.stringify(f.BranchLogic))) ? "not mobile" : "mobile"} was not carried: there is no device condition here, and without it the field would be set for everyone.`, suggestion: "The respondent's device is recorded with the response (quality and telemetry data); use that instead of the field.", autoAttempted: true });
+            break;
+          }
           const when = f.BranchLogic ? readLogic(f.BranchLogic, `Flow · Branch ${fid}`, issues) : { t: "const", value: true } as CExpr;
           out.push({ t: "branch", sourceId: fid, when, children: readFlow(arr(f.Flow), fid), description: plainText(f.Description) || undefined });
           break;
@@ -230,6 +252,9 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
 
   /* ------------------------------------------------------------ quotas */
   const quotas: CanonicalQuota[] = [];
+  /* cross quotas whose CELLS a condition reads one by one ("cell 0 has not been met"): each such cell must keep its own count */
+  const cellRead = new Set<string>();
+  { const seek = (v: Json): void => { if (!v || typeof v !== "object") return; if (str(v.LogicType) === "Quota" && str(v.QuotaType) === "Cross" && /^\d+$/.test(str(v.SubQuotaID))) cellRead.add(str(v.QuotaID)); for (const k of Object.keys(v)) seek(v[k]); }; seek(elements as unknown as Json); }
   for (const el of byType("QO")) {
     const p: Json = el.Payload ?? {};
     const id = str(p.ID ?? el.PrimaryAttribute);
@@ -249,10 +274,11 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
       const before = issues.length;
       for (const [i, c] of cells.entries()) {
         const label = [...str(c.Description).matchAll(/<span class="LeftOpDesc">([\s\S]*?)<\/span>/g)].map((m) => plainText(m[1])).filter(Boolean).join(" × ") || `Cell ${i + 1}`;
-        quotas.push({ sourceId: `${id}_${str(c.ID) || i}`, name: label.slice(0, 120), limit: Math.round(Number(c.Occurrences) || 0), when: readLogic(c.Logic, `Quota ${p.Name ?? id} · cell ${label}`, issues), onFull, group: { id, name: str(p.Name) || id } });
+        quotas.push({ sourceId: `${id}_c${i}`, name: label.slice(0, 120), limit: Math.round(Number(c.Occurrences) || 0), when: readLogic(c.Logic, `Quota ${p.Name ?? id} · cell ${label}`, issues), onFull, ...(cellRead.has(id) ? {} : { group: { id, name: str(p.Name) || id, limit: Number.isFinite(limit) ? limit : 0 } }) });
+        if (cellRead.has(id)) quotas[quotas.length - 1].name = `${str(p.Name) || id} · ${label}`.slice(0, 120);
       }
       const fractional = cells.some((c) => !Number.isInteger(Number(c.Occurrences)));
-      issues.push({ location: `Quota ${p.Name ?? id}`, type: "converted", severity: issues.length > before ? "medium" : "low", message: `Cross quota “${p.Name ?? id}” (${limit} in all) was imported as one quota with ${cells.length} cells, each with its own condition and target${fractional ? "; targets that were fractions in the source are rounded to whole respondents" : ""}.`, suggestion: "Check the cell targets in the Quotas tab.", autoAttempted: true });
+      issues.push({ location: `Quota ${p.Name ?? id}`, type: "converted", severity: issues.length > before ? "medium" : "low", message: `Cross quota “${p.Name ?? id}” (${limit} in all) was imported as ${cellRead.has(id) ? `${cells.length} quotas, one per cell (the survey flow reads its cells one by one, so each keeps its own count)` : `one quota with ${cells.length} cells`}, each with its own condition and target${fractional ? "; targets that were fractions in the source are rounded to whole respondents" : ""}.`, suggestion: "Check the cell targets in the Quotas tab.", autoAttempted: true });
       continue;
     }
     quotas.push({
@@ -670,6 +696,106 @@ const OPS: Record<string, COp> = {
  * a set, expressions are numbered and carry `Conjuction` (sic) from the
  * second on. AND binds tighter than OR.
  */
+/**
+ * QUESTION JAVASCRIPT THAT IS A KNOWN PATTERN (jsPatterns.ts) BECOMES NATIVE BEHAVIOUR (2026-11-11).
+ *
+ * The commonest Qualtrics script by far codes a HIDDEN question: "tick every choice this question shows, hide it,
+ * press Next", or "tick here whatever was ticked there". Here that is a hidden question with auto-punch rules, so
+ * the script is not needed at all — and, unlike the script, the rules also run in the server's replay.
+ *
+ * What the question "shows" is known without running anything: its own choices' display logic, or — when its
+ * choices are carried from another question — that question's selected choices (`SelectedChoices`), the rows of a
+ * grid answered with one column (`SelectedChoicesForAnswer/N`), or the items ranked at one position
+ * (`ChoicesWithValuesEqual?v=N`). Each becomes a choice of the hidden question with the condition under which the
+ * source would have shown it. Anything else leaves the script as it was: kept, disabled, reported.
+ */
+function convertKnownJs(questions: Map<string, CanonicalQuestion>, qsfQ: Map<string, Json>, issues: Issue[], inventory: InventoryItem[]): void {
+  const jsOf = (q: CanonicalQuestion) => q.custom.find((c) => c.language === "javascript" && c.role === "question JavaScript");
+  const settle = (qid: string, q: CanonicalQuestion, how: "converted" | "dropped", detail: string, severity: Issue["severity"] = "info") => {
+    const cu = jsOf(q)!;
+    cu.converted = detail;
+    const at = issues.findIndex((i) => i.location === `${qid} · JavaScript` && i.type === "custom_logic");
+    const line: Issue = { location: `${qid} · JavaScript`, type: how, severity, message: `${q.variable}: ${detail}`, autoAttempted: true, refs: [qid] };
+    if (at >= 0) issues[at] = line; else issues.push(line);
+    const inv = inventory.find((i) => i.feature === "custom_js" && i.sourceId === qid);
+    if (inv) { inv.status = "imported"; inv.note = detail; }
+    if (q.confidence === "review" && !q.notes.some((n) => /review/i.test(n))) q.confidence = "confirmed";
+  };
+  /** the choices a question can show, each with the condition under which it shows; null when that cannot be told */
+  type Shown = { sourceId: string; code: string | number; label: string; when?: CExpr };
+  const shownBy = (qid: string, depth = 0): Shown[] | null => {
+    const q = questions.get(qid);
+    if (!q || depth > 4) return null;
+    const loc = str(qsfQ.get(qid)?.DynamicChoices?.Locator);
+    if (!loc) return q.options.length ? q.options.map((o) => ({ sourceId: o.sourceId, code: o.code, label: o.label, ...(o.displayLogic ? { when: o.displayLogic } : {}) })) : null;
+    const m = /^q:\/\/(QID\d+)\/ChoiceGroup\/(SelectedChoicesTextEntry|SelectedChoices|SelectedChoicesForAnswer\/([\w-]+)|ChoicesWithValuesEqual\?v=(\d+))$/.exec(loc);
+    const src = m ? questions.get(m[1]) : undefined;
+    if (!m || !src) return null;
+    /* the source's own list: its choices, or — for a grid or a carried list — what IT can show, whatever the conditions */
+    const srcCarried = !!qsfQ.get(m[1])?.DynamicChoices?.Locator;
+    const list = srcCarried ? shownBy(m[1], depth + 1) : (m[3] !== undefined ? src.rows.map((r) => ({ sourceId: r.sourceId, code: /^-?\d+$/.test(r.code) ? Number(r.code) : r.code, label: r.label })) : src.options.map((o) => ({ sourceId: o.sourceId, code: o.code, label: o.label })));
+    if (!list?.length) return null;
+    const idIn = (id: string) => (srcCarried ? `x${id}` : id);
+    return list.map((it): Shown => ({
+      sourceId: it.sourceId, code: it.code, label: it.label,
+      when: m[3] !== undefined ? { t: "cmp", ref: { kind: "question", id: m[1], row: idIn(it.sourceId), choice: m[3] }, op: "selected" }
+        : m[4] !== undefined ? { t: "cmp", ref: { kind: "question", id: m[1], choice: idIn(it.sourceId) }, op: "rankEquals", value: Number(m[4]) }
+        : { t: "cmp", ref: { kind: "question", id: m[1], choice: idIn(it.sourceId) }, op: "selected" },
+    }));
+  };
+  const hide = (q: CanonicalQuestion) => { q.settings = { ...(q.settings ?? {}), hidden: true }; q.required = false; };
+  const found = [...questions].map(([qid, q]) => ({ qid, q, cu: jsOf(q) })).filter((x) => x.cu).map((x) => ({ ...x, pattern: recogniseQualtricsJs(x.cu!.code) }));
+
+  /* first the questions that tick what they show: their choices become fixed, which the unions below read */
+  for (const { qid, q, pattern } of found) {
+    if (pattern?.kind !== "select_displayed" || !["single", "multi", "dropdown", "multi_dropdown"].includes(q.kind)) continue;
+    const shown = shownBy(qid);
+    if (!shown) continue;
+    const carried = !!qsfQ.get(qid)?.DynamicChoices?.Locator;
+    if (carried) { q.options = shown.map((x) => ({ sourceId: x.sourceId, code: x.code, label: x.label })); delete q.carryForward; }
+    q.punches = shown.map((x) => ({ option: x.sourceId, ...(x.when ? { when: x.when } : {}) }));
+    hide(q);
+    settle(qid, q, "converted", `the script that ticks every choice the question shows, hides it and presses Next became a hidden question with ${shown.length} auto-punch rule${shown.length === 1 ? "" : "s"}${carried ? " (its carried choices are now its own, each with the condition it was carried under)" : ""}. The code is kept, switched off, for reference.`);
+  }
+  for (const { qid, q, pattern } of found) {
+    if (!pattern || q.custom.some((c) => c.converted)) continue;
+    if (pattern.kind === "recode_union") {
+      const rules: NonNullable<CanonicalQuestion["punches"]> = [];
+      let ok = q.options.length > 0;
+      for (const s of pattern.sources) {
+        const src = questions.get(s.qid);
+        if (!src?.options.length) { ok = false; break; }
+        for (const o of src.options) {
+          const target = q.options.find((t) => String(t.code) === applyRecode(o.code, s.transform));
+          /* a recode this question does not have: the script's call does nothing there either */
+          if (target) rules.push({ option: target.sourceId, when: { t: "cmp", ref: { kind: "question", id: s.qid, choice: o.sourceId }, op: "selected" } });
+        }
+      }
+      if (!ok || !rules.length) continue;
+      q.punches = rules;
+      hide(q);
+      settle(qid, q, "converted", `the script that ticks here what was selected in ${pattern.sources.map((s) => questions.get(s.qid)?.variable ?? s.qid).join(", ")} (by recode) became a hidden question with ${rules.length} auto-punch rules. The code is kept, switched off, for reference.`);
+    } else if (pattern.kind === "css_only") {
+      settle(qid, q, "dropped", "its script only adds a stylesheet to the Qualtrics page (" + pattern.css.replace(/\s+/g, " ").trim().slice(0, 80) + "); it has no effect here, where the layout is the survey theme's. The code is kept, switched off.");
+    } else if (pattern.kind === "input_prefix") {
+      settle(qid, q, "dropped", `its script writes “${pattern.text}” before text boxes on the Qualtrics page${q.kind === "text" || q.kind === "numeric" || q.rows.length ? "; add it as the field's prefix if it is wanted" : "; this question has no text box, so it did nothing"}. The code is kept, switched off.`, q.kind === "text" || q.kind === "numeric" || q.rows.length ? "low" : "info");
+    } else if (pattern.kind === "only_shown" && !pattern.rank && (q.kind === "single" || q.kind === "dropdown") && q.options.length > 1 && q.options.length <= 16 && q.options.every((o) => o.displayLogic)) {
+      /* when exactly one choice is shown, it is chosen — the choice shown when its own condition holds and no other's does */
+      q.punches = q.options.map((o) => ({ option: o.sourceId, when: { t: "group", op: "and", children: [o.displayLogic!, ...q.options.filter((x) => x !== o).map((x): CExpr => ({ t: "group", op: "not", children: [x.displayLogic!] }))] } }));
+      settle(qid, q, "converted", "the script that chooses the only choice shown became auto-punch rules: when exactly one choice is shown it is already selected. The source also hid the question and pressed Next in that case; here the page is still shown, with the answer in place.", "medium");
+    }
+  }
+  /* the rest: said precisely, still for a person */
+  for (const { qid, q, pattern } of found) {
+    if (!pattern || q.custom.some((c) => c.converted)) continue;
+    const at = issues.findIndex((i) => i.location === `${qid} · JavaScript` && i.type === "custom_logic");
+    if (at < 0) continue;
+    if (pattern.kind === "video_gate") issues[at] = { ...issues[at], message: `${q.variable}: its script keeps Next hidden until the video has played to the end and stops the respondent seeking ahead. That is not reproduced: Next is available at once. The code is kept, disabled, in Scripts.`, suggestion: "Use a video question with “must watch to the end”, or give the page a timer with a minimum time equal to the video's length." };
+    else if (pattern.kind === "only_shown") issues[at] = { ...issues[at], severity: "medium", message: `${q.variable}: when only one item is shown, its script ${pattern.rank ? "ranks it first" : "chooses it"}, hides the question and presses Next. That is not reproduced: the respondent answers the one item themselves, and the data is the same. The code is kept, disabled, in Scripts.`, suggestion: "Nothing is needed for the data; add a condition to skip the page if the extra click matters." };
+    else if (pattern.kind === "select_displayed" || pattern.kind === "recode_union") issues[at] = { ...issues[at], message: `${q.variable}: its script codes this hidden question from other answers, but ${pattern.kind === "select_displayed" ? "what the question shows could not be worked out from the file" : "a question it reads has no fixed choices"}, so it was not converted. The code is kept, disabled, in Scripts.`, suggestion: "Add auto-punch rules to the question and hide it." };
+  }
+}
+
 /** the rows of each grid question, by QID — set while a QSF is being read, for conditions that speak of "any row" */
 let matrixRows = new Map<string, string[]>();
 
@@ -711,7 +837,9 @@ function readExpression(x: Json, location: string, issues: Issue[]): CExpr {
     const o = str(x.Operator);
     const full = /Not/i.test(o) ? false : /Full|Met|Reached/i.test(o) || op === "eq" || op === "selected" ? true : op === "ne" || op === "notSelected" ? false : null;
     if (full === null) return raw(`a quota condition with operator ${o}`);
-    return { t: "cmp", ref: { kind: "quota", id: str(x.QuotaID || x.LeftOperand).replace(/^qo:\/\//, "") }, op: full ? "eq" : "ne", value: 1 };
+    /* one cell of a cross quota (`SubQuotaID`) is that cell: "cell 0 has not been met" */
+    const cell = str(x.QuotaType) === "Cross" && /^\d+$/.test(str(x.SubQuotaID)) ? `_c${str(x.SubQuotaID)}` : "";
+    return { t: "cmp", ref: { kind: "quota", id: `${str(x.QuotaID || x.LeftOperand).replace(/^qo:\/\//, "").replace(/\/.*$/, "")}${cell}` }, op: full ? "eq" : "ne", value: 1 };
   }
   /* a literal the builder leaves behind ("If False") */
   if (lt === "BooleanValue") return { t: "const", value: /^true$/i.test(str(x.Value)) };

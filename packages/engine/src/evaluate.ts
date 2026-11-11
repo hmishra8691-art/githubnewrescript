@@ -241,7 +241,8 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
       return behaviorValue(source.ref, source.scope, state);
     case "quota": {
       const counts = ctx.quotaCounts?.[source.ref];
-      if (!counts) return null;
+      /* a quota the survey defines and nobody has counted into yet stands at zero — "not full" must be true for the first respondent, not unknown */
+      if (!counts) return (ctx.def.quotas ?? []).some((q) => q.id === source.ref) ? 0 : null;
       return Object.values(counts).reduce((a, b) => a + b, 0);
     }
     case "variable":

@@ -198,7 +198,9 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
      */
     let migration = "";
     if (cu.language === "javascript" && c.source.platform === "qualtrics") {
-      const a = analyzeQualtricsJs(cu.code, cu.location, (qid) => qBySource.get(qid)?.variable);
+      const read = analyzeQualtricsJs(cu.code, cu.location, (qid) => qBySource.get(qid)?.variable);
+      /* the adapter already rebuilt this script's behaviour with native features (qsf.ts convertKnownJs): that is the verdict */
+      const a: typeof read = cu.converted ? { ...read, verdict: "native", translated: undefined, native: { kind: "rules", detail: cu.converted }, summary: `Native: ${cu.converted}` } : read;
       jsMigrations.push({ ...a, questionId, scriptName: name });
       migration = `Migration: ${a.summary} `;
       if (a.translated?.gate.ok) migratedScripts.push({
@@ -206,8 +208,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
         scope: questionId ? "question" : "survey", ...(questionId ? { ref: questionId } : {}), event: a.translated.event, code: a.translated.code, enabled: false, origin: "import",
         notes: `Script check: passes. Translated from the Qualtrics JavaScript in “${name}” by the importer; not executed. Review it, then switch it on.`.slice(0, 1000),
       });
-      if (a.native && questionId) nativeTimers.push({ questionId, minSeconds: a.native.minSeconds, location: cu.location });
-      jsStatus.set(cu.location, a.verdict === "native" ? { status: "imported", note: `reproduced by a native page timer (${a.native!.minSeconds} s minimum); code kept, disabled` } : a.verdict === "compatible" ? { status: "partial", note: "translated script attached, switched off for review" } : { status: "unsupported", note: `kept, disabled — ${a.verdict}` });
+      if (a.native?.kind === "page_timer" && questionId) nativeTimers.push({ questionId, minSeconds: a.native.minSeconds, location: cu.location });
+      jsStatus.set(cu.location, a.verdict === "native" && a.native?.kind === "rules" ? { status: "imported", note: a.native.detail } : a.verdict === "native" && a.native?.kind === "page_timer" ? { status: "imported", note: `reproduced by a native page timer (${a.native.minSeconds} s minimum); code kept, disabled` } : a.verdict === "compatible" ? { status: "partial", note: "translated script attached, switched off for review" } : { status: "unsupported", note: `kept, disabled — ${a.verdict}` });
     }
     return {
       id: uid("script"), name,
@@ -230,7 +232,15 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     const m = /^x(.+)$/.exec(choice);
     return optionCode(q.carryForward.questionId, m ? m[1] : choice, depth + 1);
   };
-  const rowCode = (qs: string, row: string): string | undefined => qBySource.get(qs)?.rows.find((r) => r.sourceId === row)?.code;
+  /* a grid whose ROWS are carried from another question: the row is that question's choice, under the code it has there */
+  const rowCode = (qs: string, row: string): string | undefined => {
+    const q = qBySource.get(qs);
+    const own = q?.rows.find((r) => r.sourceId === row)?.code;
+    if (own !== undefined || !q?.carryForward || q.carryForward.into !== "rows") return own;
+    const m = /^x(.+)$/.exec(row);
+    const c = optionCode(q.carryForward.questionId, m ? m[1] : row);
+    return c === undefined ? undefined : String(c);
+  };
   const confidence: QuestionConfidence[] = [];
   /* quota ids and limits by SOURCE id — decided before any condition is built, because branches and display logic may read a quota */
   const quotaIdOf = new Map<string, string>();
@@ -244,6 +254,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       else id = unique(safeIdent(cq.sourceId), takenQ);
       quotaIdOf.set(cq.sourceId, id);
       quotaLimitOf.set(cq.sourceId, cq.limit);
+      /* a cross quota is read, in a condition, by its own id: "is it full" is its whole count against its whole target */
+      if (cq.group?.limit !== undefined && !quotaIdOf.has(cq.group.id)) { quotaIdOf.set(cq.group.id, id); quotaLimitOf.set(cq.group.id, cq.group.limit); }
     }
   }
 
@@ -391,6 +403,11 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
         issues.push({ location, type: "converted", severity: "medium", message: `“${describe(x)}”: a was-displayed condition has no direct equivalent; it was converted to ${op === "displayed" ? "answered" : "not answered"}${r.choice ? " / selected" : ""}.`, suggestion: "Check it — an optional question can be displayed and left blank.", autoAttempted: true, refs: [r.id] });
         if (r.choice) { const cc = optionCode(r.id, r.choice); return cc === undefined ? null : rule(src, op === "displayed" ? "selected" : "notSelected", cc); }
         op = op === "displayed" ? "answered" : "unanswered";
+      }
+      if (op === "rankEquals") {
+        const cc = r.choice ? optionCode(r.id, r.choice) : undefined;
+        if (cc === undefined) { issues.push({ location, type: "reference", severity: "high", message: `A condition reads the rank of choice ${r.choice ?? "?"} of ${r.id}, which has no such choice.`, autoAttempted: true, refs: [r.id] }); return null; }
+        return rule(src, "rankEquals", cc, x.value);
       }
       if (r.choice) {
         const cc = optionCode(r.id, r.choice);
@@ -598,10 +615,18 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   };
   const embField = (x: CanonicalEmbeddedField) => {
     const name = IDENT.test(x.name) ? x.name : safeIdent(x.name);
-    if (takenFields.has(name.toUpperCase())) { issues.push({ location: `Embedded ${x.name}`, type: "renamed", severity: "low", message: `Embedded variable ${x.name} already exists in this survey; the imported one was merged into it.`, autoAttempted: true }); inventory.push({ feature: "embedded", sourceId: x.name, status: "imported", note: "merged into the existing field" }); return null; }
+    /*
+     * A field that is already there and is named again WITH A VALUE is being SET at that point of the flow
+     * ("cell = 1" inside a branch) — the commonest thing a Qualtrics flow does. It was "merged into the existing
+     * field", which dropped the assignment and left the branch empty. Only a second DECLARATION (no value) merges.
+     */
+    const again = takenFields.has(name.toUpperCase());
+    const assigns = x.source !== "url" && x.source !== "panel" && x.value !== undefined && x.value !== "";
+    if (again && !assigns) { issues.push({ location: `Embedded ${x.name}`, type: "renamed", severity: "low", message: `Embedded variable ${x.name} already exists in this survey; the imported one was merged into it.`, autoAttempted: true }); inventory.push({ feature: "embedded", sourceId: x.name, status: "imported", note: "merged into the existing field" }); return null; }
     takenFields.add(name.toUpperCase());
-    inventory.push({ feature: "embedded", sourceId: x.name, status: x.source === "expression" && x.value && /\{\{@/.test(x.value) && !/^\{\{@(\w+)\}\}$/.test(x.value.trim()) ? "partial" : "imported", note: x.source === "expression" && x.value && /\{\{@/.test(x.value) && !/^\{\{@(\w+)\}\}$/.test(x.value.trim()) ? "set from piping imported as a fixed value" : undefined });
-    if (name !== x.name) mapping.push({ kind: "embedded", source: x.name, rescript: name, reason: "not a valid variable name" });
+    if (!again) inventory.push({ feature: "embedded", sourceId: x.name, status: x.source === "expression" && x.value && /\{\{@/.test(x.value) && !/^\{\{@(\w+)\}\}$/.test(x.value.trim()) ? "partial" : "imported", note: x.source === "expression" && x.value && /\{\{@/.test(x.value) && !/^\{\{@(\w+)\}\}$/.test(x.value.trim()) ? "set from piping imported as a fixed value" : undefined });
+    if (again) { /* already in the map */ }
+    else if (name !== x.name) mapping.push({ kind: "embedded", source: x.name, rescript: name, reason: "not a valid variable name" });
     else mapping.push({ kind: "embedded", source: x.name, rescript: name });
     let value = x.value;
     let source = x.source;

@@ -476,7 +476,18 @@ function lintCondition(
           }
         }
       }
-      if (source.rowCode && src.type !== "maxdiff_task" && !gridAxes(src).rows.some((r) => r.ref === String(source.rowCode)) && !(src.rows ?? []).some((r) => String(r.code) === String(source.rowCode))) {
+      /* rows carried forward from another question are that question's answers, under the codes they have there */
+      const srcQ = src;
+      const carriedRow = (): boolean => {
+        for (let cf = srcQ.carryForward, hop = 0; cf && hop < 5; hop++) {
+          const from = ctx.def.questions.find((x) => x.id === cf!.sourceQuestionId);
+          if (!from) return false;
+          if (optionCodes(from).has(String(source.rowCode)) || (from.rows ?? []).some((r) => String(r.code) === String(source.rowCode))) return true;
+          cf = from.carryForward;
+        }
+        return false;
+      };
+      if (source.rowCode && src.type !== "maxdiff_task" && !gridAxes(src).rows.some((r) => r.ref === String(source.rowCode)) && !(src.rows ?? []).some((r) => String(r.code) === String(source.rowCode)) && !(src.carryForward?.into === "rows" && carriedRow())) {
         ctx.push({
           level: "warning",
           path,

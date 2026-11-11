@@ -123,7 +123,9 @@ export type CExpr =
 export type COp =
   | "selected" | "notSelected" | "displayed" | "notDisplayed"
   | "eq" | "ne" | "gt" | "gte" | "lt" | "lte"
-  | "answered" | "unanswered" | "contains" | "notContains" | "matches" | "in" | "notIn" | "countGte" | "countLte" | "countEq";
+  | "answered" | "unanswered" | "contains" | "notContains" | "matches" | "in" | "notIn" | "countGte" | "countLte" | "countEq"
+  /** a ranking: the choice named by `ref.choice` is ranked at position `value` */
+  | "rankEquals";
 
 export interface CRef {
   kind: "question" | "embedded" | "loop" | "quota" | "unknown";
@@ -156,6 +158,8 @@ export interface CanonicalCustom {
   role: string;
   /** source identifiers found in the code — questions, fields, choices */
   refs: string[];
+  /** set when the importer rebuilt what the code does with native features (or found it does nothing here): what it became, in words */
+  converted?: string;
 }
 
 export interface CanonicalQuestion {
@@ -244,7 +248,7 @@ export interface CanonicalQuota {
    * mapper turns a group into ONE Rescript quota whose cells are its members
    * — the multi-cell quota Rescript already has — instead of dropping it.
    */
-  group?: { id: string; name: string };
+  group?: { id: string; name: string; /** the whole quota's own target, when the group IS one source quota (a cross quota) that conditions read by its id */ limit?: number };
 }
 
 /**

@@ -23,7 +23,7 @@ test("verdicts: compatible, native, partial, incompatible — each with the call
   assert.ok(codeGate(ed.translated!.code, "logic").ok, "the translation passes the real script check");
 
   const t = analyzeQualtricsJs(js(`Qualtrics.SurveyEngine.setEmbeddedData('s6', '1'); this.hideNextButton(); var that = this; setTimeout(function(){ that.showNextButton(); }, 4500);`), "QID9");
-  assert.equal(t.verdict, "native"); assert.equal(t.native!.minSeconds, 5);
+  assert.equal(t.verdict, "native"); assert.deepEqual(t.native && t.native.kind === "page_timer" ? [t.native.kind, t.native.minSeconds] : [], ["page_timer", 5]);
   assert.equal(t.translated!.code, "setEmbedded('s6', '1');", "only the embedded write is translated, not the timer code");
 
   const mixed = analyzeQualtricsJs(js(`this.setChoiceValue(2, true); Qualtrics.SurveyEngine.setEmbeddedData('x', 1);`), "QID3");
