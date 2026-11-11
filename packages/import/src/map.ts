@@ -1,4 +1,4 @@
-import { SurveyDefinition, Localization, LanguageConfig, resolveVariant, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
+import { SurveyDefinition, PanelConfig, Localization, LanguageConfig, resolveVariant, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
 import { reconstruct, type Reconstruction } from "./reconstruct.js";
 import { runQualityCheck, listBlocks, constantCondition, recordTranslation, codeGate, gateReason, ensureBranchNames } from "@rescript/engine";
 import type {
@@ -247,6 +247,13 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     }
   }
 
+  /*
+   * A multiple-choice question's answers are columns named <variable>_<code>. A later question that is NAMED like
+   * one of those columns (the source's AQ5 with choices 1, 2 beside questions AQ5_1, AQ5_2) would write the same
+   * column, so those names are taken before any question is named.
+   */
+  for (const cq of c.questions) if (cq.kind === "multi" || cq.kind === "multi_dropdown") for (const o of cq.options) { const derived = `${safeIdent(cq.variable)}_${o.code}`.toUpperCase(); if (c.questions.some((x) => x !== cq && safeIdent(x.variable).toUpperCase() === derived)) takenVars.add(derived); }
+
   for (const cq of c.questions) {
     const ex = reuse.get(cq.sourceId);
     if (ex) { idOf.set(cq.sourceId, ex.id); mapping.push({ kind: "question", source: cq.sourceId, rescript: ex.id, reason: "already in the survey, identical — not imported again" }); continue; }
@@ -415,6 +422,25 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     const reported = raws.length > 0 && raws.every((t) => c.issues.some((i) => i.severity === "high" && i.message.includes(t)));
     if (e && exprHasRaw(e) && !reported) issues.push({ location, type: "custom_logic", severity: "high", message: `${what} was not converted, because part of it could not be read: ${describe(e)}.`, suggestion: "Rebuild it in the Logic builder. The source logic is kept in the question's notes.", autoAttempted: true });
   };
+
+  /* auto-punch rules read from the source's assignment code (CanonicalQuestion.punches): native rules on the hidden question */
+  if (logic) {
+    for (const cq of c.questions) {
+      if (!cq.punches?.length) continue;
+      const q = built.find((b) => b.id === idOf.get(cq.sourceId)) as unknown as { id: string; punches?: unknown[] } | undefined;
+      if (!q) continue;
+      const rules: unknown[] = [];
+      let lost = 0;
+      for (const [i, p] of cq.punches.entries()) {
+        const code = optionCode(cq.sourceId, p.option);
+        const when = p.when ? cond(p.when, `${cq.sourceId} · auto-punch ${i + 1}`) : null;
+        if (code === undefined || (p.when && !when)) { lost++; continue; }
+        rules.push({ id: `${q.id}_p${i + 1}`, source: { kind: "codes", codes: [String(code)] }, action: "select", mapping: [], ignoreUnmatched: true, recompute: "always", mode: "if", ...(when ? { when } : {}) });
+      }
+      if (rules.length) q.punches = rules;
+      if (lost) issues.push({ location: cq.sourceId, type: "custom_logic", severity: "high", message: `${lost} of the ${cq.punches.length} rules that code ${cq.variable} could not be written (a question or answer they read is not in the imported survey).`, suggestion: "Add them in the question's Auto-punch tab.", autoAttempted: true, refs: [cq.sourceId] });
+    }
+  }
 
   if (logic) {
     for (const cq of c.questions) {
@@ -794,6 +820,22 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     for (const l of langs) if (!loc.languages.some((x) => x.code === l)) loc = { ...loc, languages: [...loc.languages, LanguageConfig.parse({ code: l, status: "in_review" })] };
     for (const t of translated) if (langs.includes(t.lang)) { loc = recordTranslation(loc, t.lang, t.key, t.text, t.source, { origin: "import", now }); inventory.push({ feature: "translation", sourceId: `${t.key} ${t.lang}`, status: "imported" }); }
     r.localization = loc;
+  }
+  /* sample suppliers the source carries (CanonicalSurvey.vendors): the survey's own vendor list, one entry each, never replacing one that is there */
+  if (structure && c.vendors?.length) {
+    const r = raw as { panels?: { key: string }[] };
+    const have = new Set((r.panels ?? []).map((p) => p.key));
+    const added: string[] = [];
+    for (const v of c.vendors) {
+      let key = (v.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || `vendor_${v.sourceId}`).slice(0, 28);
+      for (let n = 2; have.has(key); n++) key = `${key.replace(/_\d+$/, "")}_${n}`;
+      const p = PanelConfig.safeParse({ key, preset: "custom", label: v.name.slice(0, 80), idParam: v.idParam, params: v.params.filter((x) => Object.values(v.redirects).some((u) => u?.includes(`{{${x}}}`))).map((param) => ({ param })), redirects: v.redirects, targets: ["survey"], notes: `Imported from the source's sample source ${v.sourceId}.` });
+      if (!p.success) { issues.push({ location: `Vendor ${v.name}`, type: "validation", severity: "medium", message: `The supplier ${v.name} could not be set up from the source: ${p.error.issues[0]?.message ?? "invalid"}.`, suggestion: "Add it with “add vendor” in Intelligent mode.", autoAttempted: true }); continue; }
+      have.add(key);
+      (r.panels ??= []).push(p.data);
+      added.push(`${v.name} (${Object.keys(v.redirects).join(", ")})`);
+    }
+    if (added.length) issues.push({ location: "Vendors", type: "converted", severity: "info", message: `${added.length} sample supplier${added.length === 1 ? "" : "s"} set up with return links: ${added.join("; ")}. Survey ends without their own redirect return each respondent to their supplier.${added.length > 1 ? " With more than one supplier, each entry link carries the supplier's code (see Vendors)." : ""}`, autoAttempted: true });
   }
   const parsed = SurveyDefinition.safeParse(raw);
   const all = [...c.issues, ...issues];

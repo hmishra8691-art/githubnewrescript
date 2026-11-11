@@ -187,11 +187,18 @@ test("Decipher: labels preserved, grids, hidden questions, Python conditions tra
   assert.equal(find(def, "q3").instruction, "Select all that apply");
   assert.equal(find(def, "q4").type, "matrix_single"); assert.deepEqual(find(def, "q4").rows.map((r) => r.code), ["r1", "r2"]);
   assert.deepEqual(find(def, "q4").displayLogic, { type: "group", op: "or", children: [{ type: "rule", source: { kind: "question", ref: "q3" }, operator: "selected", value: 1 }, { type: "rule", source: { kind: "question", ref: "q3" }, operator: "selected", value: 2 }] }, "q3.r1 or q3.r2");
-  assert.equal(find(def, "q5").type, "hidden", "where=execute: a hidden variable");
+  /* 2026-11-11: a hidden choice question stays a choice question, hidden — and the <exec> that codes it becomes its auto-punch rules */
+  assert.equal(find(def, "q5").type, "single_select", "where=execute: a hidden variable keeps its answers");
+  assert.equal(find(def, "q5").settings.hidden, true);
+  assert.deepEqual(find(def, "q5").punches.map((p) => [(p.source as { codes: string[] }).codes, p.when]), [
+    [["1"], { type: "rule", source: { kind: "question", ref: "q2" }, operator: "lt", value: 35 }],
+    [["2"], { type: "group", op: "not", children: [{ type: "rule", source: { kind: "question", ref: "q2" }, operator: "lt", value: 35 }] }],
+  ]);
   assert.equal(find(def, "q6").required, false, "optional=1");
   assert.equal(find(def, "q6").displayLogic, undefined, "hasMarker() is not guessed");
   assert.ok(a.report!.risks.high.some((i) => /hasMarker/.test(i.message)));
-  assert.ok(a.report!.risks.high.some((i) => /Python <exec>/.test(i.message) && i.refs?.includes("q2")), "the exec is flagged with what it reads");
+  assert.ok(!a.report!.risks.high.some((i) => /Python <exec>/.test(i.message)), "the converted exec is not a risk");
+  assert.ok(a.result!.issues.some((i) => i.type === "converted" && /auto-punch/.test(i.message) && i.refs?.includes("q5")), "…it is reported as converted, naming the question it codes");
   assert.match(find(def, "q6").text, /\{\{q1\}\}/, "[pipe: q1] → {{q1}}");
   // term → a branch that screens out; goto → a skip rule on the question before it
   const term = (def.flow as FlowNode[]).find((x) => x.type === "branch") as Extract<FlowNode, { type: "branch" }>;
@@ -328,8 +335,13 @@ test("custom code is preserved as DISABLED scripts; the project carries its revi
   assert.ok(!def.scripts.some((x) => x.ref === "QID5"), "the empty template is not custom code");
   assert.match(find(def, "QID8").notes ?? "", /kept, disabled, in Scripts/);
   const dx = (await analyzeImport(enc(DECIPHER_FIXTURE), "b.xml", { surveyId: "s2", uid })).result!.def!;
-  const exec = dx.scripts.find((x) => x.scope === "survey" && /exec/.test(x.name));
-  assert.ok(exec && exec.enabled === false && /q5\.val/.test(exec.code), "a Decipher <exec> is kept, disabled");
+  /* 2026-11-11: an <exec> that only codes a hidden question is converted (auto-punch rules), not kept as a dead script… */
+  assert.ok(!dx.scripts.some((x) => /q5\.val/.test(x.code)) && find(dx, "q5").punches.length === 2, "a convertible <exec> becomes rules");
+  /* …and one that cannot be read by shape is still kept, disabled, and reported */
+  const dy = await analyzeImport(enc(`<survey name="t"><radio label="q1"><title>A</title><row label="r1">x</row><row label="r2">y</row></radio><suspend/><exec>\nrec = File("zip.dat", "id").get(q1.val)\nq1.val = int(rec["x"])\n</exec><radio label="q2"><title>B</title><row label="r1">x</row></radio></survey>`), "c.xml", { surveyId: "s3", uid });
+  const exec = dy.result!.def!.scripts.find((x) => x.scope === "survey" && /exec/.test(x.name));
+  assert.ok(exec && exec.enabled === false && /File\(/.test(exec.code), "a Decipher <exec> that is not converted is kept, disabled");
+  assert.ok(dy.report!.risks.high.some((i) => /Python <exec>/.test(i.message)));
   const rec = def.imports![0];
   assert.ok(rec.review.length >= 3);
   assert.ok(rec.review.every((r) => r.severity === "high" || r.severity === "medium"));

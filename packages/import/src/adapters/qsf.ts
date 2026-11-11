@@ -73,6 +73,7 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
   }
   const elements: Json[] = arr(qsf.SurveyElements);
   const byType = (t: string) => elements.filter((e) => e.Element === t);
+  matrixRows = new Map(byType("SQ").filter((e) => str(e.Payload?.QuestionType) === "Matrix" && e.Payload?.Choices && typeof e.Payload.Choices === "object").map((e) => [str(e.Payload.QuestionID ?? e.PrimaryAttribute), (Array.isArray(e.Payload.ChoiceOrder) && e.Payload.ChoiceOrder.length ? e.Payload.ChoiceOrder.map(String) : Object.keys(e.Payload.Choices))] as [string, string[]]));
   /* the table of contents: every element kind, counted, with what became of it */
   const kindCounts = new Map<string, number>();
   for (const e of elements) kindCounts.set(str(e.Element) || "?", (kindCounts.get(str(e.Element) || "?") ?? 0) + 1);
@@ -126,9 +127,11 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
       const loc = str(p.DynamicChoices.Locator);
       const m = /q:\/\/(QID\d+)\/(\w+)/.exec(loc);
       if (m) {
-        const filter = /Unselected|NotSelected/.test(m[2]) ? "notSelected" : /Selected/.test(m[2]) ? "selected" : /Displayed/.test(m[2]) ? "displayed" : "all";
+        /* the filter is the locator's LAST part (`q://QID1/ChoiceGroup/SelectedChoices`); reading the part after the QID found "ChoiceGroup" and carried every choice */
+        const tail = loc.slice(loc.indexOf(m[1]) + m[1].length);
+        const filter = /Unselected|NotSelected/.test(tail) ? "notSelected" : /Selected/.test(tail) ? "selected" : /Displayed/.test(tail) ? "displayed" : "all";
         q.carryForward = { questionId: m[1], filter, into: grid ? "rows" : "options" };
-        q.notes.push(`choices carried forward from ${m[1]} (${m[2]})`);
+        q.notes.push(`choices carried forward from ${m[1]} (${tail.replace(/^\//, "")})`);
         if (!questions.has(m[1])) { issues.push({ location: `${qid} · carry-forward`, type: "reference", severity: "high", message: `${q.variable} carries choices forward from ${m[1]}, which is not in the file.`, autoAttempted: false, refs: [qid, m[1]] }); inventory.push({ feature: "carry_forward", sourceId: qid, status: "unsupported", note: `source ${m[1]} missing` }); }
       } else { issues.push({ location: `${qid} · carry-forward`, type: "unsupported", severity: "medium", message: `${q.variable} carries choices forward from “${loc}”, a locator this import does not read.`, suggestion: "Set the carry-forward source in Studio.", autoAttempted: false, refs: [qid] }); inventory.push({ feature: "carry_forward", sourceId: qid, status: "unsupported", note: loc }); }
     }
@@ -232,6 +235,26 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
     const id = str(p.ID ?? el.PrimaryAttribute);
     const limit = Number(p.Occurrences ?? p.Count ?? 0);
     const action = str(p.QuotaAction);
+    /*
+     * A CROSS QUOTA (2026-11-11). `Logic` is a list of dimensions and the export carries the cells already worked
+     * out (`CrossLogicDef`: one condition and one target per combination). That is Rescript's multi-cell quota:
+     * one quota named as the source names it, one cell per combination. It was read as a single condition, which
+     * is not what a list of dimensions is, and every such quota was reported as unreadable.
+     */
+    const cells = p.LogicType === "Cross" ? arr<Json>(p.CrossLogicDef).filter((c) => c && c.Logic) : [];
+    /* a quota the source itself marks as broken (its condition names no question) counts nobody: not imported, said once */
+    if (/q:\/\/undefined\//.test(JSON.stringify(p.Logic ?? ""))) { issues.push({ location: `Quota ${p.Name ?? id}`, type: "dropped", severity: "medium", message: `Quota “${p.Name ?? id}” has invalid logic in the source (its condition names no question), so it counts nobody there; it was not imported.`, autoAttempted: true }); continue; }
+    if (cells.length) {
+      const onFull = /End/i.test(action) ? "terminate" as const : /Redirect/i.test(action) ? "redirect" as const : "continue" as const;
+      const before = issues.length;
+      for (const [i, c] of cells.entries()) {
+        const label = [...str(c.Description).matchAll(/<span class="LeftOpDesc">([\s\S]*?)<\/span>/g)].map((m) => plainText(m[1])).filter(Boolean).join(" × ") || `Cell ${i + 1}`;
+        quotas.push({ sourceId: `${id}_${str(c.ID) || i}`, name: label.slice(0, 120), limit: Math.round(Number(c.Occurrences) || 0), when: readLogic(c.Logic, `Quota ${p.Name ?? id} · cell ${label}`, issues), onFull, group: { id, name: str(p.Name) || id } });
+      }
+      const fractional = cells.some((c) => !Number.isInteger(Number(c.Occurrences)));
+      issues.push({ location: `Quota ${p.Name ?? id}`, type: "converted", severity: issues.length > before ? "medium" : "low", message: `Cross quota “${p.Name ?? id}” (${limit} in all) was imported as one quota with ${cells.length} cells, each with its own condition and target${fractional ? "; targets that were fractions in the source are rounded to whole respondents" : ""}.`, suggestion: "Check the cell targets in the Quotas tab.", autoAttempted: true });
+      continue;
+    }
     quotas.push({
       sourceId: id, name: str(p.Name) || id, limit: Number.isFinite(limit) ? limit : 0,
       when: p.Logic ? readLogic(p.Logic, `Quota ${p.Name ?? id}`, issues) : { t: "const", value: true },
@@ -647,6 +670,9 @@ const OPS: Record<string, COp> = {
  * a set, expressions are numbered and carry `Conjuction` (sic) from the
  * second on. AND binds tighter than OR.
  */
+/** the rows of each grid question, by QID — set while a QSF is being read, for conditions that speak of "any row" */
+let matrixRows = new Map<string, string[]>();
+
 export function readLogic(logic: Json, location: string, issues: Issue[]): CExpr {
   const sets = Object.keys(logic).filter((k) => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b)).map((k) => logic[k]);
   const setExprs: { conj: string; e: CExpr }[] = [];
@@ -687,6 +713,8 @@ function readExpression(x: Json, location: string, issues: Issue[]): CExpr {
     if (full === null) return raw(`a quota condition with operator ${o}`);
     return { t: "cmp", ref: { kind: "quota", id: str(x.QuotaID || x.LeftOperand).replace(/^qo:\/\//, "") }, op: full ? "eq" : "ne", value: 1 };
   }
+  /* a literal the builder leaves behind ("If False") */
+  if (lt === "BooleanValue") return { t: "const", value: /^true$/i.test(str(x.Value)) };
   if (!op) return raw(`operator ${x.Operator ?? "?"} is not supported`);
   const right = x.RightOperand === undefined || x.RightOperand === "" ? undefined : /^-?\d+(\.\d+)?$/.test(str(x.RightOperand)) ? Number(x.RightOperand) : str(x.RightOperand);
   if (lt === "Question") {
@@ -713,6 +741,20 @@ function readExpression(x: Json, location: string, issues: Issue[]): CExpr {
       case "ChoiceTextEntryValue": if (a) { ref.choice = a; issues.push({ location, type: "converted", severity: "low", message: `A condition reads the text typed into choice ${a} of ${qid}; it was converted to a condition on the question's answer.`, autoAttempted: true, refs: [qid] }); } return { t: "cmp", ref, op, ...(right !== undefined ? { value: right } : {}) };
       case "ChoiceNumericEntryValue": if (a) ref.row = a; return { t: "cmp", ref, op, ...(right !== undefined ? { value: right } : {}) };
       case "SelectableAnswer": if (a) ref.row = a; if (b) ref.choice = b; return { t: "cmp", ref, op: op === "eq" ? "selected" : op };
+      case "SelectedAnswerCount": {
+        /* a grid: "answer A was chosen in at least one row" (≥ 1) or "in no row" (= 0) — a statement about each row, written as that */
+        const rows = matrixRows.get(qid) ?? [];
+        const n = typeof right === "number" ? right : Number(right);
+        const any = (op === "gte" && n === 1) || (op === "gt" && n === 0);
+        const none = (op === "eq" && n === 0) || (op === "lt" && n === 1) || (op === "lte" && n === 0);
+        if (a && !rows.length) return raw("a count of rows with one answer, on a grid whose rows come from another question");
+        const all = (op === "eq" || op === "gte") && n === rows.length, notAll = (op === "ne" || op === "lt") && n === rows.length;
+        if (!a || (!any && !none && !all && !notAll)) return raw("a count of rows with one answer, other than “at least one”, “none”, “every row” or “not every row”");
+        const each = (sel: boolean): CExpr[] => rows.map((r): CExpr => ({ t: "cmp", ref: { kind: "question", id: qid, row: r, choice: a }, op: sel ? "selected" : "notSelected" }));
+        if (all) return { t: "group", op: "and", children: each(true) };
+        if (notAll) return { t: "group", op: "or", children: each(false) };
+        return { t: "group", op: any ? "or" : "and", children: each(any) };
+      }
       case "QuestionText": case "QuestionScore": return raw(`a ${part} condition`);
       default: return raw(`the locator part ${part} is not supported`);
     }

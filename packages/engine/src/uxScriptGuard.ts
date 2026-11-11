@@ -289,9 +289,12 @@ export function scriptAuthoringProblems(code: string, def: AuthoringDef): string
 /** the code with comments blanked but string contents kept (style text lives in strings) */
 function withoutComments(code: string): string {
   const { bare, strings } = lexJs(code);
-  let out = bare;
-  for (const s of strings) out = out.slice(0, s.start) + code.slice(s.start, s.end) + out.slice(s.end);
-  return out;
+  /* one pass (strings come in source order): rebuilding the whole text per string took seconds on a script with thousands of literals */
+  const parts: string[] = [];
+  let pos = 0;
+  for (const s of strings) { if (s.start < pos) continue; parts.push(bare.slice(pos, s.start), code.slice(s.start, s.end)); pos = s.end; }
+  parts.push(bare.slice(pos));
+  return parts.join("");
 }
 
 export const POPUP_ALTERNATIVE = 'use the survey\'s own popup instead — a behaviour effect {"do":"show_popup","text":"…","title":"…","placement":"center"} (on select_option with "options" it shows only while the option is selected and closes by itself), or in a script rs.popup(text, {title, placement: "center"|"anchored"|"top"|"inline", target}) with rs.closePopup()';

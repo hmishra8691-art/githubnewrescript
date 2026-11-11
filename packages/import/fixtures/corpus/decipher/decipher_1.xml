@@ -1,0 +1,2706 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<survey 
+  alt="REP-032635913 Business Insurance Decision Maker"
+  autoAddVariables="1"
+  autosaveKey="rdud,rID"
+  browserDupes="safe"
+  builder:wizardCompleted="1"
+  builderCompatible="1"
+  compat="151"
+  delphi="1"
+  displayOnError="all"
+  extraVariables="ipAddress,source,record,decLang,list,userAgent,rdud,rd_proj_ud,testing2,rID"
+  fir="on"
+  html:showNumber="0"
+  mobile="compat"
+  mobileDevices="smartphone,tablet,desktop"
+  name="Survey"
+  remerged="20261102_14:19"
+  secure="1"
+  setup="term,decLang,quota,time"
+  ss:accordionDisplay="0"
+  ss:disableBackButton="1"
+  ss:enableNavigation="0"
+  ss:hideProgressBar="0"
+  ss:listDisplay="1"
+  ss:logoAlt="Logo"
+  ss:logoFile="selfserve/53b/logo_bb85fc4c008e3e3323848bda35e87734.png"
+  ss:logoPosition="left"
+  state="live"
+  theme="frozen:company/repdata-new"
+  version="13">
+
+<res label="softTerm">This is only for testing purposes and will not be seen live. (This is a soft terminate, respondent will be stopped at the end of the screener.)<br /><br />You screened on:</res>
+<res label="DuplicateError">Please enter unique response for each text box.</res>
+<res label="ErrSeq">Please enter responses in sequence for each text box.</res>
+<res label="B2text">$</res>
+<res label="SeqErr">Please provide your response in sequential order only.</res>
+<res label="ErrDup">Please enter unique responses in each box.</res>
+<res label="A02c1">Agent/broker: The intermediary who helps customers buy insurance and serves as the relationship between the customer and the carrier.</res>
+<res label="A02c2">Insurance Carrier: The company that actually provides the insurance policy, takes on the risk, collects the premium, and pays claims.</res>
+<res label="A02c3">Avatar: A digital human, powered by artificial intelligence, that talks and interacts with customers live on a screen to provide real-time support.</res>
+<res label="A02c4">Risk management: Risk management refers to the actions taken to identify, assess, reduce, and prevent risks that could negatively impact a business, such as workplace injuries, property damage, cyber threats, business interruptions, or liability exposures.</res>
+<suspend/>
+
+<exec when="init">
+#row.label in GreaterThan(Q1,0) for question with 0 or 1 columns, row.label in GreaterThan(Q1,0,'c1,c2') for question with multiple columns
+def GreaterThan(qid,val,*colnames):
+  s = []
+  if not colnames:
+      for eachRow in [row for row in qid.rows if row.displayed]:
+          if eachRow.val gt val:
+              s.append(eachRow.label) 
+  else:
+      colstr = ','.join(colnames)
+      colcount = colstr.split(',')
+      for eachRow in [row for row in qid.rows if row.displayed]:
+          for eachCol in colcount:
+              if qid.attr(str(eachRow.label)).attr(eachCol).val gt val:
+                  s.append(eachRow.label)                 
+  return s
+  
+#row.label in LessThan(Q1,5)  
+def LessThan(qid,val,*colnames):
+  s = []
+  if not colnames:
+      for eachRow in [row for row in qid.rows if row.displayed]:
+          if eachRow.val lt val:
+              s.append(eachRow.label) 
+  else:
+      colstr = ','.join(colnames)
+      colcount = colstr.split(',')
+      for eachRow in [row for row in qid.rows if row.displayed]:
+          for eachCol in colcount:
+              if qid.attr(str(eachRow.label)).attr(eachCol).val lt val:
+                  s.append(eachRow.label)                 
+  return s 
+  
+#row.label in EqualTo(Q1,5)  
+def EqualTo(qid,val,*colnames):
+  s = []
+  if not colnames:
+      for eachRow in [row for row in qid.rows if row.displayed]:
+          if eachRow.val == val:
+              s.append(eachRow.label) 
+  else:
+      colstr = ','.join(colnames)
+      colcount = colstr.split(',')
+      for eachRow in [row for row in qid.rows if row.displayed]:
+          for eachCol in colcount:
+              if qid.attr(str(eachRow.label)).attr(eachCol).val == val:
+                  s.append(eachRow.label)               
+  return s 
+  
+#row.label in EqualToSelect(Q1,'c3,c4,c5')  
+def EqualToSelect(qid,colnames):
+    s = []
+    colcount = colnames.split(',')
+    for eachRow in [row for row in qid.rows if row.displayed]:
+        for eachCol in colcount:
+            if qid.attr(str(eachRow.label)).attr(eachCol):
+                s.append(eachRow.label)               
+    return s  
+  
+#setZero(Q1)
+def setZero(qid):
+  if qid.displayed:
+    for eachRow in [row for row in qid.rows if row.displayed]:
+      for eachCol in [col for col in qid.cols if col.displayed]:
+        if eachRow[eachCol.index].val in ['', None]:
+          eachRow[eachCol.index].val = 0  
+          
+#setZero2(Q1)
+def setZero2(qid):
+  if qid.displayed:
+    for eachRow in qid.rows:
+      for eachCol in qid.cols:
+        if eachRow[eachCol.index].val in ['', None]:
+          eachRow[eachCol.index].val = 0                
+          
+#clearForm(Q1) - Clear data from a question 
+def clearForm(qid):
+  if qid.cols:
+    for eachRow in qid.rows:
+      for eachCol in qid.cols:
+        qid[eachRow][eachCol].val = None  
+  else:
+    for eachRow in qid.rows:        
+      qid[eachRow].val = None 
+        
+#CopyForm(Q1,Q2.c1) to copy from Q1 to Q2.c1, CopyForm(Q1,Q2.c1,'c2') to copy from Q1.c2 to Q2.c1
+def CopyForm(copy,paste,*colname):
+    if not colname:
+        for eachRow in [row for row in copy.rows if row.displayed]:
+            paste.attr(str(eachRow.label)).val = eachRow.val
+    else:
+        colstr = ','.join(colname)
+        colcount = colstr.split(',')
+        eachCol = colcount[0]
+        for eachRow in [row for row in copy.rows if row.displayed]:
+            paste.attr(str(eachRow.label)).val = copy.attr(str(eachRow.label)).attr(eachCol).val  
+            
+#ValidateSum(Q1,'lt',10) for static sum, ValidateSum(Q1.c1,'lt',Q0.r1.val) for dynamic value in c1 only
+def ValidateSum(qid,sCheck,iNum):
+    if sCheck=='lt':
+        if qid.sum ge iNum:
+            error(res.sum_lt %iNum)
+    if sCheck=='le':
+        if qid.sum gt iNum:
+            error(res.sum_le %iNum)  
+    if sCheck=='gt':
+        if qid.sum le iNum:
+            error(res.sum_gt %iNum) 
+    if sCheck=='ge':
+        if qid.sum lt iNum:
+            error(res.sum_ge %iNum)
+    if sCheck=='equal':
+        if qid.sum != iNum:
+            error(res.sum_equal %iNum)        
+
+##ValidateNumberRows(Q1,'lt',10) for 0 or 1 columns or ValidateNumberRows(Q1,'lt',10,'c1') to check specific column
+def ValidateNumberRows(qid,sCheck,iNum,*colnames):
+    if not colnames:
+        for eachRow in [row for row in qid.rows if row.displayed]:
+            if sCheck=='lt':
+                if eachRow.val ge iNum:
+                    error(res.row_lt %(eachRow.text, iNum), eachRow)
+            if sCheck=='le':
+                if eachRow.val gt iNum:
+                    error(res.row_le %(eachRow.text, iNum), eachRow)  
+            if sCheck=='gt':
+                if eachRow.val le iNum:
+                    error(res.row_gt %(eachRow.text, iNum), eachRow) 
+            if sCheck=='ge':
+                if eachRow.val lt iNum:
+                    error(res.row_ge %(eachRow.text, iNum), eachRow)     
+            if sCheck=='equal':
+                if eachRow.val != iNum:
+                    error(res.row_equal %(eachRow.text, iNum), eachRow)  
+    else:
+        colstr = ','.join(colnames)
+        colcount = colstr.split(',')
+        for eachRow in [row for row in qid.rows if row.displayed]:
+            for eachCol in colcount:
+              if sCheck=='lt':
+                  if qid.attr(str(eachRow.label)).attr(eachCol).val ge iNum:
+                      error(res.row_lt %(eachRow.text, iNum), eachRow)
+              if sCheck=='le':
+                  if qid.attr(str(eachRow.label)).attr(eachCol).val gt iNum:
+                      error(res.row_le %(eachRow.text, iNum), eachRow)  
+              if sCheck=='gt':
+                  if qid.attr(str(eachRow.label)).attr(eachCol).val le iNum:
+                      error(res.row_gt %(eachRow.text, iNum), eachRow) 
+              if sCheck=='ge':
+                  if qid.attr(str(eachRow.label)).attr(eachCol).val lt iNum:
+                      error(res.row_ge %(eachRow.text, iNum), eachRow)     
+              if sCheck=='equal':
+                  if qid.attr(str(eachRow.label)).attr(eachCol).val != iNum:
+                      error(res.row_equal %(eachRow.text, iNum), eachRow)                                               
+
+                
+#ValidateDKRows('any') if any box in row is required or ValidateDKRows('all') if all boxes are required
+def ValidateDKRows(anyall):
+  qid = this.label
+  qidDK = eval(qid+'dk')
+  for eachRow in [row for row in this.rows if row.displayed]:
+      if anyall=='all':
+          for eachCol in [col for col in this.cols if col.displayed]:
+              if eachRow[eachCol] and qidDK.rows[eachRow.index]:
+                  error(res.VDK %(eachRow.text,qidDK.cols[0].text), eachRow)
+              elif not eachRow[eachCol] and not qidDK.rows[eachRow.index]:  
+                  error(res.VDK %(eachRow.text,qidDK.cols[0].text), eachRow)
+      else:
+        if eachRow.any and qidDK.rows[eachRow.index]:
+            error(res.VDK %(eachRow.text,qidDK.cols[0].text), eachRow)
+        elif not eachRow.any and not qidDK.rows[eachRow.index]:  
+            error(res.VDK %(eachRow.text,qidDK.cols[0].text), eachRow)
+            
+#ValidateDKCols('any') if any box in row is required or ValidateDKRows('all') if all boxes are required
+def ValidateDKCols(anyall):
+  qid = this.label
+  qidDK = eval(qid+'dk')
+  for eachCol in [col for col in this.cols if col.displayed]:
+      if anyall=='all':
+          for eachRow in [row for row in this.rows if row.displayed]:
+              if eachRow[eachCol] and qidDK.cols[eachCol.index]:
+                  error(res.VDK %(eachCol.text,qidDK.cols[0].text), eachCol)
+              elif not eachRow[eachCol] and not qidDK.cols[eachCol.index]:  
+                  error(res.VDK %(eachCol.text,qidDK.cols[0].text), eachCol)
+      else:
+        if eachRow.any and qidDK.rows[eachRow.index]:
+            error(res.VDK %(eachRow.text,qidDK.cols[0].text), eachRow)
+        elif not eachRow.any and not qidDK.rows[eachRow.index]:  
+            error(res.VDK %(eachRow.text,qidDK.cols[0].text), eachRow)            
+            
+            
+#CheckMultiOpen()
+def CheckMultiOpen():
+ for eachRow in [row for row in this.rows if row.displayed][:-1]:
+   if eachRow and this.rows[eachRow.index +1]:
+       if eachRow.val == this.rows[eachRow.index +1].val:
+           error(res.unique)
+   if not eachRow and this.rows[eachRow.index +1]:
+       error(res.consec)  
+       
+#AnswRequire()
+def AnswRequire():
+    if not this.any:
+        error(res.answ)
+        
+#AnswRequire3D()
+def AnswRequire3D():
+    for eachCol in [col for col in this.cols if col.displayed]:
+        if not eachCol.any:
+            error(res.answcol %eachCol.text, eachCol)
+            
+
+#ValidateOEWordLength(q8.r1,1,5) to check if q8.r1 is between 1 and 5 words
+def ValidateOEWordLength(qid,lo,hi):
+    a = qid.val.split(" ")
+    if (len(a) gt hi or len(a) lt lo):
+        error(res.oelength %(lo, hi))
+        
+#OtherSpecNumeric('r3') for 0 or 1 columns, OtherSpecNumeric('r3','c1,c2') for multiple columns
+def OtherSpecNumeric(rowname,*colname):
+  if not gv.isSST():
+    if not colname:
+        if this.attr(rowname).val gt 0 and this.attr(rowname).open.strip() == '':
+            this.attr(rowname).styles.ss.rowClassNames = "oeError" 
+            error(this.lget("extraInfo"), this.attr(rowname))     
+    else:
+        colstr = ','.join(colname)
+        colcount = colstr.split(',')
+        for eachCol in colcount:
+            if this.attr(rowname).attr(eachCol).val gt 0 and this.attr(rowname).open.strip() == '':
+                this.attr(rowname).styles.ss.rowClassNames = "oeError" 
+                error(this.lget("extraInfo"), this.attr(rowname))
+
+def processTerms(qid):
+ retvar=False;
+ if qid=="Disp1":
+   if condition.Disp1:   retvar=True; QTermHid.r1.val=1; setMarker("Disp1");
+ if qid=="Disp2":
+   if condition.Disp2:   retvar=True; QTermHid.r2.val=1; setMarker("Disp2");
+ if qid=="Disp3":
+   if condition.Disp3:   retvar=True; QTermHid.r3.val=1; setMarker("Disp3");
+ if qid=="Disp4":
+   if condition.Disp4:   retvar=True; QTermHid.r4.val=1; setMarker("Disp4");
+ if qid=="Disp5":
+   if condition.Disp5:   retvar=True; QTermHid.r5.val=1; setMarker("Disp5");
+ if qid=="Disp6":
+   if condition.Disp6:   retvar=True; QTermHid.r6.val=1; setMarker("Disp6");
+ if qid=="Disp7":
+   if condition.Disp7:   retvar=True; QTermHid.r7.val=1; setMarker("Disp7");
+ if qid=="Disp8":
+   if condition.Disp8:   retvar=True; QTermHid.r8.val=1; setMarker("Disp8");
+ if qid=="Disp9":
+   if condition.Disp9:   retvar=True; QTermHid.r9.val=1; setMarker("Disp9");
+ if qid=="Disp10":
+   if condition.Disp10:   retvar=True; QTermHid.r10.val=1; setMarker("Disp10");
+ if qid=="Disp11":
+   if condition.Disp11:   retvar=True; QTermHid.r11.val=1; setMarker("Disp11");
+ if qid=="Disp12":
+   if condition.Disp12:   retvar=True; QTermHid.r12.val=1; setMarker("Disp12");
+ if qid=="Disp13":
+   if condition.Disp13:   retvar=True; QTermHid.r13.val=1; setMarker("Disp13");
+ if qid=="Disp14":
+   if condition.Disp14:   retvar=True; QTermHid.r14.val=1; setMarker("Disp14");
+ if qid=="Disp15":
+   if condition.Disp15:   retvar=True; QTermHid.r15.val=1; setMarker("Disp15");
+ if qid=="Disp16":
+   if condition.Disp16:   retvar=True; QTermHid.r16.val=1; setMarker("Disp16");
+ if qid=="Disp17":
+   if condition.Disp17:   retvar=True; QTermHid.r17.val=1; setMarker("Disp17");
+ if qid=="Disp18":
+   if condition.Disp18:   retvar=True; QTermHid.r18.val=1; setMarker("Disp18");
+ if qid=="Disp19":
+   if condition.Disp19:   retvar=True; QTermHid.r19.val=1; setMarker("Disp19");
+ if qid=="Disp20":
+   if condition.Disp20:   retvar=True; QTermHid.r20.val=1; setMarker("Disp20");
+ if qid=="QTermHid":
+   if (QTermHid.count&gt;0):   retvar=True; setMarker("TermAtEnd");
+ if gv.isSST():
+   return False;
+ else:
+   return retvar;
+</exec>
+
+<suspend/>
+
+<condition label="Disp1" cond="(condition.S01Term)" where="survey,report,notdp">Conditional Disposition 1</condition>
+<condition label="Disp2" cond="(condition.S02Term)" where="survey,report,notdp">Conditional Disposition 2</condition>
+<condition label="Disp3" cond="(condition.S05Term)" where="survey,report,notdp">Conditional Disposition 3</condition>
+<condition label="Disp4" cond="(condition.S06Term)" where="survey,report,notdp">Conditional Disposition 4</condition>
+<condition label="Disp5" cond="(condition.S07Term)" where="survey,report,notdp">Conditional Disposition 5</condition>
+<condition label="Disp6" cond="(condition.S08Term)" where="survey,report,notdp">Conditional Disposition 6</condition>
+<condition label="Disp7" cond="(condition.S10Term)" where="survey,report,notdp">Conditional Disposition 7</condition>
+<condition label="Disp8" cond="(condition.S11Term)" where="survey,report,notdp">Conditional Disposition 8</condition>
+<condition label="Disp9" cond="(condition.S12Term)" where="survey,report,notdp">Conditional Disposition 9</condition>
+<condition label="Disp10" cond="(condition.S14Term)" where="survey,report,notdp">Conditional Disposition 10</condition>
+<condition label="Disp11" cond="(condition.S15Term)" where="survey,report,notdp">Conditional Disposition 11</condition>
+<condition label="Disp12" cond="(condition.S16Term)" where="survey,report,notdp">Conditional Disposition 12</condition>
+<condition label="Disp13" cond="(condition.S17Term)" where="survey,report,notdp">Conditional Disposition 13</condition>
+<condition label="Disp14" cond="(condition.S18Term)" where="survey,report,notdp">Conditional Disposition 14</condition>
+<condition label="Disp15" cond="(False)" where="survey,report,notdp">Conditional Disposition 15</condition>
+<condition label="Disp16" cond="(False)" where="survey,report,notdp">Conditional Disposition 16</condition>
+<condition label="Disp17" cond="(False)" where="survey,report,notdp">Conditional Disposition 17</condition>
+<condition label="Disp18" cond="(False)" where="survey,report,notdp">Conditional Disposition 18</condition>
+<condition label="Disp19" cond="(False)" where="survey,report,notdp">Conditional Disposition 19</condition>
+<condition label="Disp20" cond="(False)" where="survey,report,notdp">Conditional Disposition 20</condition>
+<define label="TermList" builder:title="Term list 1" builderHint="{&quot;unlinked&quot;:[]}">
+  <row label="r1" value="1">S01</row>
+  <row label="r2" value="2">S02</row>
+  <row label="r3" value="3">S05</row>
+  <row label="r4" value="4">S06</row>
+  <row label="r5" value="5">S07</row>
+  <row label="r6" value="6">S08</row>
+  <row label="r7" value="7">S10</row>
+  <row label="r8" value="8">S11</row>
+  <row label="r9" value="9">S12</row>
+  <row label="r10" value="10">S14</row>
+  <row label="r11" value="11">S15</row>
+  <row label="r12" value="12">S16</row>
+  <row label="r13" value="13">S17</row>
+  <row label="r14" value="14">S18</row>
+  <row label="r15" value="15">PlaceHolder</row>
+  <row label="r16" value="16">PlaceHolder</row>
+  <row label="r17" value="17">PlaceHolder</row>
+  <row label="r18" value="18">PlaceHolder</row>
+  <row label="r19" value="19">PlaceHolder</row>
+  <row label="r20" value="20">PlaceHolder</row></define>
+<samplesources default="0">
+  <samplesource list="0">
+    <title>Open Survey</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <exit cond="terminated">This is only for testing purposes and will not be seen live.<br /><br /><em>To test a different path use the browser back button.</em></exit>
+    <exit cond="qualified"><em>Thank you for taking the time out of your busy schedule to complete this survey.  We truly appreciate your candid and thoughtful responses.</em></exit>
+    <exit cond="overquota">Thank you for taking our survey.</exit>
+  </samplesource>
+
+  <samplesource list="1">
+    <title>Rep Data</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <var name="rdud" unique="1"/>
+    <var name="sid"/>
+    <exit cond="terminated" url="https://www.rdsecured.com/return?inbound_code=2000&amp;rdud=${rdud}"/>
+    <exit cond="overquota" url="https://www.rdsecured.com/return?inbound_code=4000&amp;rdud=${rdud}"/>
+    <exit cond="qualified" url="https://www.rdsecured.com/return?inbound_code=1000&amp;rdud=${rdud}"/>
+  </samplesource>
+
+  <samplesource list="101">
+    <title>Catalyst Sample</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <var name="CMRID" unique="1"/>
+    <exit cond="terminated" url="https://cmrpanel.com/surveys/lp.php?CMRS=20&amp;CMRID=${CMRID}"/>
+    <exit cond="overquota" url="https://cmrpanel.com/surveys/lp.php?CMRS=40&amp;CMRID=${CMRID}"/>
+    <exit cond="qualified" url="https://cmrpanel.com/surveys/lp.php?CMRS=10&amp;CMRID=${CMRID}"/>
+  </samplesource>
+
+  <samplesource disableBrowserDupes="1" list="99">
+    <title>Client sample</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <exit cond="terminated"><em>Thank you for your time today and for your willingness to participate. Unfortunately, we are looking for a group of individuals who meet a different profile, but we look forward to including you in future research opportunities. Have a nice day.</em></exit>
+    <exit cond="qualified"><em>Thank you for taking the time out of your busy schedule to complete this survey.  We truly appreciate your candid and thoughtful responses.</em></exit>
+    <exit cond="overquota">Thank you for taking our survey.</exit>
+  </samplesource>
+</samplesources>
+
+<suspend/>
+
+<radio 
+  label="Disposition">
+  <title>Disposition Tracker</title>
+  <comment>Select one</comment>
+  <virtual>
+if "Disp1" in markers:    data.val = Disposition.r1.index
+elif "Disp2" in markers:    data.val = Disposition.r2.index
+elif "Disp3" in markers:    data.val = Disposition.r3.index
+elif "Disp4" in markers:    data.val = Disposition.r4.index
+elif "Disp5" in markers:    data.val = Disposition.r5.index
+elif "Disp6" in markers:    data.val = Disposition.r6.index
+elif "Disp7" in markers:    data.val = Disposition.r7.index
+elif "Disp8" in markers:    data.val = Disposition.r8.index
+elif "Disp9" in markers:    data.val = Disposition.r9.index
+elif "Disp10" in markers:    data.val = Disposition.r10.index
+elif "Disp11" in markers:    data.val = Disposition.r11.index
+elif "Disp12" in markers:    data.val = Disposition.r12.index
+elif "Disp13" in markers:    data.val = Disposition.r13.index
+elif "Disp14" in markers:    data.val = Disposition.r14.index
+elif "Disp15" in markers:    data.val = Disposition.r15.index
+elif "Disp16" in markers:    data.val = Disposition.r16.index
+elif "Disp17" in markers:    data.val = Disposition.r17.index
+elif "Disp18" in markers:    data.val = Disposition.r18.index
+elif "Disp19" in markers:    data.val = Disposition.r19.index
+elif "Disp20" in markers:    data.val = Disposition.r20.index
+elif "bad:qualified" in markers:        data.val = Disposition.r94.index
+elif "OQ" in markers:        data.val = Disposition.r95.index
+elif "TermAtEnd" in markers:    data.val = Disposition.r96.index
+elif "surveyComplete" in markers:    data.val = Disposition.r99.index
+elif "incMain" in markers:    data.val = Disposition.r98.index
+elif "incScreen" in markers:    data.val = Disposition.r97.index
+  </virtual>
+
+  <insert source="TermList"/>
+  <row label="r94" value="94">Terminated -- Qualified</row>
+  <row label="r95" value="95">OverQuota</row>
+  <row label="r96" value="96">Terminate -- At End of Screener</row>
+  <row label="r97" value="97">Incomplete in the screener</row>
+  <row label="r98" value="98">Incomplete in the main</row>
+  <row label="r99" value="99">Complete</row>
+</radio>
+
+<suspend/>
+
+<exec>
+setMarker("incScreen")
+QHidStage.val=QHidStage.r2.index
+</exec>
+
+<suspend/>
+
+<radio 
+  label="QHidStage"
+  where="execute,survey,report">
+  <title>Hidden question for testing purpose.</title>
+  <row label="r1">Terminate immediately</row>
+  <row label="r2">Terminate @end</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="qTesting"
+  optional="1"
+  where="execute,survey,report">
+  <title>HIDDEN VAR FOR TESTING</title>
+  <exec>
+if testing2 == "1":
+   qTesting.val = 0
+  </exec>
+
+  <row label="r1">1</row>
+  <row label="r2">2</row>
+</radio>
+
+<suspend/>
+
+<text 
+  label="survey_id"
+  where="execute,survey,report">
+  <title>HIDDEN - SURVEY NUMBER</title>
+</text>
+
+<exec>
+survey_id.val = str(gv.survey.path).split('/')[-1]
+</exec>
+
+<text 
+  label="RD_GetToken"
+  size="25">
+  <title>Result</title>
+  <row label="r0">token</row>
+  <row label="r1">pass_params</row>
+</text>
+
+<text 
+  label="RD_Search"
+  size="25">
+  <title>search</title>
+  <row label="r0">search_threat_potential</row>
+  <row label="r1">search_threat_potential_score</row>
+  <row label="r2">search_respondent_risk</row>
+  <row label="r3">search_country</row>
+  <row label="r4">search_flag</row>
+  <row label="r5">search_duplicate_potential</row>
+  <row label="r6">search_duplicate_score</row>
+  <row label="r7">search_failure_reason</row>
+  <row label="r8">search_duplicate_initial_ud</row>
+  <style name="question.after" wrap="ready"><![CDATA[
+//var qn = ${jsexport()};
+
+ 
+
+//var $qn = $ ("#question_" + qn.label);
+
+//some code
+
+ 
+
+$ ("#question_RD_GetToken").hide();
+
+$ ("#question_RD_Search").hide();
+]]></style>
+</text>
+
+<html label="Redirect">Preparing.... Please wait<br /></html>
+
+<style name="respview.client.css"><![CDATA[
+<style type="text/css">
+
+.instruction-text {
+    font-style:italic;
+    padding-left: 10px;
+
+</style>
+]]></style>
+<style mode="after" name="respview.client.css"><![CDATA[
+<style>
+    #question_RD_GetToken {
+       display: none;
+    }  
+    #question_RD_Search {
+       display: none;
+    }             
+</style>
+]]></style>
+<style mode="after" name="respview.client.js"><![CDATA[
+<script type="module">
+
+     var div_Search = document.getElementsByClassName("label_RD_Search");
+     if (typeof(div_Search) != 'undefined') {
+     
+       if (div_Search.length > 0){
+     
+       var r_gettoken_token = document.getElementsByClassName("label_RD_GetToken")[0].querySelectorAll('.answers-list')[0].querySelectorAll('.text-input')[0];
+         var r_gettoken_pass_params = document.getElementsByClassName("label_RD_GetToken")[0].querySelectorAll('.answers-list')[0].querySelectorAll('.text-input')[1];     
+
+         document.addEventListener('DOMContentLoaded', function() {
+         var scriptElement = document.createElement('script');
+         scriptElement.src = "https://prod.rtymgt.com/static/js/rd_search_v3_support_lib.min.js?v=1.1";
+         scriptElement.onload = function() {
+            
+             try {
+               let rd_result = new rd_search_v3_support_lib(
+                      1
+                    , "68daae8e-e604-4451-8e65-357493452763"
+                    , 100
+                    , 0);
+                    
+          rd_result.then(function(obj_result) {
+            console.log(obj_result); 
+                                
+                    let sub = document.querySelectorAll('input[type="submit"]');
+                    
+                        r_gettoken_token.value = obj_result.token;
+                        r_gettoken_pass_params.value = obj_result.pass_params;
+                        
+                        sub[0].click();
+            
+          });                    
+                         
+             }
+             catch (e) {console.log(e);}                        
+            
+         };
+
+         if (document.body) {
+         document.body.appendChild(scriptElement);
+         } else {
+         console.error('document.body is null or undefined');
+         }
+         });
+       }
+     }
+</script>
+]]></style>
+<suspend/>
+
+<exec>
+search_data = {"sy_nr": survey_id.val, "sn_ud": uuid, RD_GetToken.r1.val:""}
+header_data = {"Content-Type":"application/json","token":RD_GetToken.r0.val }
+</exec>
+
+<logic label="search_result" api:headers="header_data" api:method="POST" api:params="search_data" api:url="https://prod.rtymgt.com/api/v3/respondents/search/f8d3e01d-db4e-4f22-885f-c945125d4ec4" uses="api.1"/>
+<exec>
+if search_result.status == 200:
+   RD_Search.r0.val = str(search_result.r["Respondent"]["threat_potential"])
+   RD_Search.r1.val = str(search_result.r["Respondent"]["threat_potential_score"])
+   RD_Search.r2.val = str(search_result.r["Respondent"]["respondent_risk"])
+   RD_Search.r3.val = str(search_result.r["Respondent"]["country"])
+   RD_Search.r4.val = str(search_result.r["Surveys"][0]["flag"])
+   RD_Search.r5.val = str(search_result.r["Surveys"][0]["duplicate_potential"])
+   RD_Search.r6.val = str(search_result.r["Surveys"][0]["duplicate_score"])
+   RD_Search.r7.val = str(search_result.r["Surveys"][0]["failure_reason"])
+   RD_Search.r8.val = str(search_result.r["Surveys"][0]["duplicate_initial_ud"])
+</exec>
+
+<html label="Intro" cond="0" where="survey">This is a test" please click yes to proceed.<br />
+      <br />Let's start!</html>
+
+<suspend/>
+
+<note>Turning Dupe check off by default for pre-test/panel onboarding - turn it on once study is with live respondents.</note>
+<term label="RD1" cond="(RD_Search.r6.any and not(qTesting.r1) and float(str(RD_Search.r6.val)) == 100) and 0" markers="terminated, review_dupe_score" sst="0">duplicate respondent - RD</term>
+
+<term label="RD2" cond="RD_Search.r1.any and not(qTesting.r1) and float(str(RD_Search.r1.val)) gt 90" markers="terminated, review_fraud_score" sst="0">High Fraud Score - RD</term>
+
+<suspend/>
+
+<note>#################   SURVEY STARTS HERE   ###############</note>
+<note>************************ ALL SCREENER GOES HERE ********************************</note>
+<html label="INTRODUCTION" where="survey">Thank you for your interest in our survey! Your responses today will help insurance companies understand how to provide better service to your business. In accordance with our privacy policy, your responses to all questions in this survey will be kept confidential and used for research purposes only.<br />
+<br />The survey should take approximately <u>15-17 minutes</u> to complete.</html>
+
+<suspend/>
+
+<radio 
+  label="S01">
+  <title>Which of the following best describes your employment status?</title>
+  <row label="r1" value="1">Employed full-time</row>
+  <row label="r2" value="2">Employed part-time</row>
+  <row label="r3" value="3">Self-employed</row>
+  <row label="r4" value="4">Retired</row>
+  <row label="r5" value="5">Student</row>
+  <row label="r6" value="6">Currently unemployed</row>
+  <row label="r7" value="7">Prefer not to say</row>
+</radio>
+
+<suspend/>
+
+<condition label="S01Term" cond="not(S01.r1) and S01.any"/>
+<suspend/>
+
+<term label="termS01" cond="(processTerms('Disp1'))">Term - S01</term>
+
+<suspend/>
+
+<radio 
+  label="S02">
+  <title>Is your business headquartered in the U.S?</title>
+  <row label="r1" value="1">Yes</row>
+  <row label="r2" value="2">No</row>
+</radio>
+
+<suspend/>
+
+<condition label="S02Term" cond="S02.r2"/>
+<suspend/>
+
+<html label="S02TermFlag" cond="qTesting.r1 and condition.S02Term" where="survey">${res.softTerm} S02</html>
+
+<suspend/>
+
+<select 
+  label="S03">
+  <title>What state is your company's headquarters or main operations?</title>
+  <choice label="ch1">ALABAMA</choice>
+  <choice label="ch2">ALASKA</choice>
+  <choice label="ch3">ARIZONA</choice>
+  <choice label="ch4">ARKANSAS</choice>
+  <choice label="ch5">CALIFORNIA</choice>
+  <choice label="ch6">COLORADO</choice>
+  <choice label="ch7">CONNECTICUT</choice>
+  <choice label="ch8">DELAWARE</choice>
+  <choice label="ch9">DISTRICT OF COLUMBIA</choice>
+  <choice label="ch10">FLORIDA</choice>
+  <choice label="ch11">GEORGIA</choice>
+  <choice label="ch12">HAWAII</choice>
+  <choice label="ch13">IDAHO</choice>
+  <choice label="ch14">ILLINOIS</choice>
+  <choice label="ch15">INDIANA</choice>
+  <choice label="ch16">IOWA</choice>
+  <choice label="ch17">KANSAS</choice>
+  <choice label="ch18">KENTUCKY</choice>
+  <choice label="ch19">LOUISIANA</choice>
+  <choice label="ch20">MAINE</choice>
+  <choice label="ch21">MARYLAND</choice>
+  <choice label="ch22">MASSACHUSETTS</choice>
+  <choice label="ch23">MICHIGAN</choice>
+  <choice label="ch24">MINNESOTA</choice>
+  <choice label="ch25">MISSISSIPPI</choice>
+  <choice label="ch26">MISSOURI</choice>
+  <choice label="ch27">MONTANA</choice>
+  <choice label="ch28">NEBRASKA</choice>
+  <choice label="ch29">NEVADA</choice>
+  <choice label="ch30">NEW HAMPSHIRE</choice>
+  <choice label="ch31">NEW JERSEY</choice>
+  <choice label="ch32">NEW MEXICO</choice>
+  <choice label="ch33">NEW YORK</choice>
+  <choice label="ch34">NORTH CAROLINA</choice>
+  <choice label="ch35">NORTH DAKOTA</choice>
+  <choice label="ch36">OHIO</choice>
+  <choice label="ch37">OKLAHOMA</choice>
+  <choice label="ch38">OREGON</choice>
+  <choice label="ch39">PENNSYLVANIA</choice>
+  <choice label="ch40">RHODE ISLAND</choice>
+  <choice label="ch41">SOUTH CAROLINA</choice>
+  <choice label="ch42">SOUTH DAKOTA</choice>
+  <choice label="ch43">TENNESSEE</choice>
+  <choice label="ch44">TEXAS</choice>
+  <choice label="ch45">UTAH</choice>
+  <choice label="ch46">VERMONT</choice>
+  <choice label="ch47">VIRGINIA</choice>
+  <choice label="ch48">WASHINGTON</choice>
+  <choice label="ch49">WEST VIRGINIA</choice>
+  <choice label="ch50">WISCONSIN</choice>
+  <choice label="ch51">WYOMING</choice>
+</select>
+
+<suspend/>
+
+<exec>
+northeast=[7,20,22,30,31,33,39,40,46]
+midwest=[14,15,16,17,23,24,26,28,35,36,42,50]
+south=[1,4,8,9,10,11,18,19,21,25,34,37,41,43,44,47,49]
+west=[2,3,5,6,12,13,27,29,32,38,45,48,51]
+
+reg=S03.ival+1
+if reg in northeast:
+ Region.val=0
+if reg in midwest:
+ Region.val=1
+if reg in south:
+ Region.val=2
+if reg in west:
+ Region.val=3
+</exec>
+
+<radio 
+  label="Region"
+  optional="1"
+  where="execute,survey,report">
+  <title>State Region Punching</title>
+  <row label="r1"><b>Northeast:</b> Maine, Vermont, New Hampshire, Massachusetts, Connecticut, Rhode Island, New York, Pennsylvania, New Jersey</row>
+  <row label="r2"><b>Midwest:</b> Wisconsin, Illinois, Michigan, Indiana, Ohio, North Dakota, South Dakota, Nebraska, Kansas, Minnesota, Iowa, Missouri</row>
+  <row label="r3"><b>South:</b> West Virginia, Maryland, Delaware, Virginia, District of Columbia, North Carolina, South Carolina, Georgia, Florida, Kentucky, Tennessee, Mississippi, Alabama, Texas, Oklahoma, Arkansas, Louisiana</row>
+  <row label="r4"><b>West:</b> Montana, Idaho, Wyoming, Utah, Colorado, New Mexico, Arizona, Nevada, Alaska, Washington, Oregon, California, Hawaii</row>
+</radio>
+
+<suspend/>
+
+<checkbox 
+  label="pgHover"
+  ss:listDisplay="0"
+  where="execute,survey,report">
+  <title>Hidden- used for hoverover text ${progHoverOverCSS.r2.text}</title>
+  <row label="r1"><div class="tooldiv" id="hoID1">${res.A02c1}</div><span onmouseout="hideToolTip(&amp;quot;hoID1&amp;quot;)" class="hoverlabel" onclick="showTooltip(event,&amp;quot;hoID1&amp;quot;)" onmouseover="showTooltip(event,&amp;quot;hoID1&amp;quot;)">Agent/broker</span></row>
+  <row label="r2"><div class="tooldiv" id="hoID2">${res.A02c2}</div><span onmouseout="hideToolTip(&amp;quot;hoID2&amp;quot;)" class="hoverlabel" onclick="showTooltip(event,&amp;quot;hoID2&amp;quot;)" onmouseover="showTooltip(event,&amp;quot;hoID2&amp;quot;)">Insurance carrier</span></row>
+  <row label="r3"><div class="tooldiv" id="hoID3">${res.A02c3}</div><span onmouseout="hideToolTip(&amp;quot;hoID3&amp;quot;)" class="hoverlabel" onclick="showTooltip(event,&amp;quot;hoID3&amp;quot;)" onmouseover="showTooltip(event,&amp;quot;hoID3&amp;quot;)">avatar</span></row>
+  <row label="r4"><div class="tooldiv" id="hoID4">${res.A02c4}</div><span onmouseout="hideToolTip(&amp;quot;hoID4&amp;quot;)" class="hoverlabel" onclick="showTooltip(event,&amp;quot;hoID4&amp;quot;)" onmouseover="showTooltip(event,&amp;quot;hoID4&amp;quot;)">risk management</span></row>
+  <row label="r5"><div class="tooldiv" id="hoID5">${res.A02c4}</div><span onmouseout="hideToolTip(&amp;quot;hoID5&amp;quot;)" class="hoverlabel" onclick="showTooltip(event,&amp;quot;hoID5&amp;quot;)" onmouseover="showTooltip(event,&amp;quot;hoID5&amp;quot;)">Risk Management</span></row>
+  <row label="r6"><div class="tooldiv" id="hoID6">${res.A02c4}</div><span onmouseout="hideToolTip(&amp;quot;hoID6&amp;quot;)" class="hoverlabel" onclick="showTooltip(event,&amp;quot;hoID6&amp;quot;)" onmouseover="showTooltip(event,&amp;quot;hoID6&amp;quot;)">Risk management</span></row>
+</checkbox>
+
+<suspend/>
+
+<radio 
+  label="S04"
+  shuffle="rows">
+  <title>${progHoverOverCSS.r2.text}Which of the following best describes your <u>function</u> in your business?</title>
+  <comment>Please select one.</comment>
+  <row label="r1" value="1">Business Owner/Partner</row>
+  <row label="r2" value="2">CEO/President</row>
+  <row label="r3" value="3">Chief Financial Officer</row>
+  <row label="r4" value="4">Other Finance (treasure, finance manager, accountant, bookkeeper, payroll, etc.)</row>
+  <row label="r5" value="5"><i>${pgHover.r5.text}</i>/Risk Manager</row>
+  <row label="r6" value="6">Human Resources VP, Director, Manager</row>
+  <row label="r7" value="7">General Counsel</row>
+  <row label="r8" value="8">Operations manager</row>
+  <row label="r9" value="9">Procurement staff</row>
+  <row label="r10" value="10">Professional staff (accountant, architect, doctor, lawyer, teacher, professor, analyst, etc.)</row>
+  <row label="r11" value="11">Administrative Staff (coordinator, clerk, administrator, specialist, developer, representative, etc.)</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="S05">
+  <title>How many years have you been in your role?</title>
+  <row label="r1" value="1">Less than one year</row>
+  <row label="r2" value="2">1-5 years</row>
+  <row label="r3" value="3">6-10 years</row>
+  <row label="r4" value="4">11-15 years</row>
+  <row label="r5" value="5">16-20 years</row>
+  <row label="r6" value="6">21+ years</row>
+</radio>
+
+<suspend/>
+
+<condition label="S05Term" cond="S05.r1"/>
+<suspend/>
+
+<html label="S05TermFlag" cond="qTesting.r1 and condition.S05Term" where="survey">${res.softTerm} S05</html>
+
+<suspend/>
+
+<radio 
+  label="S06">
+  <title>Which of the following best describes your business?</title>
+  <row label="r1" value="1">Public company</row>
+  <row label="r2" value="2">Private company</row>
+  <row label="r3" value="3">Government</row>
+  <row label="r4" value="4">Non-profit</row>
+  <row label="r5" value="5">Unsure</row>
+</radio>
+
+<suspend/>
+
+<condition label="S06Term" cond="S06.r3 or S06.r4 or S06.r5"/>
+<suspend/>
+
+<html label="S06TermFlag" cond="qTesting.r1 and condition.S06Term" where="survey">${res.softTerm} S06</html>
+
+<suspend/>
+
+<radio 
+  label="S07">
+  <title>How many years has your business been in operation?</title>
+  <row label="r1" value="1">Less than one year</row>
+  <row label="r2" value="2">1-3 years</row>
+  <row label="r3" value="3">4-8 years</row>
+  <row label="r4" value="4">9-14 years</row>
+  <row label="r5" value="5">15-24 years</row>
+  <row label="r6" value="6">25-49 years</row>
+  <row label="r7" value="7">50 years or more</row>
+</radio>
+
+<suspend/>
+
+<condition label="S07Term" cond="S07.r1"/>
+<suspend/>
+
+<html label="S07TermFlag" cond="qTesting.r1 and condition.S07Term" where="survey">${res.softTerm} S07</html>
+
+<suspend/>
+
+<radio 
+  label="S08">
+  <title>What was your company's <u>total annual revenue or total sales</u> in 2025?</title>
+  <comment>Your best estimate is fine.</comment>
+  <row label="r1" value="1">Zero revenue/Start-up company</row>
+  <row label="r2" value="2">Under $2M</row>
+  <row label="r3" value="3">$2M to less than $5M</row>
+  <row label="r4" value="4">$5M to less than $10M</row>
+  <row label="r5" value="5">$10M to less than $20M</row>
+  <row label="r6" value="6">$20M to less than $50M</row>
+  <row label="r7" value="7">$50M to less than $100M</row>
+  <row label="r8" value="8">$100M to less than $500M</row>
+  <row label="r9" value="9">$500M to less than $1 billion</row>
+  <row label="r10" value="10">$1 billion or more</row>
+</radio>
+
+<suspend/>
+
+<condition label="S08Term" cond="S08.r1"/>
+<suspend/>
+
+<html label="S08TermFlag" cond="qTesting.r1 and condition.S08Term" where="survey">${res.softTerm} S08</html>
+
+<suspend/>
+
+<radio 
+  label="S09">
+  <title>In addition to yourself, how many <u>full-time employees</u> does your company employ across locations? By "full-time employees," we mean those who work <u>30 hours or more</u> each week.</title>
+  <row label="r1" value="1">1, sole proprietor</row>
+  <row label="r2" value="2">2 to 5</row>
+  <row label="r3" value="3">6 to 10</row>
+  <row label="r4" value="4">11 to 49</row>
+  <row label="r5" value="5">50 to 99</row>
+  <row label="r6" value="6">100 to 250</row>
+  <row label="r7" value="7">251 to 500</row>
+  <row label="r8" value="8">501 to 1,000</row>
+  <row label="r9" value="9">1,001 to 5,000</row>
+  <row label="r10" value="10">5,001 to 10,000</row>
+  <row label="r11" value="11">10,001 to 24,999</row>
+  <row label="r12" value="12">25,000 or more</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="S10">
+  <title>What was your company's overall total commercial insurance premium in 2025 across all different coverages, including different carriers? Please only include property and casualty business insurance (P&amp;C), <b><u>NOT</u></b> health insurance or employee benefits and estimate to the best of your ability.</title>
+  <row label="r1" value="1">Under $10,000</row>
+  <row label="r2" value="2">$10,000 to less than $25,000</row>
+  <row label="r3" value="3">$25,000 to less than $50,000</row>
+  <row label="r4" value="4">$50,000 to less than $100,000</row>
+  <row label="r5" value="5">$100,000 to less than $250,000</row>
+  <row label="r6" value="6">$250,000 to less than $400,000</row>
+  <row label="r7" value="7">$400,000 to less than $750,000</row>
+  <row label="r8" value="8">$750,000 to less than $1 million</row>
+  <row label="r9" value="9">$1 million or more</row>
+  <row label="r10" value="10">Don't know/unsure</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="hS10qta"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden for FLAG AS SMALL / MIDDLE / LARGE</title>
+  <exec>
+if S10.r1 or S10.r2 or S10.r3:
+  hS10qta.val = hS10qta.r1.index
+
+if S10.r4 or S10.r5 or S10.r6 or S10.r7:
+  hS10qta.val = hS10qta.r2.index
+
+if S10.r8 or S10.r9:
+  hS10qta.val = hS10qta.r3.index
+  </exec>
+
+  <row label="r1">SMALL</row>
+  <row label="r2">MIDDLE</row>
+  <row label="r3">LARGE</row>
+</radio>
+
+<suspend/>
+
+<condition label="S10Term" cond="S10.r10"/>
+<suspend/>
+
+<html label="S10TermFlag" cond="qTesting.r1 and condition.S10Term" where="survey">${res.softTerm} S10</html>
+
+<suspend/>
+
+<radio 
+  label="S11">
+  <title>What is <u>your role in making insurance decisions</u> for your company? By insurance decisions, we mean selecting or managing your company's <b>Property and Casualty (P&amp;C) insurance products</b>, <i> <u>excluding</u></i> employee health/dental benefits.</title>
+  <row label="r1" value="1">I am the sole decision-maker for all P&amp;C insurance decisions for the organization</row>
+  <row label="r2" value="2">I share in the P&amp;C insurance decision-making</row>
+  <row label="r3" value="3">I can influence P&amp;C insurance decisions</row>
+  <row label="r4" value="4">I am not involved in P&amp;C insurance decisions</row>
+</radio>
+
+<suspend/>
+
+<condition label="S11Term" cond="S11.r4"/>
+<suspend/>
+
+<html label="S11TermFlag" cond="qTesting.r1 and condition.S11Term" where="survey">${res.softTerm} S11</html>
+
+<suspend/>
+
+<radio 
+  label="S12"
+  colLegendRows="6"
+  ss:colWidth="20px"
+  ss:legendColWidth="180px"
+  ss:questionClassNames="skipAutosize">
+  <title>${progHoverOverCSS.r2.text}Thinking about your company's business insurance, on a scale of 1 to 10, where 1 is "not at all involved" and 10 is "very involved", what is your <b>current level of involvement</b> in each of the following processes? Again, please focus on your involvement related to property and casualty (P&amp;C) business insurance, <u>NOT</u> health insurance or other employee benefits.</title>
+  <row label="r1">Determining the types of insurance your company needs, or working with an agent or broker to determine this</row>
+  <row label="r2">Reviewing business insurance quotes</row>
+  <row label="r3">Choosing which carrier(s) to get your policies from</row>
+  <row label="r4">Getting your account and policies started and set up</row>
+  <row label="r5">Making changes to your policy throughout the year – such as adding vehicles, entering into new insurance contracts, etc.</row>
+  <row label="r6">Managing other service needs relative to your policy – such as requesting certificates or asking questions</row>
+  <row label="r7">Renewing your insurance policies</row>
+  <row label="r8">Reviewing and/or paying your insurance premium</row>
+  <row label="r9">Managing claims processing</row>
+  <row label="r10">Participating in <i>${pgHover.r4.text}</i>, loss control, or risk prevention</row>
+  <row label="r11">Participating in insurance premium audits</row>
+  <col label="c1" value="1">Not at all involved<br /><br />1</col>
+  <col label="c2" value="2">2</col>
+  <col label="c3" value="3">3</col>
+  <col label="c4" value="4">4</col>
+  <col label="c5" value="5">5</col>
+  <col label="c6" value="6">6</col>
+  <col label="c7" value="7">7</col>
+  <col label="c8" value="8">8</col>
+  <col label="c9" value="9">9</col>
+  <col label="c10" value="10">Very involved<br /><br />10</col>
+  <style name="question.after"><![CDATA[
+<style>
+ #question_S12 > div > table > tbody:nth-child(1) {
+    position: sticky;
+    top: 0;
+    z-index: 100000;
+}
+   </style>
+]]></style>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="hTermS12"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden for S12 Term</title>
+  <exec>
+cnt = 0
+advRows = ["r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11"]
+
+for xr in S12.rows:
+    if xr.displayed and xr.label in advRows:
+        if S12[xr].c8 or S12[xr].c9 or S12[xr].c10:
+            cnt += 1
+
+if cnt ge 4:
+    hTermS12.val = hTermS12.r2.index
+else:
+    hTermS12.val = hTermS12.r1.index
+  </exec>
+
+  <row label="r1">Term</row>
+  <row label="r2">Don't Term</row>
+</radio>
+
+<suspend/>
+
+<condition label="S12Term" cond="hTermS12.r1"/>
+<suspend/>
+
+<html label="S12TermFlag" cond="qTesting.r1 and condition.S12Term" where="survey">${res.softTerm} S12</html>
+
+<suspend/>
+
+<radio 
+  label="S13">
+  <title>Using a 10-point scale, where "10" indicates you are very involved and "1" indicates you are not at all involved, how involved are you in <b>making decisions related to group benefits</b> (e.g., life insurance, short term disability, long-term disability, etc.) for your company.</title>
+  <row label="r1"><b>Group Benefits</b> (e.g., life insurance, short-term disability insurance, long-term disability insurance and long-term care)</row>
+  <col label="c1" value="1">Not at all involved<br /><br />1</col>
+  <col label="c2" value="2">2</col>
+  <col label="c3" value="3">3</col>
+  <col label="c4" value="4">4</col>
+  <col label="c5" value="5">5</col>
+  <col label="c6" value="6">6</col>
+  <col label="c7" value="7">7</col>
+  <col label="c8" value="8">8</col>
+  <col label="c9" value="9">9</col>
+  <col label="c10" value="10">Very involved<br /><br />10</col>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="S14">
+  <title>Which of the following <u>industry categories</u> best fits your company?</title>
+  <comment>Please select the one that applies most closely to your company.</comment>
+  <row label="r1" value="1">Arts, Entertainment, Media, and Recreation</row>
+  <row label="r2" value="2">Agriculture, Forestry, Fishing and Hunting</row>
+  <row label="r3" value="3">Architects, Engineers, Surveyors</row>
+  <row label="r4" value="4">Construction</row>
+  <row label="r5" value="5">Education</row>
+  <row label="r6" value="6">Energy</row>
+  <row label="r7" value="7">Financial Institutions and Banks</row>
+  <row label="r8" value="8">Food services / Restaurants</row>
+  <row label="r9" value="9">Healthcare</row>
+  <row label="r10" value="10">Hospitality</row>
+  <row label="r11" value="11">Life Sciences/Pharmaceuticals</row>
+  <row label="r12" value="12">Manufacturing</row>
+  <row label="r13" value="13">Non-profit</row>
+  <row label="r14" value="14">Personal Services</row>
+  <row label="r15" value="15">Private Equity</row>
+  <row label="r16" value="16">Professional, Scientific and Technical Services</row>
+  <row label="r17" value="17">Real Estate, Rental and Leasing</row>
+  <row label="r18" value="18">Technology</row>
+  <row label="r19" value="19">Transportation</row>
+  <row label="r20" value="20">Utilities</row>
+  <row label="r21" value="21">Wholesale &amp; Distribution</row>
+  <row label="r22" open="1" openSize="25" randomize="0" value="22">Other (Specify)</row>
+  <row label="r23" value="23">Prefer not to answer</row>
+</radio>
+
+<suspend/>
+
+<condition label="S14Term" cond="S14.r23"/>
+<suspend/>
+
+<html label="S14TermFlag" cond="qTesting.r1 and condition.S14Term" where="survey">${res.softTerm} S14</html>
+
+<suspend/>
+
+<radio 
+  label="S15">
+  <title>Is your company involved in any of the following?</title>
+  <row label="r1" value="1">Cannabis product manufacturing, distribution, or retail</row>
+  <row label="r2" value="2">Weapons manufacturing, distribution, or retail</row>
+  <row label="r3" value="3">Oil or gas refinement</row>
+  <row label="r4" value="4">Nuclear energy</row>
+  <row label="r5" value="5">None of these</row>
+</radio>
+
+<suspend/>
+
+<condition label="S15Term" cond="not(S15.r5) and S15.any"/>
+<suspend/>
+
+<html label="S15TermFlag" cond="qTesting.r1 and condition.S15Term" where="survey">${res.softTerm} S15</html>
+
+<suspend/>
+
+<checkbox 
+  label="S16"
+  atleast="1"
+  sortRows="asc,survey">
+  <title>Which of the following <u>types of business insurance</u> does your company currently carry?</title>
+  <comment>Please select all that apply.</comment>
+  <row label="r1">Property</row>
+  <row label="r2">General Liability</row>
+  <row label="r3">Business Owner's Policy (BOP) or a package policy</row>
+  <row label="r4">Workers Compensation</row>
+  <row label="r5">Commercial Auto</row>
+  <row label="r6">Umbrella</row>
+  <row label="r7">Professional Liability (including Errors and Omissions)</row>
+  <row label="r8">Employment Practices Liability (EPL)</row>
+  <row label="r9">Product Liability</row>
+  <row label="r10">Directors and Officers Liability (D&amp;O)</row>
+  <row label="r11">Cyber Liability or Data Breach</row>
+  <row label="r12">Crime</row>
+  <row label="r13">Kidnap and Ransom</row>
+  <row label="r14">Ocean Marine (Liability &amp; Cargo)</row>
+  <row label="r15">Inland Marine</row>
+  <row label="r16">Pollution or Environmental Liability</row>
+  <row label="r17">Fiduciary Liability</row>
+  <row label="r18">Multinational Coverage</row>
+  <row label="r19" open="1" openSize="25" randomize="0">Other (Specify):</row>
+  <row label="r20" exclusive="1" randomize="0">Prefer not to say</row>
+</checkbox>
+
+<suspend/>
+
+<radio 
+  label="hTermS16"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden for S16 Term</title>
+  <exec>
+if hS10qta.r1:
+    if (sum([1 for x in [S16.r1, S16.r2, S16.r4] if x]) ge 1) or (S16.r3):
+        hTermS16.val = hTermS16.r2.index
+    else:
+        hTermS16.val = hTermS16.r1.index
+
+elif hS10qta.r2 or hS10qta.r3:
+    if (S16.r1 and S16.r2 and S16.r4) or (S16.r3 and S16.r4):
+        hTermS16.val = hTermS16.r2.index
+    else:
+        hTermS16.val = hTermS16.r1.index
+  </exec>
+
+  <row label="r1">Term S16</row>
+  <row label="r2">Don't Term S16</row>
+</radio>
+
+<suspend/>
+
+<condition label="S16Term" cond="hTermS16.r1"/>
+<suspend/>
+
+<html label="S16TermFlag" cond="qTesting.r1 and condition.S16Term" where="survey">${res.softTerm} S16</html>
+
+<suspend/>
+
+<radio 
+  label="S17">
+  <title>Do you work with an agent or broker to purchase and/or to help manage your company's business insurance?</title>
+  <row label="r1" value="1">Yes</row>
+  <row label="r2" value="2">No</row>
+  <row label="r3" value="3">Unsure</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="hS17qta"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden for S17 MID quota and SMALL monitoring</title>
+  <exec>
+if S17.r2 and hS10qta.r2:
+    hS17qta.val = hS17qta.r1.index
+
+elif S17.r2 and hS10qta.r1:
+    hS17qta.val = hS17qta.r2.index
+  </exec>
+
+  <row label="r1">MID - Maximum 25</row>
+  <row label="r2">SMALL - Monitor</row>
+</radio>
+
+<suspend/>
+
+<condition label="S17Term" cond="(S17.r2 and hS10qta.r3) or (S17.r3)"/>
+<suspend/>
+
+<html label="S17TermFlag" cond="qTesting.r1 and condition.S17Term" where="survey">${res.softTerm} S17</html>
+
+<suspend/>
+
+<checkbox 
+  label="S18"
+  atleast="1">
+  <title>Which insurance carrier(s) do you currently work with for your company's business insurance needs?</title>
+  <comment>Please think about all your P&amp;C insurance products. If you work with multiple insurance carriers, please select all that apply.</comment>
+  <row label="r1">Acuity</row>
+  <row label="r2">Allianz</row>
+  <row label="r3">AmTrust</row>
+  <row label="r4">AIG</row>
+  <row label="r5">Auto-Owners</row>
+  <row label="r6">Berkshire Hathaway/GUARD</row>
+  <row label="r7">Chubb</row>
+  <row label="r8">Cincinnati</row>
+  <row label="r9">CNA Insurance</row>
+  <row label="r10">EMC Insurance</row>
+  <row label="r11">Great American</row>
+  <row label="r12">Hanover</row>
+  <row label="r13">Hiscox</row>
+  <row label="r14">The Hartford</row>
+  <row label="r15">Liberty Mutual</row>
+  <row label="r16">Nationwide</row>
+  <row label="r17">NEXT (Ergo NEXT)</row>
+  <row label="r18">Penn National</row>
+  <row label="r19">Philadelphia</row>
+  <row label="r20">Progressive</row>
+  <row label="r21">Selective</row>
+  <row label="r22">State Auto</row>
+  <row label="r23">Travelers</row>
+  <row label="r24">Texas Mutual</row>
+  <row label="r25">United Fire &amp; Casualty</row>
+  <row label="r26">Utica National</row>
+  <row label="r27">Westfield</row>
+  <row label="r28">Zurich</row>
+  <row label="r29" open="1" openSize="25" randomize="0">Other (Please specify)</row>
+  <row label="r30" exclusive="1" randomize="0">Don't know</row>
+</checkbox>
+
+<suspend/>
+
+<condition label="S18Term" cond="S18.r30"/>
+<suspend/>
+
+<html label="S18TermFlag" cond="qTesting.r1 and condition.S18Term" where="survey">${res.softTerm} S18</html>
+
+<suspend/>
+
+<checkbox 
+  label="S19"
+  atleast="1">
+  <title>${progHoverOverCSS.r2.text}Do you log into an online service portal or website to manage your company's business insurance?</title>
+  <comment>Please select all that apply.<br /><br /><i>An online service portal/website allows you to take care of tasks such as accessing policy documents, paying premiums, reviewing billing statements, receiving insurance-related notifications, updating company information, claims handling, etc.</i></comment>
+  <row label="r1">Yes, I access my carrier's online service portal/website</row>
+  <row label="r2">Yes, I access my agent/broker's online service portal/website</row>
+  <row label="r3">Yes, I access my company’s <i>${pgHover.r5.text}</i> Information System (RMIS)</row>
+  <row label="r4" exclusive="1" randomize="0">No, I do not personally access a service portal/website to manage my company's business insurance, but one or more people on my team do</row>
+  <row label="r5" exclusive="1" randomize="0">No, no one in my company accesses a service portal or website to manage our company’s business insurance</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="QTermHid"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden question to store terminate question id.</title>
+  <insert source="TermList"/>
+</checkbox>
+
+<textarea 
+  label="QAllTermHid">
+  <title>Virtual Question for All terminate question(s) if we did not terminate immediately in screener</title>
+  <virtual>
+datastr= ", ".join([x.text for x in QTermHid.rows if x])
+data.val=datastr
+  </virtual>
+
+</textarea>
+
+<suspend/>
+
+<term label="termAtTheEnd" cond="(processTerms('QTermHid') and (QHidStage.r2))">Terminate at the end of screener</term>
+
+<suspend/>
+
+<term label="termS02" cond="(processTerms('Disp2'))">Term - S02</term>
+
+<term label="termS05" cond="(processTerms('Disp3'))">Term - S05</term>
+
+<term label="termS06" cond="(processTerms('Disp4'))">Term - S06</term>
+
+<term label="termS07" cond="(processTerms('Disp5'))">Term - S07</term>
+
+<term label="termS08" cond="(processTerms('Disp6'))">Term - S08</term>
+
+<term label="termS10" cond="(processTerms('Disp7'))">Term - S10</term>
+
+<term label="termS11" cond="(processTerms('Disp8'))">Term - S11</term>
+
+<term label="termS12" cond="(processTerms('Disp9'))">Term - S12</term>
+
+<term label="termS14" cond="(processTerms('Disp10'))">Term - S14</term>
+
+<term label="termS15" cond="(processTerms('Disp11'))">Term - S15</term>
+
+<term label="termS16" cond="(processTerms('Disp12'))">Term - S16</term>
+
+<term label="termS17" cond="(processTerms('Disp13'))">Term - S17</term>
+
+<term label="termS18" cond="(processTerms('Disp14'))">Term - S18</term>
+
+<suspend/>
+
+<quota label="qtaTotal" overquota="noqual" sheet="qta_Total"/>
+
+<quota label="qtaS04" cond="S04.r9 and hS10qta.r3" overquota="noqual" sheet="qta_S04"/>
+
+<quota label="qtahS10qta" cond="hS10qta.any" overquota="noqual" sheet="qta_hS10qta"/>
+
+<quota label="qtahS17qta" cond="hS17qta.any" overquota="noqual" sheet="qta_hS17qta"/>
+
+<quota label="quo1" overquota="noqual" sheet="EmployeeS9"/>
+
+<quota label="quo2" overquota="noqual" sheet="PremiumS10"/>
+
+<quota label="quo3" overquota="noqual" sheet="IndustryS14"/>
+
+<suspend/>
+
+<radio 
+  label="hSubGroupClassification"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden TO TRACK SUB GROUPs-TESTING PURPOSES ONLY</title>
+  <exec>
+if (S01.r1) and (S06.r1) and (S10.r1 or S10.r2 or S10.r3):
+  hSubGroupClassification.val = 0
+
+if (S01.r1) and (S06.r2) and (S10.r1 or S10.r2 or S10.r3):
+  hSubGroupClassification.val = 1
+
+if (S01.r1) and (S06.r1) and (S10.r4 or S10.r5 or S10.r6 or S10.r7):
+  hSubGroupClassification.val = 2
+
+if (S01.r1) and (S06.r2) and (S10.r4 or S10.r5 or S10.r6 or S10.r7):
+  hSubGroupClassification.val = 3
+
+if (S01.r1) and (S06.r1) and (S10.r8 or S10.r9):
+  hSubGroupClassification.val = 4
+
+if (S01.r1) and (S06.r2) and (S10.r8 or S10.r9):
+  hSubGroupClassification.val = 5
+  </exec>
+
+  <row label="r1">Employed-Public Company-SMALL Commercial Insurance</row>
+  <row label="r2">Employed-Private Company-SMALL Commercial Insurance</row>
+  <row label="r3">Employed-Public Company-MIDDLE Commercial Insurance</row>
+  <row label="r4">Employed-Private Company-MIDDLE Commercial Insurance</row>
+  <row label="r5">Employed-Public Company-LARGE Commercial Insurance</row>
+  <row label="r6">Employed-Private Company-LARGE Commercial Insurance</row>
+</radio>
+
+<suspend/>
+
+<exec>
+setMarker("incMain")
+</exec>
+
+<suspend/>
+
+<note>Main survey goes here</note>
+<suspend/>
+
+<note>=============================================SECTION A: BASELINE PERCEPTIONS=============================================</note>
+<html label="cmtA01" where="survey"><b>The next few questions are about the interactions you have with your business insurance carrier(s) and/or agents/brokers that you work with when managing your company’s business insurance.</b></html>
+
+<suspend/>
+
+<radio 
+  label="A01"
+  colLegendRows="6,11"
+  shuffle="rows"
+  ss:colWidth="20px"
+  ss:legendColWidth="180px"
+  ss:questionClassNames="skipAutosize">
+  <title>${progHoverOverCSS.r2.text}When selecting a business insurance carrier, how important are each of the following? As a reminder, an insurance carrier is the company that actually provides the insurance policy, takes on the risk, collects the premium, and pays claims.</title>
+  <row label="r1" randomize="0">New customer onboarding experience</row>
+  <row label="r2">Claims experience</row>
+  <row label="r3">Resolving issues when they arise</row>
+  <row label="r4">Digital self-service experience</row>
+  <row label="r5"><i>${pgHover.r6.text}</i> support and resources</row>
+  <row label="r6">Accessing insurance information through a customer portal</row>
+  <row label="r7">Getting answers to coverage and policy questions</row>
+  <row label="r8">Billing accuracy</row>
+  <row label="r9">Billing and payment options</row>
+  <row label="r10">Industry-specific insights and guidance</row>
+  <row label="r11">Service that adapts as my business needs change</row>
+  <row label="r12">Obtaining certificates of insurance (COIs)</row>
+  <row label="r13">Premium audit experience</row>
+  <row label="r14">Renewal experience</row>
+  <col label="c1" value="1">Not at all important<br /><br />1</col>
+  <col label="c2" value="2">2</col>
+  <col label="c3" value="3">3</col>
+  <col label="c4" value="4">4</col>
+  <col label="c5" value="5">5</col>
+  <col label="c6" value="6">6</col>
+  <col label="c7" value="7">Extremely important<br /><br />7</col>
+  <style name="question.after"><![CDATA[
+<style>
+.grid.grid-table-mode .colCount-7 .col-legend {
+    position: sticky;
+    top: 0;
+    z-index: 100000;
+}
+   </style>
+]]></style>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="A02"
+  cond="(S17.r1)"
+  colLegendRows="6,11"
+  shuffle="rows">
+  <title>${progHoverOverCSS.r2.text}Do you primarily rely more on your agent/broker, your carrier, a combination of both, or neither  for each of the following tasks?</title>
+  <row label="r1">New customer onboarding</row>
+  <row label="r2">Filing a claim</row>
+  <row label="r3">Support throughout the claims process</row>
+  <row label="r4">Resolving issues when they arise</row>
+  <row label="r5">Managing business risk and loss prevention</row>
+  <row label="r6">Accessing insurance information and policy documents</row>
+  <row label="r7">Getting answers to coverage questions</row>
+  <row label="r8">Managing billing and payments</row>
+  <row label="r9">Receiving industry-specific insights and guidance</row>
+  <row label="r10">Obtaining certificates of insurance (COIs)</row>
+  <row label="r11">Completing premium audits</row>
+  <row label="r12">Identifying emerging risks and coverage gaps</row>
+  <row label="r13">Renewing insurance policies</row>
+  <col label="c1" value="1"><i>${pgHover.r1.text}</i></col>
+  <col label="c2" value="2"><i>${pgHover.r2.text}</i></col>
+  <col label="c3" value="3">Both, depending on the need</col>
+  <col label="c9" value="9">Neither/NA</col>
+  <style name="question.after"><![CDATA[
+<style>
+ #question_A02 > div > table > tbody:nth-child(1) {
+    position: sticky;
+    top: 0;
+    z-index: 100000;
+}
+   </style>
+]]></style>
+</radio>
+
+<suspend/>
+
+<checkbox 
+  label="A03"
+  atleast="1"
+  cardsort:bucketCSS="width: 120px; padding: 2px;"
+  cardsort:cardCSS="width: 100%; text-align:center !important;"
+  cardsort:cardMaxWidth="800px"
+  cardsort:completionHTML="&lt;i&gt;&lt;b&gt;All Done!&lt;/b&gt;&lt;br/&gt;Please click 'Continue'&lt;/i&gt;"
+  uses="cardsort.6">
+  <title>${progHoverOverCSS.r2.text}Thinking about each of the following, if you were to use your business insurance carrier for the following tasks, how would you prefer to interact with the carrier?</title>
+  <comment>For each task (e.g., filing a claim), please select all interaction types listed along the bottom that you would be open to using when interacting with your business insurance carrier. Then press next for the next task.</comment>
+  <col label="c1">AI-enabled text-based chat</col>
+  <col label="c2">Online text-based chat with a person</col>
+  <col label="c3">Speaking with an AI-enabled tool (such as an <i>${pgHover.r3.text}</i> or voice-enabled chat)</col>
+  <col label="c4">Speaking with a person</col>
+  <col label="c5">Email with a person</col>
+  <col label="c6">Self-service on an online portal (without interacting with anyone)</col>
+  <col label="c9" exclusive="1" randomize="0">NA</col>
+  <row label="r1">New customer onboarding</row>
+  <row label="r2">Filing a claim</row>
+  <row label="r3">Getting support throughout the claims process</row>
+  <row label="r4">Resolving issues when they arise</row>
+  <row label="r5">Managing business risk and loss prevention</row>
+  <row label="r6">Accessing insurance information and policy documents</row>
+  <row label="r7">Getting answers to coverage questions</row>
+  <row label="r8">Managing billing and payments</row>
+  <row label="r9">Receiving industry-specific insights and guidance</row>
+  <row label="r10">Obtaining certificates of insurance (COIs)</row>
+  <row label="r11">Completing premium audits</row>
+  <row label="r12">Identifying emerging risks and coverage gaps</row>
+  <row label="r13">Renewing insurance policies</row>
+</checkbox>
+
+<suspend/>
+
+<radio 
+  label="A04">
+  <title>How comfortable would you be with a business insurance carrier using AI to improve service and support?</title>
+  <col label="c1" value="1">Not at all comfortable<br /><br />1</col>
+  <col label="c2" value="2"><br /><br />2</col>
+  <col label="c3" value="3"><br /><br />3</col>
+  <col label="c4" value="4"><br /><br />4</col>
+  <col label="c5" value="5"><br /><br />5</col>
+  <col label="c6" value="6"><br /><br />6</col>
+  <col label="c7" value="7">Very comfortable<br /><br />7</col>
+</radio>
+
+<suspend/>
+
+<checkbox 
+  label="A05"
+  cond="(A04.c4 or A04.c5 or A04.c6 or A04.c7)"
+  atleast="1"
+  shuffle="rows">
+  <title>${progHoverOverCSS.r2.text}For which of the following business insurance activities would you be comfortable using AI-enabled carrier tools?</title>
+  <comment>Please select all that apply.</comment>
+  <row label="r1">Finding policy information</row>
+  <row label="r2">Obtaining certificates of insurance</row>
+  <row label="r3">Getting questions answered</row>
+  <row label="r4">Locating documents</row>
+  <row label="r5">Reporting a claim</row>
+  <row label="r6">Checking claim status</row>
+  <row label="r7">Identifying potential coverage gaps</row>
+  <row label="r8">Getting recommendations for coverages</row>
+  <row label="r9">Completing a risk analysis for the company</row>
+  <row label="r10">Receiving <i>${pgHover.r4.text}</i> suggestions</row>
+  <row label="r11">Receiving industry trend updates</row>
+  <row label="r12">Making policy changes</row>
+  <row label="r13">Preparing for renewal</row>
+  <row label="r14">Comparing coverage options</row>
+  <row label="r15">Completing a premium audit</row>
+  <row label="r16" exclusive="1" randomize="0">None of these</row>
+</checkbox>
+
+<suspend/>
+
+<radio 
+  label="A06">
+  <title>How confident do you feel that your company's current business insurance program adequately protects your company?</title>
+  <row label="r1" value="1">Not at all confident – I have doubts that my company has the right coverage for its needs</row>
+  <row label="r2" value="2">Slightly confident</row>
+  <row label="r3" value="3">Moderately</row>
+  <row label="r4" value="4">Very confident</row>
+  <row label="r5" value="5">Extremely confident – I am certain that my company has the right coverage for its needs</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="pgA06x1"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden question for piping purpose.</title>
+  <exec>
+pgA06x1.val=pgA06x1.r2.index
+
+if(A06.r4 or A06.r5):
+  pgA06x1.val=pgA06x1.r1.index
+  </exec>
+
+  <row label="r1">even more</row>
+  <row label="r2"/>
+</radio>
+
+<suspend/>
+
+<textarea 
+  label="A06x1"
+  cond="pgA06x1.any"
+  optional="0"
+  verify="len(10)">
+  <title>What would increase your confidence [pipe: pgA06x1] that your company's current business insurance program adequately protects your company?</title>
+  <style name="question.after" wrap="ready"><![CDATA[
+/*-----------jquery to restrict from copy paste--------------- */
+$ ("#question_A06x1").on('copy paste', function(e) {
+        e.preventDefault();
+   });
+]]></style>
+</textarea>
+
+<suspend/>
+
+<radio 
+  label="A07"
+  shuffle="rows"
+  uses="cardsort.6">
+  <title>${progHoverOverCSS.r2.text}Based on your experience in managing your company's business insurance, how much do you agree or disagree with the following statements?</title>
+  <exec>
+group_rows(A07, ['r1', 'r2','r3'])
+group_rows(A07, ['r4', 'r5','r6'])
+  </exec>
+
+  <col label="c1" value="1">Strongly disagree</col>
+  <col label="c2" value="2">Somewhat disagree</col>
+  <col label="c3" value="3">Neutral</col>
+  <col label="c4" value="4">Somewhat agree</col>
+  <col label="c5" value="5">Strongly agree</col>
+  <row label="r1">It is important that my carrier(s) has expertise in my company's industry</row>
+  <row label="r2">It is important that my carrier(s) demonstrates an understanding of my specific company</row>
+  <row label="r3">I wish my carrier(s) would leverage my company's data to provide better insights and recommendations</row>
+  <row label="r4">I feel more supported when my agent/broker and carrier work together</row>
+  <row label="r5">I feel more valued by my agent/broker than I do by my carrier(s)</row>
+  <row label="r6">I feel frustrated when I need to repeat information between my broker and carrier.</row>
+  <row label="r7">Carriers lose my trust when they make errors in day-to-day servicing needs, such as billing or certificate mistakes</row>
+  <row label="r8">I want my carrier(s) to go beyond the day-to-day insurance administration tasks and provide strategic recommendations regarding my insurance and <i>${pgHover.r4.text}</i> needs</row>
+  <row label="r9">I prefer to interact <u>only</u> with my broker, not my insurance carrier</row>
+  <row label="r10">I am not sure who to contact if I needed assistance from my carrier(s)</row>
+  <row label="r11">I would be more likely to log into my carrier's portal if it offered more self-service tools (e.g., access to policies, certificates, ability to make changes)</row>
+  <row label="r12">I would be more likely to log into my carrier's portal if it offered more personalized information</row>
+  <row label="r13">Language used by insurance carriers is often difficult to understand</row>
+  <row label="r14">I want reassurance that the coverage my business has is appropriate for its needs</row>
+  <row label="r15">I prefer to immerse myself in as much detailed insurance information as possible</row>
+  <row label="r16">A smooth renewal process makes me feel more confident about engaging with the carrier during the policy year</row>
+  <row label="r17">My carrier(s) make me feel like just another policyholder rather than a valued customer</row>
+  <row label="r18">When working with my carrier(s), I prefer having a single point of contact that can connect me to the right expertise regardless of the issue</row>
+</radio>
+
+<suspend/>
+
+<checkbox 
+  label="A08"
+  atleast="1"
+  atmost="3">
+  <title>${progHoverOverCSS.r2.text}Which of the following are <b><u>most</u></b> likely to make your experience with your business insurance carrier(s) feel more <b><u>personalized</u></b>?</title>
+  <comment>Please select up to three.</comment>
+  <row label="r1">A carrier that recognizes and understands my company across all interactions and channels (e.g. email, phone, portal, chat)</row>
+  <row label="r2">Recommendations that reflect changes in my company's evolving needs and circumstances</row>
+  <row label="r3"><i>${pgHover.r6.text}</i> guidance tailored to my company</row>
+  <row label="r4">Advice based on my company's claims history and experiences</row>
+  <row label="r5">Recommendations based on my own company's data</row>
+  <row label="r6">Recommendations based on companies similar to mine (e.g. industry and location)</row>
+  <row label="r7">An online portal tailored to the needs of different individuals or roles within my company</row>
+  <row label="r8" open="1" openSize="25" randomize="0">Other (please specify)</row>
+  <row label="r9" exclusive="1" randomize="0">A personalized business insurance experience from my carrier(s) is not relevant to me.</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="A09"
+  atleast="1"
+  atmost="3">
+  <title>In thinking of different ways in which a business insurance carrier can offer you <b><u>proactive service</u></b> (e.g. without you having to initiate contact), which of the following would you most most want to receive proactively from a business insurance carrier?</title>
+  <comment>Please select up to three.</comment>
+  <row label="r1">Industry-specific insights and data before I need them</row>
+  <row label="r2">Insights about my company's risks, claims patterns, and loss prevention opportunities</row>
+  <row label="r3">Recommendations to address potential coverage gaps</row>
+  <row label="r4">Guidance and reminders to help prepare for audits</row>
+  <row label="r5">Recommendations for tools or devices (e.g. water sensors, wearable ergonomic gear) that may help reduce risk</row>
+  <row label="r6">Updates when a service issue remains unresolved</row>
+  <row label="r7">Education about available carrier tools, resources, and services</row>
+  <row label="r8">Guidance as my business grows, expands locations, enters new markets, or changes operations</row>
+  <row label="r9" open="1" openSize="25" randomize="0">Other (please specify)</row>
+  <row label="r10" exclusive="1" randomize="0">I don't want any proactive outreach from my carrier&amp;#91;s&amp;#93;</row>
+</checkbox>
+
+<suspend/>
+
+<exec>
+for xr in A08.rows:
+  if xr.displayed and xr.label != "r9":
+    if A08[xr]:
+      pgA10.attr(xr.label.replace('r','A8_r')).val=1
+      
+      
+for xr in A09.rows:
+  if xr.displayed and xr.label != "r10":
+    if A09[xr]:
+      pgA10.attr(xr.label.replace('r','A9_r')).val=1
+</exec>
+
+<suspend/>
+
+<checkbox 
+  label="pgA10"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden question for row masking purpose. ${progHoverOverCSS.r2.text}</title>
+  <row label="A8_r1">A carrier that recognize and understand my company across all interactions and channels (e.g. email, phone, portal, chat)</row>
+  <row label="A8_r2">Recommendations that reflect changes in my company's evolving needs and circumstances</row>
+  <row label="A8_r3"><i>${pgHover.r6.text}</i> guidance tailored to my company</row>
+  <row label="A8_r4">Advice based on my company's claims history and experiences</row>
+  <row label="A8_r5">Recommendations based on my own company's data</row>
+  <row label="A8_r6">Recommendations based on companies similar to mine (e.g. industry and location)</row>
+  <row label="A8_r7">An online portal tailored to the needs of different individuals or roles within my company</row>
+  <row label="A8_r8" randomize="0">${A08.r8.open}</row>
+  <row label="A9_r1">Industry-specific insights and data before I need them</row>
+  <row label="A9_r2">Proactive insights about my company's risks, claims patterns, and loss prevention opportunities</row>
+  <row label="A9_r3">Proactive recommendations to address potential coverage gaps</row>
+  <row label="A9_r4">Guidance and reminders to help prepare for audits</row>
+  <row label="A9_r5">Recommendations for tools or devices (e.g. water sensors, wearable ergonomic gear) that may help reduce risk</row>
+  <row label="A9_r6">Updates when a service issue remains unresolved</row>
+  <row label="A9_r7">Education about available carrier tools, resources, and services</row>
+  <row label="A9_r8">Guidance as my business grows, expands locations, enters new markets, or changes operations</row>
+  <row label="A9_r9" randomize="0">${A09.r9.open}</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="A10"
+  atleast="1"
+  rowCond="pgA10[row]">
+  <title>Which of the following emotional benefits would the following service experiences provide? ${progHoverOverCSS.r2.text}</title>
+  <comment>Select all that apply.</comment>
+  <row label="A8_r1">A carrier that recognize and understand my company across all interactions and channels (e.g. email, phone, portal, chat)</row>
+  <row label="A8_r2">Recommendations that reflect changes in my company's evolving needs and circumstances</row>
+  <row label="A8_r3"><i>${pgHover.r6.text}</i> guidance tailored to my company</row>
+  <row label="A8_r4">Advice based on my company's claims history and experiences</row>
+  <row label="A8_r5">Recommendations based on my own company's data</row>
+  <row label="A8_r6">Recommendations based on companies similar to mine (e.g. industry and location)</row>
+  <row label="A8_r7">An online portal tailored to the needs of different individuals or roles within my company</row>
+  <row label="A8_r8" randomize="0">${A08.r8.open}</row>
+  <row label="A9_r1">Industry-specific insights and data before I need them</row>
+  <row label="A9_r2">Proactive insights about my company's risks, claims patterns, and loss prevention opportunities</row>
+  <row label="A9_r3">Proactive recommendations to address potential coverage gaps</row>
+  <row label="A9_r4">Guidance and reminders to help prepare for audits</row>
+  <row label="A9_r5">Recommendations for tools or devices (e.g. water sensors, wearable ergonomic gear) that may help reduce risk</row>
+  <row label="A9_r6">Updates when a service issue remains unresolved</row>
+  <row label="A9_r7">Education about available carrier tools, resources, and services</row>
+  <row label="A9_r8">Guidance as my business grows, expands locations, enters new markets, or changes operations</row>
+  <row label="A9_r9" randomize="0">${A09.r9.open}</row>
+  <col label="c1">Feeling confident I chose the right carrier</col>
+  <col label="c2">Feeling prepared to manage my company's business insurance throughout the policy term</col>
+  <col label="c3">Feeling connected to the right people, tools, and resources</col>
+  <col label="c4">Feeling supported by a trusted carrier partner</col>
+  <col label="c5" exclusive="1" randomize="0">None of these</col>
+</checkbox>
+
+<suspend/>
+
+<note>=============================================SECTION B: KEY DRIVER / MAXDIFF=============================================</note>
+<define label="B01_ROW_LIST">
+  <row label="r1">Industry-specific risk prevention advice via portal at time of renewal</row>
+  <row label="r2">Industry-specific risk prevention advice provided at time of or shortly after a claim via a portal</row>
+  <row label="r3">Industry-specific insights on current trends and emerging risks via a portal</row>
+  <row label="r4">Proactive recommendations for your business based on information the carrier already knows about your business, delivered on a portal</row>
+  <row label="r5">Proactive recommendations for your business based on third party data about businesses similar to yours, delivered on a portal</row>
+  <row label="r6">Proactive outreach from your carrier ahead of renewal to understand changes in your business and potential new risks</row>
+  <row label="r7">Ability to easily obtain certificates of insurance (COIs) yourself on the carrier's portal</row>
+  <row label="r8">Online tools to support understanding and navigation of your business insurance policies (e.g., plain language summaries of coverage and limits)</row>
+  <row label="r9">AI-enabled chat with the ability to seamlessly connect you to a human expert when needed</row>
+  <row label="r10">Direct access to the right human expert at the carrier to handle your question or issue</row>
+  <row label="r11">AI-enabled review of your insurance coverage to identify potential coverage gaps or areas of concern</row>
+  <row label="r12">Ability to compare your insurance coverages and limits to similar businesses in your industry</row>
+  <row label="r13">Data and benchmarking to compare your claims history and loss experience to other businesses in your industry</row>
+  <row label="r14">Online safety trainings and webinars delivered by industry experts</row>
+  <row label="r15">Risk management dashboard on a carrier portal with resources, tools, and data to help identify and reduce risks</row>
+  <row label="r16">AI-enabled carrier portal search to find relevant content, coverage information, claims details, etc.</row>
+  <row label="r17">Interactive guidance (e.g. chat) on preparing and completing insurance premium audits</row>
+  <row label="r18">Real-time updates to the portal throughout the claims process so you always know claim status, next steps, and what to expect</row>
+  <row label="r19">Proactive alerts when changes in your business (new location, hiring additional employees) may create new risks or coverage needs</row>
+  <row label="r20">Ability to resolve questions or issues through a single point of contact without transfers or repeated explanations</row></define>
+<suspend/>
+
+<define label="MDList">
+  <row label="item1">Industry-specific risk prevention advice via portal at time of renewal</row>
+  <row label="item2">Industry-specific risk prevention advice provided at time of or shortly after a claim via a portal</row>
+  <row label="item3">Industry-specific insights on current trends and emerging risks via a portal</row>
+  <row label="item4">Proactive recommendations for your business based on information the carrier already knows about your business, delivered on a portal</row>
+  <row label="item5">Proactive recommendations for your business based on third party data about businesses similar to yours, delivered on a portal</row>
+  <row label="item6">Proactive outreach from your carrier ahead of renewal to understand changes in your business and potential new risks</row>
+  <row label="item7">Ability to easily obtain certificates of insurance (COIs) yourself on the carrier's portal</row>
+  <row label="item8">Online tools to support understanding and navigation of your business insurance policies (e.g., plain language summaries of coverage and limits)</row>
+  <row label="item9">AI-enabled chat with the ability to seamlessly connect you to a human expert when needed</row>
+  <row label="item10">Direct access to the right human expert at the carrier to handle your question or issue</row>
+  <row label="item11">AI-enabled review of your insurance coverage to identify potential coverage gaps or areas of concern</row>
+  <row label="item12">Ability to compare your insurance coverages and limits to similar businesses in your industry</row>
+  <row label="item13">Data and benchmarking to compare your claims history and loss experience to other businesses in your industry</row>
+  <row label="item14">Online safety trainings and webinars delivered by industry experts</row>
+  <row label="item15">Risk management dashboard on a carrier portal with resources, tools, and data to help identify and reduce risks</row>
+  <row label="item16">AI-enabled carrier portal search to find relevant content, coverage information, claims details, etc.</row>
+  <row label="item17">Interactive guidance (e.g. chat) on preparing and completing insurance premium audits</row>
+  <row label="item18">Real-time updates to the portal throughout the claims process so you always know claim status, next steps, and what to expect</row>
+  <row label="item19">Proactive alerts when changes in your business (new location, hiring additional employees) may create new risks or coverage needs</row>
+  <row label="item20">Ability to resolve questions or issues through a single point of contact without transfers or repeated explanations</row></define>
+<suspend/>
+
+<exec when="init">
+def setupMaxDiffFile(fname, fileDelimiter="\t"):
+    try:
+        f = open("%s/%s" % (gv.survey.path, fname))
+        mdObj = [ line.strip("\r\n").split(fileDelimiter) for line in f.readlines() ]
+        d = dict( ("v%s_t%s" % (row[0], row[1]), row[2:]) for row in mdObj )
+    except IOError:
+        d = {}
+    return d
+
+def setupMaxDiffItemsI(d, vt, question,hdQstn):
+    item_index = dict( (r.o.label.strip("item"), r.index) for r in question.rows )
+
+    items = d[vt]
+
+    for r in question.rows:
+        if r.o.label.strip("item") not in items:
+            r.disabled = True
+
+    question.rows.order = [ item_index[i] for i in items ]
+
+    print "*****STAFF ONLY*****"
+    print "Version_Task: %s" % vt
+    for i in range(len(items)):
+        print "Item %s: %s" % (i+1,items[i])
+        hdQstn.cols[i].val=hdQstn.attr('item'+items[i]).index
+</exec>
+
+<exec when="init">
+QB1_md = setupMaxDiffFile("QB1_MaxdiffNEW.dat")
+</exec>
+
+<exec>
+hB01.val=hB01.r1.index
+</exec>
+
+<suspend/>
+
+<radio 
+  label="hB01"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden question for asking purpose.</title>
+  <row label="r1">Ask MaxDiff For B01/B02</row>
+  <row label="r2">Skip MaxDiff For B01/B02</row>
+</radio>
+
+<suspend/>
+
+<quota label="QB1Maxdiff" overquota="noqual" sheet="QB1_Maxdiff"/>
+
+<suspend/>
+
+<html label="MaxDiff_INTRO" where="survey"><b>Now, please consider different ways a business insurance carrier could add value and the corresponding impact that may have on your likelihood to renew or select a specific business insurance carrier.</b> 
+<br /><br />You will see 15 groups of statements, each with 4 statements that describe services that a carrier could offer. On each screen, please read the statements closely and select 
+<ol>
+<li>The one you find is <b><u>MOST</u></b> likely to motivate you to renew or select a business insurance carrier for your company and;</li> 
+<li>Of the remaining three statements, which is <b><u>LEAST</u></b> likely to motivate you to renew or select a business insurance carrier</li> 
+</ol>
+Click below to begin.</html>
+
+<suspend/>
+
+<block label="BlkB01" cond="(hB01.r1)">
+  <note>MaxDiff Indices Template --Start--</note>
+  <number 
+   label="hB01_Version"
+   size="3"
+   ss:listDisplay="0"
+   verify="range(1,10)"
+   where="execute,survey,report">
+    <title>B01 - MaxDiff Version</title>
+    <exec>
+print p.markers
+for x in p.markers:
+    if "/QB1_Maxdiff/ver_" in x:
+        hB01_Version.val = int(x.split("_")[-1])
+        break
+    </exec>
+
+  </number>
+
+  <suspend/>
+
+  <exec>
+p.startTime = timeSpent()
+  </exec>
+
+  <loop label="QB1_md_loop" suspend="0" vars="task">
+    <title>B01 - MaxDiff Loop</title>
+    <block label="blkQ215">
+      <radio 
+     label="QB1_[loopvar: label]"
+     adim="cols"
+     grouping="cols"
+     shuffle="rows"
+     ss:questionClassNames="QB1_maxdiff"
+     unique="1">
+        <title>Here is the <i>[loopvar: task]</i> of 15 sets. Which of these do you feel is <b><u>MOST</u></b> and which do you feel is <b><u>LEAST</u></b> <b>likely to motivate you to renew or select a specific carrier for your company’s business insurance?</b></title>
+        <comment><i>Please do not select the same attribute as being least and most important.</i></comment>
+        <exec>
+setupMaxDiffItemsI( QB1_md, "v%d_t%d" % (hB01_Version.val, [loopvar: label]), QB1_[loopvar: label], hQB1_[loopvar: label])
+p.MDcount = str(QB1_md_loop_expanded.order.index([loopvar: label]-1)+1)
+        </exec>
+
+        <col label="best"><b>MOST</b> likely to motivate you to renew or select a specific carrier for your company’s business insurance</col>
+        <col label="worst"><b>LEAST</b> likely to motivate you to renew or select a specific carrier for your company’s business insurance</col>
+        <insert source="MDList"/>
+        <style mode="before" name="question.header"><![CDATA[
+<style type="text/css">
+    .QB1_maxdiff tr.maxdiff-header-legend {
+        background-color: transparent;
+        border-bottom: 2px solid #000;
+    }
+    .QB1_maxdiff tr.maxdiff-header-legend th.legend:first-child {
+        background-color: ;
+        border: 1px solid #000;
+    }
+    .QB1_maxdiff tr.maxdiff-header-legend th.legend:last-child {
+        background-color: ;
+        border: 1px solid #000;
+    }
+    .QB1_maxdiff tr.maxdiff-row td.element {
+        border-left: none;
+        border-right: none;
+        border-top: none;
+        border-bottom: 1px solid #000;
+        border: 1px solid #000;
+        text-align: center;
+    }
+    .QB1_maxdiff tr.maxdiff-row th.row-legend {
+        background-color: transparent;
+        border-left: none;
+        border-right: none;
+        border-top: none;
+        border-bottom: 1px solid #000;
+        border: 1px solid #000;
+        text-align: center;
+    }
+    .empty-top{
+    border: 1px solid #000;
+    }
+    </style>
+]]></style>
+        <style name="question.top-legend"><![CDATA[
+\@if ec.simpleList
+    $(legends)
+\@else
+    <$(tag) class="maxdiff-header-legend row row-col-legends row-col-legends-top ${"mobile-top-row-legend " if mobileOnly else ""}${"GtTenColumns " if ec.colCount > 10 else ""}colCount-$(colCount)">
+        ${"%s%s" % (legends.split("</th>")[0],"</th>")}
+       $(left)
+        ${"%s%s" % (legends.split("</th>")[1],"</th>")}
+    </$(tag)>
+    \@if not simple
+  </tbody>
+  <tbody>
+    \@endif
+\@endif
+]]></style>
+        <style name="question.row"><![CDATA[
+\@if ec.simpleList
+    $(elements)
+\@else
+    <$(tag) class="maxdiff-row row row-elements $(style) colCount-$(colCount)">
+        ${"%s%s" % (elements.split("</td>")[0],"</td>")}
+        $(left)
+        ${"%s%s" % (elements.split("</td>")[1],"</td>")}
+    </$(tag)>
+\@endif
+]]></style>
+      </radio>
+
+      <suspend/>
+
+      <radio 
+     label="hQB1_[loopvar: label]"
+     grouping="cols"
+     optional="1"
+     translateable="0"
+     where="execute,report">
+        <title>Hidden to track imtes that were shown at max diff screen for ths iteration</title>
+        <insert source="MDList"/>
+        <col label="c1">Item 1</col>
+        <col label="c2">Item 2</col>
+        <col label="c3">Item 3</col>
+        <col label="c4">Item 4</col>
+      </radio>
+
+      <suspend/>
+
+      <block label="OLD_BLOCK_B01_B02_[loopvar: label]" cond="0">
+        <radio 
+      label="hB01_[loopvar: label]"
+      grouping="cols"
+      optional="1"
+      surveyDisplay="desktop"
+      translateable="0"
+      where="execute,report">
+          <title>Randomize attribute presentation across MaxDiff sets shown (each with 4 items per set)</title>
+          <exec>
+dataFileDCM = File("QB1_Maxdiff.dat","blockxset")
+
+respDCM1 = dataFileDCM.get(str(hB01_Version.sum) + 'x' + '[loopvar: label]')
+
+attCode1 = respDCM1["att_1"]
+attCode2 = respDCM1["att_2"]
+attCode3 = respDCM1["att_3"]
+attCode4 = respDCM1["att_4"]
+
+hB01_[loopvar: label].c1.val = hB01_[loopvar: label].attr('r' + attCode1).index
+hB01_[loopvar: label].c2.val = hB01_[loopvar: label].attr('r' + attCode2).index
+hB01_[loopvar: label].c3.val = hB01_[loopvar: label].attr('r' + attCode3).index
+hB01_[loopvar: label].c4.val = hB01_[loopvar: label].attr('r' + attCode4).index
+          </exec>
+
+          <col label="c1">att_1</col>
+          <col label="c2">att_2</col>
+          <col label="c3">att_3</col>
+          <col label="c4">att_4</col>
+          <insert source="B01_ROW_LIST"/>
+        </radio>
+
+        <suspend/>
+
+        <exec>
+arre1 = []
+
+for C in hB01_[loopvar: label].cols:
+  for X in hB01_[loopvar: label].rows:
+    if C[X]:
+      arre1.append(X.index)
+      
+for Y in hB01_[loopvar: label].rows:
+  if not(Y.any):
+    arre1.append(Y.index) 
+  
+B01_[loopvar: label].rows.order = arre1
+        </exec>
+
+        <radio 
+      label="B01_[loopvar: label]"
+      rowCond="hB01_[loopvar: label][row].any"
+      shuffle="rows">
+          <title>Here is the <i>[loopvar: task]</i> of 15 sets. Which of these do you feel is <b>MOST likely to motivate you to renew a or select a specific carrier for your</b> company's business insurance?
+</title>
+          <insert source="B01_ROW_LIST"/>
+        </radio>
+
+        <suspend/>
+
+        <exec>
+for xr in B01_[loopvar: label].rows:
+  if(xr.displayed):
+    if(not B01_[loopvar: label][xr]):
+      hB02_[loopvar: label][xr].val=1
+        </exec>
+
+        <suspend/>
+
+        <checkbox 
+      label="hB02_[loopvar: label]"
+      optional="1"
+      where="execute,survey,report">
+          <title>Hidden question for row maksing purpose(LEAST ).</title>
+          <insert source="B01_ROW_LIST"/>
+        </checkbox>
+
+        <suspend/>
+
+        <exec>
+B02_[loopvar: label].rows.order = B01_[loopvar: label].rows.order
+        </exec>
+
+        <radio 
+      label="B02_[loopvar: label]"
+      rowCond="hB02_[loopvar: label][row]"
+      shuffle="rows">
+          <title>And which of these do you feel is <b>LEAST</b> likely to motivate you to renew or select a specific carrier for your company's business insurance</title>
+          <insert source="B01_ROW_LIST"/>
+        </radio>
+
+        <suspend/>
+      </block>
+    </block>
+
+    <looprow label="1">
+      <loopvar name="task">first</loopvar>
+    </looprow>
+
+    <looprow label="2">
+      <loopvar name="task">second</loopvar>
+    </looprow>
+
+    <looprow label="3">
+      <loopvar name="task">third</loopvar>
+    </looprow>
+
+    <looprow label="4">
+      <loopvar name="task">fourth</loopvar>
+    </looprow>
+
+    <looprow label="5">
+      <loopvar name="task">fifth</loopvar>
+    </looprow>
+
+    <looprow label="6">
+      <loopvar name="task">sixth</loopvar>
+    </looprow>
+
+    <looprow label="7">
+      <loopvar name="task">seventh</loopvar>
+    </looprow>
+
+    <looprow label="8">
+      <loopvar name="task">eighth</loopvar>
+    </looprow>
+
+    <looprow label="9">
+      <loopvar name="task">ninth</loopvar>
+    </looprow>
+
+    <looprow label="10">
+      <loopvar name="task">tenth</loopvar>
+    </looprow>
+
+    <looprow label="11">
+      <loopvar name="task">eleventh</loopvar>
+    </looprow>
+
+    <looprow label="12">
+      <loopvar name="task">twelfth</loopvar>
+    </looprow>
+
+    <looprow label="13">
+      <loopvar name="task">thirteenth</loopvar>
+    </looprow>
+
+    <looprow label="14">
+      <loopvar name="task">fourteenth</loopvar>
+    </looprow>
+
+    <looprow label="15">
+      <loopvar name="task">last</loopvar>
+    </looprow>
+  </loop>
+
+  <suspend/>
+
+  <float 
+   label="B01_Timer"
+   size="15"
+   where="execute,survey,report">
+    <title>B01 - MaxDiff Timer (Minutes)</title>
+    <exec>
+B01_Timer.val = (timeSpent() - p.startTime) / 60.0
+    </exec>
+
+  </float>
+
+  <radio 
+   label="hB01_Timer"
+   optional="1"
+   where="execute,survey,report">
+    <title>Hidden question to flag MaxDiff Speeder</title>
+    <exec>
+if B01_Timer.val lt 1:
+  hB01_Timer.val = 0
+else:
+  hB01_Timer.val = 1
+    </exec>
+
+    <row label="r1">Completed Max Diff under 1 minute</row>
+    <row label="r2">Completed Max Diff over 1 minute</row>
+  </radio>
+
+  <suspend/>
+
+  <term label="term_MaxDiffspeed" cond="hB01_Timer.r1" sst="0">Speeder: Completed MaxDiff under 1 minute</term>
+
+  <suspend/>
+
+  <note>MaxDiff Indices Template --End--</note>
+  <suspend/>
+</block>
+
+<suspend/>
+
+<checkbox 
+  label="B03"
+  atleast="1"
+  atmost="3"
+  shuffle="rows">
+  <title>Below is the full list of the features you just evaluated. Which of these features do you feel would justify a modest (e.g., 5-9%) increase in business insurance premium?</title>
+  <comment>Please choose up to three.</comment>
+  <insert source="B01_ROW_LIST"/>
+</checkbox>
+
+<suspend/>
+
+<note>=============================================SECTION C: DEMOGRAPHICS=============================================</note>
+<html label="cmtC01" where="survey">Our last few questions are for background purposes only.</html>
+
+<suspend/>
+
+<radio 
+  label="C01">
+  <title>${progHoverOverCSS.r2.text}Does your company have a dedicated <i>${pgHover.r4.text}</i> role?</title>
+  <row label="r3" value="3">My company has an individual dedicated to <i>${pgHover.r4.text}</i></row>
+  <row label="r4" cond="not(S09.r1) and S09.any" value="4">My company has a team of individuals dedicated to <i>${pgHover.r4.text}</i></row>
+  <row label="r5" value="5"><i>${pgHover.r5.text}</i> is part of another individual's role, along with other accountabilities</row>
+  <row label="r6" cond="not(S09.r1) and S09.any" value="6"><i>${pgHover.r5.text}</i> is part of a team's role, along with other accountabilities</row>
+  <row label="r7" value="7">My company doesn't have anyone focusing on <i>${pgHover.r4.text}</i></row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="C02">
+  <title>Which of the following best describes your company's geographic reach?</title>
+  <row label="r1" value="1">We are physically located and operate solely within the U.S.</row>
+  <row label="r2" value="2">We are physically located only in the U.S. but our products/services are sold domestically and internationally</row>
+  <row label="r3" value="3">We have both U.S. and international locations but our products/services are sold only within the U.S.</row>
+  <row label="r4" value="4">We have both U.S. and international locations but our products/services are only sold outside the U.S.</row>
+  <row label="r5" value="5">We have both U.S. and international locations and our products/services are sold worldwide</row>
+</radio>
+
+<suspend/>
+
+<html label="cmtC03" where="survey"><b>Our final questions are about you. This information will be used in combination with other participants' responses.</b></html>
+
+<suspend/>
+
+<radio 
+  label="C03">
+  <title>Please select your age range.</title>
+  <row label="r1" value="1">Under 18</row>
+  <row label="r2" value="2">18-29</row>
+  <row label="r3" value="3">30-39</row>
+  <row label="r4" value="4">40-49</row>
+  <row label="r5" value="5">50-59</row>
+  <row label="r6" value="6">60 or over</row>
+  <row label="r7" value="7">Prefer not to answer</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="C04">
+  <title>Are you of Hispanic, Latino, or Spanish origin or descent?</title>
+  <row label="r1" value="1">Yes</row>
+  <row label="r2" value="2">No</row>
+</radio>
+
+<suspend/>
+
+<checkbox 
+  label="C05"
+  atleast="1">
+  <title>Which of the following best describe your race or ethnicity?</title>
+  <comment>Please select all that apply.</comment>
+  <row label="r1">American Indian or Alaskan Native</row>
+  <row label="r2">Asian</row>
+  <row label="r3">Black or African American</row>
+  <row label="r5">White / Caucasian</row>
+  <row label="r8">Native Hawaiian or Other Pacific Islander</row>
+  <row label="r6" open="1" openSize="25" randomize="0">Other (Please specify):</row>
+  <row label="r7" exclusive="1" randomize="0">Prefer not to answer</row>
+</checkbox>
+
+<suspend/>
+
+<term label="term_speed" cond="timeSpent() lt 600" sst="0">Speeder: Less than 10 minutes</term>
+
+<suspend/>
+
+<exec when="finished">
+setMarker("surveyComplete")
+</exec>
+
+<suspend/>
+
+<note>#################   END OF SURVEY   ###############</note>
+<suspend/>
+
+<text 
+  label="straightLine_question"
+  sst="0"
+  translateable="0"
+  where="execute,survey,report,notdp">
+  <title>Question labels checked for straightlining</title>
+  <exec>
+count = 0
+grids = []
+for oneQ in allQuestions.keys():
+  try:
+    if count lt 20 and allQuestions[str(oneQ)].o.xmlTagName == "radio" and allQuestions[str(oneQ)].displayed and len(allQuestions[str(oneQ)].cols) ge 3 and len(allQuestions[str(oneQ)].rows) ge 5 and not allQuestions[str(oneQ)].o.grouping.cols:
+      grids.append(str(oneQ))
+      count += 1
+  except:
+    pass
+for i, grid in enumerate(sorted(grids)):
+  straightLine_question.rows[i].val = str(grid)
+  for col in allQuestions[grid].cols:
+    if col.all:
+      straightLine_flags.rows[i].val = 1
+  </exec>
+
+  <row label="r1">Check 1 - Question Label</row>
+  <row label="r2">Check 2 - Question Label</row>
+  <row label="r3">Check 3 - Question Label</row>
+  <row label="r4">Check 4 - Question Label</row>
+  <row label="r5">Check 5 - Question Label</row>
+  <row label="r6">Check 6 - Question Label</row>
+  <row label="r7">Check 7 - Question Label</row>
+  <row label="r8">Check 8 - Question Label</row>
+  <row label="r9">Check 9 - Question Label</row>
+  <row label="r10">Check 10 - Question Label</row>
+  <row label="r11">Check 11 - Question Label</row>
+  <row label="r12">Check 12 - Question Label</row>
+  <row label="r13">Check 13 - Question Label</row>
+  <row label="r14">Check 14 - Question Label</row>
+  <row label="r15">Check 15 - Question Label</row>
+  <row label="r16">Check 16 - Question Label</row>
+  <row label="r17">Check 17 - Question Label</row>
+  <row label="r18">Check 18 - Question Label</row>
+  <row label="r19">Check 19 - Question Label</row>
+  <row label="r20">Check 20 - Question Label</row>
+</text>
+
+<checkbox 
+  label="straightLine_flags"
+  sst="0"
+  translateable="0"
+  where="execute,survey,report,notdp">
+  <title>Straightlined yes/no?</title>
+  <row label="r1">Check 1 - SL?</row>
+  <row label="r2">Check 2 - SL?</row>
+  <row label="r3">Check 3 - SL?</row>
+  <row label="r4">Check 4 - SL?</row>
+  <row label="r5">Check 5 - SL?</row>
+  <row label="r6">Check 6 - SL?</row>
+  <row label="r7">Check 7 - SL?</row>
+  <row label="r8">Check 8 - SL?</row>
+  <row label="r9">Check 9 - SL?</row>
+  <row label="r10">Check 10 - SL?</row>
+  <row label="r11">Check 11 - SL?</row>
+  <row label="r12">Check 12 - SL?</row>
+  <row label="r13">Check 13 - SL?</row>
+  <row label="r14">Check 14 - SL?</row>
+  <row label="r15">Check 15 - SL?</row>
+  <row label="r16">Check 16 - SL?</row>
+  <row label="r17">Check 17 - SL?</row>
+  <row label="r18">Check 18 - SL?</row>
+  <row label="r19">Check 19 - SL?</row>
+  <row label="r20">Check 20 - SL?</row>
+</checkbox>
+
+<suspend/>
+
+<number 
+  label="straightLine_possible"
+  size="3"
+  sst="0"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Total possible SL flags</title>
+  <exec>
+count = 0
+for oneQ in allQuestions.keys():
+  try:
+    if allQuestions[str(oneQ)].o.xmlTagName == "radio" and allQuestions[str(oneQ)].displayed and len(allQuestions[str(oneQ)].cols) ge 3 and len(allQuestions[str(oneQ)].rows) ge 5 and not allQuestions[str(oneQ)].o.grouping.cols:
+      count += 1
+  except:
+    pass  
+straightLine_possible.val = count
+  </exec>
+
+</number>
+
+<number 
+  label="straightLine_count"
+  size="3"
+  sst="0"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Total count SL flags</title>
+  <exec>
+straightLine_count.val=straightLine_flags.count
+  </exec>
+
+</number>
+
+<suspend/>
+
+<checkbox 
+  label="straightLiner"
+  sst="0"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Straightliner Check</title>
+  <exec>
+SL_Quota_Cells = gv.survey.root.quota.getQuotaCells()
+limit = SL_Quota_Cells["/QC/Straightline"][1]
+  
+if (straightLine_count.ival gt limit):
+  straightLiner.r1.val = 1
+  </exec>
+
+  <row label="r1">Yes</row>
+</checkbox>
+
+<suspend/>
+
+<term label="Straightline_term" cond="((straightLine_possible.ival == 4) and (straightLine_count.ival gt 2)) or ((straightLine_possible.ival == 3) and (straightLine_count.ival gt 1))" sst="0">Straight_Liner:  2/3 or 3/4</term>
+
+<suspend/>
+
+<float 
+  label="vQtime"
+  size="40">
+  <title>Virtual variable to store LOI in minutes.</title>
+  <virtual>
+if "qualified" in markers:
+  vQtime.val = qtime.val/60
+  </virtual>
+
+</float>
+
+<suspend/>
+
+<logic label="ln1" resdefcomplete:platform_id="0182812a-1f4b-4547-aa92-a224ac4e7fa7" resdefcomplete:supplier_id="1" resdefcomplete:survey_number="rd_proj_ud" resdefcomplete:transaction_id="rdud" uses="resdefcomplete.2"/>
+<note>#################   PROGRAMMER:  this block will add in the question number on screen, which is for client testing without a decipher login</note>
+<note>################################</note>
+<style mode="after" name="respview.client.css"><![CDATA[
+<style>
+.sq-atm1d-tiled .sq-atm1d-button{margin:3px 3px !important}
+
+.sq-atm1d-tiled .sq-atm1d-open{height:auto !important;}
+.sq-atm1d-vertical .sq-atm1d-button.sq-atm1d-button.sq-atm1d-button{height: auto;}
+.sq-atm1d-vertical .sq-atm1d-open .sq-atm1d-openEnd {display: inline-block;}
+
+.sq-atm1d-small .sq-atm1d-tiled .sq-atm1d-button{height:auto !important;text-align:left !important;min-width:95% !important;}
+.sq-atm1d-small .sq-atm1d-tiled .sq-atm1d-button .sq-atm1d-content{text-align:left !important;}
+
+.left-blank-legend {text-align: left !important;border: 1px solid #ccc;background-color: #ededed;font-weight: bold;padding-left: 0.5em;}
+[data-viewsize=small] [data-viewmode=horizontal] .sq-cardrating-button{max-height:50px !important;padding:.2em !important}
+
+.sq-atm1d-buttons.sq-atm1d-vertical{width: fit-content; }
+.sq-atm1d-buttons.sq-atm1d-buttons.sq-atm1d-vertical .sq-atm1d-button{width: auto;}
+
+\@media (min-width: 300px){ .sq-atm1d-buttons.sq-atm1d-vertical{min-width: 250px;} }
+
+.nobr{${"" if gv.request.device.isMobileDevice() else "display:block"}}
+.sq-atm1d-fctl{width: 1.37em;display:inline-block;}
+
+.survey-page {
+    padding-top: 10px !important;
+}
+.sq-cardrating-card {
+  height: 150px !important;
+}
+[data-bind~=completion] {
+  font-size: 18px;
+}
+
+/*** usage: add ss:colClassNames="noBoldCols" to <col> tag or ss:questionClassNames="noBoldCols" to question tag***/
+.noBoldCols .col-legend, .noBoldCols.col-legend {
+    font-weight: normal;
+}
+
+.ticket {
+}
+
+.ticketcell1 {
+  border: solid thin #3a404a;
+  padding: 5px;
+  background-color: #dfe4ea;
+}
+
+.ticketcell2 {
+  border: solid thin #3a404a;
+  padding: 5px;
+}
+
+</style>
+]]></style>
+<note>#################  hideElements is used on a question to remove the radio,checkbox, or input box for one or more cells see Q33 for example  ###############</note>
+<style label="hideElements" name="question.element"><![CDATA[
+\@if ec.simpleList
+<div class="element $(rowStyle) $(levels) $(extraClasses) ${col.group.styles.ss.groupClassNames if col.group else (row.group.styles.ss.groupClassNames if row.group else "")} $(col.styles.ss.colClassNames) $(row.styles.ss.rowClassNames) ${"clickableCell" if isClickable else ""}"$(extra)>
+    ${v2_insertStyle('el.label.start')}
+    ${v2_insertStyle('el.label.end')}
+</div>
+\@else
+<$(tag) $(headers) class="cell nonempty element $(levels) ${"desktop" if this.grouping.cols else "mobile"} border-collapse $(extraClasses) ${col.group.styles.ss.groupClassNames if col.group else (row.group.styles.ss.groupClassNames if row.group else "")} $(col.styles.ss.colClassNames) $(row.styles.ss.rowClassNames) ${"clickableCell" if isClickable else ""}"$(extra)>
+    ${v2_insertStyle('el.label.start')}
+    ${v2_insertStyle('el.label.end')}
+</$(tag)>
+\@endif
+]]></style>
+<style cond="1" name="survey.respview.footer.support"><![CDATA[
+<br data-mce-bogus="1">
+]]></style>
+<exec when="init">
+###Example: call this within exec tag after question:
+###setZero(S7)
+def setZero(qid):
+    if qid.displayed:
+        for eachRow in [row for row in qid.rows if row.displayed]:
+            for eachCol in [col for col in qid.cols if col.displayed]:
+                if eachRow[eachCol.index].val in ['', None]:
+                    eachRow[eachCol.index].val = 0
+
+###Example: call this within validate tag at question:
+###OtherSpecify('r5')
+def OtherSpecify(code):
+    for eachRow in [this.attr(row) for row in [code]]:
+        if len([1 for eachCol in this.cols if this.rows[eachRow.index][eachCol.index].val not in [0, "", None]]) gt 0 and eachRow.open in ["", None]:
+            error(this.lget("extraInfo"), eachRow)
+        elif len([1 for eachCol in this.cols if this.rows[eachRow.index][eachCol.index].val not in [0, "", None]]) == 0 and eachRow.open not in ["", None]:
+            error(this.lget("extraSelect"), eachRow)
+
+
+def checkOthLen(code,chklen=2):  ## UPDATED APR 2022 ##
+    for eachRow in [eval("this.%s" % row) for row in [code]]:
+        if eachRow and eachRow.open not in ["", None]:
+            if len(eachRow.open.decode('utf-8').replace(' ','')) lt chklen:
+                error(res.otherErr3, row = eachRow)
+
+def group_rows( question, grouped_rows ):
+    first_item_index = None
+    shuffle_order = [row.index for row in question.rows.order]
+
+    for index, row in enumerate( shuffle_order ):
+        if question.rows[row].label in grouped_rows:
+            if first_item_index == None:
+                first_item_index = index
+            else:
+                first_item_index += 1
+                shuffle_order.insert( first_item_index, shuffle_order.pop(index) )
+
+    question.rows.order = shuffle_order
+
+def group_rows_with_order( question, grouped_rows ):
+    current_order = [row.index for row in question.rows.order]
+    new_order     = []
+
+    grouped_rows     = [question.attr(row).index for row in grouped_rows]
+    first_item_index = current_order.index(grouped_rows[0])
+
+    current_order.insert(first_item_index, grouped_rows)
+
+    for row in current_order:
+        if row == grouped_rows:
+            new_order = new_order + row
+        elif row not in grouped_rows:
+            new_order.append(row)
+
+    question.rows.order = new_order
+</exec>
+
+<suspend/>
+
+<radio 
+  label="progHoverOverCSS"
+  cond="0"
+  optional="1"
+  where="none">
+  <title>Hidden- Css used for hover over</title>
+  <row label="r2">&lt;style type="text/css"&gt;
+.autosave-restart {
+    display: none;
+}
+.grid.grid-table-mode .col-legend {
+    vertical-align: bottom;
+}
+
+\@media screen and (max-width: 800px) and (min-width: 650px){
+.question-text img, .answers-list img, .comment-text img{
+max-width: 600px;
+}
+}
+\@media screen and (max-width: 649px) and (min-width: 350px){
+.question-text img, .answers-list img, .comment-text img{
+max-width: 600px;
+}
+}
+\@media screen and (max-width: 349px){
+.question-text img, .answers-list img, .comment-text img{
+max-width: 450px;
+}
+}
+.phonepackage, .offertype, .tooldiv
+{
+border-style:solid;
+border-width:1px;
+background-color: white;
+font-weight:normal;
+/*font-family:arial;*/
+display:none;
+position:fixed;
+z-index:31;
+text-align:left;
+}
+.phonename
+{
+font-size:10px;
+font-weight:bold;
+}
+
+.phonetypetitle
+{
+font-size:11px;
+font-weight:bold;
+}
+.hoverlabel
+{
+cursor:pointer;
+//border-bottom:1px dashed;
+}
+
+.phonepackage, .offertype, .tooldiv
+{
+width:450px;
+color:#000000;
+font-style:normal;
+}
+.phonepackage, .offertype, .tooldiv
+{
+padding:2px;
+}
+.hyper{
+color:blue;
+text-decoration:underline;
+cursor:pointer;
+}
+.whitehyper{
+color:white;
+text-decoration:underline;
+cursor:pointer;
+}
+    &lt;/style&gt;
+   
+    &lt;script type="text/javascript"&gt;
+function showTooltip(e,id){
+if (!e) var e = window.event;
+var element;
+if (e.srcElement) element = e.srcElement;
+else element = e.target;
+var scrollAmount;
+var scrollAmtLeft;
+
+if (window.pageYOffset != undefined) scrollAmount = window.pageYOffset ;
+else scrollAmount = document.documentElement.scrollTop;
+if (window.pageXOffset != undefined)  scrollAmtLeft = window.pageXOffset ;
+else scrollAmtLeft = document.documentElement.scrollLeft;
+scrollAmount = 0;
+//alert("scrollAmount" + scrollAmount)
+
+x = e.clientX + scrollAmtLeft;
+y = e.clientY + scrollAmount;
+//console.log("e.clientX " + e.clientX);
+//console.log("e.target.id " + e.target.id);
+var divHeight = parseInt(y) + parseInt(document.getElementById(id).clientHeight);
+var divWidth = parseInt(y) + parseInt(document.getElementById(id).clientWidth);
+var screenHeight = parseInt(document.documentElement.clientHeight) + scrollAmount;
+var screenWidth = parseInt(document.documentElement.clientWidth) + scrollAmtLeft;
+var nonScrollHeight = parseInt(document.documentElement.clientHeight);
+var nonScrollWidth = parseInt(document.documentElement.clientWidth);
+//alert("Screen width = " + screenWidth);
+document.getElementById(id).style.display = "block";
+var actualHeight = parseInt(document.getElementById(id).clientHeight)
+var actualWidth = parseInt(document.getElementById(id).clientWidth)
+var xOffset = 50;
+var yOffset = 5;
+var buffer = 3;
+
+
+//alert('scroll height ' + parseInt(nonScrollHeight));
+//alert('div height ' + parseInt(y + yOffset + actualHeight + buffer));
+//if (y + yOffset + actualHeight + scrollAmount + buffer &gt; screenHeight){
+if (parseInt(y + yOffset + actualHeight + buffer) &gt; screenHeight){
+if (parseInt(y - actualHeight - buffer - yOffset) &gt; 0) document.getElementById(id).style.top = parseInt(y - actualHeight - yOffset) + "px";
+else document.getElementById(id).style.top = parseInt(screenHeight - actualHeight) + "px";
+}
+else document.getElementById(id).style.top = parseInt(y+yOffset) + "px";
+
+//alert("document.getElementById(id).style.top" + document.getElementById(id).style.top)
+
+//document.getElementById(id).style.top = parseInt(y+yOffset) + "px";
+//if (x + xOffset + actualWidth + buffer &gt; screenWidth){
+
+if (parseInt(x + actualWidth + xOffset + buffer) &gt; screenWidth){
+//alert('0 check ' + parseInt(x - actualWidth - buffer - xOffset));
+if (parseInt(x - actualWidth - buffer - xOffset) &gt; 0) document.getElementById(id).style.left =  parseInt(x - actualWidth - xOffset)+ "px";
+else document.getElementById(id).style.left =  parseInt(screenWidth - actualWidth)+ "px";
+}
+else document.getElementById(id).style.left = parseInt(x+xOffset) + "px";
+//alert('left ' + document.getElementById(id).style.left);
+
+}    
+function hideToolTip(id){
+document.getElementById(id).style.display = "none";
+}    
+    &lt;/script&gt;</row>
+</radio>
+
+<suspend/>
+</survey>

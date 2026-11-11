@@ -1,0 +1,2879 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<survey 
+  alt="REP-102667939 DVU Cicero Higher Ed. Study H2 2026"
+  autoAddVariables="1"
+  autosaveKey="rdud"
+  browserDupes="safe"
+  builder:wizardCompleted="1"
+  builderCompatible="1"
+  compat="154"
+  delphi="1"
+  displayOnError="all"
+  extraVariables="ipAddress,source,record,decLang,list,userAgent,rdud,rd_proj_ud"
+  fingerprint="all"
+  fir="on"
+  html:showNumber="0"
+  mobile="compat"
+  mobileDevices="smartphone,tablet,desktop"
+  name="Survey"
+  remerged="20261028_04:24"
+  secure="1"
+  setup="term,decLang,quota,time"
+  ss:accordionDisplay="0"
+  ss:disableBackButton="1"
+  ss:enableNavigation="0"
+  ss:hideProgressBar="0"
+  ss:includeCSS="https://cdnjs.cloudflare.com/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css"
+  ss:includeJS="https://cdnjs.cloudflare.com/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js,[rel insutils.js]"
+  ss:listDisplay="1"
+  ss:logoAlt="Logo"
+  ss:logoPosition="left"
+  state="live"
+  theme="frozen:company/inserene_2026"
+  version="5">
+
+<res label="INS_Carousal">Please select one response per statement. Once selected you will automatically move to the next statement in the series. To amend your answer, use the arrows beside the statement to navigate. When done, click “Continue” to proceed.</res>
+<res label="INS_Carousal_Q31">Please select one response per platform. Once selected you will automatically move to the next platform in the series. To amend your answer, use the arrows beside the platform to navigate. When done, click “Continue” to proceed.</res>
+<res label="INS_Carousal1">Please select one response per school. Once selected you will automatically move to the next school in the series. To amend your answer, use the arrows beside the school to navigate. When done, click “Continue” to proceed.</res>
+<res label="INS_Carousal2">Please select one response per university. Once selected you will automatically move to the next university in the series. To amend your answer, use the arrows beside the university to navigate. When done, click “Continue” to proceed.</res>
+<res label="INS_S">Please select one response.</res>
+<res label="INS_ZIP">Please enter valid 5-digit zip code below.</res>
+<res label="sys_textNoAnswerSelected">Please provide an answer.</res>
+<res label="INS_M">Please select all that apply.</res>
+<res label="INS_G">Please select one response per row.</res>
+<res label="INS_N">Please enter whole numbers.</res>
+<res label="INS_NS">Please enter a whole number.</res>
+<res label="INS_N_SUM">Please enter whole numbers. Your answers must sum to 100%.</res>
+<res label="rank3">Please rank 3 product names only.</res>
+<res label="INS_DD">Please select one response from the below drop-down.</res>
+<res label="error_ddoe">Please specify the required information.</res>
+<res label="error_oelen4">The other specify response must be atleast 4 characters in length.</res>
+<res label="completion">Please click 'Continue' to proceed.</res>
+<res label="rankall">Please rank the outcomes where 1 is the most important and 11 is the least important. To change your answer, click again to deselect and choose another option.</res>
+<samplesources>
+  <samplesource list="0">
+    <title>Open Survey</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <exit cond="terminated">Thank you for your time, unfortunately you do not qualify to participate at this time.</exit>
+    <exit cond="qualified">Thank you for your time and participation!</exit>
+    <exit cond="overquota">Thank you for your interest this study! We will not be taking up any more of your time. We have either filled the quota for respondents with your profile or you do not fit the profile of the type of respondent we are looking for. Have a good day!</exit>
+  </samplesource>
+
+  <samplesource list="99">
+    <title>Client sample</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <exit cond="terminated">Thank you for taking our survey.</exit>
+    <exit cond="qualified"><em>Thank you for taking the time out of your busy schedule to complete this survey.  We truly appreciate your candid and thoughtful responses.</em></exit>
+    <exit cond="overquota">Thank you for taking our survey.</exit>
+  </samplesource>
+
+  <samplesource eid="s2s:143" list="143">
+    <title>RepData</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already completed this survey.</completed>
+    <var name="rdud" unique="1"/>
+    <var name="rd_proj_ud" required="1"/>
+    <exit cond="qualified" url="https://www.rdsecured.com/return?inbound_code=1000&amp;rdud=${rdud}"/>
+    <exit cond="terminated" url="https://www.rdsecured.com/return?inbound_code=2000&amp;rdud=${rdud}"/>
+    <exit cond="overquota" url="https://www.rdsecured.com/return?inbound_code=4000&amp;rdud=${rdud}"/>
+  </samplesource>
+</samplesources>
+
+<suspend/>
+
+<exec when="started">
+if gv.survey.root.state.live:
+    gv.survey.root.styles.ss.enableNavigation = 0
+    gv.survey.root.styles.ss.disableBackButton = 1
+
+setExtra("rd_proj_ud", gv.survey.path.split("/")[-1])
+</exec>
+
+<suspend/>
+
+<note>----------------------------------------------------------------------------------------------------------------------------------
+                                              Example of Research Defender OE Review
+                                        Remove it and add it to the survey manually when required.
+----------------------------------------------------------------------------------------------------------------------------------</note>
+<block label="blk" cond="0">
+  <textarea 
+   label="QEXAMPLE"
+   cond="0"
+   optional="0">
+    <title>Example question</title>
+  </textarea>
+
+  <logic label="lnQEXAMPLE" cond="list == '143'" researchdefender_review:participant_id="${rdud}" researchdefender_review:private_key="2b974a55-9b1b-40e8-acf1-59583bb3f1d4" researchdefender_review:publishable_key="fc607d8d-e0da-4f8e-8c48-d8957e9ec8a8" researchdefender_review:survey_id="${rd_proj_ud}" researchdefender_review:targets="QEXAMPLE" uses="researchdefender_review.1">
+    <title>Research Defender REVIEW Integration</title></logic></block>
+
+<suspend/>
+
+<radio 
+  label="hidChange"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Hidden question for tracking any changes made during fielding</title>
+  <exec>
+hidChange.val = hidChange.r1.index
+  </exec>
+
+  <row label="r1">Original - No Changes</row>
+  <row label="r2">(date and time of change) - (QRE Version)</row>
+  <row label="r3">(date and time of change) - (QRE Version)</row>
+  <row label="r4">(date and time of change) - (QRE Version)</row>
+  <row label="r5">(date and time of change) - (QRE Version)</row>
+  <row label="r6">(date and time of change) - (QRE Version)</row>
+  <row label="r7">(date and time of change) - (QRE Version)</row>
+  <row label="r8">(date and time of change) - (QRE Version)</row>
+  <row label="r9">(date and time of change) - (QRE Version)</row>
+  <row label="r10">(date and time of change) - (QRE Version)</row>
+  <row label="r11">(date and time of change) - (QRE Version)</row>
+</radio>
+
+<suspend/>
+
+<quota label="TotalQTA" overquota="noqual" sheet="QuotaTotal"/>
+
+<suspend/>
+
+<note>*********************************************************************************************************************************
+                                                      SURVEY STARTS HERE
+*********************************************************************************************************************************</note>
+<block label="isurvey" builder:title="isurvey">
+  <block label="Section_1" builder:title="SCREENER">
+    <html label="intro">Thank you for your interest in participating in this survey! Your responses will be kept entirely anonymous, so please answer as openly and honestly as possible. 
+<br /><br />
+You can expect this survey to take approximately 15 minutes.
+<br /><br />
+Please click "Continue" to begin...</html>
+
+    <suspend/>
+
+    <radio 
+    label="Q1"
+    atm1d:showInput="0"
+    cs:unitid="a1b2c3d4"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Please indicate your gender:<br /><i>This question is for categorization purposes only</i></title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">Male</row>
+      <row label="r2">Female</row>
+      <row label="r3">Non-Binary</row>
+      <row label="r4">Prefer not to answer</row>
+    </radio>
+
+    <suspend/>
+
+    <term label="TERM_Q1" cond="Q1.r4" cs:unitid="a1b2c3d4">Terminated: Prefer not to answer gender</term>
+
+    <suspend/>
+
+    <select 
+    label="Q2"
+    cs:unitid="b2c3d4e5">
+      <title>Please indicate your age: <p><em>This question is for categorization purposes only</em></p></title>
+      <comment>[res INS_DD]</comment>
+      <choice label="ch1">17 or Younger</choice>
+      <choice label="ch2">18</choice>
+      <choice label="ch3">19</choice>
+      <choice label="ch4">20</choice>
+      <choice label="ch5">21</choice>
+      <choice label="ch6">22</choice>
+      <choice label="ch7">23</choice>
+      <choice label="ch8">24</choice>
+      <choice label="ch9">25</choice>
+      <choice label="ch10">26</choice>
+      <choice label="ch11">27</choice>
+      <choice label="ch12">28</choice>
+      <choice label="ch13">29</choice>
+      <choice label="ch14">30</choice>
+      <choice label="ch15">31</choice>
+      <choice label="ch16">32</choice>
+      <choice label="ch17">33</choice>
+      <choice label="ch18">34</choice>
+      <choice label="ch19">35</choice>
+      <choice label="ch20">36</choice>
+      <choice label="ch21">37</choice>
+      <choice label="ch22">38</choice>
+      <choice label="ch23">39</choice>
+      <choice label="ch24">40</choice>
+      <choice label="ch25">41</choice>
+      <choice label="ch26">42</choice>
+      <choice label="ch27">43</choice>
+      <choice label="ch28">44</choice>
+      <choice label="ch29">45</choice>
+      <choice label="ch30">46</choice>
+      <choice label="ch31">47</choice>
+      <choice label="ch32">48</choice>
+      <choice label="ch33">49</choice>
+      <choice label="ch34">50</choice>
+      <choice label="ch35">51</choice>
+      <choice label="ch36">52</choice>
+      <choice label="ch37">53</choice>
+      <choice label="ch38">54</choice>
+      <choice label="ch39">55 or Older</choice>
+    </select>
+
+    <suspend/>
+
+    <term label="TERM_Q2" cond="Q2.ch1 or Q2.ch34 or Q2.ch35 or Q2.ch36 or Q2.ch37 or Q2.ch38 or Q2.ch39" cs:unitid="b2c3d4e5">Terminated: Age</term>
+
+    <suspend/>
+
+    <radio 
+    label="hAge"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden question for age</title>
+      <exec>
+if anyCodes(Q2, ["ch:2-8"]):
+	hAge.val=hAge.r1.index
+elif anyCodes(Q2, ["ch:9-18"]):
+	hAge.val=hAge.r2.index
+elif anyCodes(Q2, ["ch:19-33"]):
+	hAge.val=hAge.r3.index
+      </exec>
+
+      <row label="r1" value="1">18-24</row>
+      <row label="r2" value="2">25-34</row>
+      <row label="r3" value="3">35-49</row>
+    </radio>
+
+    <suspend/>
+
+    <quota label="qage" cond="hAge.any" overquota="noqual" sheet="Age"/>
+
+    <radio 
+    label="hAges"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden question for age</title>
+      <exec>
+if anyCodes(Q2, ["ch:4-5"]):
+	hAges.val=hAges.r1.index
+else:
+	hAges.val=hAges.r2.index
+      </exec>
+
+      <row label="r1" value="1">20-21</row>
+      <row label="r2" value="2">not 20-21</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="hAge_quota"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden question for age</title>
+      <exec>
+if anyCodes(Q2, ["ch:2-9"]):
+	hAge_quota.val=hAge_quota.r1.index
+elif anyCodes(Q2, ["ch:10-14"]):
+	hAge_quota.val=hAge_quota.r2.index
+elif anyCodes(Q2, ["ch:15-19"]):
+	hAge_quota.val=hAge_quota.r3.index
+elif anyCodes(Q2, ["ch:20-24"]):
+	hAge_quota.val=hAge_quota.r4.index
+elif anyCodes(Q2, ["ch:25-29"]):
+	hAge_quota.val=hAge_quota.r5.index
+elif anyCodes(Q2, ["ch:30-33"]):
+	hAge_quota.val=hAge_quota.r6.index
+      </exec>
+
+      <row label="r1" value="1">25 and under</row>
+      <row label="r2" value="2">26–30</row>
+      <row label="r3" value="3">31–35</row>
+      <row label="r4" value="4">36–40</row>
+      <row label="r5" value="5">41–45</row>
+      <row label="r6" value="6">46–49</row>
+    </radio>
+
+    <suspend/>
+
+    <quota label="qage1" cond="hAges.r1" overquota="noqual" sheet="Age(20-21)"/>
+
+    <suspend/>
+
+    <quota label="qage2" cond="hAge_quota.any" overquota="noqual" sheet="Agequota"/>
+
+    <suspend/>
+
+    <block label="zipblock" builder:title="Zip block">
+      <exec when="init">
+def readFile(Zipcode, ZIPCODE):
+  try:
+      fileData = File( "%s/%s" % (gv.survey.path, Zipcode), ZIPCODE)
+  except IOError:
+      fileData = ""
+  return fileData
+      </exec>
+
+      <suspend/>
+
+      <text 
+     label="Q3"
+     optional="0"
+     size="5"
+     verify="zipcode;len(5,5)">
+        <title>Please enter the zip code of your current residence<br />
+<i>This question is for categorization purposes only</i>
+</title>
+        <comment>Please enter a valid 5-digit zip code.</comment>
+        <res label="sys_badZipCode">Invalid zipcode, please correct your entries.</res>
+        <style label="numpad" cond="gv.request.device.isMobileDevice()" name="question.after"><![CDATA[
+<style>
+input[type=text]:not(.oe) {
+    max-width: 100px;
+    width: 65% !important;
+
+}</style>
+<script>
+$ (document).ready(function(){
+
+$ ("input[type='text']:not('.oe')").each(function(){
+ $ (this).attr("inputmode","decimal");
+});
+
+$ (".cfbox").each(function(){
+ $ (this).attr("inputmode","decimal");
+});
+});
+
+</script>
+]]></style>
+      </text>
+
+      <suspend/>
+
+      <exec when="init">
+Zipfile = File("ZipFile_New.dat", "zipcode")
+      </exec>
+
+      <exec>
+hState.val=hState.ch99.index
+respInfo = Zipfile.get(Q3.val)
+if respInfo:
+	st=respInfo['markets']
+	print st
+	hState.val=int(st)-1
+      </exec>
+
+      <select 
+     label="hState"
+     optional="1"
+     translateable="0"
+     where="execute,survey,report">
+        <title>State</title>
+        <choice label="ch1" value="1">Las Vegas, Nevada</choice>
+        <choice label="ch2" value="2">Colorado Springs-Pueblo, Colorado</choice>
+        <choice label="ch3" value="3">Medford-Klamath Falls, Oregon</choice>
+        <choice label="ch4" value="4">Anchorage, Alaska</choice>
+        <choice label="ch5" value="5">Casper-Riverton, Wyoming</choice>
+        <choice label="ch6" value="6">Fairbanks, Alaska</choice>
+        <choice label="ch7" value="7">Juneau, Alaska</choice>
+        <choice label="ch8" value="8">Los Angeles, California</choice>
+        <choice label="ch9" value="9">San Diego, California</choice>
+        <choice label="ch10" value="10">Fresno-Visalia, California</choice>
+        <choice label="ch11" value="11">Bend, Oregon</choice>
+        <choice label="ch12" value="12">Albuquerque-Santa Fe, New Mexico</choice>
+        <choice label="ch13" value="13">Palm Springs, California</choice>
+        <choice label="ch14" value="14">Butte-Bozeman, Montana</choice>
+        <choice label="ch15" value="15">Grand Junction-Montrose, Colorado</choice>
+        <choice label="ch16" value="16">Eureka, California</choice>
+        <choice label="ch17" value="17">Phoenix, Arizona</choice>
+        <choice label="ch18" value="18">San Antonio, Texas</choice>
+        <choice label="ch19" value="19">Waco-Temple-Bryan, Texas</choice>
+        <choice label="ch20" value="20">Abilene-Sweetwater, Texas</choice>
+        <choice label="ch21" value="21">Wichita Falls, Texas &amp; Lawton, Oklahoma</choice>
+        <choice label="ch22" value="22">San Angelo, Texas</choice>
+        <choice label="ch23" value="23">El Paso, Texas</choice>
+        <choice label="ch24" value="24">Oklahoma City, Oklahoma</choice>
+        <choice label="ch25" value="25">Chicago, Illinois</choice>
+        <choice label="ch26" value="26">Columbus, Ohio</choice>
+        <choice label="ch27" value="27">Cleveland-Akron (Canton), Ohio</choice>
+        <choice label="ch28" value="28">Cincinnati, Ohio</choice>
+        <choice label="ch29" value="29">Indianapolis, Indiana</choice>
+        <choice label="ch30" value="30">Dayton, Ohio</choice>
+        <choice label="ch31" value="31">Champaign &amp; Springfield-Decatur,Illinois</choice>
+        <choice label="ch32" value="32">Toledo, Ohio</choice>
+        <choice label="ch33" value="33">Peoria-Bloomington, Illinois</choice>
+        <choice label="ch34" value="34">Terre Haute, Indiana</choice>
+        <choice label="ch35" value="35">Topeka, Kansas</choice>
+        <choice label="ch36" value="36">Erie, Pennsylvania</choice>
+        <choice label="ch37" value="37">Wheeling, West Virginia-Steubenville, Ohio</choice>
+        <choice label="ch38" value="38">Joseph, Missouri</choice>
+        <choice label="ch39" value="39">Ottumwa, Iowa-Kirksville, Missouri</choice>
+        <choice label="ch40" value="40">Louis, Missouri</choice>
+        <choice label="ch41" value="41">Lincoln &amp; Hastings-Kearney, Nebraska</choice>
+        <choice label="ch42" value="42">New York, New York</choice>
+        <choice label="ch43" value="43">Philadelphia, Pennsylvania</choice>
+        <choice label="ch44" value="44">Wilkes Barre-Scranton, Pennsylvania</choice>
+        <choice label="ch45" value="45">Elmira, New York</choice>
+        <choice label="ch46" value="46">Washington, DC (Hagerstown, Maryland)</choice>
+        <choice label="ch47" value="47">Atlanta, Georgia</choice>
+        <choice label="ch48" value="48">Charlotte, North Carolina</choice>
+        <choice label="ch49" value="49">Raleigh-Durham (Fayetteville), North Carolina</choice>
+        <choice label="ch50" value="50">Jacksonville, Florida</choice>
+        <choice label="ch51" value="51">Memphis, Tennessee</choice>
+        <choice label="ch52" value="52">Greensboro-Winston Salem, North Carolina</choice>
+        <choice label="ch53" value="53">Columbia, South Carolina</choice>
+        <choice label="ch54" value="54">Augusta, Georgia</choice>
+        <choice label="ch55" value="55">Savannah, Georgia</choice>
+        <choice label="ch56" value="56">Mobile, Alabama-Pensacola, Florida</choice>
+        <choice label="ch57" value="57">Greenville-New Bern-Washington, North Carolina</choice>
+        <choice label="ch58" value="58">Jackson, Mississippi</choice>
+        <choice label="ch59" value="59">Columbus, Georgia</choice>
+        <choice label="ch60" value="60">Florence-Myrtle Beach, South Carolina</choice>
+        <choice label="ch61" value="61">Macon, Georgia</choice>
+        <choice label="ch62" value="62">Charleston, South Carolina</choice>
+        <choice label="ch63" value="63">Albany, Georgia</choice>
+        <choice label="ch64" value="64">Montgomery (Selma), Alabama</choice>
+        <choice label="ch65" value="65">Columbus-Tupelo-West Point, Mississippi</choice>
+        <choice label="ch66" value="66">Jackson, Tennessee</choice>
+        <choice label="ch67" value="67">Dothan, Alabama</choice>
+        <choice label="ch68" value="68">Alexandria, Louisiana</choice>
+        <choice label="ch69" value="69">Jonesboro, Arkansas</choice>
+        <choice label="ch70" value="70">Greenwood-Greenville, Mississippi</choice>
+        <choice label="ch71" value="71">Orlando-Daytona Beach, Florida</choice>
+        <choice label="ch72" value="72">Norfolk-Portsmouth-Newport News,Virginia</choice>
+        <choice label="ch73" value="73">Tallahassee, Florida-Thomasville, Georgia</choice>
+        <choice label="ch74" value="74">Richmond-Petersburg, Virginia</choice>
+        <choice label="ch75" value="75">Roanoke-Lynchburg, Virginia</choice>
+        <choice label="ch76" value="76">Bluefield-Beckley-Oak Hill, West Virginia</choice>
+        <choice label="ch77" value="77">Charlottesville, Virginia</choice>
+        <choice label="ch99" value="99">Other</choice>
+      </select>
+
+      <term label="Q3_term" cond="hState.ch99.any">Q3: Invalid zip</term>
+
+      <suspend/>
+
+      <radio 
+     label="hRegion"
+     translateable="0"
+     where="execute,survey,report">
+        <title>Region</title>
+        <exec>
+respInfo1 = Zipfile.get(Q3.val)
+if respInfo1:
+	rg=respInfo1['region']
+	print rg
+	hRegion.val=int(rg)-1
+        </exec>
+
+        <row label="r1">West</row>
+        <row label="r2">Southwest</row>
+        <row label="r3">Midwest</row>
+        <row label="r4">Northeast</row>
+        <row label="r5">Southeast</row>
+      </radio>
+
+      <suspend/>
+    </block>
+
+    <suspend/>
+
+    <quota label="RegionQTA" overquota="noqual" sheet="Region"/>
+
+    <suspend/>
+
+    <radio 
+    label="Q4"
+    atm1d:showInput="0"
+    cs:unitid="d4e5f6g7"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>What is the highest level of education you have completed?</title>
+      <comment>Please select one response.</comment>
+      <row label="r1">Some high school or less, no diploma</row>
+      <row label="r2">High school degree or equivalent</row>
+      <row label="r3">Some technical training, but no certificate</row>
+      <row label="r4">Some college, 12 credit hours or less, no degree</row>
+      <row label="r5">Some college, more than 12 credit hours, no degree</row>
+      <row label="r6">Undergraduate certificate</row>
+      <row label="r7">Associate degree</row>
+      <row label="r8">Bachelor’s degree</row>
+      <row label="r9">Graduate certificate</row>
+      <row label="r10">Graduate or Master’s degree</row>
+      <row label="r11">Doctorate degree or higher</row>
+    </radio>
+
+    <suspend/>
+
+    <term label="TERM_Q4" cond="Q4.r1 or Q4.r11" cs:unitid="d4e5f6g7">Terminated: Education</term>
+
+    <checkbox 
+    label="Q5"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="e5f6g7h8"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Which, if any, of the following types of education do you plan to pursue <u>in the near future</u>?</title>
+      <comment>Please select all that apply.</comment>
+      <row label="r1">Technical training</row>
+      <row label="r2">Undergraduate certificate</row>
+      <row label="r3">Associate degree</row>
+      <row label="r4">Bachelor’s degree</row>
+      <row label="r5">Graduate certificate</row>
+      <row label="r6">Graduate or Master’s degree</row>
+      <row label="r7">Doctorate degree or higher</row>
+      <row label="r8">Open online course (skills-based courses at minimal charge)</row>
+      <row label="r9">Non-degree program through a college or university (non-certificate)</row>
+      <row label="r10" exclusive="1" randomize="0">None of the above</row>
+    </checkbox>
+
+    <suspend/>
+
+    <term label="tQ5_term2" cond="Q5.r10">term:Q5</term>
+
+    <suspend/>
+
+    <radio 
+    label="Q5_term"
+    where="execute,survey,report">
+      <title>hidden question for tremination</title>
+      <exec>
+Q5_term.val = Q5_term.r2.index
+
+count_selected = 0
+allowed_selected = 0
+
+for r in Q5.rows:
+	if r.val:
+		count_selected += 1
+
+for r in [Q5.r1, Q5.r7, Q5.r8, Q5.r9]:
+	if r.val:
+		allowed_selected += 1
+
+
+if count_selected == allowed_selected and allowed_selected &gt; 0:
+	Q5_term.val = Q5_term.r1.index
+      </exec>
+
+      <row label="r1">Term</row>
+      <row label="r2">Continue</row>
+    </radio>
+
+    <suspend/>
+
+    <term label="tQ5_term" cond="Q5_term.r1">term:Q5</term>
+
+    <term label="tQ5_Term1" cond="(Q5.r1 and Q5.count==1) or (Q5.r7 and Q5.count==1) or (Q5.r8 and Q5.count==1) or (Q5.r9 and Q5.count==1) or (Q5.r10)">Q5Term</term>
+
+    <suspend/>
+
+    <exec>
+if Q5.r2 or Q5.r3 or Q5.r4:
+	hQ5.r1.val =1
+if Q5.r5 or Q5.r6:
+	hQ5.r2.val =1
+    </exec>
+
+    <checkbox 
+    label="hQ5"
+    optional="1"
+    where="execute,survey,report">
+      <title> Hidden in live</title>
+      <row label="r1">Undergrad</row>
+      <row label="r2">Grad</row>
+    </checkbox>
+
+    <suspend/>
+
+    <pipe label="pipe1" capture="">
+      <case label="c1" cond="Q5.count==1">a</case>
+      <case label="c2" cond="Q5.count gt 1">an</case>
+      <case label="c3" cond="1"/></pipe>
+    <radio 
+    label="Q6"
+    atm1d:showInput="0"
+    cs:unitid="f6g7h8i9"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>You said you plan to seek additional education in the near future. When do you plan to enroll in school?</title>
+      <comment>Please select one response.</comment>
+      <row label="r1">In the next 2 months or less</row>
+      <row label="r2">In the next 3-6 months</row>
+      <row label="r3">In the next 7-12 months</row>
+      <row label="r4">In 1-2 years</row>
+      <row label="r5">In more than 2 years</row>
+      <row label="r6">I’m already enrolled in a school to pursue additional education</row>
+    </radio>
+
+    <suspend/>
+
+    <term label="TERM_Q6" cond="Q6.r4 or Q6.r5" cs:unitid="f6g7h8i9">Terminated: Enrollment timing</term>
+
+    <suspend/>
+
+    <quota label="qQ6" cond="Q6.r1 or Q6.r2 or Q6.r3" overquota="noqual" sheet="Education"/>
+
+    <suspend/>
+
+    <textarea 
+    label="Q7"
+    cond="Q6.r6"
+    cs:unitid="g7h8i9j0"
+    optional="0"
+    size="40">
+      <title>You said you are already enrolled in a school to pursue <b>[pipe:pipe1] [pipe:Q5]</b>. Where did you enroll in school?</title>
+      <comment>To the best of your knowledge, please type the full name of the school below.</comment>
+    </textarea>
+
+    <suspend/>
+
+    <textarea 
+    label="Q8"
+    cond="Q6.r6"
+    cs:unitid="h8i9j0k1"
+    optional="0"
+    size="80">
+      <title>Why did you choose that school to pursue your <b>[pipe:pipe1] [pipe:Q5]</b>?</title>
+      <comment>Please be as detailed and specific as possible.</comment>
+    </textarea>
+
+    <suspend/>
+
+    <term label="TERM_Q8" cond="Q6.r6" cs:unitid="h8i9j0k1">Terminated: Already enrolled</term>
+
+    <checkbox 
+    label="Q9"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="i9j0k1l2"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Which of the following have you done when thinking about pursuing your education?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1">I have spoken to friends, family, employers, or co-workers about going to school/college</row>
+      <row label="r2">I have started researching (schools or areas of study) by visiting websites, reading brochures</row>
+      <row label="r3">I have contacted colleges/universities (e.g., called, had meetings, visited the campus)</row>
+      <row label="r4">I have applied to colleges and/or universities</row>
+      <row label="r5" exclusive="1" randomize="0">It’s on my mind a lot but I’ve not done anything yet</row>
+    </checkbox>
+
+    <suspend/>
+
+    <term label="TERM_Q9_1" cond="Q9.r5" cs:unitid="i9j0k1l2">Terminated: Not done anything yet</term>
+
+    <term label="TERM_Q9_2" cond="Q9.r1 and not (Q9.r2 or Q9.r3 or Q9.r4)" cs:unitid="i9j0k1l2">Terminated: Only spoken to friends</term>
+
+    <radio 
+    label="Q10"
+    atm1d:showInput="0"
+    cs:unitid="j0k1l2m3"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>What types of schools are you considering?</title>
+      <comment>Please select one response.</comment>
+      <row label="r1">I am considering schools that offer only online classes</row>
+      <row label="r2">I am considering schools that offer both online and on-campus classes</row>
+      <row label="r3">I am only considering schools that offer primarily on-campus classes</row>
+    </radio>
+
+    <suspend/>
+
+    <term label="TERM_Q10" cond="Q10.r3" cs:unitid="j0k1l2m3">Terminated: Only on-campus</term>
+
+    <checkbox 
+    label="Q11"
+    cond="Q5.r2"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="k1l2m3n4"
+    ss:listDisplay="1"
+    ss:questionClassNames="_col2"
+    uses="atm1d.11">
+      <title>Which, if any, of the following undergraduate certificates are you most interested in pursuing?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1">Business Essentials</row>
+      <row label="r2">Cloud Computing</row>
+      <row label="r3">Cyber Security</row>
+      <row label="r4">Data Mining and Analytics</row>
+      <row label="r5">Information Technology (IT) Essentials</row>
+      <row label="r6">Internet of Things (IoT)</row>
+      <row label="r7">Medical Billing and Coding</row>
+      <row label="r8">Networking Essentials</row>
+      <row label="r9">Programming Essentials</row>
+      <row label="r10">Software Design and Solutions</row>
+      <row label="r11">Web and Mobile Application Development</row>
+      <row label="r12">Website Design</row>
+      <row label="r13">Website Development</row>
+      <row label="r14" open="1" openSize="25" randomize="0">Other, please specify:</row>
+      <style name="question.after"><![CDATA[
+<style>  
+._col2 fieldset.atm1d .answers {
+    width: 80%;
+}
+</style>
+]]></style>
+    </checkbox>
+
+    <suspend/>
+
+    <term label="TERM_Q11" cond="((Q5.r2 and Q5.count==1) and (Q11.r14 and Q11.count==1))" cs:unitid="k1l2m3n4">Terminated: Only Other selected</term>
+
+    <checkbox 
+    label="Q12"
+    cond="Q5.r3 or Q5.r4"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="l2m3n4o5"
+    ss:listDisplay="1"
+    ss:questionClassNames="atm1dOEQ"
+    uses="atm1d.11">
+      <title>Which, if any, of the following programs are you interested in seeking an undergraduate degree in?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1"><b>Accounting:</b> such as auditing, bookkeeping, managerial accounting, tax accounting</row>
+      <row label="r2"><b>Business:</b> such as finance, general management, human resources, marketing, project management, global supply chain, entrepreneurship</row>
+      <row label="r3"><b>Computers (Information Systems and Technology):</b> such as database administration, network communications management, network systems administration</row>
+      <row label="r4"><b>Computers (Cyber Security):</b> such as computer forensics, cyber security programming</row>
+      <row label="r5"><b>Computers (Software Development):</b> such as application development, computer programming, systems development, web development</row>
+      <row label="r6"><b>Criminal Justice/Security:</b> corrections, critical incident response, digital forensics, emergency management, homeland security, loss prevention, policing/law enforcement</row>
+      <row label="r7"><b>Design/Media Arts:</b> such as graphic design, game and simulation programming, multimedia design and development, photography, web design, web/mobile gaming</row>
+      <row label="r8"><b>Education:</b> such as bilingual education, curriculum and instruction, special education, educational technology, leadership</row>
+      <row label="r9"><b>Engineering Technology:</b> such as focus on application and implementation (as opposed to theory and design). Programs like these focus on practical applications. Graduates are technologists who may work in technical services, sales, product design, product testing</row>
+      <row label="r10"><b>Healthcare (Administrative/Billing &amp; Coding):</b> such as clinical lab science, healthcare administration, health information technology, medical billing and coding, community health, medical office administration</row>
+      <row label="r11"><b>Healthcare (Nursing):</b> such as licensed practical nursing, nursing assisting, registered nursing, RN to BSN, nursing leadership</row>
+      <row label="r12"><b>Liberal Arts:</b> such as a comprehensive overview of humanities-related classes (communications, literature, philosophy, social and physical sciences)</row>
+      <row label="r13" open="1" openSize="25" randomize="0"><b>Other, please specify:</b></row>
+    </checkbox>
+
+    <suspend/>
+
+    <radio 
+    label="Q12_term"
+    where="execute,survey,report">
+      <title>hidden question for tremination</title>
+      <exec>
+Q12_term.val = Q12_term.r2.index
+
+count_selected = 0
+allowed_selected = 0
+
+for r in Q12.rows:
+	if r.val:
+		count_selected += 1
+
+for r in [Q12.r8, Q12.r11, Q12.r12, Q12.r13]:
+	if r.val:
+		allowed_selected += 1
+
+
+if count_selected == allowed_selected and allowed_selected &gt; 0:
+	Q12_term.val = Q12_term.r1.index
+      </exec>
+
+      <row label="r1">Term</row>
+      <row label="r2">Continue</row>
+    </radio>
+
+    <suspend/>
+
+    <term label="tQ12_term" cond="Q12_term.r1">Q13term</term>
+
+    <term label="Q12_Term1" cond="((Q5.r3 and Q5.count==1) or (Q5.r4 and Q5.count==1)) and ((Q12.r8 and Q12.count==1) or (Q12.r11 and Q12.count==1) or (Q12.r13 and Q12.count==1))">Q12Term1</term>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q13"
+    cond="Q5.r5"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="m3n4o5p6"
+    ss:listDisplay="1"
+    ss:questionClassNames="atm1dOEQ"
+    uses="atm1d.11">
+      <title>Which, if any, of the following graduate certificates are you most interested in pursuing?</title>
+      <comment>Please select all that apply.</comment>
+      <row label="r1">Accounting</row>
+      <row label="r2">Big Data and Analytics</row>
+      <row label="r3">CPA Exam Prep</row>
+      <row label="r4">Entrepreneurship</row>
+      <row label="r5">Global Supply Chain Management</row>
+      <row label="r6">Health Services Management</row>
+      <row label="r7">Human Resources Management</row>
+      <row label="r8">Information Security</row>
+      <row label="r9">Project Management</row>
+      <row label="r10" open="1" openSize="25" randomize="0">Other, please specify:</row>
+    </checkbox>
+
+    <suspend/>
+
+    <term label="Q13_Term" cond="((Q5.r5 and Q5.count==1) and (Q13.r10 and Q13.count==1))">Q13Term</term>
+
+    <term label="Q13_Term1" cond="(Q13.r6 and Q13.count==1) or (Q13.r10 and Q13.count==1)">Q13Term1</term>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q14"
+    cond="Q5.r6"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="n4o5p6q7"
+    sortRows="asc,survey"
+    ss:listDisplay="1"
+    ss:questionClassNames="atm1dOEQ"
+    uses="atm1d.11">
+      <title>Which, if any, of the following programs are you most interested in seeking a Graduate/Master’s degree in?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1"><b>Accounting / Finance:</b> MAFM, MSAC, etc.</row>
+      <row label="r2"><b>Business Administration:</b> MBA</row>
+      <row label="r3"><b>Business Analytics:</b> MS</row>
+      <row label="r4"><b>Cyber Security</b> (Information Security): MISM, MNCM</row>
+      <row label="r5"><b>Specialized Business &amp; Management/Leadership Degrees (Human Resource Management, Project Management, Public Administration): </b>MHRM, MPM, MPA, etc.</row>
+      <row label="r6"><b>Education:</b> MSED, MSET, MEd, EdD, etc.</row>
+      <row label="r7"><b>Health Administration:</b> MHA</row>
+      <row label="r8"><b>Physical Science:</b> MPhys, MBio, MChem, PhD, etc.</row>
+      <row label="r9"><b>Technology Management</b> (IT / Networking / Information Systems Management): MISM, MNCM</row>
+      <row label="r10" open="1" openSize="25" randomize="0"><b>Other, please specify:</b></row>
+    </checkbox>
+
+    <suspend/>
+
+    <radio 
+    label="Q14_term"
+    cond="Q5.r6"
+    where="execute,survey,report">
+      <title>hidden question for tremination</title>
+      <exec>
+Q14_term.val = Q14_term.r2.index
+
+count_selected = 0
+allowed_selected = 0
+
+for r in Q14.rows:
+	if r.val:
+		count_selected += 1
+
+for r in [Q14.r3, Q14.r6, Q14.r7, Q14.r8,Q14.r10]:
+	if r.val:
+		allowed_selected += 1
+
+
+if count_selected == allowed_selected and allowed_selected &gt; 0:
+	Q14_term.val = Q14_term.r1.index
+      </exec>
+
+      <row label="r1">Term</row>
+      <row label="r2">Continue</row>
+    </radio>
+
+    <suspend/>
+
+    <term label="tQ14term" cond="Q14_term.r1">Q14:term</term>
+
+    <term label="Q14_Term" cond="(Q5.r6 and Q5.count==1) and ((Q14.r3 and Q14.count==1) or (Q14.r6 and Q14.count==1) or (Q14.r7 and Q14.count==1) or (Q14.r8 and Q14.count==1) or (Q14.r10 and Q14.count==1))">Q14Term</term>
+
+    <suspend/>
+
+    <exec>
+if (anyCodes(Q13,['r:1-5']) or Q13.r7 or Q13.r9) or (Q12.r1 or Q12.r2 or Q12.r6 or Q12.r12) or (Q11.r1) or (Q14.r1 or Q14.r2 or Q14.r3 or Q14.r5):
+	hQ13.r1.val =1
+
+if Q13.r8 or anyCodes(Q11,['r:2-6']) or anyCodes(Q11,['r:8-13']) or (Q12.r3 or Q12.r4 or Q12.r5 or Q12.r7 or Q12.r8 or Q12.r9 ) or (Q14.r4 or Q14.r9):
+	hQ13.r2.val =1
+if Q13.r6 or Q11.r7 or Q12.r10 or Q12.r11 or Q14.r7: 
+	hQ13.r3.val = 1
+    </exec>
+
+    <checkbox 
+    label="hQ13"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden in live</title>
+      <row label="r1">Business</row>
+      <row label="r2">Technology</row>
+      <row label="r3">Healthcare</row>
+    </checkbox>
+
+    <suspend/>
+
+    <checkbox 
+    label="hQ15_Options"
+    cs:unitid="o5p6q7r8"
+    optional="1"
+    where="execute,survey,report">
+      <title>HIDDEN - Q15 Options</title>
+      <comment>Please select all that apply.</comment>
+      <exec>
+if Q11.r1: hQ15_Options.r1.val = 1
+if Q11.r2: hQ15_Options.r2.val = 1
+if Q11.r3: hQ15_Options.r3.val = 1
+if Q11.r4: hQ15_Options.r4.val = 1
+if Q11.r5: hQ15_Options.r5.val = 1
+if Q11.r6: hQ15_Options.r6.val = 1
+if Q11.r7: hQ15_Options.r7.val = 1
+if Q11.r8: hQ15_Options.r8.val = 1
+if Q11.r9: hQ15_Options.r9.val = 1
+if Q11.r10: hQ15_Options.r10.val = 1
+if Q11.r11: hQ15_Options.r11.val = 1
+if Q11.r12: hQ15_Options.r12.val = 1
+if Q11.r13: hQ15_Options.r13.val = 1
+
+if Q12.r1: hQ15_Options.r14.val = 1
+if Q12.r2: hQ15_Options.r15.val = 1
+if Q12.r3: hQ15_Options.r16.val = 1
+if Q12.r4: hQ15_Options.r17.val = 1
+if Q12.r5: hQ15_Options.r18.val = 1
+if Q12.r6: hQ15_Options.r19.val = 1
+if Q12.r7: hQ15_Options.r20.val = 1
+if Q12.r9: hQ15_Options.r21.val = 1
+if Q12.r10: hQ15_Options.r22.val = 1
+
+if Q13.r1: hQ15_Options.r23.val = 1
+if Q13.r2: hQ15_Options.r24.val = 1
+if Q13.r3: hQ15_Options.r25.val = 1
+if Q13.r4: hQ15_Options.r26.val = 1
+if Q13.r5: hQ15_Options.r27.val = 1
+if Q13.r7: hQ15_Options.r28.val = 1
+if Q13.r8: hQ15_Options.r29.val = 1
+if Q13.r9: hQ15_Options.r30.val = 1
+
+if Q14.r1: hQ15_Options.r31.val = 1
+if Q14.r2: hQ15_Options.r32.val = 1
+if Q14.r4: hQ15_Options.r33.val = 1
+if Q14.r5: hQ15_Options.r34.val = 1
+if Q14.r9: hQ15_Options.r35.val = 1
+      </exec>
+
+      <row label="r1">Business Essentials</row>
+      <row label="r2">Cloud Computing</row>
+      <row label="r3">Cyber Security</row>
+      <row label="r4">Data Mining and Analytics</row>
+      <row label="r5">Information Technology (IT) Essentials</row>
+      <row label="r6">Internet of Things (IoT)</row>
+      <row label="r7">Medical Billing and Coding</row>
+      <row label="r8">Networking Essentials</row>
+      <row label="r9">Programming Essentials</row>
+      <row label="r10">Software Design and Solutions</row>
+      <row label="r11">Web and Mobile Application Development</row>
+      <row label="r12">Website Design</row>
+      <row label="r13">Website Development</row>
+      <row label="r14"><b>Accounting:</b> such as auditing, bookkeeping, managerial accounting, tax accounting</row>
+      <row label="r15"><b>Business:</b> such as finance, general management, human resources, marketing, project management, global supply chain, entrepreneurship</row>
+      <row label="r16"><b>Computers (Information Systems and Technology):</b> such as database administration, network communications management, network systems administration</row>
+      <row label="r17"><b>Computers (Cyber Security):</b> such as computer forensics, cyber security programming</row>
+      <row label="r18"><b>Computers (Software Development):</b> such as application development, computer programming, systems development, web development</row>
+      <row label="r19"><b>Criminal Justice/Security:</b> corrections, critical incident response, digital forensics, emergency management, homeland security, loss prevention, policing/law enforcement</row>
+      <row label="r20"><b>Design/Media Arts:</b> such as graphic design, game and simulation programming, multimedia design and development, photography, web design, web/mobile gaming</row>
+      <row label="r21"><b>Engineering Technology:</b> such as focus on application and implementation (as opposed to theory and design). Programs like these focus on practical applications. Graduates are technologists who may work in technical services, sales, product design, product testing</row>
+      <row label="r22"><b>Healthcare (Administrative/Billing &amp; Coding):</b> such as clinical lab science, healthcare administration, health information technology, medical billing and coding, community health, medical office administration</row>
+      <row label="r23">Accounting (Grad Cert)</row>
+      <row label="r24">Big Data and Analytics (Grad Cert)</row>
+      <row label="r25">CPA Exam Prep (Grad Cert)</row>
+      <row label="r26">Entrepreneurship (Grad Cert)</row>
+      <row label="r27">Global Supply Chain Management (Grad Cert)</row>
+      <row label="r28">Human Resources Management (Grad Cert)</row>
+      <row label="r29">Information Security (Grad Cert)</row>
+      <row label="r30">Project Management (Grad Cert)</row>
+      <row label="r31"><b>Accounting / Finance:</b> MAFM, MSAC, etc.</row>
+      <row label="r32"><b>Business Administration:</b> MBA</row>
+      <row label="r33"><b>Cyber Security</b> (Information Security): MISM, MNCM</row>
+      <row label="r34"><b>Specialized Business &amp; Management/Leadership Degrees (Human Resource Management, Project Management, Public Administration): </b>MHRM, MPM, MPA, etc.</row>
+      <row label="r35"><b>Technology Management</b> (IT / Networking / Information Systems Management): MISM, MNCM</row>
+    </checkbox>
+
+    <suspend/>
+
+    <radio 
+    label="Q15"
+    atm1d:showInput="0"
+    cs:unitid="o5p6q7r8"
+    rowCond="hQ15_Options[row]"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Of the options below, please select the program you are <u>most</u> interested in.</title>
+      <comment>Please select one response.</comment>
+      <row label="r1">Business Essentials</row>
+      <row label="r2">Cloud Computing</row>
+      <row label="r3">Cyber Security</row>
+      <row label="r4">Data Mining and Analytics</row>
+      <row label="r5">Information Technology (IT) Essentials</row>
+      <row label="r6">Internet of Things (IoT)</row>
+      <row label="r7">Medical Billing and Coding</row>
+      <row label="r8">Networking Essentials</row>
+      <row label="r9">Programming Essentials</row>
+      <row label="r10">Software Design and Solutions</row>
+      <row label="r11">Web and Mobile Application Development</row>
+      <row label="r12">Website Design</row>
+      <row label="r13">Website Development</row>
+      <row label="r14"><b>Accounting:</b> such as auditing, bookkeeping, managerial accounting, tax accounting</row>
+      <row label="r15"><b>Business:</b> such as finance, general management, human resources, marketing, project management, global supply chain, entrepreneurship</row>
+      <row label="r16"><b>Computers (Information Systems and Technology):</b> such as database administration, network communications management, network systems administration</row>
+      <row label="r17"><b>Computers (Cyber Security):</b> such as computer forensics, cyber security programming</row>
+      <row label="r18"><b>Computers (Software Development):</b> such as application development, computer programming, systems development, web development</row>
+      <row label="r19"><b>Criminal Justice/Security:</b> corrections, critical incident response, digital forensics, emergency management, homeland security, loss prevention, policing/law enforcement</row>
+      <row label="r20"><b>Design/Media Arts:</b> such as graphic design, game and simulation programming, multimedia design and development, photography, web design, web/mobile gaming</row>
+      <row label="r21"><b>Engineering Technology:</b> such as focus on application and implementation (as opposed to theory and design). Programs like these focus on practical applications. Graduates are technologists who may work in technical services, sales, product design, product testing</row>
+      <row label="r22"><b>Healthcare (Administrative/Billing &amp; Coding):</b> such as clinical lab science, healthcare administration, health information technology, medical billing and coding, community health, medical office administration</row>
+      <row label="r23">Accounting (Grad Cert)</row>
+      <row label="r24">Big Data and Analytics (Grad Cert)</row>
+      <row label="r25">CPA Exam Prep (Grad Cert)</row>
+      <row label="r26">Entrepreneurship (Grad Cert)</row>
+      <row label="r27">Global Supply Chain Management (Grad Cert)</row>
+      <row label="r28">Human Resources Management (Grad Cert)</row>
+      <row label="r29">Information Security (Grad Cert)</row>
+      <row label="r30">Project Management (Grad Cert)</row>
+      <row label="r31"><b>Accounting / Finance:</b> MAFM, MSAC, etc.</row>
+      <row label="r32"><b>Business Administration:</b> MBA</row>
+      <row label="r33"><b>Cyber Security</b> (Information Security): MISM, MNCM</row>
+      <row label="r34"><b>Specialized Business &amp; Management/Leadership Degrees (Human Resource Management, Project Management, Public Administration): </b>MHRM, MPM, MPA, etc.</row>
+      <row label="r35"><b>Technology Management</b> (IT / Networking / Information Systems Management): MISM, MNCM</row>
+    </radio>
+
+    <suspend/>
+
+    <exec>
+# Business
+if anyCodes(Q15, ['r1','r14','r15','r19','r23','r24','r25','r26','r27','r28','r30','r31','r32','r34']):
+	hQ15quota.val = hQ15quota.r1.index
+
+# Technology
+elif anyCodes(Q15, ['r2','r3','r4','r5','r6','r8','r9','r10','r11','r12','r13','r16','r17','r18','r20','r21','r29','r33','r35']):
+	hQ15quota.val = hQ15quota.r2.index
+
+# Healthcare
+elif anyCodes(Q15,['r7','r22']):
+	hQ15quota.val = hQ15quota.r3.index
+    </exec>
+
+    <radio 
+    label="hQ15quota"
+    atm1d:showInput="0"
+    cs:unitid="o5p6q7r8"
+    optional="1"
+    ss:listDisplay="1"
+    uses="atm1d.11"
+    where="execute,survey,report">
+      <title>HIDDEN - Quotas</title>
+      <comment>Please select one response.</comment>
+      <row label="r1">Business</row>
+      <row label="r2">Technology</row>
+      <row label="r3">Healthcare</row>
+    </radio>
+
+    <suspend/>
+
+    <checkbox 
+    label="UNDERGRADUATE_DEGREE"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden for under graduate degree</title>
+      <exec>
+if anyCodes(Q2, ["ch:2-33"]):
+	UNDERGRADUATE_DEGREE.r1.val = 1
+if Q5.r3 or Q5.r4:
+	UNDERGRADUATE_DEGREE.r2.val = 1
+if anyCodes(Q6, ["r:1-3"]):
+	UNDERGRADUATE_DEGREE.r3.val = 1
+if anyCodes(Q12, ["r:1-7", "r:9-10"]):
+	UNDERGRADUATE_DEGREE.r4.val = 1
+      </exec>
+
+      <row label="r1">Ages 18-49</row>
+      <row label="r2">Interested in Associate's or Bachelor's degree</row>
+      <row label="r3">Plan to start undergraduate education within the next 12 months</row>
+      <row label="r4">Interested in DeVry offered program</row>
+    </checkbox>
+
+    <suspend/>
+
+    <checkbox 
+    label="UNDERGRADUATE_CERTIFICATE"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden for under graduate degree</title>
+      <exec>
+if anyCodes(Q2, ["ch:2-33"]):
+	UNDERGRADUATE_CERTIFICATE.r1.val = 1
+if Q5.r2:
+	UNDERGRADUATE_CERTIFICATE.r2.val = 1
+if anyCodes(Q6, ["r:1-3"]):
+	UNDERGRADUATE_CERTIFICATE.r3.val = 1
+if anyCodes(Q11, ["r:1-13"]):
+	UNDERGRADUATE_CERTIFICATE.r4.val = 1
+      </exec>
+
+      <row label="r1">Ages 18-49</row>
+      <row label="r2">Interested in a Certificate</row>
+      <row label="r3">Plan to start certificate within the next 12 months</row>
+      <row label="r4">Interested in DeVry offered program</row>
+    </checkbox>
+
+    <suspend/>
+
+    <checkbox 
+    label="GRADUATE_DEGREE"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden for under graduate degree</title>
+      <exec>
+if anyCodes(Q2, ["ch:6-33"]):
+	GRADUATE_DEGREE.r1.val = 1
+if anyCodes(Q4, ["r:5-9"]):
+	GRADUATE_DEGREE.r2.val = 1
+if Q5.r6:
+	GRADUATE_DEGREE.r3.val = 1
+if anyCodes(Q6, ["r:1-3"]):
+	GRADUATE_DEGREE.r4.val = 1
+if anyCodes(Q14, ["r:1-2","r:4-5","r9"]):
+	GRADUATE_DEGREE.r5.val = 1
+      </exec>
+
+      <row label="r1">Ages 22-49</row>
+      <row label="r2">&gt;12 credit hours, but no degree or more education</row>
+      <row label="r3">Interested in Master's degree</row>
+      <row label="r4">Plan to start graduate education within the next 12 months</row>
+      <row label="r5">Interested in Keller offered degree</row>
+    </checkbox>
+
+    <suspend/>
+
+    <checkbox 
+    label="GRADUATE_CERTIFICATE"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden for under graduate degree</title>
+      <exec>
+if anyCodes(Q2, ["ch:6-33"]):
+	GRADUATE_CERTIFICATE.r1.val = 1
+if anyCodes(Q4, ["r:5-9"]):
+	GRADUATE_CERTIFICATE.r2.val = 1
+if Q5.r5:
+	GRADUATE_CERTIFICATE.r3.val = 1
+if anyCodes(Q6, ["r:1-3"]):
+	GRADUATE_CERTIFICATE.r4.val = 1
+if anyCodes(Q13, ["r:1-5"]) or anyCodes(Q13, ["r:7-9"]):
+	GRADUATE_CERTIFICATE.r5.val = 1
+      </exec>
+
+      <row label="r1">Ages 22-49</row>
+      <row label="r2">&gt;12 credit hours, but no degree or more education</row>
+      <row label="r3">Interested in a Graduate Certificate</row>
+      <row label="r4">Plan to start certificate within the next 12 months</row>
+      <row label="r5">Interested in DeVry offered program</row>
+    </checkbox>
+
+    <suspend/>
+
+    <checkbox 
+    label="DEGREE_OPEN"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden for under graduate degree</title>
+      <exec>
+quota_cells = gv.survey.root.quota.getQuotaCells()
+for eachrow in DEGREE_OPEN.rows:
+	markerstr = "/Pklr_Degree/hDEGREE_r"+str(eachrow.index+1)
+	current, limit, overquota = quota_cells[markerstr]
+	if current lt limit:
+		eachrow.val = 1
+	else:
+		eachrow.val = 0
+      </exec>
+
+      <row label="r1">Undergraduate Degree</row>
+      <row label="r2">Undergraduate Certificate</row>
+      <row label="r3">Graduate Degree</row>
+      <row label="r4">Graduate Certificate</row>
+    </checkbox>
+
+    <suspend/>
+
+    <checkbox 
+    label="DEGREE"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden for under graduate degree</title>
+      <exec>
+if UNDERGRADUATE_DEGREE.all and DEGREE_OPEN.r1:
+	DEGREE.r1.val = 1
+if UNDERGRADUATE_CERTIFICATE.all and DEGREE_OPEN.r2:
+	DEGREE.r2.val = 1
+if GRADUATE_DEGREE.all and DEGREE_OPEN.r3:
+	DEGREE.r3.val = 1
+if GRADUATE_CERTIFICATE.all and DEGREE_OPEN.r4:
+	DEGREE.r4.val = 1
+      </exec>
+
+      <row label="r1">Undergraduate Degree</row>
+      <row label="r2">Undergraduate Certificate</row>
+      <row label="r3">Graduate Degree</row>
+      <row label="r4">Graduate Certificate</row>
+    </checkbox>
+
+    <suspend/>
+
+    <quota label="qu_hDEGREE" cond="DEGREE.any" overquota="noqual" sheet="Pklr_Degree"/>
+
+    <radio 
+    label="hDEGREE"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden for under graduate degree</title>
+      <exec>
+print p.markers
+for eachRow in hDEGREE.rows:
+	if hasMarker('/Pklr_Degree/hDEGREE_' + eachRow.label):
+		hDEGREE.val = hDEGREE.attr(eachRow.label).index
+      </exec>
+
+      <row label="r1">Undergraduate Degree</row>
+      <row label="r2">Undergraduate Certificate</row>
+      <row label="r3">Graduate Degree</row>
+      <row label="r4">Graduate Certificate</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="GRADUATE"
+    optional="1"
+    where="execute,survey,report">
+      <title>Hidden for under graduate degree</title>
+      <exec>
+if hDEGREE.r1 or hDEGREE.r2:
+	GRADUATE.val = 0
+if hDEGREE.r3 or hDEGREE.r4:
+	GRADUATE.val = 1
+      </exec>
+
+      <row label="r1">UNDERGRADUATE</row>
+      <row label="r2">GRADUATE</row>
+    </radio>
+
+    <suspend/>
+
+    <term label="thGRADUATEterm" cond="not(GRADUATE.any)">GRADUATE:Not Qualified term</term>
+
+    <suspend/>
+
+    <quota label="qhgraduate" cond="GRADUATE.any" overquota="noqual" sheet="Graduate"/>
+
+    <suspend/>
+
+    <quota label="qgender" cond="(Q1.r1 or Q1.r2 or Q1.r3) and GRADUATE.any" overquota="noqual" sheet="Gender"/>
+
+    <suspend/>
+
+    <quota label="qu_hQ15" cond="hQ15quota.any" overquota="noqual" sheet="Program"/>
+
+    <suspend/>
+  </block>
+
+  <block label="Section_2" builder:title="ATTITUDES, NEEDS, AND WANTS">
+    <html label="intro2">You qualify to take the rest of the survey!
+<br /><br />
+The purpose of the survey is to determine your preferences and opinions about pursuing your <b>[pipe:hDEGREE]</b>. 
+<br /><br />
+For the next few questions, please think about colleges and universities in general.</html>
+
+    <suspend/>
+
+    <radio 
+    label="Q16"
+    atm1d:showInput="0"
+    cs:unitid="p6q7r8s9"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Which of the following best describes where you are in your process of choosing a school?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">I am just beginning to explore schools or programs</row>
+      <row label="r2">I am narrowing down my options to a few schools</row>
+      <row label="r3">I am ready to apply or have already started applying</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q17"
+    cardrating:completion="${res.completion}"
+    cardrating:lrg_maxwidth="140px"
+    cs:unitid="q7r8s9t0"
+    shuffle="rows"
+    uses="cardrating.1">
+      <title>After finding a school you’re interested in, how likely would you be to do each of the following?</title>
+      <comment>[res INS_Carousal]</comment>
+      <row label="r1">Explore information on the school’s website on your own</row>
+      <row label="r2">Use interactive tools (e.g., cost calculators, program finders)</row>
+      <row label="r3">Chat or text with someone</row>
+      <row label="r4">Request more information (e.g., fill out a form or email the school)</row>
+      <row label="r5">Speak with an advisor by phone</row>
+      <row label="r6">Schedule a time to speak with an advisor</row>
+      <row label="r7">Apply directly without speaking to anyone</row>
+      <col label="c1">1 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Extremely Unlikely</col>
+      <col label="c2">2</col>
+      <col label="c3">3 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Neither likely nor unlikely</col>
+      <col label="c4">4</col>
+      <col label="c5">5 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Extremely Likely</col>
+    </radio>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q18"
+    cond="0 and (Q17.r5.c1 or Q17.r5.c2 or Q17.r5.c3)"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="r8s9t0u1"
+    shuffle="rows"
+    ss:listDisplay="1"
+    ss:questionClassNames="atm1dOEQ"
+    uses="atm1d.11">
+      <title>You mentioned you are less likely to speak with an advisor by phone. What are the main reasons for this?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1">I prefer to research on my own using websites or online information</row>
+      <row label="r2">I don’t want to feel pressured</row>
+      <row label="r3">Calls take too much time</row>
+      <row label="r4">I prefer text/chat instead</row>
+      <row label="r5">I don’t like talking on the phone</row>
+      <row label="r6">I don’t think it’s necessary at that stage</row>
+      <row label="r7">Scheduling a call is inconvenient</row>
+      <row label="r8">I’ve had a negative experience with admissions calls</row>
+      <row label="r9">I prefer to use online tools (e.g., calculators or guided tools) instead of speaking with someone</row>
+      <row label="r99" exclusive="1" open="1" openSize="25" randomize="0">Something else</row>
+    </checkbox>
+
+    <suspend/>
+
+    <radio 
+    label="Q19"
+    cond="0"
+    atm1d:showInput="0"
+    cs:unitid="s9t0u1v2"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>If you had questions for a school you were researching, which ONE way would you prefer to communicate with that school to get answers?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">Speak with someone by phone</row>
+      <row label="r2">Chat or text with someone</row>
+      <row label="r3">Email</row>
+      <row label="r4">Look up information on the school’s website on my own</row>
+      <row label="r5">Use chat, tools, or guided experiences on the website</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q20a"
+    cardrating:completion="${res.completion}"
+    cardrating:lrg_maxwidth="240px"
+    shuffle="rows"
+    uses="cardrating.1">
+      <title>We'll now show you several statements that could describe a higher education institution.
+<br /><br />
+<i>For each statement, please indicate how important it is that a school... </i>
+</title>
+      <comment>[res INS_Carousal]</comment>
+      <row label="r1">Is a good university for those who are beginning their careers</row>
+      <row label="r2">Is a good university for people looking to advance their careers</row>
+      <row label="r3">Is accredited</row>
+      <row label="r4">Has strong expertise in technology education</row>
+      <row label="r5">Provides support tailored to my individual goals and needs</row>
+      <row label="r6" cond="0">Has a strong business program</row>
+      <row label="r7" cond="0">Has a strong technology program</row>
+      <row label="r8" cond="0">Has a strong healthcare program</row>
+      <row label="r9">Offers a high-quality education</row>
+      <row label="r10">Provides degrees that employers value</row>
+      <row label="r11">Helps me grow professionally to make me more valuable in the market</row>
+      <row label="r12">Has faculty and staff that are highly responsive and supportive</row>
+      <row label="r13">Offers online classes and flexible scheduling options</row>
+      <row label="r14">Offers programs that are aligned to the current and upcoming needs of the job market</row>
+      <row label="r15">Awards course credit for courses previously taken at another school</row>
+      <row label="r16">Enables me to earn my degree more quickly than I might at other schools</row>
+      <row label="r17">Is a good value for the money</row>
+      <row label="r18">Provides hands-on learning I can apply in the workplace</row>
+      <row label="r19">Cares about me and my success</row>
+      <row label="r20">Prepares students for careers involving emerging technologies like AI</row>
+      <row label="r21">Provides timely guidance to help me stay on track</row>
+      <col label="c1">1 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Unimportant to me</col>
+      <col label="c2">2</col>
+      <col label="c3">3 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Neutral</col>
+      <col label="c4">4</col>
+      <col label="c5">5 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Important to me</col>
+    </radio>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q20b"
+    atleast="1"
+    atmost="3"
+    grouping="cols"
+    shuffle="rows">
+      <title>Thinking about the process of choosing a school, what are the most important things you need to know at each stage?</title>
+      <comment>Please select up to 3 for each stage.</comment>
+      <validate>
+#if Q20b.c1.count &gt; 3:
+    #error("Please select up to 3 for Early Decision")
+#if Q20b.c2.count &gt; 3:
+    #error("Please select up to 3 for Final Decision")
+      </validate>
+
+      <row label="r1">How much it costs and what financial aid is available</row>
+      <row label="r2">What kind of job I could get after completing the program</row>
+      <row label="r3">The quality and reputation of the school or program</row>
+      <row label="r4">How flexible the program is (online, schedule, pace)</row>
+      <row label="r5">How long it will take to complete</row>
+      <row label="r6">What support is available to help me succeed (academic, career, etc.)</row>
+      <row label="r7">What I need to do to apply or get started</row>
+      <row label="r8">Whether I can transfer credits or get credit for past experience</row>
+      <row label="r9">What current students or graduates say about their experience</row>
+      <col label="c1">Early Decision</col>
+      <col label="c2">Final Decision</col>
+    </checkbox>
+
+    <suspend/>
+
+    <number 
+    label="Q20c"
+    shuffle="rows"
+    size="3"
+    unique="1"
+    verify="range(1,11)">
+      <title>Please rank the following factors in order of importance to you when considering 
+where to enroll, with 1 being the most important and 11 being the least important.
+</title>
+      <comment>Please click on the items in the order of your preference, starting with your most preferred and ending with your least preferred.</comment>
+      <validate>
+count1=0
+minrank=11
+maxrank=11
+for each in this.rows:
+	if each.ival gt 0:
+		count1=count1+1
+	if each.ival gt this.count:
+		error("Please make sure to rank all options.")
+if count1 lt minrank or count1 gt maxrank:
+	error("Please make sure to rank all options")
+      </validate>
+
+      <choice label="ch1">1 Most important</choice>
+      <choice label="ch2">2</choice>
+      <choice label="ch3">3</choice>
+      <choice label="ch4">4</choice>
+      <choice label="ch5">5</choice>
+      <choice label="ch6">6</choice>
+      <choice label="ch7">7</choice>
+      <choice label="ch8">8</choice>
+      <choice label="ch9">9</choice>
+      <choice label="ch10">10</choice>
+      <choice label="ch11">11&amp;nbsp; Least important</choice>
+      <row label="r1">Job placement and employability (getting a job in-field after graduation)</row>
+      <row label="r2">Career advancement (promotion or salary increase after graduation)</row>
+      <row label="r3">Alumni success stories (real-world examples of graduates achieving goals)</row>
+      <row label="r4">Employer partnerships (connections to companies that hire graduates)</row>
+      <row label="r5">Industry alignment (coursework aligned with current and emerging employer needs)</row>
+      <row label="r6">Practical, career-ready skills (hands-on skills you can apply right away)</row>
+      <row label="r7">Faculty expertise (instructors with real-world professional experience)</row>
+      <row label="r8">Affordability &amp;amp; financial value (education that feels worth the investment)</row>
+      <row label="r9">Flexibility of learning (balancing education with work and personal life)</row>
+      <row label="r10">Student care &amp;amp; support (personalized support and resources to succeed)</row>
+      <row label="r11">Third-party recognition/accreditation (trusted, accredited institution)</row>
+      <style name="page.head"><![CDATA[
+<link rel="stylesheet" href="//insient.s3.amazonaws.com/survey-files/rankcomponent/v1.2/rank.css" />
+<script src="//insient.s3.amazonaws.com/survey-files/rankcomponent/v1.2/rank.js"></script>
+]]></style>
+      <style name="question.after"><![CDATA[
+<script>
+/* isDKnewLine = binary value 0/1 => controls whether dk option should be shown on its own line or not */
+      const rankconfig = {
+       minRank: 11,
+       maxRank: 11,
+       noOfCols: 2,
+       isDKnewLine: 1
+      }
+      $ (document).ready(function(){rankingComponent(rankconfig);});
+</script>
+<style>
+      .cell-text.cell-sub-column label {margin-left: 0px;}
+      .cell-legend-above {margin-left: 8px}
+      div.answers.col-2 div.element.dk.dknewline {
+       display:grid !important;
+       place-items:center !important;
+      }
+</style>
+]]></style>
+    </number>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q21"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="w3x4y5z6"
+    shuffle="rows"
+    ss:listDisplay="1"
+    ss:questionClassNames="${' _col2 ' if not gv.request.device.isMobileDevice() else ' '}"
+    uses="atm1d.11">
+      <title>What, if anything, might prevent you from enrolling in a college or university?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1">Not receiving enough scholarships or grants</row>
+      <row label="r2">Needing to take out student loans</row>
+      <row label="r3">Financial aid not covering enough of the total cost</row>
+      <row label="r4">Not sure the degree is worth it</row>
+      <row label="r5">Uncertainty about job or career outcomes</row>
+      <row label="r6">Not having enough time due to work or personal responsibilities</row>
+      <row label="r7">Concern about being able to finish the program</row>
+      <row label="r8">Not having enough information to decide</row>
+      <row label="r9">The application or enrollment process feels too complicated</row>
+      <row label="r10">Not feeling confident I can succeed academically</row>
+      <row label="r11">Feeling pressured by the school to make a decision before I’m ready</row>
+      <row label="r12">Not getting enough support from the school during the enrollment process</row>
+      <row label="r13">Concern that past credits or relevant experience will not count</row>
+      <row label="r14">Concern about returning to school after a long time away</row>
+      <row label="r15">Not knowing which schools to trust</row>
+      <row label="r99" exclusive="1" randomize="0">None of the above</row>
+    </checkbox>
+
+    <suspend/>
+  </block>
+
+  <block label="Section_3" builder:title="AWARENESS, PREFERENCE, PERCEPTIONS">
+    <html label="Intro_section3">Now, we are going to ask you a few questions about schools that offer <b>[pipe:hDEGREE]</b></html>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q22"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="x4y5z6a7"
+    shuffle="rows"
+    ss:listDisplay="1"
+    ss:questionClassNames="_col2"
+    uses="atm1d.11">
+      <title>Below are some schools that offer <b>[pipe:hDEGREE]</b>. Which of these have you heard of?</title>
+      <comment>Please select all that apply.</comment>
+      <row label="r1" cond="GRADUATE.r1">DeVry University</row>
+      <row label="r2">Rasmussen University</row>
+      <row label="r3">University of Phoenix</row>
+      <row label="r4">University of Arizona Global Campus</row>
+      <row label="r5">Colorado Technical University</row>
+      <row label="r6">Southern New Hampshire University</row>
+      <row label="r7">Strayer University</row>
+      <row label="r8">University of Maryland-Global Campus</row>
+      <row label="r9">Western Governors University</row>
+      <row label="r10" cond="hQ15quota.r3">College of Healthcare Professionals</row>
+      <row label="r11">Purdue University Global</row>
+      <row label="r12">Capella University</row>
+      <row label="r13">Arizona State University Online</row>
+      <row label="r14">Colorado State University Global Campus</row>
+      <row label="r15" cond="GRADUATE.r2">DeVry Keller Graduate School of Management</row>
+      <row label="r99" cond="1" exclusive="1" randomize="0">None of the above</row>
+    </checkbox>
+
+    <suspend/>
+
+    <goto cond="Q22.r99" target="Section_6"/>
+
+    <exec>
+Q23.rows.order=Q22.rows.order
+    </exec>
+
+    <radio 
+    label="Q23"
+    cond="Q22.any and not Q22.r99"
+    cardrating:completion="${res.completion}"
+    cardrating:lrg_maxwidth="240px"
+    cs:unitid="y5z6a7b8"
+    rowCond="Q22[row]"
+    shuffle="rows"
+    uses="cardrating.1">
+      <title>How familiar are you with each of the following schools?</title>
+      <comment>[res INS_Carousal1]</comment>
+      <row label="r1">DeVry University</row>
+      <row label="r2">Rasmussen University</row>
+      <row label="r3">University of Phoenix</row>
+      <row label="r4">University of Arizona Global Campus</row>
+      <row label="r5">Colorado Technical University</row>
+      <row label="r6">Southern New Hampshire University</row>
+      <row label="r7">Strayer University</row>
+      <row label="r8">University of Maryland-Global Campus</row>
+      <row label="r9">Western Governors University</row>
+      <row label="r10">College of Healthcare Professionals</row>
+      <row label="r11">Purdue University Global</row>
+      <row label="r12">Capella University</row>
+      <row label="r13">Arizona State University Online</row>
+      <row label="r14">Colorado State University Global Campus</row>
+      <row label="r15">DeVry Keller Graduate School of Management</row>
+      <col label="c1">1 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Not at all familiar</col>
+      <col label="c2">2</col>
+      <col label="c3">3 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Somewhat familiar</col>
+      <col label="c4">4</col>
+      <col label="c5">5 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Extremely familiar</col>
+      <style cond="not gv.request.device.isMobileDevice()" name="question.after"><![CDATA[
+<style type="text/css">
+ 
+.sq-cardrating-card {
+    width: 500px;
+}
+</style>
+]]></style>
+    </radio>
+
+    <suspend/>
+
+    <exec>
+Q24.rows.order=Q22.rows.order
+    </exec>
+
+    <radio 
+    label="Q24"
+    cond="Q22.any and not Q22.r99"
+    cardrating:completion="${res.completion}"
+    cardrating:lrg_maxwidth="140px"
+    cs:unitid="z6a7b8c9"
+    rowCond="Q22[row]"
+    shuffle="rows"
+    uses="cardrating.1">
+      <title>Overall, what is your impression of each of these Universities?</title>
+      <comment>[res INS_Carousal2]</comment>
+      <row label="r1">DeVry University</row>
+      <row label="r2">Rasmussen University</row>
+      <row label="r3">University of Phoenix</row>
+      <row label="r4">University of Arizona Global Campus</row>
+      <row label="r5">Colorado Technical University</row>
+      <row label="r6">Southern New Hampshire University</row>
+      <row label="r7">Strayer University</row>
+      <row label="r8">University of Maryland-Global Campus</row>
+      <row label="r9">Western Governors University</row>
+      <row label="r10">College of Healthcare Professionals</row>
+      <row label="r11">Purdue University Global</row>
+      <row label="r12">Capella University</row>
+      <row label="r13">Arizona State University Online</row>
+      <row label="r14">Colorado State University Global Campus</row>
+      <row label="r15">DeVry Keller Graduate School of Management</row>
+      <col label="c1">1 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Very Unfavorable</col>
+      <col label="c2">2</col>
+      <col label="c3">3 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Neither Favorable nor Unfavorable</col>
+      <col label="c4">4</col>
+      <col label="c5">5 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Very Favorable</col>
+      <style cond="not gv.request.device.isMobileDevice()" name="question.after"><![CDATA[
+<style type="text/css">
+ 
+.sq-cardrating-card {
+    width: 500px;
+}
+</style>
+]]></style>
+    </radio>
+
+    <suspend/>
+  </block>
+
+  <block label="Section_4" builder:title="BRAND PERCEPTIONS">
+    <exec>
+Q25.rows.order=Q22.rows.order
+    </exec>
+
+    <radio 
+    label="Q25"
+    cond="Q22.any and not Q22.r99"
+    cardrating:completion="${res.completion}"
+    cardrating:lrg_maxwidth="140px"
+    cs:unitid="a7b8c9d0"
+    rowCond="Q22[row]"
+    shuffle="rows"
+    uses="cardrating.1">
+      <title>Please indicate how likely you are to consider applying to the following schools.</title>
+      <comment>[res INS_Carousal1]</comment>
+      <row label="r1">DeVry University</row>
+      <row label="r2">Rasmussen University</row>
+      <row label="r3">University of Phoenix</row>
+      <row label="r4">University of Arizona Global Campus</row>
+      <row label="r5">Colorado Technical University</row>
+      <row label="r6">Southern New Hampshire University</row>
+      <row label="r7">Strayer University</row>
+      <row label="r8">University of Maryland-Global Campus</row>
+      <row label="r9">Western Governors University</row>
+      <row label="r10">College of Healthcare Professionals</row>
+      <row label="r11">Purdue University Global</row>
+      <row label="r12">Capella University</row>
+      <row label="r13">Arizona State University Online</row>
+      <row label="r14">Colorado State University Global Campus</row>
+      <row label="r15">DeVry Keller Graduate School of Management</row>
+      <col label="c1">1 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Extremely Unlikely</col>
+      <col label="c2">2</col>
+      <col label="c3">3 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Neither likely nor unlikely</col>
+      <col label="c4">4</col>
+      <col label="c5">5 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Extremely Likely</col>
+      <style cond="not gv.request.device.isMobileDevice()" name="question.after"><![CDATA[
+<style type="text/css">
+ 
+.sq-cardrating-card {
+    width: 500px;
+}
+</style>
+]]></style>
+    </radio>
+
+    <suspend/>
+
+    <exec>
+Q26.rows.order=Q22.rows.order
+    </exec>
+
+    <radio 
+    label="Q26"
+    cond="Q22.any and not Q22.r99"
+    atm1d:showInput="0"
+    cs:unitid="b8c9d0e1"
+    rowCond="Q22[row]"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Please select the school you would prefer to attend if given the opportunity.</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">DeVry University</row>
+      <row label="r2">Rasmussen University</row>
+      <row label="r3">University of Phoenix</row>
+      <row label="r4">University of Arizona Global Campus</row>
+      <row label="r5">Colorado Technical University</row>
+      <row label="r6">Southern New Hampshire University</row>
+      <row label="r7">Strayer University</row>
+      <row label="r8">University of Maryland-Global Campus</row>
+      <row label="r9">Western Governors University</row>
+      <row label="r10">College of Healthcare Professionals</row>
+      <row label="r11">Purdue University Global</row>
+      <row label="r12">Capella University</row>
+      <row label="r13">Arizona State University Online</row>
+      <row label="r14">Colorado State University Global Campus</row>
+      <row label="r15">DeVry Keller Graduate School of Management</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="hQ27_order"
+    cond="Q22.any and not Q22.r99"
+    optional="1"
+    shuffle="rows"
+    where="execute,survey,report">
+      <title>hidden question for Q27 order</title>
+      <row label="r1">Is a good university for those who are beginning their careers</row>
+      <row label="r2">Is a good university for people looking to advance their careers</row>
+      <row label="r3">Is accredited</row>
+      <row label="r4">Has strong expertise in technology education</row>
+      <row label="r5">Provides support tailored to my individual goals and needs</row>
+      <row label="r6" cond="0">Has a strong business program</row>
+      <row label="r7" cond="0">Has a strong technology program</row>
+      <row label="r8" cond="0">Has a strong healthcare program</row>
+      <row label="r9">Offers a high-quality education</row>
+      <row label="r10">Provides degrees that employers value</row>
+      <row label="r11">Helps me grow professionally to make me more valuable in the market</row>
+      <row label="r12">Has faculty and staff that are highly responsive and supportive</row>
+      <row label="r13">Offers online classes and flexible scheduling options</row>
+      <row label="r14">Offers programs that are aligned to the current and upcoming needs of the job market</row>
+      <row label="r15">Awards course credit for courses previously taken at another school</row>
+      <row label="r16">Enables me to earn my degree more quickly than I might at other schools</row>
+      <row label="r17">Is a good value for the money</row>
+      <row label="r18">Provides hands-on learning I can apply in the workplace</row>
+      <row label="r19">Cares about me and my success</row>
+      <row label="r20">Prepares students for careers involving emerging technologies like AI</row>
+      <row label="r21">Provides timely guidance to help me stay on track</row>
+    </radio>
+
+    <suspend/>
+
+    <quota label="qu_Q27" cond="Q22.any and not Q22.r99" overquota="noqual" sheet="Q27Pklr"/>
+
+    <checkbox 
+    label="hQ27"
+    cond="Q22.any and not Q22.r99"
+    optional="1"
+    where="execute,survey,report">
+      <title>hidden question for Q27</title>
+      <exec>
+print p.markers
+for eachRow in hQ27.rows:
+  if hasMarker('/Q27Pklr/hQ27_' + eachRow.label):
+    eachRow.val = 1
+      </exec>
+
+      <row label="r1">DeVry University</row>
+      <row label="r2">Rasmussen University</row>
+      <row label="r3">University of Phoenix</row>
+      <row label="r4">University of Arizona Global Campus</row>
+      <row label="r5">Colorado Technical University</row>
+      <row label="r6">Southern New Hampshire University</row>
+      <row label="r7">Strayer University</row>
+      <row label="r8">University of Maryland-Global Campus</row>
+      <row label="r9">Western Governors University</row>
+      <row label="r10">College of Healthcare Professionals</row>
+      <row label="r11">Purdue University Global</row>
+      <row label="r12">Capella University</row>
+      <row label="r13">Arizona State University Online</row>
+      <row label="r14">Colorado State University Global Campus</row>
+      <row label="r15">DeVry Keller Graduate School of Management</row>
+    </checkbox>
+
+    <suspend/>
+
+    <exec>
+Q27loop_expanded.order = Q22.rows.order
+    </exec>
+
+    <loop label="Q27loop" cs:unitid="c9d0e1f2" vars="var1">
+      <block label="Q27loopblock">
+        <radio 
+      label="Q27_[loopvar:label]"
+      cardrating:completion="${res.completion}"
+      cardrating:lrg_maxwidth="140px"
+      cs:unitid="c9d0e1f2"
+      optional="0"
+      shuffle="rows"
+      shuffleBy="hQ27_order"
+      uses="cardrating.1">
+          <title>Please indicate the extent to which you agree or disagree with each of the following statements about <b>[loopvar:var1]</b>.</title>
+          <comment>[res INS_Carousal]</comment>
+          <row label="r1">Is a good university for those who are beginning their careers</row>
+          <row label="r2">Is a good university for people looking to advance their careers</row>
+          <row label="r3">Is accredited</row>
+          <row label="r4">Has strong expertise in technology education</row>
+          <row label="r5">Provides support tailored to my individual goals and needs</row>
+          <row label="r6" cond="0">Has a strong business program</row>
+          <row label="r7" cond="0">Has a strong technology program</row>
+          <row label="r8" cond="0">Has a strong healthcare program</row>
+          <row label="r9">Offers a high-quality education</row>
+          <row label="r10">Provides degrees that employers value</row>
+          <row label="r11">Helps me grow professionally to make me more valuable in the market</row>
+          <row label="r12">Has faculty and staff that are highly responsive and supportive</row>
+          <row label="r13">Offers online classes and flexible scheduling options</row>
+          <row label="r14">Offers programs that are aligned to the current and upcoming needs of the job market</row>
+          <row label="r15">Awards course credit for courses previously taken at another school</row>
+          <row label="r16">Enables me to earn my degree more quickly than I might at other schools</row>
+          <row label="r17">Is a good value for the money</row>
+          <row label="r18">Provides hands-on learning I can apply in the workplace</row>
+          <row label="r19">Cares about me and my success</row>
+          <row label="r20">Prepares students for careers involving emerging technologies like AI</row>
+          <row label="r21">Provides timely guidance to help me stay on track</row>
+          <col label="c1">1 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Completely disagree</col>
+          <col label="c2">2</col>
+          <col label="c3">3 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Neither agree nor disagree</col>
+          <col label="c4">4</col>
+          <col label="c5">5 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Completely agree</col>
+        </radio>
+
+        <suspend/>
+      </block>
+
+      <looprow label="r1" cond="hQ27.r1">
+        <loopvar name="var1">DeVry University</loopvar>
+      </looprow>
+
+      <looprow label="r2" cond="hQ27.r2">
+        <loopvar name="var1">Rasmussen University</loopvar>
+      </looprow>
+
+      <looprow label="r3" cond="hQ27.r3">
+        <loopvar name="var1">University of Phoenix</loopvar>
+      </looprow>
+
+      <looprow label="r4" cond="hQ27.r4">
+        <loopvar name="var1">University of Arizona Global Campus</loopvar>
+      </looprow>
+
+      <looprow label="r5" cond="hQ27.r5">
+        <loopvar name="var1">Colorado Technical University</loopvar>
+      </looprow>
+
+      <looprow label="r6" cond="hQ27.r6">
+        <loopvar name="var1">Southern New Hampshire University</loopvar>
+      </looprow>
+
+      <looprow label="r7" cond="hQ27.r7">
+        <loopvar name="var1">Strayer University</loopvar>
+      </looprow>
+
+      <looprow label="r8" cond="hQ27.r8">
+        <loopvar name="var1">University of Maryland-Global Campus</loopvar>
+      </looprow>
+
+      <looprow label="r9" cond="hQ27.r9">
+        <loopvar name="var1">Western Governors University</loopvar>
+      </looprow>
+
+      <looprow label="r10" cond="hQ27.r10">
+        <loopvar name="var1">College of Healthcare Professionals</loopvar>
+      </looprow>
+
+      <looprow label="r11" cond="hQ27.r11">
+        <loopvar name="var1">Purdue University Global</loopvar>
+      </looprow>
+
+      <looprow label="r12" cond="hQ27.r12">
+        <loopvar name="var1">Capella University</loopvar>
+      </looprow>
+
+      <looprow label="r13" cond="hQ27.r13">
+        <loopvar name="var1">Arizona State University Online</loopvar>
+      </looprow>
+
+      <looprow label="r14" cond="hQ27.r14">
+        <loopvar name="var1">Colorado State University Global Campus</loopvar>
+      </looprow>
+
+      <looprow label="r15" cond="hQ27.r15">
+        <loopvar name="var1">DeVry Keller Graduate School of Management</loopvar>
+      </looprow>
+    </loop>
+
+    <exec>
+Q28loop_expanded.order = Q22.rows.order
+    </exec>
+
+    <loop label="Q28loop" randomizeChildren="1" vars="var1">
+      <block label="Q28_block" cond="hQ27.r[loopvar:label]">
+        <radio 
+      label="Q28_[loopvar:label]"
+      cardrating:completion="${res.completion}"
+      cardrating:lrg_maxwidth="140px"
+      uses="cardrating.1">
+          <title>To what extent do you agree that each of these Universities matches the corresponding statements below?<br /><br />
+   <span class="instruction-text">[res INS_Carousal]</span><br /><br /><span style="text-align:center;padding:10px; border:1px solid #ccc;background-color:#ededed; display:block;width:fit-content;margin:0 auto;min-width:200px;border-radius:10px;"><b>[loopvar: var1]</b></span>
+</title>
+          <col label="c1">1 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Completely Disagree</col>
+          <col label="c2">2</col>
+          <col label="c3">3 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Neither agree nor disagree</col>
+          <col label="c4">4</col>
+          <col label="c5">5 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Completely agree</col>
+          <row label="r1"><b>Genuinely cares about its students and provides the support they need to succeed academically and professionally.</b></row>
+          <row label="r2"><b>Prepares students for real-world workforce opportunities, such as getting a job in their field of study.</b></row>
+          <row label="r3"><b>Provides good value for the investment compared to other universities.</b></row>
+          <row label="r4"><b>Prepares students with skills relevant to artificial intelligence (AI) and emerging technologies.</b></row>
+        </radio>
+      </block>
+
+      <looprow label="1">
+        <loopvar name="var1">DeVry University</loopvar>
+      </looprow>
+
+      <looprow label="2">
+        <loopvar name="var1">Rasmussen University</loopvar>
+      </looprow>
+
+      <looprow label="3">
+        <loopvar name="var1">University of Phoenix</loopvar>
+      </looprow>
+
+      <looprow label="4">
+        <loopvar name="var1">University of Arizona Global Campus</loopvar>
+      </looprow>
+
+      <looprow label="5">
+        <loopvar name="var1">Colorado Technical University</loopvar>
+      </looprow>
+
+      <looprow label="6">
+        <loopvar name="var1">Southern New Hampshire University</loopvar>
+      </looprow>
+
+      <looprow label="7">
+        <loopvar name="var1">Strayer University</loopvar>
+      </looprow>
+
+      <looprow label="8">
+        <loopvar name="var1">University of Maryland-Global Campus</loopvar>
+      </looprow>
+
+      <looprow label="9">
+        <loopvar name="var1">Western Governors University</loopvar>
+      </looprow>
+
+      <looprow label="10">
+        <loopvar name="var1">College of Healthcare Professionals</loopvar>
+      </looprow>
+
+      <looprow label="11">
+        <loopvar name="var1">Purdue University Global</loopvar>
+      </looprow>
+
+      <looprow label="12">
+        <loopvar name="var1">Capella University</loopvar>
+      </looprow>
+
+      <looprow label="13">
+        <loopvar name="var1">Arizona State University Online</loopvar>
+      </looprow>
+
+      <looprow label="14">
+        <loopvar name="var1">Colorado State University Global Campus</loopvar>
+      </looprow>
+
+      <looprow label="15">
+        <loopvar name="var1">DeVry Keller Graduate School of Management</loopvar>
+      </looprow>
+    </loop>
+
+    <suspend/>
+
+    <html label="intro5" cond="0">Thank you for your answers so far! The next few questions will be about a school’s advertisements.</html>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q29"
+    cond="0"
+    altlabel="Q29_old"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="i5j6k7l8"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Now thinking about advertisements for colleges or universities… <br /><br />
+Imagine you came across an ad for a school you might be interested in.<br /><br />
+
+What information in the ad would make you most likely to click to learn more?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1">Tuition / cost information</row>
+      <row label="r2">Scholarship or grants available</row>
+      <row label="r3">Financial aid options</row>
+      <row label="r4">Program or degree offerings</row>
+      <row label="r5">Career outcomes (e.g., job types, career paths)</row>
+      <row label="r6">Time to complete the program</row>
+      <row label="r7">Flexibility (online, schedule, pace)</row>
+      <row label="r8">Accreditation or credibility</row>
+      <row label="r9">Real student stories or testimonials</row>
+      <row label="r10">Transfer credit options</row>
+      <row label="r11">Admissions requirements</row>
+      <row label="r12">A clear next step to get more information</row>
+      <row label="r99" exclusive="1" randomize="0">None of these</row>
+    </checkbox>
+
+    <suspend/>
+
+    <textarea 
+    label="Q29_new"
+    cond="Q22.r1 or Q22.r15"
+    altlabel="Q29"
+    optional="0">
+      <title>In a few words, what does DeVry University stand for, if anything?</title>
+      <comment>Please be as detailed and specific as possible.</comment>
+    </textarea>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q30"
+    cond="0"
+    altlabel="Q30_old"
+    atleast="1"
+    atm1d:showInput="1"
+    atmost="3"
+    cs:unitid="i5j6k7l8"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Which of the following information, if shown after clicking on an ad, would increase your likelihood of requesting more information from a school?</title>
+      <comment>Please select up to three responses.</comment>
+      <row label="r1">Clear, upfront pricing</row>
+      <row label="r2">Scholarships or grants available</row>
+      <row label="r3">Clear explanation of financial aid options</row>
+      <row label="r4">Evidence of strong career outcomes</row>
+      <row label="r5">Ability to start quickly</row>
+      <row label="r6">Flexible learning options</row>
+      <row label="r7">Real student success stories</row>
+      <row label="r8">Strong employer partnerships</row>
+      <row label="r9">Easy, simple next steps</row>
+      <row label="r99" exclusive="1" randomize="0">None of the above</row>
+    </checkbox>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q30_new"
+    altlabel="Q30"
+    atleast="1"
+    atm1d:showInput="1"
+    atmost="3"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Thinking about the education you plan to pursue, which of the following would you most want it to help you achieve?</title>
+      <comment>Please select up to three responses.</comment>
+      <row label="r1">Earn higher pay</row>
+      <row label="r2">Have greater job security</row>
+      <row label="r3">Advance in my current career field</row>
+      <row label="r4">Start a career or change career fields</row>
+      <row label="r5">Do work I care about</row>
+      <row label="r6">Feel proud of what I've achieved</row>
+      <row label="r7">Feel more confident in myself</row>
+      <row label="r8">Reach my full potential</row>
+      <row label="r9">Set an example for my family</row>
+      <row label="r10">Achieve financial independence</row>
+      <row label="r11">Keep my skills relevant as technology changes</row>
+      <row label="r99" randomize="0">Other</row>
+    </checkbox>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q31_new"
+    altlabel="Q31"
+    atleast="1"
+    atm1d:showInput="1"
+    atmost="3"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Which of the following types of information would most increase your confidence that a school can deliver on its promises?</title>
+      <comment>Please select up to three responses.</comment>
+      <row label="r1">Graduate employment and salary results</row>
+      <row label="r2">Graduation or completion rates</row>
+      <row label="r3">Employers who hire its graduates</row>
+      <row label="r4">Faculty with industry experience</row>
+      <row label="r5">Hands-on projects based on real business scenarios</row>
+      <row label="r6">Reviews and stories from students and graduates</row>
+      <row label="r7">Recommendations from people I trust</row>
+      <row label="r8">Accreditation or third-party rankings</row>
+      <row label="r9">A clear picture of what students actually pay</row>
+      <row label="r99" exclusive="1" randomize="0">None of the above</row>
+    </checkbox>
+
+    <suspend/>
+  </block>
+
+  <block label="Section_6" builder:title="DeVryPro Special Issue">
+    <radio 
+    label="Q31"
+    cond="0"
+    altlabel="Q31_old"
+    cardrating:completion="${res.completion}"
+    cardrating:lrg_maxwidth="240px"
+    cs:unitid="j6k7l8m9"
+    shuffle="rows"
+    uses="cardrating.1">
+      <title>Now thinking about options for gaining new skills to improve your career opportunities…<br /><br /> How familiar are you with each of the following platforms or programs for learning new job-related skills or advancing your career?</title>
+      <comment>[res INS_Carousal_Q31]</comment>
+      <row label="r1">DeVryPro</row>
+      <row label="r2">Coursera</row>
+      <row label="r3">Udemy</row>
+      <row label="r4">Google Career Certificates</row>
+      <row label="r5">LinkedIn Learning</row>
+      <row label="r6">edX</row>
+      <col label="c1">Not at all familiar</col>
+      <col label="c2">Heard of it, but don’t know much about it.</col>
+      <col label="c3">Somewhat familiar</col>
+      <col label="c4">Very Familiar</col>
+    </radio>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q32"
+    cond="0"
+    altlabel="Q32_old"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="k7l8m9n0"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>If you were looking to gain new job-related skills, which of the following options would you consider?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1">Short online courses (a few weeks to a few months)</row>
+      <row label="r2">Certificate programs from a university</row>
+      <row label="r3">Full degree programs from a university</row>
+      <row label="r4">Employer-provided training</row>
+      <row label="r5">Free online learning resources</row>
+      <row label="r99" exclusive="1" randomize="0">None of these</row>
+    </checkbox>
+
+    <suspend/>
+
+    <radio 
+    label="Q32_new"
+    altlabel="Q32"
+    atm1d:showInput="0"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Before taking this survey, how familiar were you with DeVry University/Keller Graduate School of Management's FastTrack offering?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">I had never heard of it before</row>
+      <row label="r2">I had heard of it but knew very little about it</row>
+      <row label="r3">I was somewhat familiar with it</row>
+      <row label="r4">I was very familiar with it</row>
+    </radio>
+
+    <suspend/>
+
+    <html label="Q33_intro" where="survey"><b>FastTrack</b> is DeVry University/Keller Graduate School of Management’s competency-based education offering. In this approach, students progress by demonstrating mastery of specific skills or knowledge areas at their own pace, rather than following a fixed course schedule. Students may move more quickly through material they already know and spend more time on topics they need to learn.</html>
+
+    <radio 
+    label="Q33_new"
+    altlabel="Q33"
+    atm1d:showInput="0"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>How likely would you be to consider DeVry University/Keller Graduate School of Management for a program that uses a competency-based education approach?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">Extremely unlikely</row>
+      <row label="r2">Somewhat unlikely</row>
+      <row label="r3">Neither likely nor unlikely</row>
+      <row label="r4">Somewhat likely</row>
+      <row label="r5">Extremely likely</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q33"
+    cond="0"
+    altlabel="Q33_old"
+    cardrating:completion="${res.completion}"
+    cardrating:lrg_maxwidth="140px"
+    cs:unitid="l8m9n0o1"
+    shuffle="rows"
+    uses="cardrating.1">
+      <title>How likely would you be to choose each of the following options to gain new job-related skills?</title>
+      <comment>[res INS_Carousal]</comment>
+      <row label="r1">A short, skills-based course (weeks to months)</row>
+      <row label="r2">A certificate program from a university</row>
+      <row label="r3">A full degree program from a university</row>
+      <row label="r4">Employer-provided training</row>
+      <col label="c1">1 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Extremely Unlikely</col>
+      <col label="c2">2</col>
+      <col label="c3">3 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Neither likely nor unlikely</col>
+      <col label="c4">4</col>
+      <col label="c5">5 <span class="nobr">${" – " if gv.request.device.isMobileDevice() else ""}</span> Extremely Likely</col>
+    </radio>
+
+    <suspend/>
+  </block>
+
+  <block label="Section_7_new" builder:title="DEMOGRAPHICS">
+    <html label="intro7_new" where="survey">DeVry University is exploring the possibility of offering new academic programs that prepare students for careers in skilled trades, including electrical work, heating, ventilation, air conditioning and refrigeration (HVAC-R), and plumbing. These programs could prepare students for opportunities in fields such as advanced manufacturing, construction technology, and digital infrastructure, including data centers.</html>
+
+    <suspend/>
+
+    <radio 
+    label="Q34_new"
+    altlabel="Q34"
+    atm1d:showInput="0"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>How interested would you be in pursuing education or training in the skilled trades areas described above?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">Not at all interested</row>
+      <row label="r2">Slightly interested</row>
+      <row label="r3">Moderately interested</row>
+      <row label="r4">Very interested</row>
+      <row label="r5">Extremely interested</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q35_new"
+    altlabel="Q35"
+    atm1d:showInput="0"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>How well do these skilled trades programs fit with your perception of DeVry University?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">Not at all well</row>
+      <row label="r2">Slightly well</row>
+      <row label="r3">Moderately well</row>
+      <row label="r4">Very well</row>
+      <row label="r5">Extremely well</row>
+      <row label="r6">Not familiar enough with DeVry to say</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q36_new"
+    altlabel="Q36"
+    atm1d:showInput="0"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>If DeVry University began offering programs in these skilled trades, how would that affect your overall impression of the university?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">Much more negative</row>
+      <row label="r2">Somewhat more negative</row>
+      <row label="r3">No change</row>
+      <row label="r4">Somewhat more positive</row>
+      <row label="r5">Much more positive</row>
+    </radio>
+
+    <suspend/>
+  </block>
+
+  <block label="Section_7" builder:title="DEMOGRAPHICS">
+    <html label="intro7">Finally, the last few questions are for classification purposes only.</html>
+
+    <suspend/>
+
+    <radio 
+    label="Q34"
+    altlabel="Q37"
+    atm1d:showInput="0"
+    cs:unitid="m9n0o1p2"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Please select the statement below that comes closest to describing you.</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">I am pursuing a [pipe:hDEGREE] in order to enter a career field for the first time</row>
+      <row label="r2">I am pursuing a [pipe:hDEGREE] in order to switch career paths</row>
+      <row label="r3">I am pursuing a [pipe:hDEGREE] because I want to further my current career at my current employer</row>
+      <row label="r4">I am pursuing a [pipe:hDEGREE] because I want to further my current career at a new employer</row>
+      <row label="r5">I am pursuing a [pipe:hDEGREE] because I enjoy education and not necessarily looking into my next career move</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q35"
+    altlabel="Q38"
+    atm1d:showInput="0"
+    cs:unitid="n0o1p2q3"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Thinking about your education prior to considering enrolling in school, which of the following statements best describes you?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">I <u>recently</u> graduated high school, and this will be my first college experience</row>
+      <row label="r2">I graduated high school <u>a while ago</u> and this will be my first college experience</row>
+      <row label="r3">I previously attended college, but did not earn a certificate/degree</row>
+      <row label="r4">I previously attended college and earned a certificate/degree <u>recently</u></row>
+      <row label="r5">I previously attended college and earned a certificate/degree <u>a while ago</u></row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q36"
+    altlabel="Q39"
+    atm1d:showInput="0"
+    cs:unitid="o1p2q3r4"
+    shuffle="rows"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Regarding the <b>[pipe:hDEGREE]</b> you currently plan to pursue, please indicate your preferred learning method from the options below.</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1" value="1">In person classes – live instruction with other students</row>
+      <row label="r2" value="2">Online, live classes – live instruction with other students, but virtually</row>
+      <row label="r3" value="3">Online, on-demand classes – prerecorded lectures or modules that allow me to complete school when I want, and at my own pace</row>
+      <row label="r99" randomize="0" value="99">None of the above</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q37"
+    altlabel="Q40"
+    atm1d:showInput="0"
+    cs:unitid="p2q3r4s5"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Which of the following best describes your current marital status?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1" value="1">Single, never married</row>
+      <row label="r2" value="2">Currently married or living with partner</row>
+      <row label="r3" value="3">Separated or divorced</row>
+      <row label="r4" value="4">Widowed</row>
+      <row label="r99" value="99">Prefer not to answer</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q38"
+    altlabel="Q41"
+    atm1d:showInput="0"
+    cs:unitid="q3r4s5t6"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Do you have any children under 18 who are living in your household?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1" value="1">Yes</row>
+      <row label="r2" value="2">No</row>
+      <row label="r99" value="99">Prefer not to answer</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q39"
+    cond="Q38.r1"
+    altlabel="Q42"
+    atm1d:showInput="0"
+    cs:unitid="r4s5t6u7"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>How many children do you have under 18 who are living in your household?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1">1</row>
+      <row label="r2">2</row>
+      <row label="r3">3</row>
+      <row label="r4">4</row>
+      <row label="r5">5</row>
+      <row label="r6">6</row>
+      <row label="r7">7</row>
+      <row label="r8">8</row>
+      <row label="r9">More than 8</row>
+    </radio>
+
+    <suspend/>
+
+    <number 
+    label="Q40"
+    cond="Q39.val ge 0 and Q38.r1"
+    altlabel="Q43"
+    optional="0"
+    rowCond="row.index in [each for each in range(0,Q39.val+1)]"
+    size="3"
+    ss:listDisplay="0"
+    ss:postText="Years Old"
+    verify="range(1,17)">
+      <title>Please list their age(s). If more than one, please separate each with a comma.
+<br /><br />
+For example, type “12, 9, 7” if you have 3 children living at home that are 12, 9, and 7 years old.
+</title>
+      <comment><i>Please enter a value in below box.</i></comment>
+      <validate>
+k=0
+l=0
+for i in Q40.rows:
+	for each in Q40.rows:
+		if each.index==l:
+			k=each.val
+		if each.index&gt;l:
+			if(each.val gt k):
+				error("please enter value less pervious child", each)
+	l+=1
+      </validate>
+
+      <row label="r1">1st Child Oldest:</row>
+      <row label="r2">2nd Child:</row>
+      <row label="r3">3rd Child:</row>
+      <row label="r4">4th Child:</row>
+      <row label="r5">5th Child:</row>
+      <row label="r6">6th Child:</row>
+      <row label="r7">7th Child:</row>
+      <row label="r8">8th Child:</row>
+      <row label="r9">9th Child:</row>
+      <row label="r10" cond="Q39.r9">10th Child:</row>
+      <style label="gridWidth_PC" name="question.after"><![CDATA[
+<style>
+.grid.grid{
+  width: fit-content !important;
+}
+.grid.grid .element{width: auto !important;}
+\@media (max-width: 800px){
+    .post-text {
+      display: block;
+      width: 150px;
+      padding-top: 5px;
+    }
+}
+</style>
+]]></style>
+      <style label="numpad" cond="gv.request.device.isMobileDevice()" name="question.after"><![CDATA[
+\@if questionType(this.label) in ['number','numbergrid','floatgrid','float']
+<style>
+input[type=text]:not(.oe) {
+    max-width: 200px;
+    width: 65% !important;
+ 
+}
+
+
+</style>
+<script>
+$ (document).ready(function(){
+ 
+$ ("input[type='text']:not('.oe')").each(function(){
+$ (this).attr("inputmode","decimal");
+});
+ 
+});
+ 
+</script>
+\@endif
+]]></style>
+      <style name="question.after"><![CDATA[
+<style>
+ 
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+ 
+</style>
+]]></style>
+    </number>
+
+    <suspend/>
+
+    <radio 
+    label="Q41"
+    altlabel="Q44"
+    atm1d:showInput="0"
+    cs:unitid="t6u7v8w9"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Are you of Hispanic, Latino, or Spanish origin?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1" value="1">No, not of Hispanic, Latino, or Spanish origin</row>
+      <row label="r2" value="2">Yes, Mexican, Mexican American, or Chicano</row>
+      <row label="r3" value="3">Yes, Puerto Rican</row>
+      <row label="r4" value="4">Yes, Cuban</row>
+      <row label="r5" value="5">Yes, Other Hispanic, Latino or Spanish origin</row>
+      <row label="r99" value="99">Prefer not to answer</row>
+    </radio>
+
+    <suspend/>
+
+    <checkbox 
+    label="Q42"
+    altlabel="Q45"
+    atleast="1"
+    atm1d:showInput="1"
+    cs:unitid="u7v8w9x0"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>What best describes your ethnicity?</title>
+      <comment>[res INS_M]</comment>
+      <row label="r1">White</row>
+      <row label="r2">Black or African American</row>
+      <row label="r3">Hispanic, Latino, or Spanish</row>
+      <row label="r4">American Indian or Alaska Native</row>
+      <row label="r5">Asian</row>
+      <row label="r6">Pacific Islander</row>
+      <row label="r98">Some other race</row>
+      <row label="r99" exclusive="1">Prefer not to answer</row>
+    </checkbox>
+
+    <suspend/>
+
+    <radio 
+    label="Q43"
+    altlabel="Q46"
+    atm1d:showInput="0"
+    cs:unitid="v8w9x0y1"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Which of the following <u>best</u> describes your employment status?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1" value="1">Employed full-time</row>
+      <row label="r2" value="2">Employed part-time</row>
+      <row label="r3" value="3">Self-employed</row>
+      <row label="r4" value="4">Full-time student</row>
+      <row label="r5" value="5">Homemaker</row>
+      <row label="r6" value="6">Retired</row>
+      <row label="r7" value="7">Unemployed</row>
+      <row label="r8" value="8">Furloughed / Temporarily laid off</row>
+      <row label="r98" value="98">Prefer not to answer</row>
+    </radio>
+
+    <suspend/>
+
+    <select 
+    label="Q44"
+    altlabel="Q47"
+    cs:unitid="w9x0y1z2">
+      <title>How many total years of professional work experience do you have?</title>
+      <comment>[res INS_DD]</comment>
+      <choice label="ch1">0</choice>
+      <choice label="ch2">1-2</choice>
+      <choice label="ch3">3-5</choice>
+      <choice label="ch4">6-10</choice>
+      <choice label="ch5">11-20</choice>
+      <choice label="ch6">20+</choice>
+    </select>
+
+    <suspend/>
+
+    <radio 
+    label="Q45"
+    cond="Q43.r1 or Q43.r2"
+    altlabel="Q48"
+    atm1d:showInput="0"
+    cs:unitid="x0y1z2a3"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Do you consider yourself to be <u>underemployed</u> based on your current level of education?<br /><br /><i>Underemployment refers to a situation where an individual is employed in a job that does not fully utilize their skills, education, or availability.</i></title>
+      <comment>[res INS_S]</comment>
+      <row label="r1" value="1">Yes</row>
+      <row label="r2" value="2">No</row>
+      <row label="r99" value="99">Prefer not to answer</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q46"
+    altlabel="Q49"
+    atm1d:showInput="0"
+    cs:unitid="y1z2a3b4"
+    ss:listDisplay="1"
+    ss:questionClassNames="atm1dOEQ"
+    uses="atm1d.11">
+      <title>Which of the following best describes your current living situation?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1" value="1">Renting</row>
+      <row label="r2" value="2">Own / paying a mortgage</row>
+      <row label="r3" value="3">Living free of charge with family or friends</row>
+      <row label="r4" open="1" openSize="25" value="4">Other, please specify:</row>
+      <row label="r88" value="88">Prefer not to answer</row>
+    </radio>
+
+    <suspend/>
+
+    <radio 
+    label="Q47"
+    altlabel="Q50"
+    atm1d:showInput="0"
+    cs:unitid="z2a3b4c5"
+    ss:listDisplay="1"
+    uses="atm1d.11">
+      <title>Approximately, what is your total household annual income?</title>
+      <comment>[res INS_S]</comment>
+      <row label="r1" value="1">Less than $20,000</row>
+      <row label="r2" value="2">$20,000 - $39,999</row>
+      <row label="r3" value="3">$40,000 - $59,999</row>
+      <row label="r4" value="4">$60,000 - $79,999</row>
+      <row label="r5" value="5">$80,000 - $99,999</row>
+      <row label="r6" value="6">$100,000 - $124,999</row>
+      <row label="r7" value="7">$125,000 - $149,999</row>
+      <row label="r8" value="8">$150,000 - $199,999</row>
+      <row label="r9" value="9">$200,000 or more</row>
+      <row label="r88" value="88">Prefer not to answer</row>
+    </radio>
+
+    <suspend/>
+
+    <text 
+    label="Q48"
+    altlabel="Q51"
+    cs:unitid="a3b4c5d6"
+    optional="0"
+    size="40">
+      <title>Finally, what specific type of job do you hope to gain after obtaining your <b>[pipe:hDEGREE]</b>?</title>
+      <comment>Please be as detailed and specific as possible.</comment>
+      <noanswer label="r99">I don’t know</noanswer>
+    </text>
+
+    <suspend/>
+
+    <text 
+    label="Q49"
+    altlabel="Q52"
+    cs:unitid="b4c5d6e7"
+    optional="0"
+    size="40">
+      <title>Similarly, what specific skills do you hope to learn as a result of obtaining your <b>[pipe:hDEGREE]</b>?</title>
+      <comment>Please be as detailed and specific as possible.</comment>
+      <noanswer label="r99">No specific skills come to mind</noanswer>
+    </text>
+
+    <suspend/>
+  </block>
+</block>
+
+<block label="Screener_aksh" builder:title="Screener_aksh">
+  <label label="sect_screener_aksh" builder:title="SCREENER STARTS HERE"/>
+
+  <suspend/>
+</block>
+
+<note>***************** Start main section from here *********************</note>
+<block label="MainSurvey_aksh" builder:title="Main Survey_aksh">
+  <label label="sect_main_aksh" builder:title="MAIN SURVEY STARTS HERE"/>
+</block>
+
+<stylevar name="cs:unitid"/>
+<stylevar name="cs:division"/>
+<note>*********************************************************************************************************************************
+                                                      END OF SURVEY
+*********************************************************************************************************************************</note>
+<suspend/>
+
+<logic label="ln1" resdefcomplete:platform_id="0182812a-1f4b-4547-aa92-a224ac4e7fa7" resdefcomplete:supplier_id="1" resdefcomplete:survey_number="rd_proj_ud" resdefcomplete:transaction_id="rdud" uses="resdefcomplete.2"/>
+<note>#################   PROGRAMMER:  this block will add in the question number on screen, which is for client testing without a decipher login</note>
+<style cond="gv.hasQA(True) or not gv.survey.root.state.live" mode="after" name="buttons"><![CDATA[
+<div class="savelink-dialog" style="display:none;">Please copy and save the link below to return to this question later.<br/><br/><textarea style="width:570px;" class="savelink-holder"></textarea></div>
+    <div style="text-align: center"><a href="#" onclick="$ ('.savelink-holder').val('${gv.request.baseURL+gv.request.path}'+'?state='+jQuery('input[name=&quot;state&quot;]').attr('value')).select();$ ('.savelink-dialog').dialog({width:620});">Progress link</a></div>
+]]></style>
+<note>################################</note>
+<style mode="after" name="respview.client.js"><![CDATA[
+<script>
+document.addEventListener("DOMContentLoaded", ()=>{
+
+  var utilsObj = insutils();
+  utilsObj.showTurnOffQAcodeButton();
+  window.germancurrencyformat = 0;// keep 1 if "." need to be displayed ${1 if "Currency.r5" else 0}
+  utilsObj.init();
+  
+  $ (".fb-a").fancybox();
+
+});
+</script>
+]]></style>
+<style mode="after" name="respview.client.css"><![CDATA[
+<style>
+.nobr{${"" if gv.request.device.isMobileDevice() else "display:block;"}}
+.data-fancybox img { width: 90%; }
+</style>
+]]></style>
+<note>#################  hideElements is used on a question to remove the radio,checkbox, or input box for one or more cells see Q33 for example  ###############</note>
+<style label="hideElements" name="question.element"><![CDATA[
+\@if ec.simpleList
+<div class="element $(rowStyle) $(levels) $(extraClasses) ${col.group.styles.ss.groupClassNames if col.group else (row.group.styles.ss.groupClassNames if row.group else "")} $(col.styles.ss.colClassNames) $(row.styles.ss.rowClassNames) ${"clickableCell" if isClickable else ""}"$(extra)>
+    ${v2_insertStyle('el.label.start')}
+    ${v2_insertStyle('el.label.end')}
+</div>
+\@else
+<$(tag) $(headers) class="cell nonempty element $(levels) ${"desktop" if this.grouping.cols else "mobile"} border-collapse $(extraClasses) ${col.group.styles.ss.groupClassNames if col.group else (row.group.styles.ss.groupClassNames if row.group else "")} $(col.styles.ss.colClassNames) $(row.styles.ss.rowClassNames) ${"clickableCell" if isClickable else ""}"$(extra)>
+    ${v2_insertStyle('el.label.start')}
+    ${v2_insertStyle('el.label.end')}
+</$(tag)>
+\@endif
+]]></style>
+<text 
+  label="ndpForJS"
+  cond="0"
+  size="40"
+  where="survey,report,notdp">
+  <title>for styles related</title>
+  <style label="atm1d_maxWidth" arg:maxwidth="500" name="question.after"><![CDATA[
+<style>
+.answers.answers-list {max-width: $(maxwidth)px; }
+</style>
+]]></style>
+</text>
+
+<style cond="1" name="survey.respview.footer.support"><![CDATA[
+<div class="footer"><a href="/support?decLang=@(lang)" target="_blank">Help</a></div>
+]]></style>
+<exec when="init">
+###Example: call this within exec tag after question:
+###setZero(S7)
+def setZero(qid):
+    if qid.displayed:
+        for eachRow in [row for row in qid.rows if row.displayed]:
+            for eachCol in [col for col in qid.cols if col.displayed]:
+                if eachRow[eachCol.index].val in ['', None]:
+                    eachRow[eachCol.index].val = 0
+
+###Example: call this within validate tag at question:
+###OtherSpecify('r5')
+def OtherSpecify(code):
+    for eachRow in [this.attr(row) for row in [code]]:
+        if len([1 for eachCol in this.cols if this.rows[eachRow.index][eachCol.index].val not in [0, "", None]]) gt 0 and eachRow.open in ["", None]:
+            error(this.lget("extraInfo"), eachRow)
+        elif len([1 for eachCol in this.cols if this.rows[eachRow.index][eachCol.index].val not in [0, "", None]]) == 0 and eachRow.open not in ["", None]:
+            error(this.lget("extraSelect"), eachRow)
+
+
+def checkOthLen(code,chklen=2):  ## UPDATED APR 2022 ##
+    for eachRow in [eval("this.%s" % row) for row in [code]]:
+        if eachRow and eachRow.open not in ["", None]:
+            if len(eachRow.open.decode('utf-8').replace(' ','')) lt chklen:
+                error(res.otherErr3, row = eachRow)
+
+def group_rows( question, grouped_rows ):
+    first_item_index = None
+    shuffle_order = [row.index for row in question.rows.order]
+
+    for index, row in enumerate( shuffle_order ):
+        if question.rows[row].label in grouped_rows:
+            if first_item_index == None:
+                first_item_index = index
+            else:
+                first_item_index += 1
+                shuffle_order.insert( first_item_index, shuffle_order.pop(index) )
+
+    question.rows.order = shuffle_order
+
+def group_rows_with_order( question, grouped_rows ):
+    current_order = [row.index for row in question.rows.order]
+    new_order     = []
+
+    grouped_rows     = [question.attr(row).index for row in grouped_rows]
+    first_item_index = current_order.index(grouped_rows[0])
+
+    current_order.insert(first_item_index, grouped_rows)
+
+    for row in current_order:
+        if row == grouped_rows:
+            new_order = new_order + row
+        elif row not in grouped_rows:
+            new_order.append(row)
+
+    question.rows.order = new_order
+
+
+
+# function to check whether passed rows or answered or not in radio or multi questions
+# anyCodes(S1, ["r1", "r2", "r:3-10"])
+# anyCodes(QID3.r1, ['c:1-2'])
+
+def anyCodes(qid, arr):
+  arrLabels = []
+  tempArr = []
+  for label in arr:
+    if label.find(":") == -1:
+      arrLabels.append(label)
+    else:
+      arrLabels.extend(rangeToLabelArr(label))
+  
+  for label in arrLabels:
+    try:
+      if qid.attr(label):
+        return True
+    except:
+      pass
+  return False
+
+
+# Function to generate array of labels from the range.
+# rangeToLabelArr("r:1-3") will generate ["r1", "r2", "r3"]
+#
+def rangeToLabelArr(str1):
+  initChar, rangeStr = str1.split(":")
+  start, end = rangeStr.split("-")
+  arr = []
+  for i in range(int(start), int(end)+1):
+    arr.append(initChar + str(i))
+  return arr
+def comma(num):
+	return '{:,.2f}'.format(num) # Rounds to 2 decimal places
+def commaint(num):
+	return '{:,}'.format(num) # adding comma. no decimal places
+##${commaint(var_BedCount.ival)}
+
+def questionType(qidlabel):
+	qid=allQuestions[qidlabel]
+	qidType=qid.o.xmlTagName
+	if qid.cols and qid.rows:
+		qidType+='grid'
+	return 	qidType
+	
+def clearForm(question):
+	if question.cols:
+		for x in question.rows:
+			for y in question.cols:
+				question[x][y].val = None	
+	elif not questions.cols:
+			for x in question.rows:				
+				question[x].val = None
+</exec>
+
+<suspend/>
+</survey>

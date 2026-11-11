@@ -443,6 +443,13 @@ function lintCondition(
       // deleted option codes
       if (!isOptionValueRef(c.value) && (src.options?.length ?? 0) > 0) {
         const codes = optionCodes(src);
+        /* answers carried forward from another question are this question's answers too, under the codes they have there */
+        for (let cf = src.carryForward, hop = 0; cf && cf.into !== "rows" && hop < 5; hop++) {
+          const from = ctx.def.questions.find((x) => x.id === cf!.sourceQuestionId);
+          if (!from) break;
+          for (const k of optionCodes(from)) codes.add(k);
+          cf = from.carryForward;
+        }
         /* a right-hand question (`Q1 = Q6`) is compared by value at runtime, not against the code list */
         const values = (Array.isArray(c.value) ? c.value : [c.value]).filter((v) => !isQuestionValueRef(v) && !isPipedValueRef(v));
         const codeBased =

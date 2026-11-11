@@ -188,6 +188,12 @@ export interface CanonicalQuestion {
   settings?: Record<string, unknown>;
   /** a calculated / hidden question's expression, in the source language */
   expression?: string;
+  /**
+   * HOW A HIDDEN QUESTION IS CODED: each entry selects one of the question's own options (by source id) when its
+   * condition holds. Read from the source's assignment code by shape (Decipher <exec>: `H.val = H.r2.index`),
+   * never by running it. The mapper writes them as the question's native auto-punch rules.
+   */
+  punches?: { option: string; when?: CExpr }[];
   custom: CanonicalCustom[];
   confidence: Confidence;
   /** why the confidence is what it is */
@@ -299,6 +305,18 @@ export interface PendingInstruction {
   options?: string[];
 }
 
+/**
+ * A SAMPLE SUPPLIER the source carries: the URL variable that holds the supplier's id for the person, the other
+ * variables it sends, and where each outcome returns to. `{{pid}}` stands for the id; `{{name}}` for another variable.
+ */
+export interface CanonicalVendor {
+  sourceId: string;
+  name: string;
+  idParam: string;
+  params: string[];
+  redirects: { complete?: string; screenout?: string; quota_full?: string; terminate?: string };
+}
+
 export interface CanonicalSurvey {
   source: {
     platform: SourcePlatform;
@@ -318,6 +336,8 @@ export interface CanonicalSurvey {
   /** flow-level custom code (Decipher top-level exec, Qualtrics survey-level JS) */
   custom: CanonicalCustom[];
   issues: Issue[];
+  /** sample suppliers with their return links (Decipher <samplesource> with exits) */
+  vendors?: CanonicalVendor[];
   /** images and files referred to, by reference — see CanonicalAsset */
   assets?: CanonicalAsset[];
   /** the languages the source carries translations for, beside `source.language` */

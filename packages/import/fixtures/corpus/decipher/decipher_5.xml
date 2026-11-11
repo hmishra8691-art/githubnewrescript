@@ -1,0 +1,2266 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<survey 
+  alt="REP-072639938 WSE - Liquid I.V. x House of Maher x Whiskey Ginger"
+  autoAddVariables="1"
+  autosaveKey="rdud"
+  browserDupes=""
+  builder:wizardCompleted="1"
+  builderCompatible="1"
+  compat="151"
+  delphi="1"
+  displayOnError="all"
+  extraVariables="ipAddress,source,record,decLang,list,userAgent,rdud,rd_proj_ud"
+  fir="on"
+  html:showNumber="0"
+  mobile="compat"
+  mobileDevices="smartphone,tablet,desktop"
+  name="Survey"
+  secure="1"
+  setup="term,decLang,quota,time"
+  ss:accordionDisplay="0"
+  ss:disableBackButton="0"
+  ss:enableNavigation="1"
+  ss:hideProgressBar="0"
+  ss:listDisplay="1"
+  ss:logoAlt="Logo"
+  ss:logoPosition="left"
+  state="live"
+  theme="frozen:company/tmr-theme">
+
+<res label="prev">Prev</res>
+<res label="after">Next</res>
+<res label="done">All Done!<br /><br /><i>Please click 'Continue'.</i></res>
+<stylevar name="cs:col1text"/>
+<stylevar name="cs:qc"/>
+<samplesources>
+  <samplesource list="0">
+    <title>Open Survey</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <exit cond="terminated">This is only for testing purposes and will not be seen live.<br /><br /><em>To test a different path use the browser back button.</em></exit>
+    <exit cond="qualified"><em>Thank you for taking the time out of your busy schedule to complete this survey.  We truly appreciate your candid and thoughtful responses.</em></exit>
+    <exit cond="overquota">Thank you for taking our survey.</exit>
+  </samplesource>
+
+  <samplesource list="1">
+    <title>Rep Data</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <var name="rdud" unique="1"/>
+    <var name="sid"/>
+    <exit cond="terminated and not(removalReason.any)" url="https://www.rdsecured.com/return?inbound_code=2000&amp;rdud=${rdud}"/>
+    <exit cond="terminated and removalReason.any" url="https://www.rdsecured.com/return?inbound_code=3000&amp;rdud=${rdud}"/>
+    <exit cond="overquota" url="https://www.rdsecured.com/return?inbound_code=4000&amp;rdud=${rdud}"/>
+    <exit cond="qualified" url="https://www.rdsecured.com/return?inbound_code=1000&amp;rdud=${rdud}"/>
+  </samplesource>
+
+  <samplesource list="99">
+    <title>Client sample</title>
+    <invalid>You are missing information in the URL. Please verify the URL with the original invite.</invalid>
+    <completed>It seems you have already entered this survey.</completed>
+    <exit cond="terminated">Thank you for taking our survey.</exit>
+    <exit cond="qualified"><em>Thank you for taking the time out of your busy schedule to complete this survey.  We truly appreciate your candid and thoughtful responses.</em></exit>
+    <exit cond="overquota">Thank you for taking our survey.</exit>
+  </samplesource>
+</samplesources>
+
+<style name="question.after" wrap="ready"><![CDATA[
+/* redem-init-start */
+(function(){
+  function __redemClearSessionStorage(){
+    var keysToRemove=[];
+    for(var i=0;i<sessionStorage.length;i++){
+      var key=sessionStorage.key(i);
+      if(!key)continue;
+      if(
+      key==='bas_tracking_data'||
+      key==='survey_start_time'||
+      key==='redem_response'||
+      key==='redem_error'||
+      key.endsWith('_bas')||
+      key.endsWith('_interaction_data')||
+      key.endsWith('_duration')||
+      key.endsWith('_start')
+      ){
+        keysToRemove.push(key);
+      }
+    }
+    for(var j=0;j<keysToRemove.length;j++){
+      sessionStorage.removeItem(keysToRemove[j]);
+    }
+  }
+  var respondentId="${rdud}";
+  if(sessionStorage.getItem('redem_respondent_id')!==respondentId){
+    __redemClearSessionStorage();
+    sessionStorage.setItem('redem_respondent_id',respondentId);
+  }
+  if(!sessionStorage.getItem('survey_start_time')){
+    sessionStorage.setItem('survey_start_time',Date.now().toString());
+  }
+})();
+/* redem-init-end */
+]]></style>
+<style name="question.after" wrap="ready"><![CDATA[
+/* redem-bas-tracker-start */
+(function() {
+  var textQuestions = ['QVideo_Maher_1', 'QVideo_Maher_2', 'QVideo_Maher_3', 'QVideo_Maher_4', 'QVideo_Maher_5', 'QVideo_Maher_6', 'QVideo_OT_1', 'QVideo_OT_2', 'QVideo_WG_1', 'QVideo_WG_2', 'QVideo_WG_3', 'S5'];
+  var mouseOnlyQuestions = ['A1', 'B1', 'B3', 'B4', 'B5', 'B6', 'S6'];
+  var allBasQuestions = ['A1', 'B1', 'B3', 'B4', 'B5', 'B6', 'QVideo_Maher_1', 'QVideo_Maher_2', 'QVideo_Maher_3', 'QVideo_Maher_4', 'QVideo_Maher_5', 'QVideo_Maher_6', 'QVideo_OT_1', 'QVideo_OT_2', 'QVideo_WG_1', 'QVideo_WG_2', 'QVideo_WG_3', 'S5', 'S6'];
+  var ENABLE_MOUSE_FOR_OPEN_ENDED = true;
+  var MAX_MOUSE_EVENTS = 300;
+  var basData = {};
+  function createInteractionRecord(value, interactionType) {
+    return {
+      value: value,
+      interactionType: interactionType,
+      timestamp: new Date().toISOString()
+    };
+  }
+  function isRecordableClick(event, rect) {
+    if (!rect || rect.width < 1 || rect.height < 1) {
+      return false;
+    }
+    var slack = 2;
+    return event.clientX >= rect.left - slack && event.clientX <= rect.right + slack && event.clientY >= rect.top - slack && event.clientY <= rect.bottom + slack;
+  }
+  function applyCap(buffer, maxEvents) {
+    while (buffer.length > maxEvents) {
+      buffer.shift();
+    }
+  }
+  function pushMouseEvent(buffer, record) {
+    buffer.push(record);
+    applyCap(buffer, MAX_MOUSE_EVENTS);
+  }
+  function splitIntoInteractionBuffers(questionId, interactionData) {
+    var entry = basData[questionId];
+    if (!entry || !interactionData || !interactionData.length) {
+      return;
+    }
+    for (var s = 0; s < interactionData.length; s++) {
+      var event = interactionData[s];
+      if (!event) {
+        continue;
+      }
+      if (event.interactionType === 'MOUSE_MOVEMENT' || event.interactionType === 'MOUSE_CLICK') {
+        entry.mouseEvents.push(event);
+      } else {
+        entry.keystrokeEvents.push(event);
+      }
+    }
+    applyCap(entry.mouseEvents, MAX_MOUSE_EVENTS);
+  }
+  function mergeInteractionDataChronologically(questionId) {
+    var entry = basData[questionId];
+    if (!entry) {
+      return [];
+    }
+    var merged = entry.mouseEvents.concat(entry.keystrokeEvents);
+    merged.sort(function(a, b) { return a.timestamp.localeCompare(b.timestamp); });
+    return merged;
+  }
+  function saveInteractionDataToSession(questionId) {
+    var interactionData = mergeInteractionDataChronologically(questionId);
+    sessionStorage.setItem(questionId + '_interaction_data', JSON.stringify(interactionData));
+  }
+  function loadInteractionBuffers(questionId) {
+    var stored = sessionStorage.getItem(questionId + '_interaction_data');
+    if (!stored) {
+      return;
+    }
+    try {
+      splitIntoInteractionBuffers(questionId, JSON.parse(stored));
+    } catch (loadError) {}
+  }
+  for (var i = 0; i < allBasQuestions.length; i++) {
+    var q = allBasQuestions[i];
+    if (!basData[q]) {
+      basData[q] = { mouseEvents: [], keystrokeEvents: [], keystrokes: 0, pastes: 0 };
+    }
+    loadInteractionBuffers(q);
+  }
+  function flushBAS() {
+    for (var j = 0; j < allBasQuestions.length; j++) {
+      var id = allBasQuestions[j];
+      var interactionData = mergeInteractionDataChronologically(id);
+      if (interactionData.length > 0) {
+        sessionStorage.setItem(id + '_bas', JSON.stringify({ interactionData: interactionData }));
+      }
+      saveInteractionDataToSession(id);
+    }
+  }
+  function matchesQuestionField(value, questionId) {
+    if (!value) return false;
+    if (value === questionId) return true;
+    var index = value.indexOf(questionId);
+    while (index !== -1) {
+      var before = index === 0 ? '' : value.charAt(index - 1);
+      var afterIndex = index + questionId.length;
+      var after = afterIndex >= value.length ? '' : value.charAt(afterIndex);
+      if (!isAlphaNumeric(before) && !isAlphaNumeric(after)) {
+        return true;
+      }
+      index = value.indexOf(questionId, index + 1);
+    }
+    return false;
+  }
+  function isAlphaNumeric(value) {
+    if (!value) return false;
+    var code = value.charCodeAt(0);
+    return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+  }
+  function isQuestionVisibleOnPage(questionId) {
+    var pageText = (document.body && (document.body.innerText || document.body.textContent) || '').replace(/\s+/g, ' ');
+    return pageText.indexOf(questionId) !== -1 || !!document.querySelector('[id*="' + questionId + '"], [class*="' + questionId + '"]');
+  }
+  function getVisibleBasQuestionId() {
+    for (var r = 0; r < textQuestions.length; r++) {
+      var visibleQuestionId = textQuestions[r];
+      if (isQuestionVisibleOnPage(visibleQuestionId)) {
+        return visibleQuestionId;
+      }
+    }
+    return null;
+  }
+  function resolveMouseQuestionId(inputMappings) {
+    for (var r = 0; r < mouseOnlyQuestions.length; r++) {
+      var mouseOnlyId = mouseOnlyQuestions[r];
+      if (isQuestionVisibleOnPage(mouseOnlyId)) {
+        return mouseOnlyId;
+      }
+    }
+    if (ENABLE_MOUSE_FOR_OPEN_ENDED && inputMappings && inputMappings.length > 0) {
+      return inputMappings[0].questionId;
+    }
+    return null;
+  }
+  setTimeout(function() {
+    var form = document.getElementById('primary') || document.querySelector('form') || (document.forms && document.forms[0]);
+    if (form) {
+      form.addEventListener('submit', flushBAS);
+    }
+    window.addEventListener('beforeunload', flushBAS);
+    window.addEventListener('pagehide', flushBAS);
+    var textInputs = document.querySelectorAll('textarea, input[type="text"]:not([type="number"]):not([inputmode="numeric"])');
+    var inputMappings = [];
+    var mappedQuestions = {};
+    var fallbackQuestionId = getVisibleBasQuestionId();
+    var fallbackUsed = false;
+    for (var k = 0; k < textInputs.length; k++) {
+      var input = textInputs[k];
+      var questionId = null;
+      var isTextarea = input.tagName && input.tagName.toLowerCase() === 'textarea';
+      var isTextInput = input.tagName && input.tagName.toLowerCase() === 'input' && input.type === 'text';
+      var okInputmode = !input.hasAttribute('inputmode') || /^(text|search|url|email)$/i.test(input.getAttribute('inputmode') || '');
+      var okName = !input.name || !input.name.match(/number|numeric|count|age|score|rating|scale/i);
+      if (input.className && String(input.className).indexOf('savelink-holder') !== -1) {
+        continue;
+      }
+      if (!(isTextarea || (isTextInput && okInputmode && okName))) {
+        continue;
+      }
+      if (input.getAttribute('aria-labelledby')) {
+        var labelledBy = input.getAttribute('aria-labelledby');
+        for (var m = 0; m < textQuestions.length; m++) {
+          var labelledQuestionId = textQuestions[m];
+          if (labelledBy.indexOf('question_text_' + labelledQuestionId) !== -1 || labelledBy.indexOf(labelledQuestionId + '_text') !== -1 || labelledBy.indexOf('text_' + labelledQuestionId) !== -1 || labelledBy.indexOf(labelledQuestionId) !== -1) {
+            questionId = labelledQuestionId;
+            break;
+          }
+        }
+      }
+      if (!questionId && input.name) {
+        for (var n = 0; n < textQuestions.length; n++) {
+          var nameQuestionId = textQuestions[n];
+          if (matchesQuestionField(input.name, nameQuestionId)) {
+            questionId = nameQuestionId;
+            break;
+          }
+        }
+      }
+      if (!questionId && input.id) {
+        for (var p = 0; p < textQuestions.length; p++) {
+          var idQuestionId = textQuestions[p];
+          if (matchesQuestionField(input.id, idQuestionId)) {
+            questionId = idQuestionId;
+            break;
+          }
+        }
+      }
+      if (!questionId && fallbackQuestionId && !fallbackUsed) {
+        questionId = fallbackQuestionId;
+        fallbackUsed = true;
+      }
+      if (!questionId) {
+        continue;
+      }
+      if (mappedQuestions[questionId]) {
+        continue;
+      }
+      mappedQuestions[questionId] = true;
+      inputMappings.push({ input: input, questionId: questionId });
+    }
+    if (mouseOnlyQuestions.length > 0 || (ENABLE_MOUSE_FOR_OPEN_ENDED && inputMappings.length > 0)) {
+      document.addEventListener('pointermove', function(e) {
+        var mouseQuestionId = resolveMouseQuestionId(inputMappings);
+        if (!mouseQuestionId || !basData[mouseQuestionId]) {
+          return;
+        }
+        pushMouseEvent(
+        basData[mouseQuestionId].mouseEvents,
+        createInteractionRecord({ x: Math.round(e.clientX), y: Math.round(e.clientY) }, 'MOUSE_MOVEMENT')
+        );
+      });
+      document.addEventListener('pointerup', function(e) {
+        if (e.button !== 0) {
+          return;
+        }
+        var mouseQuestionId = resolveMouseQuestionId(inputMappings);
+        if (!mouseQuestionId || !basData[mouseQuestionId]) {
+          return;
+        }
+        var target = e.target;
+        if (!target || typeof target.getBoundingClientRect !== 'function') {
+          return;
+        }
+        var rect = target.getBoundingClientRect();
+        if (!isRecordableClick(e, rect)) {
+          return;
+        }
+        var pointerType = (e.pointerType === 'mouse' || e.pointerType === 'pen' || e.pointerType === 'touch')
+        ? e.pointerType
+        : null;
+        pushMouseEvent(
+        basData[mouseQuestionId].mouseEvents,
+        createInteractionRecord(
+        {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          offsetX: Math.round(e.clientX - rect.left),
+          offsetY: Math.round(e.clientY - rect.top),
+          x: Math.round(e.clientX),
+          y: Math.round(e.clientY),
+          pointerType: pointerType
+        },
+        'MOUSE_CLICK'
+        )
+        );
+      }, true);
+    }
+    for (var q = 0; q < inputMappings.length; q++) {
+      var mapping = inputMappings[q];
+      var mappedInput = mapping.input;
+      var mappedQuestionId = mapping.questionId;
+      if (!mappedQuestionId || !basData[mappedQuestionId]) {
+        continue;
+      }
+      (function(capturedQuestionId, capturedInput) {
+        capturedInput.addEventListener('input', function(e) {
+          var isKeystroke = !e.inputType || (e.inputType.indexOf('insert') !== -1 && e.inputType.indexOf('Paste') === -1);
+          if (!isKeystroke) return;
+          basData[capturedQuestionId].keystrokes += 1;
+          basData[capturedQuestionId].keystrokeEvents.push(createInteractionRecord(
+          (e.target.value || '').substring(0, 100),
+          "KEYSTROKE"
+          ));
+        });
+        capturedInput.addEventListener('paste', function() {
+          basData[capturedQuestionId].pastes += 1;
+          setTimeout(function() {
+            basData[capturedQuestionId].keystrokeEvents.push(createInteractionRecord(
+            (capturedInput.value || '').substring(0, 100),
+            "COPY_AND_PASTE"
+            ));
+          }, 10);
+        });
+      })(mappedQuestionId, mappedInput);
+    }
+  }, 1500);
+})();
+/* redem-bas-tracker-end */
+]]></style>
+<style name="question.after" wrap="ready"><![CDATA[
+/* redem-ts-tracker-start */
+(function() {
+  var pages={"Page1":["S1"],"Page2":["S2"],"Page3":["S3"],"Page4":["S4"],"Page5":["S5"],"Page6":["S6"],"Page7":["S7"],"Page8":["B1"],"Page9":["B3"],"Page10":["B4"],"Page11":["B5"],"Page12":["B6"],"Page13":["B7"],"Page14":["A1"],"Page15":["A2"],"Page16":["A3"],"Page17":["A4"],"Page18":["A5"],"Page19":["F1"],"Page20":["F2"],"Page21":["F3"],"Page22":["K1"],"Page23":["QVideo_Maher_1","QVideo_Maher_2","QVideo_Maher_3","QVideo_Maher_4","QVideo_Maher_5","QVideo_Maher_6","QVideo_OT_1","QVideo_OT_2","QVideo_WG_1","QVideo_WG_2","QVideo_WG_3"],"Page24":["E1"],"Page25":["E2"],"Page26":["E3"],"Page27":["C1"],"Page28":["C2"],"Page29":["C3"],"Page30":["C4"],"Page31":["S8"]};
+  if (!sessionStorage.getItem('survey_start_time')) {
+    sessionStorage.setItem('survey_start_time', Date.now().toString());
+  }
+  function isVisible(el) {
+    return !!(el && (el.offsetParent !== null || (el.getClientRects && el.getClientRects().length > 0)));
+  }
+  function hasQuestion(questionId) {
+    var containers = [document.getElementById('question_' + questionId), document.getElementById(questionId)];
+    for (var i = 0; i < containers.length; i++) {
+      if (isVisible(containers[i])) return true;
+    }
+    var exactName = document.querySelector('[name="' + questionId + '"]');
+    return isVisible(exactName);
+  }
+  function detectPage() {
+    var pageIds = Object.keys(pages);
+    for (var i = 0; i < pageIds.length; i++) {
+      var pageId = pageIds[i];
+      var questions = pages[pageId];
+      for (var j = 0; j < questions.length; j++) {
+        if (hasQuestion(questions[j])) return pageId;
+      }
+    }
+    return null;
+  }
+  function startPage(pageId) {
+    if (!pageId) return;
+    var durationKey = pageId + '_duration';
+    var startKey = pageId + '_start';
+    if (!sessionStorage.getItem(durationKey) && !sessionStorage.getItem(startKey)) {
+      sessionStorage.setItem(startKey, Date.now().toString());
+    }
+  }
+  function finalizePage(pageId) {
+    if (!pageId) return;
+    var startKey = pageId + '_start';
+    var durationKey = pageId + '_duration';
+    var start = parseInt(sessionStorage.getItem(startKey), 10);
+    if (!start || sessionStorage.getItem(durationKey)) return;
+    var duration = Date.now() - start;
+    sessionStorage.setItem(durationKey, duration.toString());
+    sessionStorage.removeItem(startKey);
+  }
+  var currentPage = detectPage();
+  startPage(currentPage);
+  function beforeSubmitOrLeave() {
+    finalizePage(currentPage);
+  }
+  document.addEventListener('submit', beforeSubmitOrLeave);
+  window.addEventListener('beforeunload', beforeSubmitOrLeave);
+  window.addEventListener('pagehide', beforeSubmitOrLeave);
+})();
+/* redem-ts-tracker-end */
+]]></style>
+<suspend/>
+
+<exec when="started">
+if gv.survey.root.state.live:
+    gv.survey.root.styles.ss.enableNavigation = 0
+    gv.survey.root.styles.ss.disableBackButton = 1
+</exec>
+
+<radio 
+  label="hidTesting"
+  translateable="0"
+  where="execute,survey,report,notdp">
+  <title>Hidden question for testing</title>
+  <exec>
+if gv.survey.root.state.live:
+    hidTesting.val = hidTesting.r2.index
+else:
+    hidTesting.val = hidTesting.r1.index
+  </exec>
+
+  <row label="r1">TESTING MODE</row>
+  <row label="r2">LIVE MODE</row>
+</radio>
+
+<radio 
+  label="hidChange"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Hidden question for tracking any changes made during fielding</title>
+  <exec>
+hidChange.val = hidChange.r1.index
+  </exec>
+
+  <row label="r1">Original - No Changes</row>
+  <row label="r2">(date and time of change) - (QRE Version)</row>
+  <row label="r3">(date and time of change) - (QRE Version)</row>
+  <row label="r4">(date and time of change) - (QRE Version)</row>
+  <row label="r5">(date and time of change) - (QRE Version)</row>
+  <row label="r6">(date and time of change) - (QRE Version)</row>
+  <row label="r7">(date and time of change) - (QRE Version)</row>
+  <row label="r8">(date and time of change) - (QRE Version)</row>
+  <row label="r9">(date and time of change) - (QRE Version)</row>
+  <row label="r10">(date and time of change) - (QRE Version)</row>
+  <row label="r11">(date and time of change) - (QRE Version)</row>
+</radio>
+
+<stylevar name="cs:panel"/>
+<radio 
+  label="hidSupplier"
+  optional="1"
+  translateable="0"
+  where="execute,survey,notdp">
+  <title>Supplier panel</title>
+  <exec>
+hidSupplier.val = hidSupplier.r99.index
+
+for eachRow in hidSupplier.rows:
+  if sid == str(eachRow.value):
+    hidSupplier.val = eachRow.index
+  </exec>
+
+  <row label="r7593" cs:panel="99" value="7593">Advue Media (API)</row>
+  <row label="r4555" cs:panel="99" value="4555">Almedia (API)</row>
+  <row label="r6865" cs:panel="99" value="6865">Attapoll (API)</row>
+  <row label="r10132" cs:panel="99" value="10132">Bohemian Research (API)</row>
+  <row label="r10231" cs:panel="99" value="10231">DailyDough (API)</row>
+  <row label="r8845" cs:panel="99" value="8845">Datadvise (API)</row>
+  <row label="r6799" cs:panel="99" value="6799">dataSpring (API)</row>
+  <row label="r2905" cs:panel="2" value="2905">DISQO (API)</row>
+  <row label="r8878" cs:panel="99" value="8878">Dynata (API)</row>
+  <row label="r3829" cs:panel="99" value="3829">Elicit Research (API)</row>
+  <row label="r5083" cs:panel="99" value="5083">Emporia (API)</row>
+  <row label="r4588" cs:panel="99" value="4588">GRL (API)</row>
+  <row label="r4456" cs:panel="99" value="4456">Logit (API)</row>
+  <row label="r2179" cs:panel="99" value="2179">Luc.id (API)</row>
+  <row label="r3928" cs:panel="99" value="3928">Luc.id Coverage (API)</row>
+  <row label="r4522" cs:panel="99" value="4522">Make Opinion (API)</row>
+  <row label="r2938" cs:panel="99" value="2938">OnDevice Research (API)</row>
+  <row label="r4126" cs:panel="99" value="4126">Paas (API)</row>
+  <row label="r6568" cs:panel="99" value="6568">Paradigm Sample (API)</row>
+  <row label="r6898" cs:panel="99" value="6898">PCH (API)</row>
+  <row label="r5248" cs:panel="99" value="5248">Precision Sample (API)</row>
+  <row label="r4523" cs:panel="1" value="4523">Prime Insights (API)</row>
+  <row label="r2707" cs:panel="99" value="2707">Prodege (API)</row>
+  <row label="r5116" cs:panel="99" value="5116">Prodege Coverage (API)</row>
+  <row label="r2014" cs:panel="99" value="2014">PureSpectrum (API)</row>
+  <row label="r3895" cs:panel="99" value="3895">PureSpectrum Coverage (API)</row>
+  <row label="r8416" cs:panel="99" value="8416">Qmee (API)</row>
+  <row label="r6832" cs:panel="99" value="6832">Rakuten Insights (API)</row>
+  <row label="r7129" cs:panel="99" value="7129">RDS (API)</row>
+  <row label="r2839" cs:panel="99" value="2839">Research Desk Survey Test</row>
+  <row label="r4687" cs:panel="99" value="4687">RIWI (API)</row>
+  <row label="r1849" cs:panel="99" value="1849">SAGO (API)</row>
+  <row label="r6601" cs:panel="99" value="6601">SAGO L2 (API)</row>
+  <row label="r4720" cs:panel="99" value="4720">Sample Junction (API)</row>
+  <row label="r7558" cs:panel="99" value="7558">SocialLoop (API)</row>
+  <row label="r5149" cs:panel="99" value="5149">Symmetric Sample (API)</row>
+  <row label="r7822" cs:panel="99" value="7822">Syno International (API)</row>
+  <row label="r2872" cs:panel="3" value="2872">Tap Research (API)</row>
+  <row label="r232" cs:panel="3" value="232">Tap Research 232</row>
+  <row label="r6535" cs:panel="99" value="6535">TapJoy (API)</row>
+  <row label="r4589" cs:panel="99" value="4589">Theorem Reach (API)</row>
+  <row label="r99" cs:panel="99" value="99">None</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="hidSupplierQTA"
+  optional="1"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Supplier panel quota</title>
+  <exec>
+for eachRow in hidSupplierQTA.rows:
+  if eachRow.styles.cs.panel == hidSupplier.selected.styles.cs.panel:
+    hidSupplierQTA.val = eachRow.index
+  </exec>
+
+  <row label="r1" cs:panel="1">Panel 1</row>
+  <row label="r2" cs:panel="2">Panel 2</row>
+  <row label="r3" cs:panel="3">Panel 3</row>
+  <row label="r99" cs:panel="99">All Else</row>
+</radio>
+
+<suspend/>
+
+<note>#################   SCREENER STARTS HERE   ###############</note>
+<number 
+  label="S1"
+  optional="0"
+  size="2"
+  ss:postText="years old"
+  verify="range(1,99)">
+  <title>How old are you?</title>
+  <comment>Enter a whole number</comment>
+</number>
+
+<suspend/>
+
+<term label="Term_S1" cond="S1.val lt 18 or S1.val gt 44" markers="S1">S1 - Under 18 or over 44 years old</term>
+
+<suspend/>
+
+<exec>
+if S1.val ge 18 and S1.val le 24:
+    hS1_Age.val = hS1_Age.r1.index
+elif S1.val ge 25 and S1.val le 34:
+    hS1_Age.val = hS1_Age.r2.index
+elif S1.val ge 35 and S1.val le 39:
+    hS1_Age.val = hS1_Age.r3.index
+elif S1.val ge 40 and S1.val le 44:
+    hS1_Age.val = hS1_Age.r4.index
+</exec>
+
+<radio 
+  label="hS1_Age"
+  optional="1"
+  where="execute,survey,report">
+  <title>Hidden Age Groups</title>
+  <row label="r1">18-24</row>
+  <row label="r2">25-34</row>
+  <row label="r3">35-39</row>
+  <row label="r4">40-44</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="S2"
+  atm1d:showInput="0"
+  ss:listDisplay="1"
+  uses="atm1d.10">
+  <title>Are you...?</title>
+  <comment>Select one</comment>
+  <row label="r1">Female</row>
+  <row label="r2">Male</row>
+  <row label="r3">Other / Non-binary</row>
+  <row label="r4">Prefer not to answer</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="S3"
+  atm1d:showInput="0"
+  ss:listDisplay="1"
+  uses="atm1d.10">
+  <title>What race / ethnic background do you most closely identify with?</title>
+  <comment>Select one</comment>
+  <row label="r1">Caucasian or White</row>
+  <row label="r2">African-American or Black</row>
+  <row label="r3">Asian</row>
+  <row label="r4">American Indian or Alaska Native</row>
+  <row label="r5">Native Hawaiian or Other Pacific Islander</row>
+  <row label="r6">Other</row>
+  <row label="r7" exclusive="1">Prefer not to answer</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="S4"
+  atm1d:showInput="0"
+  ss:listDisplay="1"
+  uses="atm1d.10">
+  <title>To make sure that we have a fair representation of diverse backgrounds, are you from Spanish, Hispanic or Latino background/origin? (This includes Mexican, Mexican American, Puerto Rican, Cuban and all other Spanish, Hispanic or Latino origins)?</title>
+  <comment>Select one</comment>
+  <row label="r1">Yes</row>
+  <row label="r2">No</row>
+  <row label="r3">Prefer not to answer</row>
+</radio>
+
+<suspend/>
+
+<text 
+  label="S5"
+  optional="0"
+  size="5"
+  translateable="0"
+  verify="zipcode">
+  <title>Please provide your five (5) digit zip code.</title>
+  <style label="NumKey" cond="not(device.desktop)" name="el.text"><![CDATA[
+\@if row.styles.ss.preText or this.styles.ss.preText
+    ${row.styles.ss.preText or this.styles.ss.preText or ""}&nbsp;
+\@endif
+<input type="tel" name="$(name)" id="$(id)" value="$(value)" size=5% class="input text-input" $(extra)/>
+\@if row.styles.ss.postText or this.styles.ss.postText
+    &nbsp;${row.styles.ss.postText or this.styles.ss.postText or ""}
+\@endif
+]]></style>
+</text>
+
+<suspend/>
+
+<exec>
+Zipfile = File("zipstate.dat", "id")
+</exec>
+
+<exec>
+respInfo = Zipfile.get(S5.val)
+if respInfo:
+  if respInfo['state']:
+    hidSTATE.val = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','DC','WV','WI','WY'].index(respInfo['state'])
+</exec>
+
+<radio 
+  label="hidSTATE"
+  optional="1"
+  translateable="0"
+  where="execute,survey,report">
+  <title>State from zip code</title>
+  <row label="r1">Alabama</row>
+  <row label="r2">Alaska</row>
+  <row label="r3">Arizona</row>
+  <row label="r4">Arkansas</row>
+  <row label="r5">California</row>
+  <row label="r6">Colorado</row>
+  <row label="r7">Connecticut</row>
+  <row label="r8">Delaware</row>
+  <row label="r9">Florida</row>
+  <row label="r10">Georgia</row>
+  <row label="r11">Hawaii</row>
+  <row label="r12">Idaho</row>
+  <row label="r13">Illinois</row>
+  <row label="r14">Indiana</row>
+  <row label="r15">Iowa</row>
+  <row label="r16">Kansas</row>
+  <row label="r17">Kentucky</row>
+  <row label="r18">Louisiana</row>
+  <row label="r19">Maine</row>
+  <row label="r20">Maryland</row>
+  <row label="r21">Massachusetts</row>
+  <row label="r22">Michigan</row>
+  <row label="r23">Minnesota</row>
+  <row label="r24">Mississippi</row>
+  <row label="r25">Missouri</row>
+  <row label="r26">Montana</row>
+  <row label="r27">Nebraska</row>
+  <row label="r28">Nevada</row>
+  <row label="r29">New Hampshire</row>
+  <row label="r30">New Jersey</row>
+  <row label="r31">New Mexico</row>
+  <row label="r32">New York</row>
+  <row label="r33">North Carolina</row>
+  <row label="r34">North Dakota</row>
+  <row label="r35">Ohio</row>
+  <row label="r36">Oklahoma</row>
+  <row label="r37">Oregon</row>
+  <row label="r38">Pennsylvania</row>
+  <row label="r39">Rhode Island</row>
+  <row label="r40">South Carolina</row>
+  <row label="r41">South Dakota</row>
+  <row label="r42">Tennessee</row>
+  <row label="r43">Texas</row>
+  <row label="r44">Utah</row>
+  <row label="r45">Vermont</row>
+  <row label="r46">Virginia</row>
+  <row label="r47">Washington</row>
+  <row label="r48">Washington DC</row>
+  <row label="r49">West Virginia</row>
+  <row label="r50">Wisconsin</row>
+  <row label="r51">Wyoming</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="hidRegion"
+  optional="1"
+  translateable="0"
+  where="execute,survey,report">
+  <title>U.S Region</title>
+  <exec>
+if  hidSTATE.r7 or hidSTATE.r19 or hidSTATE.r21 or hidSTATE.r29 or hidSTATE.r30 or hidSTATE.r32 or hidSTATE.r38 or hidSTATE.r39 or hidSTATE.r45:
+  hidRegion.val = 0
+elif hidSTATE.r13 or hidSTATE.r14 or hidSTATE.r15 or hidSTATE.r16 or hidSTATE.r22 or hidSTATE.r23 or hidSTATE.r25 or hidSTATE.r27 or hidSTATE.r34 or hidSTATE.r35 or hidSTATE.r41 or hidSTATE.r50:
+  hidRegion.val = 1
+elif hidSTATE.r1 or hidSTATE.r4 or hidSTATE.r8 or hidSTATE.r9 or hidSTATE.r10 or hidSTATE.r17 or hidSTATE.r18 or hidSTATE.r20 or hidSTATE.r24 or hidSTATE.r33 or hidSTATE.r36 or hidSTATE.r40 or hidSTATE.r42 or hidSTATE.r43 or hidSTATE.r46 or hidSTATE.r48 or hidSTATE.r49:
+  hidRegion.val = 2
+else:
+  hidRegion.val = 3
+  </exec>
+
+  <row label="r1">Northeast</row>
+  <row label="r2">Midwest</row>
+  <row label="r3">South</row>
+  <row label="r4">West</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="S6">
+  <title>How would you describe your interest in the following areas?</title>
+  <comment>Select one in each row</comment>
+  <col label="c1">1 – Not interested at all</col>
+  <col label="c2">2</col>
+  <col label="c3">3</col>
+  <col label="c4">4</col>
+  <col label="c5">5 – Very interested</col>
+  <row label="r1">Sports</row>
+  <row label="r2">Online grocery shopping</row>
+  <row label="r3">Ordering individual meals / snacks online</row>
+  <row label="r4">Health and Fitness activities</row>
+  <row label="r5">Playing Video Games (Console, PC or Mobile)</row>
+  <row label="r6">Vacation and Leisure activities</row>
+  <row label="r7">Listening to / watching podcasts</row>
+  <row label="r8">Spending time with Family / Friends</row>
+  <row label="r9">Attending Music Concerts / Festivals</row>
+  <row label="r10">Technology</row>
+  <row label="r11">Attending social gatherings</row>
+  <row label="r12">Pop Culture</row>
+  <row label="r13">Watching live sports on TV / streaming services</row>
+  <row label="r14">Watching TV or streaming service series / movies</row>
+</radio>
+
+<term label="Term_S6" cond="not(S6.r7.c2 or S6.r7.c3 or S6.r7.c4 or S6.r7.c5)" markers="S6">S6 term</term>
+
+<suspend/>
+
+<checkbox 
+  label="S7"
+  atleast="1"
+  shuffle="rows"
+  uses="atm1d.10">
+  <title>Based on your interests, which of the activities do you actively participate or engage in?</title>
+  <comment>Select all that apply</comment>
+  <row label="r1">Baseball / Softball</row>
+  <row label="r2">Basketball</row>
+  <row label="r3">American Football</row>
+  <row label="r4">Golf</row>
+  <row label="r5">Hockey</row>
+  <row label="r6">Soccer / Football</row>
+  <row label="r7">Tennis</row>
+  <row label="r8">Racquetball</row>
+  <row label="r9">Pickleball</row>
+  <row label="r10">Cycling</row>
+  <row label="r11">Rugby</row>
+  <row label="r12">Handball</row>
+  <row label="r13">Skiing / Snowboarding</row>
+  <row label="r14">Swimming</row>
+  <row label="r15">Running / Jogging</row>
+  <row label="r16">Studio / Fitness Classes</row>
+  <row label="r17">Working Out / Gym Activities</row>
+  <row label="r18">Yoga</row>
+  <row label="r19">Hiking</row>
+  <row label="r20">Dancing</row>
+  <row label="r99" exclusive="1" randomize="0">None of the Above</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="hidHealth1"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Female 18-44 "Health Curious" or "Wellness Enthusiasts" who actively participate in top fitness and leisure activities.</title>
+  <exec>
+if S2.r1 and (S6.r4.c3 or S6.r4.c4 or S6.r4.c5 or S6.r6.c3 or S6.r6.c4 or S6.r6.c5) and (S7.r8 or S7.r4 or S7.r9 or S7.r7 or S7.r13 or S7.r14 or S7.r16 or S7.r18 or S7.r20):
+  hidHealth1.r1.val = 1
+  </exec>
+
+  <row label="r1">Yes</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="hidHealth2"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Males between the ages of 18–44 classified as "Health-Curious" or "Wellness Enthusiasts" who engage in high-intensity, structured sports like Soccer or Running to optimize their physical conditioning.</title>
+  <exec>
+if S2.r2 and (S6.r4.c3 or S6.r4.c4 or S6.r4.c5 or S6.r6.c3 or S6.r6.c4 or S6.r6.c5) and (S7.r1 or S7.r2 or S7.r3 or S7.r5 or S7.r6 or S7.r10 or S7.r11 or S7.r12 or S7.r15 or S7.r17 or S7.r19):
+  hidHealth2.r1.val = 1
+  </exec>
+
+  <row label="r1">Yes</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="hidHealth3"
+  translateable="0"
+  where="execute,survey,report">
+  <title>US Hispanic between the ages of 18–44 classified as "Health-Curious" or "Wellness Enthusiasts" who engage in competitive, interactive, or tech-driven recreation like Video Games, Golf, or Pickleball.</title>
+  <exec>
+if S4.r1 and (S6.r4.c3 or S6.r4.c4 or S6.r4.c5 or S6.r6.c3 or S6.r6.c4 or S6.r6.c5 or S6.r5.c3 or S6.r5.c4 or S6.r5.c5) and (S7.r6 or S7.r4 or S7.r7 or S7.r8 or S7.r9 or S7.r17 or S7.r12):
+  hidHealth3.r1.val = 1
+  </exec>
+
+  <row label="r1">Yes</row>
+</checkbox>
+
+<suspend/>
+
+<quota label="quota_total" overquota="noqual" sheet="Total"/>
+
+<quota label="quota_supplier" overquota="noqual" sheet="Supplier"/>
+
+<quota label="quota_demos" overquota="noqual" sheet="Demos"/>
+
+<note>#################   MAIN SURVEY   ###############</note>
+<suspend/>
+
+<radio 
+  label="B1"
+  shuffle="rows">
+  <title>How familiar are you with the following brands offering hydration or sports drink?</title>
+  <comment>Please select one answer for each brand.</comment>
+  <row label="r1">Liquid I.V.</row>
+  <row label="r2">LMNT</row>
+  <row label="r3">Gatorade</row>
+  <row label="r4">Prime</row>
+  <row label="r5">Celsius</row>
+  <row label="r99" cond="0" randomize="0">None of the above</row>
+  <col label="c1">Never heard of it</col>
+  <col label="c2">Somewhat familiar</col>
+  <col label="c3">Moderately familiar</col>
+  <col label="c4">Very familiar</col>
+  <col label="c5">Extremely familiar</col>
+</radio>
+
+<suspend/>
+
+<exec>
+for row in B1.rows:
+  if row.c5 or row.c2 or row.c3 or row.c4:
+    hB1_Aware.attr(row.label).val = 1
+</exec>
+
+<checkbox 
+  label="hB1_Aware"
+  where="execute,survey,report">
+  <title>Hidden - Brand Awareness</title>
+  <row label="r1">Liquid I.V.</row>
+  <row label="r2">LMNT</row>
+  <row label="r3">Gatorade</row>
+  <row label="r4">Prime</row>
+  <row label="r5">Celsius</row>
+  <row label="r99" cond="0">None of the above</row>
+</checkbox>
+
+<suspend/>
+
+<radio 
+  label="B3"
+  rowCond="hB1_Aware[row]"
+  shuffle="rows"
+  shuffleBy="B1">
+  <title>How do you feel about the following brands offering hydration or sports drink?</title>
+  <comment>Select one in each row</comment>
+  <col label="c1">Hate it</col>
+  <col label="c2">Dislike it</col>
+  <col label="c3">Neutral</col>
+  <col label="c4">Like it</col>
+  <col label="c5">Love it</col>
+  <row label="r1">Liquid I.V.</row>
+  <row label="r2">LMNT</row>
+  <row label="r3">Gatorade</row>
+  <row label="r4">Prime</row>
+  <row label="r5">Celsius</row>
+  <row label="r99" cond="0">None of the above</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="B4"
+  rowCond="hB1_Aware[row]"
+  shuffle="rows"
+  shuffleBy="B1">
+  <title>How likely are you to consider each of the following brands offering hydration or sports drink?</title>
+  <comment>Please select one answer for each brand</comment>
+  <col label="c1">Very unlikely</col>
+  <col label="c2">Somewhat unlikely</col>
+  <col label="c3">Neutral</col>
+  <col label="c4">Somewhat likely</col>
+  <col label="c5">Very likely</col>
+  <row label="r1">Liquid I.V.</row>
+  <row label="r2">LMNT</row>
+  <row label="r3">Gatorade</row>
+  <row label="r4">Prime</row>
+  <row label="r5">Celsius</row>
+  <row label="r99" cond="0">None of the above</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="B5"
+  rowCond="hB1_Aware[row]"
+  shuffle="rows"
+  shuffleBy="B1">
+  <title>How likely are you to recommend each of the following brands offering hydration or sports drink?</title>
+  <comment>Select one in each row</comment>
+  <col label="c1">Definitely will not</col>
+  <col label="c2">Probably will not</col>
+  <col label="c3">May or may not</col>
+  <col label="c4">Probably will</col>
+  <col label="c5">Definitely will</col>
+  <row label="r1">Liquid I.V.</row>
+  <row label="r2">LMNT</row>
+  <row label="r3">Gatorade</row>
+  <row label="r4">Prime</row>
+  <row label="r5">Celsius</row>
+  <row label="r99" cond="0">None of the above</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="B6"
+  rowCond="hB1_Aware[row]"
+  shuffle="rows"
+  shuffleBy="B1">
+  <title>The next time you are looking to purchase hydration or sports drink, which of the following brands will you buy?</title>
+  <comment>Please select one answer for each brand</comment>
+  <col label="c1">Definitely will not</col>
+  <col label="c2">Probably will not</col>
+  <col label="c3">May or may not</col>
+  <col label="c4">Probably will</col>
+  <col label="c5">Definitely will</col>
+  <row label="r1">Liquid I.V.</row>
+  <row label="r2">LMNT</row>
+  <row label="r3">Gatorade</row>
+  <row label="r4">Prime</row>
+  <row label="r5">Celsius</row>
+  <row label="r99" cond="0">None of the above</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="B7"
+  atm1d:showInput="0"
+  rowCond="hB1_Aware[row]"
+  shuffle="rows"
+  shuffleBy="B1"
+  ss:listDisplay="0"
+  uses="atm1d.10">
+  <title>If you could only select one of the following brands offering hydration or sports drink, which one would be your first choice? </title>
+  <comment>Select one</comment>
+  <row label="r1">Liquid I.V.</row>
+  <row label="r2">LMNT</row>
+  <row label="r3">Gatorade</row>
+  <row label="r4">Prime</row>
+  <row label="r5">Celsius</row>
+  <row label="r99" cond="1" exclusive="1" randomize="0">None of the above</row>
+</radio>
+
+<suspend/>
+
+<radio 
+  label="A1"
+  shuffle="rows">
+  <title>How <b>familiar</b> are you with the following media companies?</title>
+  <comment>Select one in each row</comment>
+  <col label="c1">Not familiar at all</col>
+  <col label="c2">Somewhat familiar</col>
+  <col label="c3">Very familiar</col>
+  <row label="r1">Wave Sports &amp; Entertainment</row>
+  <row label="r2">Barstool Sports</row>
+  <row label="r3">ESPN</row>
+  <row label="r4">Almost Friday</row>
+  <row label="r5">Betches</row>
+  <row label="r6">The Ringer</row>
+  <row label="r7">Wondery</row>
+  <row label="r8">The Athletic</row>
+  <row label="r9">Meadowlark Media</row>
+</radio>
+
+<suspend/>
+
+<checkbox 
+  label="A2"
+  atleast="1"
+  shuffle="rows"
+  ss:listDisplay="1"
+  uses="atm1d.10">
+  <title>Which of the following shows and podcasts are you aware of / have you heard of?</title>
+  <comment>Select all that apply</comment>
+  <row label="r1">House of Maher</row>
+  <row label="r2">Open Thoughts with Funny Marco</row>
+  <row label="r3">Whiskey Ginger with Andrew Santino</row>
+  <row label="r4">Not Gonna Lie, with Kylie Kelce</row>
+  <row label="r5">7PM in Brooklyn</row>
+  <row label="r6">Big Bro with Kid Cudi</row>
+  <row label="r7">Almost Athletes with Dude Perfect</row>
+  <row label="r8">The Right Time with Bomani Jones</row>
+  <row label="r9">Wingmen</row>
+  <row label="r10">So True with Caleb Hearon</row>
+  <row label="r11">Spittin' Chiclets</row>
+  <row label="r12">Office Ladies with Jenna Fischer and Angela Kinsey</row>
+  <row label="r13">We Can Do Hard Things</row>
+  <row label="r14">The Mel Robbins Podcast</row>
+  <row label="r15">The Toast</row>
+  <row label="r16">New Heights with Jason &amp; Travis Kelce</row>
+  <row label="r17">Call Her Daddy</row>
+  <row label="r99" exclusive="1" randomize="0">None of the above</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="A3"
+  atleast="1"
+  rowCond="A2[row]"
+  shuffle="rows"
+  ss:listDisplay="1"
+  uses="atm1d.10">
+  <title>Which of the shows and podcasts have you watched / listened to in the last month?</title>
+  <comment>Select all that apply</comment>
+  <exec>
+A3.rows.order = A2.rows.order
+  </exec>
+
+  <row label="r1">House of Maher</row>
+  <row label="r2">Open Thoughts with Funny Marco</row>
+  <row label="r3">Whiskey Ginger with Andrew Santino</row>
+  <row label="r4">Not Gonna Lie, with Kylie Kelce</row>
+  <row label="r5">7PM in Brooklyn</row>
+  <row label="r6">Big Bro with Kid Cudi</row>
+  <row label="r7">Almost Athletes with Dude Perfect</row>
+  <row label="r8">The Right Time with Bomani Jones</row>
+  <row label="r9">Wingmen</row>
+  <row label="r10">So True with Caleb Hearon</row>
+  <row label="r11">Spittin' Chiclets</row>
+  <row label="r12">Office Ladies with Jenna Fischer and Angela Kinsey</row>
+  <row label="r13">We Can Do Hard Things</row>
+  <row label="r14">The Mel Robbins Podcast</row>
+  <row label="r15">The Toast</row>
+  <row label="r16">New Heights with Jason &amp; Travis Kelce</row>
+  <row label="r17">Call Her Daddy</row>
+  <row label="r99" cond="1" exclusive="1" randomize="0">None of these</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="A4"
+  atleast="1"
+  rowCond="A3.r1 or A3.r2 or A3.r3"
+  shuffle="rows,cols">
+  <title>You mentioned that you’ve watched/listened to the following shows in the last month. How/where have you watched/listened to them?</title>
+  <comment>Select all that apply</comment>
+  <col label="c1">Watched/Listened to full episode(s) on YouTube</col>
+  <col label="c2">Listened to full episode(s) via Spotify</col>
+  <col label="c3">Listened to full episode(s) via Apple Music</col>
+  <col label="c4">Listened to full episode(s) via Amazon Music</col>
+  <col label="c5">Watched/listened to clip(s) on Instagram</col>
+  <col label="c6">Watched/listened to clip(s) on TikTok</col>
+  <col label="c7">Watched/listened to clip(s) on YouTube Shorts</col>
+  <col label="c8" exclusive="1" randomize="0">None of these</col>
+  <row label="r1" cond="A3.r1">House of Maher</row>
+  <row label="r2" cond="A3.r2">Open Thoughts with Funny Marco</row>
+  <row label="r3" cond="A3.r3">Whiskey Ginger with Andrew Santino</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="A5"
+  cond="A2.r1 or A2.r2 or A2.r3"
+  atleast="1"
+  rowCond="A2[row]"
+  shuffle="rows,cols">
+  <title>Which of the following brands are sponsors of / partnered with the following podcasts?</title>
+  <comment>Please select all that apply to each show.</comment>
+  <exec>
+A5.rows.order = A2.rows.order
+A5.cols.order = B1.rows.order
+  </exec>
+
+  <col label="c1">Liquid I.V.</col>
+  <col label="c2">LMNT</col>
+  <col label="c3">Gatorade</col>
+  <col label="c4">Prime</col>
+  <col label="c5">Celsius</col>
+  <col label="c6" exclusive="1" randomize="0">None of these</col>
+  <row label="r1">House of Maher</row>
+  <row label="r2">Open Thoughts with Funny Marco</row>
+  <row label="r3">Whiskey Ginger with Andrew Santino</row>
+  <row label="r4">Not Gonna Lie, with Kylie Kelce</row>
+  <row label="r5">7PM in Brooklyn</row>
+  <row label="r6">Big Bro with Kid Cudi</row>
+  <row label="r7">Almost Athletes with Dude Perfect</row>
+  <row label="r8">The Right Time with Bomani Jones</row>
+  <row label="r9">Wingmen</row>
+  <row label="r10">So True with Caleb Hearon</row>
+  <row label="r11">Spittin' Chiclets</row>
+  <row label="r12">Office Ladies with Jenna Fischer and Angela Kinsey</row>
+  <row label="r13">We Can Do Hard Things</row>
+  <row label="r14">The Mel Robbins Podcast</row>
+  <row label="r15">The Toast</row>
+  <row label="r16">New Heights with Jason &amp; Travis Kelce</row>
+  <row label="r17">Call Her Daddy</row>
+  <row label="r99" cond="0">None of these</row>
+</checkbox>
+
+<suspend/>
+
+<radio 
+  label="F1"
+  cond="A2.r1"
+  atm1d:showInput="0"
+  uses="atm1d.10">
+  <title>You indicated that you are aware of the ‘House of Maher’ podcast. Are you aware of their YouTube series, “<b>Power Hour</b>”?</title>
+  <comment>Select one</comment>
+  <row label="r1">No</row>
+  <row label="r2">Yes</row>
+</radio>
+
+<suspend/>
+
+<checkbox 
+  label="F2"
+  cond="F1.r2"
+  atleast="1"
+  shuffle="rows"
+  uses="atm1d.10">
+  <title>Have you ever watched / consumed any of the following content from or about House of Maher’s ‘<b>Power Hour</b>’ show?</title>
+  <comment>Select all that apply</comment>
+  <row label="r1">Watched full episode(s) on YouTube</row>
+  <row label="r2">Watched / listened to clip(s) on Instagram</row>
+  <row label="r3">Watched / listened to clip(s) on TikTok</row>
+  <row label="r4">Watched / listened to clip(s) on YouTube Shorts</row>
+  <row label="r5">Watched / listened to clip(s) on Facebook</row>
+  <row label="r6" exclusive="1" randomize="0">I have not watched any content from the show.</row>
+</checkbox>
+
+<suspend/>
+
+<checkbox 
+  label="F3"
+  cond="F1.r2"
+  atleast="1"
+  rowCond="B1"
+  shuffle="rows"
+  uses="atm1d.10">
+  <title>Which of the following brands are sponsors of / partnered with House of Maher’s ‘<b>Power Hour</b>’ show?</title>
+  <comment>Select all that apply</comment>
+  <row label="r1">Liquid I.V.</row>
+  <row label="r2">LMNT</row>
+  <row label="r3">Gatorade</row>
+  <row label="r4">Prime</row>
+  <row label="r5">Celsius</row>
+  <row label="r6" exclusive="1" randomize="0">None of these</row>
+  <row label="r7" exclusive="1" randomize="0">I do not know</row>
+</checkbox>
+
+<suspend/>
+
+<radio 
+  label="K1"
+  cond="hB1_Aware.r1"
+  atm1d:showInput="0"
+  ss:listDisplay="1"
+  uses="atm1d.10">
+  <title>Do you recall hearing or seeing an ad for Liquid I.V. while listening to/ watching a podcast show in the last month?</title>
+  <comment>Select one</comment>
+  <row label="r1">Yes</row>
+  <row label="r2">No</row>
+</radio>
+
+<suspend/>
+
+<quota label="quota_cell" doit="1" overquota="noqual" sheet="Cell"/>
+
+<radio 
+  label="hCell"
+  translateable="0"
+  where="execute,survey,report">
+  <title>HIDDEN: Sample Assigned</title>
+  <exec>
+for eachRow in hCell.rows:
+  if hasMarker('cell_{}'.format(eachRow.index+1)):
+    hCell.val = eachRow.index
+  </exec>
+
+  <row label="r1">Exposed</row>
+  <row label="r2">Control</row>
+</radio>
+
+<suspend/>
+
+<block label="ExposedBlock" cond="hCell.r1">
+  <quota label="quota_HOMvideo" doit="1" overquota="noqual" sheet="HOMvideo"/>
+
+  <radio 
+   label="hHOMvideo"
+   optional="1"
+   translateable="0"
+   where="execute,survey,report">
+    <title>HIDDEN: HOM Video Assigned</title>
+    <exec>
+for eachRow in hHOMvideo.rows:
+  if hasMarker('/HOMvideo/HOMvideo_{}'.format(eachRow.label)):
+    hHOMvideo.val = eachRow.index
+    </exec>
+
+    <row label="r1">Power Hour with Ilona Maher - Episode 1</row>
+    <row label="r2">Power Hour with Ilona Maher - Episode 2</row>
+    <row label="r3">Power Hour with Ilona Maher - Episode 3</row>
+    <row label="r4">House of Maher - Episode 1</row>
+    <row label="r5">House of Maher - Episode 2</row>
+    <row label="r6">House of Maher - Episode 3</row>
+  </radio>
+
+  <suspend/>
+
+  <quota label="quota_WGvideo" doit="1" overquota="noqual" sheet="WGvideo"/>
+
+  <radio 
+   label="hWGvideo"
+   optional="1"
+   translateable="0"
+   where="execute,survey,report">
+    <title>HIDDEN: WG Video Assigned</title>
+    <exec>
+for eachRow in hWGvideo.rows:
+  if hasMarker('/WGvideo/WGvideo_{}'.format(eachRow.label)):
+    hWGvideo.val = eachRow.index
+    </exec>
+
+    <row label="r1">Whiskey Ginger - Episode 1</row>
+    <row label="r2">Whiskey Ginger - Episode 2</row>
+    <row label="r3">Whiskey Ginger - Episode 3</row>
+  </radio>
+
+  <suspend/>
+
+  <quota label="quota_OSvideo" doit="1" overquota="noqual" sheet="OSvideo"/>
+
+  <radio 
+   label="hOTvideo"
+   optional="1"
+   translateable="0"
+   where="execute,survey,report">
+    <title>HIDDEN: OT Video Assigned</title>
+    <exec>
+for eachRow in hOTvideo.rows:
+  if hasMarker('/OSvideo/OSvideo_{}'.format(eachRow.label)):
+    hOTvideo.val = eachRow.index
+    </exec>
+
+    <row label="r1">Open Thoughts - Episode 2</row>
+    <row label="r2">Open Thoughts - Episode 3</row>
+  </radio>
+
+  <suspend/>
+
+  <pipe label="Video_Maher" capture="">
+    <case label="r1" cond="hHOMvideo.r1">6405742055112</case>
+    <case label="r2" cond="hHOMvideo.r2">6405743108112</case>
+    <case label="r3" cond="hHOMvideo.r3">6405742823112</case>
+    <case label="r4" cond="hHOMvideo.r4">6405741865112</case>
+    <case label="r5" cond="hHOMvideo.r5">6405742818112</case>
+    <case label="r6" cond="hHOMvideo.r6">6405742530112</case>
+    <case label="r7" cond="1">UNDEFINED</case></pipe>
+  <pipe label="Video_Whiskey" capture="">
+    <case label="r1" cond="hWGvideo.r1">6405742533112</case>
+    <case label="r2" cond="hWGvideo.r2">6405741659112</case>
+    <case label="r3" cond="hWGvideo.r3">6405743143112</case>
+    <case label="r4" cond="1">UNDEFINED</case></pipe>
+  <pipe label="Video_OpenThoughts" capture="">
+    <case label="r1" cond="hOTvideo.r1">6405742538112</case>
+    <case label="r2" cond="hOTvideo.r2">6405742468112</case>
+    <case label="r3" cond="1">UNDEFINED</case></pipe>
+  <suspend/>
+
+  <html label="cm1" where="survey">Below is a recent advertisement for Liquid I.V. from an episode of the House of Maher, Open Thoughts with Funny Marco and Whiskey Ginger with Andrew Santino podcast. Please watch it briefly before answering the next few questions.</html>
+
+  <text 
+   label="QVideo_Maher_1"
+   cond="hHOMvideo.r1"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405742055112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_Maher_2"
+   cond="hHOMvideo.r2"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405743108112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_Maher_3"
+   cond="hHOMvideo.r3"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:autostart="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405742823112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_Maher_4"
+   cond="hHOMvideo.r4"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:autostart="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405741865112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_Maher_5"
+   cond="hHOMvideo.r5"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405742818112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_Maher_6"
+   cond="hHOMvideo.r6"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405742530112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_OT_1"
+   cond="hOTvideo.r1"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405742538112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_OT_2"
+   cond="hOTvideo.r2"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405742468112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_WG_1"
+   cond="hWGvideo.r1"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405742533112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_WG_2"
+   cond="hWGvideo.r2"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405741659112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <text 
+   label="QVideo_WG_3"
+   cond="hWGvideo.r3"
+   size="25"
+   sst="0"
+   uses="videoplayer.1"
+   videoplayer:account_id="2280166212001"
+   videoplayer:allow_fullscreen="1"
+   videoplayer:enable_continue_after="15"
+   videoplayer:hide_volume="1"
+   videoplayer:pause_enable="1"
+   videoplayer:player_id="WxkzMz4Kr"
+   videoplayer:replay_enable="1"
+   videoplayer:video_id="6405743143112">
+    <title><i>Click the "play" button to start the video.</i></title>
+  </text>
+
+  <suspend/>
+
+  <radio 
+   label="E1"
+   atm1d:showInput="0"
+   ss:listDisplay="1"
+   uses="atm1d.10">
+    <title>Considering the partnership with House of Maher, Open Thoughts and Whiskey Ginger and the advertisement you just saw, how would you now rate your overall impression of Liquid I.V.?</title>
+    <comment>Select one</comment>
+    <row label="r1">Hate it</row>
+    <row label="r2">Dislike it</row>
+    <row label="r3">Neutral</row>
+    <row label="r4">Like it</row>
+    <row label="r5">Love it</row>
+  </radio>
+
+  <suspend/>
+
+  <radio 
+   label="E2"
+   atm1d:showInput="0"
+   ss:listDisplay="1"
+   uses="atm1d.10">
+    <title>How does this advertisement and partnership with House of Maher, Open Thoughts and Whiskey Ginger podcast change your impression of Liquid I.V.?</title>
+    <comment>Select one</comment>
+    <row label="r1">Very negatively</row>
+    <row label="r2">Somewhat negatively</row>
+    <row label="r3">Neutral / no change</row>
+    <row label="r4">Somewhat positively</row>
+    <row label="r5">Very positively</row>
+  </radio>
+
+  <suspend/>
+
+  <radio 
+   label="E3"
+   atm1d:showInput="0"
+   ss:listDisplay="1"
+   uses="atm1d.10">
+    <title>How does this advertisement and partnership with the House of Maher, Open Thoughts and Whiskey Ginger podcast impact on your likelihood to consider hydration or sports drink like <b>Liquid I.V.</b> in the future?</title>
+    <comment>Select one</comment>
+    <row label="r1">Much less likely</row>
+    <row label="r2">Slightly less likely</row>
+    <row label="r3">Neutral / no change</row>
+    <row label="r4">Slightly more likely</row>
+    <row label="r5">Much more likely</row>
+  </radio>
+
+  <suspend/>
+</block>
+
+<block label="ControlBlock" cond="hCell.r2">
+  <html label="cm2" where="survey">Please answer the following questions regarding your thoughts on hydration or sports drink brand Liquid I.V.</html>
+
+  <suspend/>
+
+  <radio 
+   label="C1"
+   cond="K1.r1"
+   atm1d:showInput="0"
+   ss:listDisplay="1"
+   uses="atm1d.10">
+    <title>How did hearing an advertisement for Liquid I.V. while listening to or watching a podcast change your impression of the brand?</title>
+    <comment>Select one</comment>
+    <row label="r1">Very negatively</row>
+    <row label="r2">Somewhat negatively</row>
+    <row label="r3">Neutral / no change</row>
+    <row label="r4">Somewhat positively</row>
+    <row label="r5">Very positively</row>
+  </radio>
+
+  <suspend/>
+
+  <radio 
+   label="C2"
+   cond="K1.r1"
+   atm1d:showInput="0"
+   ss:listDisplay="1"
+   uses="atm1d.10">
+    <title>How did hearing an advertisement while listening to or watching a podcast impact on your likelihood of considering buying Liquid I.V. in the future?</title>
+    <comment>Select one</comment>
+    <row label="r1">Very negatively</row>
+    <row label="r2">Somewhat negatively</row>
+    <row label="r3">Neutral / no change</row>
+    <row label="r4">Somewhat positively</row>
+    <row label="r5">Very positively</row>
+  </radio>
+
+  <suspend/>
+
+  <radio 
+   label="C3"
+   cond="K1.r2"
+   atm1d:showInput="0"
+   ss:listDisplay="1"
+   uses="atm1d.10">
+    <title>How does hearing an advertisement while listening to or watching a podcast affect your impression of the advertising company / brand?</title>
+    <comment>Select one</comment>
+    <row label="r1">Very negatively</row>
+    <row label="r2">Somewhat negatively</row>
+    <row label="r3">Neutral / no change</row>
+    <row label="r4">Somewhat positively</row>
+    <row label="r5">Very positively</row>
+  </radio>
+
+  <suspend/>
+
+  <radio 
+   label="C4"
+   cond="K1.r2"
+   atm1d:showInput="0"
+   ss:listDisplay="1"
+   uses="atm1d.10">
+    <title>How does hearing an advertisement while listening to or watching a podcast affect the likelihood of you purchasing a product from the advertising company / brand in the future?</title>
+    <comment>Select one</comment>
+    <row label="r1">Very negatively</row>
+    <row label="r2">Somewhat negatively</row>
+    <row label="r3">Neutral / no change</row>
+    <row label="r4">Somewhat positively</row>
+    <row label="r5">Very positively</row>
+  </radio>
+
+  <suspend/>
+</block>
+
+<html label="cm3"><p>Almost finished! Finally, a few quick demographic questions for the statistical analysis of this survey.</p></html>
+
+<suspend/>
+
+<radio 
+  label="S8"
+  atm1d:showInput="0"
+  uses="atm1d.10">
+  <title>What is your total annual household income before taxes?</title>
+  <row label="r1">Under $25,000</row>
+  <row label="r2">$25,000-$49,999</row>
+  <row label="r3">$50,000-$59,999</row>
+  <row label="r4">$60,000-$69,999</row>
+  <row label="r5">$70,000-$79,999</row>
+  <row label="r6">$80,000-$89,999</row>
+  <row label="r7">$90,000-$99,999</row>
+  <row label="r8">$100,000-$149,999</row>
+  <row label="r9">$150,000-$199,999</row>
+  <row label="r10">$200,000-$249,999</row>
+  <row label="r11">$250,000 or more</row>
+  <row label="r12">Prefer not to answer</row>
+  <row label="r13">I do not know</row>
+</radio>
+
+<suspend/>
+
+<note>#################   END OF SURVEY   ###############</note>
+<suspend/>
+
+<text 
+  label="straightLine_question"
+  sst="0"
+  translateable="0"
+  where="execute,survey,notdp">
+  <title>Question labels checked for straightlining</title>
+  <exec>
+count = 0
+grids = []
+for oneQ in allQuestions.keys():
+  try:
+    if count lt 20 and allQuestions[str(oneQ)].o.xmlTagName == "radio" and allQuestions[str(oneQ)].displayed and len(allQuestions[str(oneQ)].cols) ge 3 and len(allQuestions[str(oneQ)].rows) ge 5 and not allQuestions[str(oneQ)].o.grouping.cols:
+      grids.append(str(oneQ))
+      count += 1
+  except:
+    pass
+for i, grid in enumerate(sorted(grids)):
+  straightLine_question.rows[i].val = str(grid)
+  for col in allQuestions[grid].cols:
+    if col.all:
+      straightLine_flags.rows[i].val = 1
+  </exec>
+
+  <row label="r1">Check 1 - Question Label</row>
+  <row label="r2">Check 2 - Question Label</row>
+  <row label="r3">Check 3 - Question Label</row>
+  <row label="r4">Check 4 - Question Label</row>
+  <row label="r5">Check 5 - Question Label</row>
+  <row label="r6">Check 6 - Question Label</row>
+  <row label="r7">Check 7 - Question Label</row>
+  <row label="r8">Check 8 - Question Label</row>
+  <row label="r9">Check 9 - Question Label</row>
+  <row label="r10">Check 10 - Question Label</row>
+  <row label="r11">Check 11 - Question Label</row>
+  <row label="r12">Check 12 - Question Label</row>
+  <row label="r13">Check 13 - Question Label</row>
+  <row label="r14">Check 14 - Question Label</row>
+  <row label="r15">Check 15 - Question Label</row>
+  <row label="r16">Check 16 - Question Label</row>
+  <row label="r17">Check 17 - Question Label</row>
+  <row label="r18">Check 18 - Question Label</row>
+  <row label="r19">Check 19 - Question Label</row>
+  <row label="r20">Check 20 - Question Label</row>
+</text>
+
+<checkbox 
+  label="straightLine_flags"
+  sst="0"
+  translateable="0"
+  where="execute,survey,notdp">
+  <title>Straightlined yes/no?</title>
+  <row label="r1">Check 1 - SL?</row>
+  <row label="r2">Check 2 - SL?</row>
+  <row label="r3">Check 3 - SL?</row>
+  <row label="r4">Check 4 - SL?</row>
+  <row label="r5">Check 5 - SL?</row>
+  <row label="r6">Check 6 - SL?</row>
+  <row label="r7">Check 7 - SL?</row>
+  <row label="r8">Check 8 - SL?</row>
+  <row label="r9">Check 9 - SL?</row>
+  <row label="r10">Check 10 - SL?</row>
+  <row label="r11">Check 11 - SL?</row>
+  <row label="r12">Check 12 - SL?</row>
+  <row label="r13">Check 13 - SL?</row>
+  <row label="r14">Check 14 - SL?</row>
+  <row label="r15">Check 15 - SL?</row>
+  <row label="r16">Check 16 - SL?</row>
+  <row label="r17">Check 17 - SL?</row>
+  <row label="r18">Check 18 - SL?</row>
+  <row label="r19">Check 19 - SL?</row>
+  <row label="r20">Check 20 - SL?</row>
+</checkbox>
+
+<suspend/>
+
+<number 
+  label="straightLine_possible"
+  size="3"
+  sst="0"
+  translateable="0"
+  where="execute,survey,notdp">
+  <title>Total possible SL flags</title>
+  <exec>
+count = 0
+for oneQ in allQuestions.keys():
+  try:
+    if allQuestions[str(oneQ)].o.xmlTagName == "radio" and allQuestions[str(oneQ)].displayed and len(allQuestions[str(oneQ)].cols) ge 3 and len(allQuestions[str(oneQ)].rows) ge 5 and not allQuestions[str(oneQ)].o.grouping.cols:
+      count += 1
+  except:
+    pass  
+straightLine_possible.val = count
+  </exec>
+
+</number>
+
+<number 
+  label="straightLine_count"
+  size="3"
+  sst="0"
+  translateable="0"
+  where="execute,survey,notdp">
+  <title>Total count SL flags</title>
+  <exec>
+straightLine_count.val=straightLine_flags.count
+  </exec>
+
+</number>
+
+<suspend/>
+
+<checkbox 
+  label="straightLiner"
+  sst="0"
+  translateable="0"
+  where="execute,survey,notdp">
+  <title>Straightliner Check</title>
+  <exec>
+SL_Quota_Cells = gv.survey.root.quota.getQuotaCells()
+limit = SL_Quota_Cells["/QC/Straightline"][1]
+  
+if (straightLine_count.ival gt limit):
+  straightLiner.r1.val = 1
+  </exec>
+
+  <row label="r1">Yes</row>
+</checkbox>
+
+<checkbox 
+  label="speeder"
+  sst="0"
+  translateable="0"
+  where="execute,survey,notdp">
+  <title>Speeder Check</title>
+  <exec>
+Speeder_Quota_Cells = gv.survey.root.quota.getQuotaCells()
+timeSet = Speeder_Quota_Cells["/QC/SpeederLimit"][1]
+  
+if (timeSpent() lt timeSet):
+  speeder.r1.val = 1
+  </exec>
+
+  <row label="r1">Yes</row>
+</checkbox>
+
+<suspend/>
+
+<radio 
+  label="removalReason"
+  optional="1"
+  sst="0"
+  translateable="0"
+  where="execute,survey,report">
+  <title>Reason for QC removal</title>
+  <exec>
+if straightLiner.r1.val == 1:
+  removalReason.val = removalReason.r1.index
+if speeder.r1.val == 1:
+  removalReason.val = removalReason.r2.index
+  </exec>
+
+  <row label="r1">Straightliner</row>
+  <row label="r2">Speeder</row>
+  <row label="r3">Bad OE</row>
+</radio>
+
+<logic label="ln1" cond="list == '1'" resdefcomplete:platform_id="0182812a-1f4b-4547-aa92-a224ac4e7fa7" resdefcomplete:supplier_id="1" resdefcomplete:survey_number="rd_proj_ud" resdefcomplete:transaction_id="rdud" uses="resdefcomplete.2"/>
+<term label="QC_term1" cond="removalReason.r1" markers="straightliner" sst="0">QC Term: Straightliner</term>
+
+<term label="QC_term2" cond="removalReason.r2" markers="speeder" sst="0">QC Term: Speeder</term>
+
+<note>#################   PROGRAMMER:  this block will add in the question number on screen, which is for client testing without a decipher login</note>
+<style cond="gv.hasQA(True) or hidTesting.r1" mode="after" name="buttons"><![CDATA[
+<div class="savelink-dialog" style="display:none;">Please copy and save the link below to return to this question later.<br/><br/><textarea style="width:570px;" class="savelink-holder"></textarea></div>
+    <div style="text-align: center"><a href="#" onclick="$ ('.savelink-holder').val('${gv.request.baseURL+gv.request.path}'+'?state='+jQuery('input[name=&quot;state&quot;]').attr('value')).select();$ ('.savelink-dialog').dialog({width:620});">Progress link</a></div>
+]]></style>
+<note>################################</note>
+<style mode="after" name="respview.client.css"><![CDATA[
+<style>
+.sq-atm1d-tiled .sq-atm1d-button{margin:3px 3px !important}
+
+.sq-atm1d-tiled .sq-atm1d-open{height:auto !important;}
+.sq-atm1d-vertical .sq-atm1d-button.sq-atm1d-button.sq-atm1d-button{height: auto;}
+.sq-atm1d-vertical .sq-atm1d-open .sq-atm1d-openEnd {display: inline-block;}
+
+.sq-atm1d-small .sq-atm1d-tiled .sq-atm1d-button{height:auto !important;text-align:left !important;min-width:95% !important;}
+.sq-atm1d-small .sq-atm1d-tiled .sq-atm1d-button .sq-atm1d-content{text-align:left !important;}
+
+.left-blank-legend {text-align: left !important;border: 1px solid #ccc;background-color: #ededed;font-weight: bold;padding-left: 0.5em;}
+[data-viewsize=small] [data-viewmode=horizontal] .sq-cardrating-button{max-height:50px !important;padding:.2em !important}
+
+.sq-atm1d-buttons.sq-atm1d-vertical{width: fit-content; }
+.sq-atm1d-buttons.sq-atm1d-buttons.sq-atm1d-vertical .sq-atm1d-button{width: auto;}
+
+\@media (min-width: 300px){ .sq-atm1d-buttons.sq-atm1d-vertical{min-width: 250px;} }
+
+.nobr{${"" if gv.request.device.isMobileDevice() else "display:block"}}
+.sq-atm1d-fctl{width: 1.37em;display:inline-block;}
+
+.survey-page {
+    padding-top: 10px !important;
+}
+.sq-cardrating-card {
+  height: 150px !important;
+}
+[data-bind~=completion] {
+  font-size: 18px;
+}
+
+/*** usage: add ss:colClassNames="noBoldCols" to <col> tag or ss:questionClassNames="noBoldCols" to question tag***/
+.noBoldCols .col-legend, .noBoldCols.col-legend {
+    font-weight: normal;
+}
+
+.ticket {
+}
+
+.ticketcell1 {
+  border: solid thin #3a404a;
+  padding: 5px;
+  background-color: #dfe4ea;
+}
+
+.ticketcell2 {
+  border: solid thin #3a404a;
+  padding: 5px;
+}
+
+</style>
+]]></style>
+<note>#################  hideElements is used on a question to remove the radio,checkbox, or input box for one or more cells see Q33 for example  ###############</note>
+<style label="hideElements" name="question.element"><![CDATA[
+\@if ec.simpleList
+<div class="element $(rowStyle) $(levels) $(extraClasses) ${col.group.styles.ss.groupClassNames if col.group else (row.group.styles.ss.groupClassNames if row.group else "")} $(col.styles.ss.colClassNames) $(row.styles.ss.rowClassNames) ${"clickableCell" if isClickable else ""}"$(extra)>
+    ${v2_insertStyle('el.label.start')}
+    ${v2_insertStyle('el.label.end')}
+</div>
+\@else
+<$(tag) $(headers) class="cell nonempty element $(levels) ${"desktop" if this.grouping.cols else "mobile"} border-collapse $(extraClasses) ${col.group.styles.ss.groupClassNames if col.group else (row.group.styles.ss.groupClassNames if row.group else "")} $(col.styles.ss.colClassNames) $(row.styles.ss.rowClassNames) ${"clickableCell" if isClickable else ""}"$(extra)>
+    ${v2_insertStyle('el.label.start')}
+    ${v2_insertStyle('el.label.end')}
+</$(tag)>
+\@endif
+]]></style>
+<style cond="1" name="survey.respview.footer.support"><![CDATA[
+<div class="footer"><a href="/support?decLang=@(lang)" target="_blank">Help</a></div>
+]]></style>
+<exec when="init">
+###Example: call this within exec tag after question:
+###setZero(S7)
+def setZero(qid):
+    if qid.displayed:
+        for eachRow in [row for row in qid.rows if row.displayed]:
+            for eachCol in [col for col in qid.cols if col.displayed]:
+                if eachRow[eachCol.index].val in ['', None]:
+                    eachRow[eachCol.index].val = 0
+
+###Example: call this within validate tag at question:
+###OtherSpecify('r5')
+def OtherSpecify(code):
+    for eachRow in [this.attr(row) for row in [code]]:
+        if len([1 for eachCol in this.cols if this.rows[eachRow.index][eachCol.index].val not in [0, "", None]]) gt 0 and eachRow.open in ["", None]:
+            error(this.lget("extraInfo"), eachRow)
+        elif len([1 for eachCol in this.cols if this.rows[eachRow.index][eachCol.index].val not in [0, "", None]]) == 0 and eachRow.open not in ["", None]:
+            error(this.lget("extraSelect"), eachRow)
+
+
+def checkOthLen(code,chklen=2):  ## UPDATED APR 2022 ##
+    for eachRow in [eval("this.%s" % row) for row in [code]]:
+        if eachRow and eachRow.open not in ["", None]:
+            if len(eachRow.open.decode('utf-8').replace(' ','')) lt chklen:
+                error(res.otherErr3, row = eachRow)
+
+def group_rows( question, grouped_rows ):
+    first_item_index = None
+    shuffle_order = [row.index for row in question.rows.order]
+
+    for index, row in enumerate( shuffle_order ):
+        if question.rows[row].label in grouped_rows:
+            if first_item_index == None:
+                first_item_index = index
+            else:
+                first_item_index += 1
+                shuffle_order.insert( first_item_index, shuffle_order.pop(index) )
+
+    question.rows.order = shuffle_order
+
+def group_rows_with_order( question, grouped_rows ):
+    current_order = [row.index for row in question.rows.order]
+    new_order     = []
+
+    grouped_rows     = [question.attr(row).index for row in grouped_rows]
+    first_item_index = current_order.index(grouped_rows[0])
+
+    current_order.insert(first_item_index, grouped_rows)
+
+    for row in current_order:
+        if row == grouped_rows:
+            new_order = new_order + row
+        elif row not in grouped_rows:
+            new_order.append(row)
+
+    question.rows.order = new_order
+</exec>
+
+<suspend/>
+
+<html label="thank_you"><div id="thank_you">
+<h3>Thank You!</h3>
+<p>Your responses have been recorded successfully.</p>
+</div></html>
+
+<suspend/>
+
+<style mode="after" name="respview.client.js" with="thank_you" wrap="ready"><![CDATA[
+/* redem-api-integration-start */
+(function(){
+  var respondentId="${rdud}";
+  var surveyStartTime=sessionStorage.getItem('survey_start_time')||Date.now().toString();
+  var surveyDuration=Math.floor((Date.now()-parseInt(surveyStartTime,10))/1000);
+  function __redemClearSessionStorage(){
+    var keysToRemove=[];
+    for(var i=0;i<sessionStorage.length;i++){
+      var key=sessionStorage.key(i);
+      if(!key)continue;
+      if(
+      key==='bas_tracking_data'||
+      key==='survey_start_time'||
+      key==='redem_response'||
+      key==='redem_error'||
+      key.endsWith('_bas')||
+      key.endsWith('_interaction_data')||
+      key.endsWith('_duration')||
+      key.endsWith('_start')
+      ){
+        keysToRemove.push(key);
+      }
+    }
+    for(var j=0;j<keysToRemove.length;j++){
+      sessionStorage.removeItem(keysToRemove[j]);
+    }
+  }
+  function __redemExtract(fn){try{var s=fn.toString();var start=s.indexOf('/*');var end=s.lastIndexOf('*/');if(start===-1||end===-1||end<=start+2)return '';return s.slice(start+2,end);}catch(e){return '';}}
+  function __redemDecodeText(value){if(value==null)return '';return String(value).replaceAll('&nbsp;',' ').replaceAll('&NBSP;',' ').replaceAll('&#160;',' ').replaceAll('&#xa0;',' ').replaceAll('\u00A0',' ').replaceAll('&amp;','&');}
+  function __redemNormalizeTitle(value){if(value==null)return '';return __redemDecodeText(value).replace(/<br\s*\/?>/gi,' ').replace(/[\r\n]+/g,' ').replace(/\s+/g,' ').trim();}
+  function __redemIsNoneLikeStructure(s){if(s==null)return true;var str=String(s).trim();if(!str)return true;str=str.replace(/[\uFEFF\u200B-\u200D\u202F]/g,'');if(!str)return true;var i,c,allWrap=true;for(i=0;i<str.length;i++){c=str.charCodeAt(i);if(c<=32)continue;if(c===40||c===41||c===91||c===93||c===44)continue;if(c===0xFF08||c===0xFF09||c===0x3000||c===0xFF0C)continue;allWrap=false;break;}if(allWrap)return true;var tokens=str.split(/\s+|\(|\)|\[|\]|,|\uFF08|\uFF09|\u3000|\uFF0C/g);for(i=0;i<tokens.length;i++){var tok=tokens[i];if(!tok)continue;if(!/^(none|null|undefined|nan)$/i.test(tok))return false;}return true;}
+  function __redemNormalizeValue(value){if(value==null)return '';var normalized=__redemDecodeText(value).replace(/<br\s*\/?>/gi,' ').replace(/[\r\n]+/g,' ').replace(/\s+/g,' ').trim();if(!normalized)return '';if(__redemIsNoneLikeStructure(normalized))return '';return normalized;}
+  function __redemParseList(raw){if(!raw||!String(raw).trim())return [];var cleaned=String(raw).replace(/[()\[\]]/g,'');if(!cleaned)return [];var parts=cleaned.split(',');var values=[];for(var i=0;i<parts.length;i++){var v=parseInt(parts[i].trim(),10);if(!isNaN(v))values.push(v);}return values;}
+  function __redemParseIndexedList(raw){if(!raw||!String(raw).trim())return [];var cleaned=String(raw).trim();var firstChar=cleaned.charAt(0);var lastChar=cleaned.charAt(cleaned.length-1);if((firstChar==='['&&lastChar===']')||(firstChar==='('&&lastChar===')')){cleaned=cleaned.slice(1,-1).trim();}if(!cleaned)return [];var parts=cleaned.split(',');var values=[];for(var i=0;i<parts.length;i++){var token=parts[i].trim();if(!token||/^(none|null|undefined|nan)$/i.test(token)){values.push(null);continue;}var parsed=parseInt(token,10);values.push(isNaN(parsed)?null:parsed);}return values;}
+  function __redemParseGridValue(raw){var normalized=__redemNormalizeValue(raw);if(!normalized)return null;var parsed=parseInt(normalized,10);if(!isNaN(parsed)&&parsed>=0)return parsed;var match=normalized.match(/\d+/);if(!match)return null;var extracted=parseInt(match[0],10);return isNaN(extracted)||extracted<0?null:extracted;}
+  function __redemParseGridPattern(raw){var indexed=__redemParseIndexedList(raw);if(!indexed.length)return [];var values=[];for(var i=0;i<indexed.length;i++){values.push(indexed[i]==null?null:indexed[i]);}return values;}
+  function __redemHasSelectedGridValue(values){for(var i=0;i<values.length;i++){if(values[i]!==null&&values[i]!==undefined&&!isNaN(values[i]))return true;}return false;}
+  function __redemLookup(mapping,key){if(!mapping)return '';if(Object.prototype.hasOwnProperty.call(mapping,key))return mapping[key];var k=parseInt(key,10);if(!isNaN(k)){if(Object.prototype.hasOwnProperty.call(mapping,k))return mapping[k];if(Object.prototype.hasOwnProperty.call(mapping,String(k)))return mapping[String(k)];}return '';}
+  function __redemConvertAnswer(raw,mapping){var normalized=__redemNormalizeValue(raw);if(!normalized)return '';if(!mapping||!mapping.type)return normalized;
+  if(mapping.type==='text')return normalized;
+  if(mapping.type==='radio'){var label=__redemLookup(mapping.mapping,normalized);return label||normalized;}
+  if(mapping.type==='checkbox'){var checkboxValues=__redemParseIndexedList(normalized);if(!checkboxValues.length)return __redemIsNoneLikeStructure(normalized)?'':normalized;var checkboxLabels=[];for(var i=0;i<checkboxValues.length;i++){if(checkboxValues[i]>0){var rowLabel=__redemLookup(mapping.mapping,i);if(rowLabel)checkboxLabels.push(rowLabel);}}return checkboxLabels.length?checkboxLabels.join(', '):'';}
+  if(mapping.type==='grid'){var gridValues=__redemParseIndexedList(normalized);if(!gridValues.length)return __redemIsNoneLikeStructure(normalized)?'':normalized;var hasRows=!!(mapping.rows&&Object.keys(mapping.rows).length);var hasCols=!!(mapping.columns&&Object.keys(mapping.columns).length);var gridLabels=[];for(var rowIndex=0;rowIndex<gridValues.length;rowIndex++){var selectedCode=gridValues[rowIndex];var code=(selectedCode!=null&&!isNaN(selectedCode))?Number(selectedCode):0;if(code<0)code=0;var rowValue=hasRows?(__redemLookup(mapping.rows,rowIndex)||('Row '+(rowIndex+1))):('Row '+(rowIndex+1));if(hasCols){var colValue=__redemLookup(mapping.columns,code)||__redemLookup(mapping.columns,code-1)||String(code);gridLabels.push(rowValue+': '+colValue);}else{gridLabels.push(rowValue+': '+String(code));}}return gridLabels.length?gridLabels.join(', '):'';}
+  return normalized;}
+  function __redemIsEmptyAnswer(value){if(value==null)return true;var str=String(value).trim();if(!str)return true;return __redemIsNoneLikeStructure(str);}
+  function __redemIsDisplayed(value){var normalized=String(value==null?'':value).trim().toLowerCase();return normalized==='1'||normalized==='true'||normalized==='yes';}
+  function __redemAddOes(data,item){if(item[1]&&item[1].trim())data.push({qualityCheck:'OES',dataPointId:item[0],question:item[2],answer:item[1],activateDuplicateDetection:item[3],allowedLanguages:item[4]});}
+  function __redemAddGqs(data,item){var grid=item[1];var filtered=[];for(var i=0;i<grid.length;i++){if(grid[i]!==null&&grid[i]!==undefined)filtered.push(grid[i]);}if(filtered.length>=5&&__redemHasSelectedGridValue(filtered))data.push({qualityCheck:'GQS',dataPointId:item[0],gridAnswersPattern:filtered,patternCheckEnabled:false});}
+  function __redemAddBas(data,id){var raw=sessionStorage.getItem(id+'_bas');if(!raw)return;try{var parsed=JSON.parse(raw);if(parsed.interactionData&&parsed.interactionData.length>0)data.push({qualityCheck:'BAS',dataPointId:id+'_bas',interactionData:parsed.interactionData});}catch(e){}}
+  function __redemAddChs(data,id,title,raw,mapping,visible,rows){if(!__redemIsDisplayed(visible))return;if(rows){for(var i=0;i<rows.length;i++){var row=rows[i];if(!__redemIsDisplayed(row[2]))continue;var parts=[];for(var j=3;j<row.length;j++){var cell=row[j];if(cell[1]!==''&&(cell.length<3||__redemIsDisplayed(cell[2])))parts.push(cell[0]+': '+cell[1]);}if(parts.length)data.push({questionId:row[0]?id+'.'+row[0]:id,question:row[0]?title+' ('+row[1]+')':title,answer:parts.join(', ')});}return;}var answer=__redemConvertAnswer(raw,mapping);if(answer!==''&&!__redemIsNoneLikeStructure(answer))data.push({questionId:id,question:title,answer:answer});}
+  function __redemSanitizePayload(payload){if(!payload||!payload.dataPoints||!payload.dataPoints.length)return payload;var kept=[];var droppedDataPoints=[];var droppedInterviewEntries=[];for(var i=0;i<payload.dataPoints.length;i++){var dp=payload.dataPoints[i];if(!dp)continue;if(dp.interviewData&&dp.interviewData.length){var entries=[];for(var j=0;j<dp.interviewData.length;j++){var e=dp.interviewData[j];if(!e)continue;if(__redemIsEmptyAnswer(e.answer)){droppedInterviewEntries.push({questionId:e.questionId,answer:e.answer});continue;}entries.push(e);}if(entries.length>=2){dp.interviewData=entries;kept.push(dp);}else{droppedDataPoints.push({dataPointId:dp.dataPointId,reason:'interviewData<2'});}continue;}if(Object.prototype.hasOwnProperty.call(dp,'answer')){if(__redemIsEmptyAnswer(dp.answer)){droppedDataPoints.push({dataPointId:dp.dataPointId,answer:dp.answer});continue;}kept.push(dp);continue;}kept.push(dp);}payload.dataPoints=kept;try{if(typeof __redemDebug==='function'){__redemDebug('[redem sanitizer]',{droppedDataPoints:droppedDataPoints,droppedInterviewEntries:droppedInterviewEntries});}}catch(e){}return payload;}
+  var A1_response=__redemNormalizeValue(__redemExtract(function(){/*${A1.values}*/}));
+  var A1_title=__redemNormalizeTitle(__redemExtract(function(){/*${A1.title}*/}));
+  var A1_displayed=__redemExtract(function(){/*${A1.displayed}*/});
+  var A1_values=A1_response;
+  var A2_response=__redemNormalizeValue(__redemExtract(function(){/*${A2.values}*/}));
+  var A2_title=__redemNormalizeTitle(__redemExtract(function(){/*${A2.title}*/}));
+  var A2_displayed=__redemExtract(function(){/*${A2.displayed}*/});
+  var A2_values=A2_response;
+  var A3_response=__redemNormalizeValue(__redemExtract(function(){/*${A3.values}*/}));
+  var A3_title=__redemNormalizeTitle(__redemExtract(function(){/*${A3.title}*/}));
+  var A3_displayed=__redemExtract(function(){/*${A3.displayed}*/});
+  var A3_values=A3_response;
+  var A4_response=__redemNormalizeValue(__redemExtract(function(){/*${A4.values}*/}));
+  var A4_title=__redemNormalizeTitle(__redemExtract(function(){/*${A4.title}*/}));
+  var A4_displayed=__redemExtract(function(){/*${A4.displayed}*/});
+  var A4_values=A4_response;
+  var A5_response=__redemNormalizeValue(__redemExtract(function(){/*${A5.values}*/}));
+  var A5_title=__redemNormalizeTitle(__redemExtract(function(){/*${A5.title}*/}));
+  var A5_displayed=__redemExtract(function(){/*${A5.displayed}*/});
+  var A5_values=A5_response;
+  var B1_response=__redemNormalizeValue(__redemExtract(function(){/*${B1.values}*/}));
+  var B1_title=__redemNormalizeTitle(__redemExtract(function(){/*${B1.title}*/}));
+  var B1_displayed=__redemExtract(function(){/*${B1.displayed}*/});
+  var B1_values=B1_response;
+  var B3_response=__redemNormalizeValue(__redemExtract(function(){/*${B3.values}*/}));
+  var B3_title=__redemNormalizeTitle(__redemExtract(function(){/*${B3.title}*/}));
+  var B3_displayed=__redemExtract(function(){/*${B3.displayed}*/});
+  var B3_values=B3_response;
+  var B4_response=__redemNormalizeValue(__redemExtract(function(){/*${B4.values}*/}));
+  var B4_title=__redemNormalizeTitle(__redemExtract(function(){/*${B4.title}*/}));
+  var B4_displayed=__redemExtract(function(){/*${B4.displayed}*/});
+  var B4_values=B4_response;
+  var B5_response=__redemNormalizeValue(__redemExtract(function(){/*${B5.values}*/}));
+  var B5_title=__redemNormalizeTitle(__redemExtract(function(){/*${B5.title}*/}));
+  var B5_displayed=__redemExtract(function(){/*${B5.displayed}*/});
+  var B5_values=B5_response;
+  var B6_response=__redemNormalizeValue(__redemExtract(function(){/*${B6.values}*/}));
+  var B6_title=__redemNormalizeTitle(__redemExtract(function(){/*${B6.title}*/}));
+  var B6_displayed=__redemExtract(function(){/*${B6.displayed}*/});
+  var B6_values=B6_response;
+  var B7_response=__redemNormalizeValue(__redemExtract(function(){/*${B7.val}*/}));
+  var B7_title=__redemNormalizeTitle(__redemExtract(function(){/*${B7.title}*/}));
+  var B7_displayed=__redemExtract(function(){/*${B7.displayed}*/});
+  var C1_response=__redemNormalizeValue(__redemExtract(function(){/*${C1.val}*/}));
+  var C1_title=__redemNormalizeTitle(__redemExtract(function(){/*${C1.title}*/}));
+  var C1_displayed=__redemExtract(function(){/*${C1.displayed}*/});
+  var C2_response=__redemNormalizeValue(__redemExtract(function(){/*${C2.val}*/}));
+  var C2_title=__redemNormalizeTitle(__redemExtract(function(){/*${C2.title}*/}));
+  var C2_displayed=__redemExtract(function(){/*${C2.displayed}*/});
+  var C3_response=__redemNormalizeValue(__redemExtract(function(){/*${C3.val}*/}));
+  var C3_title=__redemNormalizeTitle(__redemExtract(function(){/*${C3.title}*/}));
+  var C3_displayed=__redemExtract(function(){/*${C3.displayed}*/});
+  var C4_response=__redemNormalizeValue(__redemExtract(function(){/*${C4.val}*/}));
+  var C4_title=__redemNormalizeTitle(__redemExtract(function(){/*${C4.title}*/}));
+  var C4_displayed=__redemExtract(function(){/*${C4.displayed}*/});
+  var E1_response=__redemNormalizeValue(__redemExtract(function(){/*${E1.val}*/}));
+  var E1_title=__redemNormalizeTitle(__redemExtract(function(){/*${E1.title}*/}));
+  var E1_displayed=__redemExtract(function(){/*${E1.displayed}*/});
+  var E2_response=__redemNormalizeValue(__redemExtract(function(){/*${E2.val}*/}));
+  var E2_title=__redemNormalizeTitle(__redemExtract(function(){/*${E2.title}*/}));
+  var E2_displayed=__redemExtract(function(){/*${E2.displayed}*/});
+  var E3_response=__redemNormalizeValue(__redemExtract(function(){/*${E3.val}*/}));
+  var E3_title=__redemNormalizeTitle(__redemExtract(function(){/*${E3.title}*/}));
+  var E3_displayed=__redemExtract(function(){/*${E3.displayed}*/});
+  var F1_response=__redemNormalizeValue(__redemExtract(function(){/*${F1.val}*/}));
+  var F1_title=__redemNormalizeTitle(__redemExtract(function(){/*${F1.title}*/}));
+  var F1_displayed=__redemExtract(function(){/*${F1.displayed}*/});
+  var F2_response=__redemNormalizeValue(__redemExtract(function(){/*${F2.values}*/}));
+  var F2_title=__redemNormalizeTitle(__redemExtract(function(){/*${F2.title}*/}));
+  var F2_displayed=__redemExtract(function(){/*${F2.displayed}*/});
+  var F2_values=F2_response;
+  var F3_response=__redemNormalizeValue(__redemExtract(function(){/*${F3.values}*/}));
+  var F3_title=__redemNormalizeTitle(__redemExtract(function(){/*${F3.title}*/}));
+  var F3_displayed=__redemExtract(function(){/*${F3.displayed}*/});
+  var F3_values=F3_response;
+  var K1_response=__redemNormalizeValue(__redemExtract(function(){/*${K1.val}*/}));
+  var K1_title=__redemNormalizeTitle(__redemExtract(function(){/*${K1.title}*/}));
+  var K1_displayed=__redemExtract(function(){/*${K1.displayed}*/});
+  var QVideo_Maher_1_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_Maher_1.val}*/}));
+  var QVideo_Maher_1_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_Maher_1.title}*/}));
+  var QVideo_Maher_2_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_Maher_2.val}*/}));
+  var QVideo_Maher_2_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_Maher_2.title}*/}));
+  var QVideo_Maher_3_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_Maher_3.val}*/}));
+  var QVideo_Maher_3_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_Maher_3.title}*/}));
+  var QVideo_Maher_4_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_Maher_4.val}*/}));
+  var QVideo_Maher_4_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_Maher_4.title}*/}));
+  var QVideo_Maher_5_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_Maher_5.val}*/}));
+  var QVideo_Maher_5_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_Maher_5.title}*/}));
+  var QVideo_Maher_6_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_Maher_6.val}*/}));
+  var QVideo_Maher_6_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_Maher_6.title}*/}));
+  var QVideo_OT_1_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_OT_1.val}*/}));
+  var QVideo_OT_1_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_OT_1.title}*/}));
+  var QVideo_OT_2_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_OT_2.val}*/}));
+  var QVideo_OT_2_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_OT_2.title}*/}));
+  var QVideo_WG_1_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_WG_1.val}*/}));
+  var QVideo_WG_1_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_WG_1.title}*/}));
+  var QVideo_WG_2_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_WG_2.val}*/}));
+  var QVideo_WG_2_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_WG_2.title}*/}));
+  var QVideo_WG_3_response=__redemNormalizeValue(__redemExtract(function(){/*${QVideo_WG_3.val}*/}));
+  var QVideo_WG_3_title=__redemNormalizeTitle(__redemExtract(function(){/*${QVideo_WG_3.title}*/}));
+  var S1_response=__redemNormalizeValue(__redemExtract(function(){/*${S1.val}*/}));
+  var S1_title=__redemNormalizeTitle(__redemExtract(function(){/*${S1.title}*/}));
+  var S1_displayed=__redemExtract(function(){/*${S1.displayed}*/});
+  var S2_response=__redemNormalizeValue(__redemExtract(function(){/*${S2.val}*/}));
+  var S2_title=__redemNormalizeTitle(__redemExtract(function(){/*${S2.title}*/}));
+  var S2_displayed=__redemExtract(function(){/*${S2.displayed}*/});
+  var S3_response=__redemNormalizeValue(__redemExtract(function(){/*${S3.val}*/}));
+  var S3_title=__redemNormalizeTitle(__redemExtract(function(){/*${S3.title}*/}));
+  var S3_displayed=__redemExtract(function(){/*${S3.displayed}*/});
+  var S4_response=__redemNormalizeValue(__redemExtract(function(){/*${S4.val}*/}));
+  var S4_title=__redemNormalizeTitle(__redemExtract(function(){/*${S4.title}*/}));
+  var S4_displayed=__redemExtract(function(){/*${S4.displayed}*/});
+  var S5_response=__redemNormalizeValue(__redemExtract(function(){/*${S5.val}*/}));
+  var S5_title=__redemNormalizeTitle(__redemExtract(function(){/*${S5.title}*/}));
+  var S5_displayed=__redemExtract(function(){/*${S5.displayed}*/});
+  var S6_response=__redemNormalizeValue(__redemExtract(function(){/*${S6.values}*/}));
+  var S6_title=__redemNormalizeTitle(__redemExtract(function(){/*${S6.title}*/}));
+  var S6_displayed=__redemExtract(function(){/*${S6.displayed}*/});
+  var S6_values=S6_response;
+  var S7_response=__redemNormalizeValue(__redemExtract(function(){/*${S7.values}*/}));
+  var S7_title=__redemNormalizeTitle(__redemExtract(function(){/*${S7.title}*/}));
+  var S7_displayed=__redemExtract(function(){/*${S7.displayed}*/});
+  var S7_values=S7_response;
+  var S8_response=__redemNormalizeValue(__redemExtract(function(){/*${S8.val}*/}));
+  var S8_title=__redemNormalizeTitle(__redemExtract(function(){/*${S8.title}*/}));
+  var S8_displayed=__redemExtract(function(){/*${S8.displayed}*/});
+  var redemCodeMappings={"S1":{"type":"number","valueAccessor":"val"},"S2":{"type":"radio","mapping":{"0":"Female","1":"Male","2":"Other / Non-binary","3":"Prefer not to answer"}},"S3":{"type":"radio","mapping":{"0":"Caucasian or White","1":"African-American or Black","2":"Asian","3":"American Indian or Alaska Native","4":"Native Hawaiian or Other Pacific Islander","5":"Other","6":"Prefer not to answer"}},"S4":{"type":"radio","mapping":{"0":"Yes","1":"No","2":"Prefer not to answer"}},"S5":{"type":"text"},"S6":{"type":"grid","columns":{"0":"1 \u2013 Not interested at all","1":"2","2":"3","3":"4","4":"5 \u2013 Very interested"},"rows":{"0":"Sports","1":"Online grocery shopping","2":"Ordering individual meals / snacks online","3":"Health and Fitness activities","4":"Playing Video Games (Console, PC or Mobile)","5":"Vacation and Leisure activities","6":"Listening to / watching podcasts","7":"Spending time with Family / Friends","8":"Attending Music Concerts / Festivals","9":"Technology","10":"Attending social gatherings","11":"Pop Culture","12":"Watching live sports on TV / streaming services","13":"Watching TV or streaming service series / movies"}},"S7":{"type":"checkbox","mapping":{"0":"Baseball / Softball","1":"Basketball","2":"American Football","3":"Golf","4":"Hockey","5":"Soccer / Football","6":"Tennis","7":"Racquetball","8":"Pickleball","9":"Cycling","10":"Rugby","11":"Handball","12":"Skiing / Snowboarding","13":"Swimming","14":"Running / Jogging","15":"Studio / Fitness Classes","16":"Working Out / Gym Activities","17":"Yoga","18":"Hiking","19":"Dancing","20":"None of the Above"}},"B1":{"type":"grid","columns":{"0":"Never heard of it","1":"Somewhat familiar","2":"Moderately familiar","3":"Very familiar","4":"Extremely familiar"},"rows":{"0":"Liquid I.V.","1":"LMNT","2":"Gatorade","3":"Prime","4":"Celsius","5":"None of the above"}},"B3":{"type":"grid","columns":{"0":"Hate it","1":"Dislike it","2":"Neutral","3":"Like it","4":"Love it"},"rows":{"0":"Liquid I.V.","1":"LMNT","2":"Gatorade","3":"Prime","4":"Celsius","5":"None of the above"},"rowFilterQuestionId":"hB1_Aware"},"B4":{"type":"grid","columns":{"0":"Very unlikely","1":"Somewhat unlikely","2":"Neutral","3":"Somewhat likely","4":"Very likely"},"rows":{"0":"Liquid I.V.","1":"LMNT","2":"Gatorade","3":"Prime","4":"Celsius","5":"None of the above"},"rowFilterQuestionId":"hB1_Aware"},"B5":{"type":"grid","columns":{"0":"Definitely will not","1":"Probably will not","2":"May or may not","3":"Probably will","4":"Definitely will"},"rows":{"0":"Liquid I.V.","1":"LMNT","2":"Gatorade","3":"Prime","4":"Celsius","5":"None of the above"},"rowFilterQuestionId":"hB1_Aware"},"B6":{"type":"grid","columns":{"0":"Definitely will not","1":"Probably will not","2":"May or may not","3":"Probably will","4":"Definitely will"},"rows":{"0":"Liquid I.V.","1":"LMNT","2":"Gatorade","3":"Prime","4":"Celsius","5":"None of the above"},"rowFilterQuestionId":"hB1_Aware"},"B7":{"type":"radio","mapping":{"0":"Liquid I.V.","1":"LMNT","2":"Gatorade","3":"Prime","4":"Celsius","5":"None of the above"},"rowFilterQuestionId":"hB1_Aware"},"A1":{"type":"grid","columns":{"0":"Not familiar at all","1":"Somewhat familiar","2":"Very familiar"},"rows":{"0":"Wave Sports & Entertainment","1":"Barstool Sports","2":"ESPN","3":"Almost Friday","4":"Betches","5":"The Ringer","6":"Wondery","7":"The Athletic","8":"Meadowlark Media"}},"A2":{"type":"checkbox","mapping":{"0":"House of Maher","1":"Open Thoughts with Funny Marco","2":"Whiskey Ginger with Andrew Santino","3":"Not Gonna Lie, with Kylie Kelce","4":"7PM in Brooklyn","5":"Big Bro with Kid Cudi","6":"Almost Athletes with Dude Perfect","7":"The Right Time with Bomani Jones","8":"Wingmen","9":"So True with Caleb Hearon","10":"Spittin' Chiclets","11":"Office Ladies with Jenna Fischer and Angela Kinsey","12":"We Can Do Hard Things","13":"The Mel Robbins Podcast","14":"The Toast","15":"New Heights with Jason & Travis Kelce","16":"Call Her Daddy","17":"None of the above"}},"A3":{"type":"checkbox","mapping":{"0":"House of Maher","1":"Open Thoughts with Funny Marco","2":"Whiskey Ginger with Andrew Santino","3":"Not Gonna Lie, with Kylie Kelce","4":"7PM in Brooklyn","5":"Big Bro with Kid Cudi","6":"Almost Athletes with Dude Perfect","7":"The Right Time with Bomani Jones","8":"Wingmen","9":"So True with Caleb Hearon","10":"Spittin' Chiclets","11":"Office Ladies with Jenna Fischer and Angela Kinsey","12":"We Can Do Hard Things","13":"The Mel Robbins Podcast","14":"The Toast","15":"New Heights with Jason & Travis Kelce","16":"Call Her Daddy","17":"None of these"},"rowFilterQuestionId":"A2"},"A4":{"type":"checkbox","mapping":{"0":"House of Maher","1":"Open Thoughts with Funny Marco","2":"Whiskey Ginger with Andrew Santino"}},"A5":{"type":"checkbox","mapping":{"0":"House of Maher","1":"Open Thoughts with Funny Marco","2":"Whiskey Ginger with Andrew Santino","3":"Not Gonna Lie, with Kylie Kelce","4":"7PM in Brooklyn","5":"Big Bro with Kid Cudi","6":"Almost Athletes with Dude Perfect","7":"The Right Time with Bomani Jones","8":"Wingmen","9":"So True with Caleb Hearon","10":"Spittin' Chiclets","11":"Office Ladies with Jenna Fischer and Angela Kinsey","12":"We Can Do Hard Things","13":"The Mel Robbins Podcast","14":"The Toast","15":"New Heights with Jason & Travis Kelce","16":"Call Her Daddy","17":"None of these"},"rowFilterQuestionId":"A2"},"F1":{"type":"radio","mapping":{"0":"No","1":"Yes"}},"F2":{"type":"checkbox","mapping":{"0":"Watched full episode(s) on YouTube","1":"Watched / listened to clip(s) on Instagram","2":"Watched / listened to clip(s) on TikTok","3":"Watched / listened to clip(s) on YouTube Shorts","4":"Watched / listened to clip(s) on Facebook","5":"I have not watched any content from the show."}},"F3":{"type":"checkbox","mapping":{"0":"Liquid I.V.","1":"LMNT","2":"Gatorade","3":"Prime","4":"Celsius","5":"None of these","6":"I do not know"}},"K1":{"type":"radio","mapping":{"0":"Yes","1":"No"}},"QVideo_Maher_1":{"type":"text"},"QVideo_Maher_2":{"type":"text"},"QVideo_Maher_3":{"type":"text"},"QVideo_Maher_4":{"type":"text"},"QVideo_Maher_5":{"type":"text"},"QVideo_Maher_6":{"type":"text"},"QVideo_OT_1":{"type":"text"},"QVideo_OT_2":{"type":"text"},"QVideo_WG_1":{"type":"text"},"QVideo_WG_2":{"type":"text"},"QVideo_WG_3":{"type":"text"},"E1":{"type":"radio","mapping":{"0":"Hate it","1":"Dislike it","2":"Neutral","3":"Like it","4":"Love it"}},"E2":{"type":"radio","mapping":{"0":"Very negatively","1":"Somewhat negatively","2":"Neutral / no change","3":"Somewhat positively","4":"Very positively"}},"E3":{"type":"radio","mapping":{"0":"Much less likely","1":"Slightly less likely","2":"Neutral / no change","3":"Slightly more likely","4":"Much more likely"}},"C1":{"type":"radio","mapping":{"0":"Very negatively","1":"Somewhat negatively","2":"Neutral / no change","3":"Somewhat positively","4":"Very positively"}},"C2":{"type":"radio","mapping":{"0":"Very negatively","1":"Somewhat negatively","2":"Neutral / no change","3":"Somewhat positively","4":"Very positively"}},"C3":{"type":"radio","mapping":{"0":"Very negatively","1":"Somewhat negatively","2":"Neutral / no change","3":"Somewhat positively","4":"Very positively"}},"C4":{"type":"radio","mapping":{"0":"Very negatively","1":"Somewhat negatively","2":"Neutral / no change","3":"Somewhat positively","4":"Very positively"}},"S8":{"type":"radio","mapping":{"0":"Under $25,000","1":"$25,000-$49,999","2":"$50,000-$59,999","3":"$60,000-$69,999","4":"$70,000-$79,999","5":"$80,000-$89,999","6":"$90,000-$99,999","7":"$100,000-$149,999","8":"$150,000-$199,999","9":"$200,000-$249,999","10":"$250,000 or more","11":"Prefer not to answer","12":"I do not know"}}};
+  function buildPayload(){
+    {
+      var payload={respondentId:respondentId,surveyName:"REP-072639938 WSE - Liquid IV x House of Maher x Whiskey Ginger redem",synchronousResponse:true,dataPoints:[]};
+      payload.activateCleaning=true;
+      payload.cleaningSettings={"redemScore":60,"CHS":{"activate":true,"score":30},"GQS":{"activate":true,"score":40},"TS":{"activate":true,"score":35},"BAS":{"activate":true,"score":20,"categories":{"UNNATURAL_TYPING":{"activate":true,"minDataPoints":1},"UNNATURAL_MOVEMENT":{"activate":true,"minDataPoints":2},"COPY_AND_PASTE":{"activate":true,"minDataPoints":0}}}};
+      var __redemGqs=[["S6_gqs",[__redemParseGridValue(__redemExtract(function(){/*${S6.r1.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r2.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r3.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r4.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r5.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r6.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r7.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r8.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r9.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r10.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r11.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r12.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r13.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${S6.r14.val}*/}))]],["B1_gqs",[__redemParseGridValue(__redemExtract(function(){/*${B1.r1.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B1.r2.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B1.r3.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B1.r4.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B1.r5.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B1.r99.val}*/}))]],["B3_gqs",[__redemParseGridValue(__redemExtract(function(){/*${B3.r1.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B3.r2.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B3.r3.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B3.r4.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B3.r5.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B3.r99.val}*/}))]],["B4_gqs",[__redemParseGridValue(__redemExtract(function(){/*${B4.r1.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B4.r2.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B4.r3.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B4.r4.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B4.r5.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B4.r99.val}*/}))]],["B5_gqs",[__redemParseGridValue(__redemExtract(function(){/*${B5.r1.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B5.r2.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B5.r3.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B5.r4.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B5.r5.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B5.r99.val}*/}))]],["B6_gqs",[__redemParseGridValue(__redemExtract(function(){/*${B6.r1.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B6.r2.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B6.r3.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B6.r4.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B6.r5.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${B6.r99.val}*/}))]],["A1_gqs",[__redemParseGridValue(__redemExtract(function(){/*${A1.r1.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${A1.r2.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${A1.r3.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${A1.r4.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${A1.r5.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${A1.r6.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${A1.r7.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${A1.r8.val}*/})),__redemParseGridValue(__redemExtract(function(){/*${A1.r9.val}*/}))]]];
+      for(var __redemGqsIndex=0;__redemGqsIndex<__redemGqs.length;__redemGqsIndex++)__redemAddGqs(payload.dataPoints,__redemGqs[__redemGqsIndex]);
+      var __redemBas=["S5","QVideo_Maher_1","QVideo_Maher_2","QVideo_Maher_3","QVideo_Maher_4","QVideo_Maher_5","QVideo_Maher_6","QVideo_OT_1","QVideo_OT_2","QVideo_WG_1","QVideo_WG_2","QVideo_WG_3","S6","B1","B3","B4","B5","B6","A1"];
+      for(var __redemBasIndex=0;__redemBasIndex<__redemBas.length;__redemBasIndex++)__redemAddBas(payload.dataPoints,__redemBas[__redemBasIndex]);
+      var __redemTsPages=["Page1","Page2","Page3","Page4","Page5","Page6","Page7","Page8","Page9","Page10","Page11","Page12","Page13","Page14","Page15","Page16","Page17","Page18","Page19","Page20","Page21","Page22","Page23","Page24","Page25","Page26","Page27","Page28","Page29","Page30","Page31"];
+      var tsTotalDuration=0;
+      var tsHasPageDurations=false;
+      function __redemAddTsPage(id){var raw=sessionStorage.getItem(id+'_duration');if(!raw)return;var duration=parseInt(raw,10);if(isNaN(duration))return;tsHasPageDurations=true;tsTotalDuration+=duration;payload.dataPoints.push({qualityCheck:'TS',dataPointId:id,duration:duration});}
+      for(var __redemTsIndex=0;__redemTsIndex<__redemTsPages.length;__redemTsIndex++)__redemAddTsPage(__redemTsPages[__redemTsIndex]);
+      payload.dataPoints.push({
+        qualityCheck:"TS",
+        dataPointId:"TotalSurveyDuration",
+        duration:tsHasPageDurations?tsTotalDuration:surveyDuration*1000
+      });
+      var chsData=[];
+      __redemAddChs(chsData,"S1_chs",S1_title,(typeof S1_values!=='undefined'&&S1_values&&S1_values.trim()?S1_values:S1_response),redemCodeMappings["S1"],S1_displayed,null);
+      __redemAddChs(chsData,"S2_chs",S2_title,(typeof S2_values!=='undefined'&&S2_values&&S2_values.trim()?S2_values:S2_response),redemCodeMappings["S2"],S2_displayed,null);
+      __redemAddChs(chsData,"S3_chs",S3_title,(typeof S3_values!=='undefined'&&S3_values&&S3_values.trim()?S3_values:S3_response),redemCodeMappings["S3"],S3_displayed,null);
+      __redemAddChs(chsData,"S4_chs",S4_title,(typeof S4_values!=='undefined'&&S4_values&&S4_values.trim()?S4_values:S4_response),redemCodeMappings["S4"],S4_displayed,null);
+      __redemAddChs(chsData,"S5_chs",S5_title,(typeof S5_values!=='undefined'&&S5_values&&S5_values.trim()?S5_values:S5_response),redemCodeMappings["S5"],S5_displayed,null);
+      __redemAddChs(chsData,"S6_chs",S6_title,(typeof S6_values!=='undefined'&&S6_values&&S6_values.trim()?S6_values:S6_response),redemCodeMappings["S6"],S6_displayed,null);
+      __redemAddChs(chsData,"S7_chs",S7_title,(typeof S7_values!=='undefined'&&S7_values&&S7_values.trim()?S7_values:S7_response),redemCodeMappings["S7"],S7_displayed,null);
+      __redemAddChs(chsData,"B1_chs",B1_title,(typeof B1_values!=='undefined'&&B1_values&&B1_values.trim()?B1_values:B1_response),redemCodeMappings["B1"],B1_displayed,null);
+      __redemAddChs(chsData,"B3_chs",B3_title,(typeof B3_values!=='undefined'&&B3_values&&B3_values.trim()?B3_values:B3_response),redemCodeMappings["B3"],B3_displayed,null);
+      __redemAddChs(chsData,"B4_chs",B4_title,(typeof B4_values!=='undefined'&&B4_values&&B4_values.trim()?B4_values:B4_response),redemCodeMappings["B4"],B4_displayed,null);
+      __redemAddChs(chsData,"B5_chs",B5_title,(typeof B5_values!=='undefined'&&B5_values&&B5_values.trim()?B5_values:B5_response),redemCodeMappings["B5"],B5_displayed,null);
+      __redemAddChs(chsData,"B6_chs",B6_title,(typeof B6_values!=='undefined'&&B6_values&&B6_values.trim()?B6_values:B6_response),redemCodeMappings["B6"],B6_displayed,null);
+      __redemAddChs(chsData,"B7_chs",B7_title,(typeof B7_values!=='undefined'&&B7_values&&B7_values.trim()?B7_values:B7_response),redemCodeMappings["B7"],B7_displayed,null);
+      __redemAddChs(chsData,"A1_chs",A1_title,(typeof A1_values!=='undefined'&&A1_values&&A1_values.trim()?A1_values:A1_response),redemCodeMappings["A1"],A1_displayed,null);
+      __redemAddChs(chsData,"A2_chs",A2_title,(typeof A2_values!=='undefined'&&A2_values&&A2_values.trim()?A2_values:A2_response),redemCodeMappings["A2"],A2_displayed,null);
+      __redemAddChs(chsData,"A3_chs",A3_title,(typeof A3_values!=='undefined'&&A3_values&&A3_values.trim()?A3_values:A3_response),redemCodeMappings["A3"],A3_displayed,null);
+      __redemAddChs(chsData,"A4_chs",A4_title,(typeof A4_values!=='undefined'&&A4_values&&A4_values.trim()?A4_values:A4_response),redemCodeMappings["A4"],A4_displayed,null);
+      __redemAddChs(chsData,"A5_chs",A5_title,(typeof A5_values!=='undefined'&&A5_values&&A5_values.trim()?A5_values:A5_response),redemCodeMappings["A5"],A5_displayed,null);
+      __redemAddChs(chsData,"F1_chs",F1_title,(typeof F1_values!=='undefined'&&F1_values&&F1_values.trim()?F1_values:F1_response),redemCodeMappings["F1"],F1_displayed,null);
+      __redemAddChs(chsData,"F2_chs",F2_title,(typeof F2_values!=='undefined'&&F2_values&&F2_values.trim()?F2_values:F2_response),redemCodeMappings["F2"],F2_displayed,null);
+      __redemAddChs(chsData,"F3_chs",F3_title,(typeof F3_values!=='undefined'&&F3_values&&F3_values.trim()?F3_values:F3_response),redemCodeMappings["F3"],F3_displayed,null);
+      __redemAddChs(chsData,"K1_chs",K1_title,(typeof K1_values!=='undefined'&&K1_values&&K1_values.trim()?K1_values:K1_response),redemCodeMappings["K1"],K1_displayed,null);
+      __redemAddChs(chsData,"E1_chs",E1_title,(typeof E1_values!=='undefined'&&E1_values&&E1_values.trim()?E1_values:E1_response),redemCodeMappings["E1"],E1_displayed,null);
+      __redemAddChs(chsData,"E2_chs",E2_title,(typeof E2_values!=='undefined'&&E2_values&&E2_values.trim()?E2_values:E2_response),redemCodeMappings["E2"],E2_displayed,null);
+      __redemAddChs(chsData,"E3_chs",E3_title,(typeof E3_values!=='undefined'&&E3_values&&E3_values.trim()?E3_values:E3_response),redemCodeMappings["E3"],E3_displayed,null);
+      __redemAddChs(chsData,"C1_chs",C1_title,(typeof C1_values!=='undefined'&&C1_values&&C1_values.trim()?C1_values:C1_response),redemCodeMappings["C1"],C1_displayed,null);
+      __redemAddChs(chsData,"C2_chs",C2_title,(typeof C2_values!=='undefined'&&C2_values&&C2_values.trim()?C2_values:C2_response),redemCodeMappings["C2"],C2_displayed,null);
+      __redemAddChs(chsData,"C3_chs",C3_title,(typeof C3_values!=='undefined'&&C3_values&&C3_values.trim()?C3_values:C3_response),redemCodeMappings["C3"],C3_displayed,null);
+      __redemAddChs(chsData,"C4_chs",C4_title,(typeof C4_values!=='undefined'&&C4_values&&C4_values.trim()?C4_values:C4_response),redemCodeMappings["C4"],C4_displayed,null);
+      __redemAddChs(chsData,"S8_chs",S8_title,(typeof S8_values!=='undefined'&&S8_values&&S8_values.trim()?S8_values:S8_response),redemCodeMappings["S8"],S8_displayed,null);
+      if(chsData.length>=2){
+        payload.dataPoints.push({
+          qualityCheck:"CHS",
+          dataPointId:"CHS_Interview",
+          interviewData:chsData
+        });
+      }
+      __redemSanitizePayload(payload);
+      return payload;
+    }
+  }
+  setTimeout(function(){
+    var payload=buildPayload();
+    fetch('https://api.redem.io/v3/addRespondent',{method:'POST',headers:{'api-key':'c699e402-5f44-40d7-afe5-7438e1c2cd2a','Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(response){return response.json();})
+    .then(function(data){
+      __redemClearSessionStorage();
+      sessionStorage.setItem('redem_response',JSON.stringify(data));
+    })
+    .catch(function(error){
+      __redemClearSessionStorage();
+      sessionStorage.setItem('redem_error',error&&error.message?error.message:String(error));
+    });
+  },250);
+})();
+/* redem-api-integration-end */
+]]></style></survey>
