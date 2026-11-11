@@ -30,7 +30,12 @@ import {
  * what they mean.
  */
 
+/** what "Launch study" came to: the live link, or why not */
+export interface LaunchResult { ok: boolean; url?: string; version?: string; error?: string; problems?: { area: string; message: string }[] }
+
 export interface ShellActions {
+  /** save a version, publish it to the live link, and say where it is (or what stopped it) */
+  launch?(): Promise<LaunchResult>;
   save?(): void | Promise<void>;
   testSurvey?(): void | Promise<void>;
   preview?(): void;

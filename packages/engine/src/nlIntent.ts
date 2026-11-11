@@ -1,4 +1,5 @@
 import { sampleAvailability } from "./sampleAvailability.js";
+import { interpretVendorRequest } from "./vendorIntent.js";
 import { fieldworkPlan } from "./fieldworkPlan.js";
 import { readResearchBrief } from "./researchBrief.js";
 import { downstreamOf } from "./lifecycle.js";
@@ -3829,6 +3830,17 @@ function semantic(r: Run): Interpretation | null {
  */
 export function interpretRequest(def: SurveyDefinition, text: string, ctx: InterpretContext = {}): Interpretation {
   const clean = String(text ?? "").trim().replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
+  /*
+   * A SAMPLE VENDOR FROM ITS REDIRECT LINKS (2026-11-11, vendorIntent.ts). Read first and without a model: the
+   * links are exact strings that must reach the definition as pasted, and a sentence that is mostly addresses has
+   * no "survey word" for the scope check below to find.
+   */
+  const vendor = interpretVendorRequest(def, String(text ?? ""));
+  if (vendor) {
+    return vendor.kind === "actions" && vendor.action
+      ? { kind: "actions", category: "survey_editing", understood: vendor.understood, actions: [vendor.action as SurveyAction], detected: vendor.detected, targets: [] }
+      : { kind: "clarify", category: "survey_editing", understood: vendor.understood, question: vendor.question ?? "", choices: vendor.choices, detected: vendor.detected };
+  }
   /*
    * OUTSIDE THE PLATFORM, SAID WITHOUT A MODEL (Intelligent engine reliability, 2026-10-17). "Write me a poem", "book
    * a flight", "what's the weather" — with no research or survey word in them — are answered here with the one

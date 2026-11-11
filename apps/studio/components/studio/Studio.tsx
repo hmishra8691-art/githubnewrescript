@@ -34,6 +34,7 @@ import { RecruitmentPanel } from "./RecruitmentPanel";
 import { DistributionPanel } from "./DistributionPanel";
 import { ProjectPanel } from "./ProjectPanel";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
+import { publishGate } from "@/lib/publishGate";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { STUDIO_NAV } from "@/lib/studioNav";
 import { HelpAssistant } from "@/components/help/HelpAssistant";
@@ -47,7 +48,7 @@ import { AlertBell } from "../notify/AlertBell";
 import { fmtMoney } from "@/components/billing/shared";
 import { ModeProvider } from "./ModeContext";
 import { SelectionProvider } from "./SelectionContext";
-import { CommandProvider, useCommands, type ShellActions } from "./CommandContext";
+import { CommandProvider, useCommands, type LaunchResult, type ShellActions } from "./CommandContext";
 import { CommandPalette } from "./CommandPalette";
 import { MenuBar } from "./MenuBar";
 import { useMode } from "./ModeContext";
@@ -774,6 +775,34 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
     }
   };
 
+  /**
+   * LAUNCH, WITH AN ANSWER (2026-11-11). The same two steps as the Publish button — cut a version, deploy it to
+   * the live link — but it RETURNS what happened, so Intelligent Mode can show the link to share or the reasons
+   * it did not go: the publish gate's own problems first (checked here, before anything is saved), then whatever
+   * the version or deploy route said.
+   */
+  const launch = async (): Promise<LaunchResult> => {
+    const gate = publishGate(defRef.current);
+    if (!gate.ok) return { ok: false, error: gate.summary, problems: gate.problems };
+    const versionId = await save("publish");
+    if (!versionId) return { ok: false, error: "The survey could not be saved as a version, so it was not published. The reason is shown at the top of the Studio." };
+    const dep = defRef.current.deployment;
+    const clientSlug = dep.clientSlug || "client", studySlug = dep.studySlug || "study-001";
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/deploy`, {
+        method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
+        body: JSON.stringify({ versionId, clientSlug, studySlug, customDomain: dep.customDomain ?? null, mode: "live" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, error: d.error ?? "The version was saved, but publishing it to the live link failed.", ...(Array.isArray(d.lint?.problems) ? { problems: d.lint.problems } : {}) };
+      void loadPublishState();
+      s.toast(`Published v${defRef.current.meta.version} to the live link`);
+      return { ok: true, url: `${surveyBaseUrl(dep.customDomain)}/s/${clientSlug}/${studySlug}`, version: defRef.current.meta.version };
+    } catch (e) {
+      return { ok: false, error: `The version was saved, but the live link could not be reached: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  };
+
   /*
    * THE handover from server truth to editor behaviour.
    *
@@ -848,7 +877,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
   const setTabGuarded = React.useCallback((t: string) => {
     if (t === tab || s.canLeaveTab()) setTab(t as Tab);
   }, [tab, s]);
-  const shellActions: ShellActions = { save: async () => { await save(); }, testSurvey, preview };
+  const shellActions: ShellActions = { save: async () => { await save(); }, testSurvey, preview, launch };
 
   return (
     <CommandProvider tab={tab} setTab={setTabGuarded} tabs={navTabs}>
@@ -1119,6 +1148,7 @@ function ShellBridge({ actions }: { actions: ShellActions }) {
       save: () => ref.current.save?.(),
       testSurvey: () => ref.current.testSurvey?.(),
       preview: () => ref.current.preview?.(),
+      launch: () => ref.current.launch?.() ?? Promise.resolve({ ok: false, error: "Launch is not available here." }),
     });
   }, [setShell]);
   return null;

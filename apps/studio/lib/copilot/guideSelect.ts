@@ -69,7 +69,7 @@ const OPS_OF: [GuideId, readonly string[]][] = [
   ["analysis", ANALYSIS_ACTION_OPS], ["translation", LOCALIZATION_ACTION_OPS], ["quota", QUOTA_ACTION_OPS], ["listFill", LIST_FILL_ACTION_OPS],
   ["methods", METHOD_ACTION_OPS], ["qual", [...QUAL_ACTION_OPS, ...RESEARCH_ACTION_OPS]], ["aiInterview", AI_INTERVIEW_ACTION_OPS],
   ["research", ["set_research", "add_hypothesis", "set_hypothesis", "remove_hypothesis", "link_constructs"]],
-  ["integrations", ["connect_panel", "disconnect_panel", "configure_alerts"]],
+  ["integrations", ["connect_panel", "add_vendor", "disconnect_panel", "configure_alerts"]],
   ["quality", ["set_quality_settings", "set_deployment"]],
   ["audience", ["define_audience", "clear_audience", "set_fieldwork_plan"]],
   ["assessment", ASSESSMENT_ACTION_OPS],

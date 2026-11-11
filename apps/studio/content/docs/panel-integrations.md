@@ -33,13 +33,31 @@ Prolific · Cint / Lucid · PureSpectrum · Dynata · Toluna · CloudResearch Co
 
 ::: example panel-integration
 
+## Add a vendor from its four redirect links
+
+When a vendor sends you its four redirect links, paste them into **Intelligent Mode** — for example *"Add vendor Acme with these redirect links:"* followed by the links.
+
+::: steps Add a vendor
+1. **Paste the four links** — complete, screened out, quota full, and quality check / termination. Order does not matter, and labels ("Complete: https://…") are read if you give them.
+2. **Review the proposal** — which link was read as which outcome and why, the vendor's code, the parameter that carries the respondent's ID, the link to give the vendor, and the checks.
+3. **Test the redirects** — every vendor's four exits, resolved for a test ID.
+4. **Apply** — the vendor is added. Nothing is written before this.
+5. **Launch study** — saves a version, publishes it, and shows the survey link and each vendor's link with **Copy**.
+:::
+
+- **Recognition is by evidence, never by position.** A link is given an outcome when its own words say so (`status=complete`, `/quotafull`), when it matches a preset's documented link, or when you labelled it. A link that cannot be told apart — four links that differ only by a number — is a question, with the answer one click away.
+- **Each vendor is independent.** A new vendor gets a code no other vendor has (it travels as `rp=<code>` on that vendor's link and is recorded as the response's source). Adding a vendor never changes another vendor, an end, a quota or a skip rule; the change is refused if it would.
+- **Each vendor's respondents leave by that vendor's links** — at an end of the survey, on a full quota, and when a skip rule screens somebody out. Respondents who came from no vendor leave exactly as they did before.
+- **A vendor that already exists is not touched** until you say whether to update it or add a separate entry; an update is shown and confirmed before it is applied.
+
 ## How it is stored
 
-`panels[]` on the survey definition: the preset, the ID parameter, extra parameters, the redirect per outcome with `{{code}}`, the codes, signing settings (never the secret), de-duplication. Connecting also adds the embedded fields and the end redirects to the flow.
+`panels[]` on the survey definition: the preset, the ID parameter, extra parameters, the redirect per outcome with `{{code}}`, the codes, signing settings (never the secret), de-duplication. Connecting a preset adds the embedded fields and fills ends that have no redirect. A vendor added from its links adds only its own embedded fields (`rp` and its ID parameter): the ends are left as they are, and the vendor's link is chosen when its respondent leaves.
 
 ## Common mistakes
 
 - **Testing without the ID** — a required ID that is missing is refused; test with `?PROLIFIC_PID=test`.
+- **Giving two vendors the same link** — each vendor's link carries its own `rp=<code>`; without it, two vendors that use the same ID parameter cannot be told apart.
 - **A screen-out with no end for it** — make sure screeners end at a terminate so the provider gets the screen-out code.
 
 ## Troubleshooting

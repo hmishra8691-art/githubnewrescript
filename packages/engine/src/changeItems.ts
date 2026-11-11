@@ -647,7 +647,16 @@ function surveyItems(t: Tree, before: SurveyDefinition, after: SurveyDefinition)
   for (const x of ux.changed) t.add({ objectId: x.id, level: "ux", category: cat(x.kind), kind: "modified", field: x.label, to: x.target });
   for (const x of ux.removed) t.add({ objectId: x.id, level: "ux", category: cat(x.kind), kind: "removed", field: x.label, from: x.target });
   /* 2026-10-22 (G3): panels and alerts, in words */
-  for (const [field, from, to] of [["panels", panelsWords(before.panels), panelsWords(after.panels)], ["alerts", alertsWords(before.alerts), alertsWords(after.alerts)]] as const) {
+  /*
+   * 2026-11-11: only the panels that DIFFER are shown. One "panels" line with every vendor on both sides read as
+   * "Acme was struck out and rewritten" when Acme was untouched and Bravo was added beside it — the opposite of
+   * what happened. A vendor that is byte-identical before and after is in neither column.
+   */
+  const pBefore = new Map((before.panels ?? []).map((p) => [p.key, JSON.stringify(p)]));
+  const pAfter = new Map((after.panels ?? []).map((p) => [p.key, JSON.stringify(p)]));
+  const panelsFrom = panelsWords((before.panels ?? []).filter((p) => pAfter.get(p.key) !== pBefore.get(p.key)));
+  const panelsTo = panelsWords((after.panels ?? []).filter((p) => pBefore.get(p.key) !== pAfter.get(p.key)));
+  for (const [field, from, to] of [["panels", panelsFrom, panelsTo], ["alerts", alertsWords(before.alerts), alertsWords(after.alerts)]] as const) {
     if (from === to) continue;
     t.add({ objectId: field, level: "survey", category: "Panels & alerts", kind: !from ? "added" : !to ? "removed" : "modified", field, ...(from ? { from } : {}), ...(to ? { to } : {}) });
   }

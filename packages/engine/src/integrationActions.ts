@@ -2,6 +2,7 @@ import type { AlertChannelRef, AlertRule, AlertSettings, FlowNode, PanelConfig, 
 import { AlertSettings as AlertSettingsSchema, PanelConfig as PanelConfigSchema, PANEL_OUTCOMES, PANEL_TARGETS, PANEL_SIGNING_ALGORITHMS } from "@rescript/schema";
 import { PANEL_PRESETS, PANEL_OUTCOME_LABELS, panelConfigProblems, panelFromPreset } from "./panels.js";
 import { NOTIFY_EVENTS, NOTIFY_EVENT_TYPES, CHANNEL_KIND_LABELS } from "./notifyEvents.js";
+import { VENDOR_OUTCOMES, VENDOR_OUTCOME_WORDS, VENDOR_SOURCE_PARAM, checkVendors, declareVendorFields, findVendor, readVendorUrls, vendorKey, vendorLinkQuery, vendorsUntouched, type VendorOutcome, type VendorReading, type VendorUrlInput } from "./vendorSetup.js";
 
 /**
  * PANELS AND ALERTS AS INTELLIGENT-MODE ACTIONS (2026-10-22, engineer G3).
@@ -11,6 +12,11 @@ import { NOTIFY_EVENTS, NOTIFY_EVENT_TYPES, CHANNEL_KIND_LABELS } from "./notify
  *                     When the survey link is a target, the panel's id and kept parameters are captured as
  *                     URL embedded data and the survey's ends that have NO redirect get the panel's unsigned end
  *                     link (a signing panel's survey ends are left alone: the signed exit is set from the Panels tab).
+ *   add_vendor        "add vendor Acme: <four redirect links>" → a NEW, independent vendor on `def.panels` read
+ *                     from the links themselves (vendorSetup.ts): which link is which outcome, the respondent-id
+ *                     parameter, a vendor code nothing else uses. ADDITIVE — no other vendor, end, quota action or
+ *                     skip rule is changed, and the action refuses itself if one would be. An existing vendor is
+ *                     only changed with `mode: "update"`, and that is confirmed like any destructive change.
  *   disconnect_panel  removes one (destructive: it is confirmed)
  *   configure_alerts  "send distress alerts to #research-ops on Slack and to me by email" → a rule on
  *                     `def.alerts`: events → channels (Slack / Teams / webhook BY NAME, e-mail "@me" / "@team" /
@@ -23,7 +29,7 @@ import { NOTIFY_EVENTS, NOTIFY_EVENT_TYPES, CHANNEL_KIND_LABELS } from "./notify
  * starts anything — links go live from their own tabs.
  */
 
-export const INTEGRATION_ACTION_OPS = ["connect_panel", "disconnect_panel", "configure_alerts"] as const;
+export const INTEGRATION_ACTION_OPS = ["connect_panel", "add_vendor", "disconnect_panel", "configure_alerts"] as const;
 export const isIntegrationOp = (op: string): boolean => (INTEGRATION_ACTION_OPS as readonly string[]).includes(op);
 
 export interface ConnectPanelAction {
@@ -42,6 +48,20 @@ export interface ConnectPanelAction {
   dedupe?: boolean;
   showCode?: boolean;
   enabled?: boolean;
+}
+export interface AddVendorAction {
+  op: "add_vendor";
+  /** the vendor's name; from the links' host when absent */
+  name?: string;
+  /** the pasted end links, each with the outcome the researcher named for it (if any) */
+  urls: VendorUrlInput[];
+  /** the parameter the respondent's id arrives in, when it is not the one the links return it in */
+  idParam?: string;
+  /** "update": change the vendor this names; "new": a separate entry even though one like it exists. Absent: a new vendor, refused if one like it exists */
+  mode?: "new" | "update";
+  /** the vendor to update, by its code */
+  key?: string;
+  completesTarget?: number;
 }
 export interface DisconnectPanelAction { op: "disconnect_panel"; key: string }
 export interface ConfigureAlertsAction {
@@ -63,7 +83,7 @@ export interface ConfigureAlertsAction {
    */
   responses?: { enabled?: boolean; events?: ("completed" | "screened_out" | "quota_full")[]; includeAnswers?: boolean; allowFields?: string[]; includeTest?: boolean } | null;
 }
-export type IntegrationAction = ConnectPanelAction | DisconnectPanelAction | ConfigureAlertsAction;
+export type IntegrationAction = ConnectPanelAction | AddVendorAction | DisconnectPanelAction | ConfigureAlertsAction;
 
 const str = (v: unknown, max = 200): string | undefined => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : typeof v === "number" ? String(v) : undefined);
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
@@ -144,6 +164,35 @@ function connectIn(o: Record<string, unknown>): ConnectPanelAction | string {
   const ct = o.completesTarget ?? o.completes ?? o.quota;
   if (ct === null) a.completesTarget = null; else if (ct !== undefined) { const n = Number(ct); if (!Number.isInteger(n) || n < 1) return `${op}: completesTarget is a number of completes`; a.completesTarget = n; }
   for (const k of ["dedupe", "showCode", "enabled"] as const) if (typeof o[k] === "boolean") a[k] = o[k] as boolean;
+  return a;
+}
+
+function vendorIn(o: Record<string, unknown>): AddVendorAction | string {
+  const op = "add_vendor";
+  if (o.secret !== undefined || o.signingSecret !== undefined || o.hashKey !== undefined) return `${op}: a signing secret is never set through chat — paste it in Research Tools → Qualitative → Alerts & panels (it is stored encrypted)`;
+  const urls: VendorUrlInput[] = [];
+  const raw = o.urls ?? o.links ?? o.endLinks;
+  if (Array.isArray(raw)) for (const x of raw) {
+    const r = obj(x);
+    const u = str(r ? r.url ?? r.link : x, 2000);
+    if (!u) continue;
+    const oc = r && (r.outcome ?? r.for) !== undefined ? outcomeOf(String(r.outcome ?? r.for)) : null;
+    if (r && (r.outcome ?? r.for) !== undefined && (!oc || oc === "over_quota")) return `${op}: “${String(r.outcome ?? r.for)}” is not an outcome (${VENDOR_OUTCOMES.join(", ")})`;
+    urls.push({ url: u, ...(oc ? { outcome: oc as VendorOutcome } : {}) });
+  } else if (typeof raw === "string") for (const u of raw.split(/[\s,]+/).filter((x) => /^https?:\/\//i.test(x))) urls.push({ url: u });
+  const named = outcomeMap(o.redirects, "redirects", 2000);
+  if (typeof named === "string") return `${op}: ${named}`;
+  for (const [k, u] of Object.entries(named ?? {})) { if (k === "over_quota") return `${op}: a vendor has four links — ${VENDOR_OUTCOMES.join(", ")}`; urls.push({ url: u!, outcome: k as VendorOutcome }); }
+  if (!urls.length) return `${op}: paste the vendor's four redirect links (complete, screened out, quota full, quality check / termination)`;
+  if (urls.length > 8) return `${op}: a vendor has four redirect links — ${urls.length} were given`;
+  const a: AddVendorAction = { op, urls };
+  const name = str(o.name ?? o.vendor ?? o.label, 60); if (name) a.name = name;
+  const idp = str(o.idParam ?? o.idParameter, 60); if (idp) { if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,59}$/.test(idp)) return `${op}: idParam is a URL parameter name`; a.idParam = idp; }
+  const key = str(o.key ?? o.code, 32)?.toLowerCase(); if (key) { if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(key)) return `${op}: a vendor code is lowercase letters, digits, - and _`; a.key = key; }
+  const mode = str(o.mode, 10)?.toLowerCase();
+  if (o.update === true || mode === "update") a.mode = "update"; else if (o.separate === true || mode === "new" || mode === "separate") a.mode = "new";
+  const ct = o.completesTarget ?? o.completes;
+  if (ct !== undefined && ct !== null) { const n = Number(ct); if (!Number.isInteger(n) || n < 1) return `${op}: completesTarget is a number of completes`; a.completesTarget = n; }
   return a;
 }
 
@@ -245,6 +294,7 @@ function alertsIn(o: Record<string, unknown>): ConfigureAlertsAction | string {
 export function coerceIntegrationAction(op: string, o: Record<string, unknown>): IntegrationAction | string | null {
   if (!isIntegrationOp(op)) return null;
   if (op === "connect_panel") return connectIn(o);
+  if (op === "add_vendor") return vendorIn(o);
   if (op === "disconnect_panel") { const k = str(o.key ?? o.panel ?? o.preset, 40); if (!k) return `${op}: which panel`; return { op, key: k.toLowerCase().trim() }; }
   return alertsIn(o);
 }
@@ -298,7 +348,89 @@ function wireSurvey(def: SurveyDefinition, p: PanelConfig, changes: string[], wa
   if (filled) changes.push(`${filled} survey end${filled === 1 ? "" : "s"} redirect${filled === 1 ? "s" : ""} to ${p.label}`);
 }
 
+/** what an add_vendor would configure, without configuring it — the preview card and the action share this */
+export interface VendorPlan {
+  ok: boolean;
+  /** why not (a question for the researcher) */
+  question?: string;
+  reading: VendorReading;
+  /** "new": an independent vendor; "update": the existing vendor `existing` is changed */
+  kind: "new" | "update";
+  key: string;
+  label: string;
+  existing: PanelConfig | null;
+  panel: PanelConfig | null;
+  /** the vendors that stay exactly as they are */
+  others: { key: string; label: string }[];
+  /** `rp=<code>&<id>=<their id>` — what the vendor adds to the survey link */
+  linkQuery: string;
+}
+
+export function planVendor(def: SurveyDefinition, a: AddVendorAction): VendorPlan {
+  const reading = readVendorUrls(a.urls, { idParam: a.idParam });
+  const others = (key: string | null) => (def.panels ?? []).filter((p) => p.key !== key).map((p) => ({ key: p.key, label: p.label }));
+  const name = a.name ?? reading.hostName ?? "";
+  const stop = (question: string, existing: PanelConfig | null = null): VendorPlan => ({ ok: false, question, reading, kind: "new", key: "", label: name, existing, panel: null, others: others(null), linkQuery: "" });
+  if (reading.questions.length) return stop(reading.questions.join(" "));
+  if (!name) return stop("What is this vendor called?");
+  const existing = findVendor(def, { key: a.key, name, redirects: reading.redirects });
+  if (a.mode === "update" && !existing) return stop(`There is no vendor “${a.key ?? name}” on this study to update${def.panels?.length ? ` (configured: ${def.panels.map((p) => `${p.label} — ${p.key}`).join(", ")})` : ""}. Add it as a new vendor instead?`);
+  if (existing && !a.mode) return stop(`${existing.label} is already a vendor on this study (code ${existing.key}). Do you want to UPDATE its links, or add these as a SEPARATE vendor entry? Nothing has been changed.`, existing);
+  const idParam = reading.idParam ?? "pid";
+  if (existing && a.mode === "update") {
+    const next: PanelConfig = JSON.parse(JSON.stringify(existing));
+    next.redirects = { ...next.redirects, ...reading.redirects };
+    if (reading.idParam) next.idParam = reading.idParam;
+    for (const k of reading.kept) if (!next.params.some((x) => x.param === k)) next.params.push({ param: k });
+    if (a.completesTarget) next.completesTarget = a.completesTarget;
+    const parsed = PanelConfigSchema.safeParse(next);
+    if (!parsed.success) return stop(`the vendor settings are not valid: ${parsed.error.issues[0]?.path.join(".")} ${parsed.error.issues[0]?.message ?? ""}`, existing);
+    return { ok: true, reading, kind: "update", key: existing.key, label: existing.label, existing, panel: parsed.data, others: others(existing.key), linkQuery: vendorLinkQuery(parsed.data) };
+  }
+  const key = vendorKey(def, a.mode === "new" && a.key && !(def.panels ?? []).some((p) => p.key === a.key) ? a.key : name);
+  const labelTaken = (def.panels ?? []).some((p) => p.label.toLowerCase() === name.toLowerCase());
+  const label = labelTaken ? `${name} (${key})`.slice(0, 80) : name;
+  const parsed = PanelConfigSchema.safeParse({
+    key, preset: reading.preset, label, enabled: true, idParam, params: reading.kept.map((param) => ({ param })), requireId: !!reading.idParam, dedupe: true,
+    redirects: reading.redirects, codes: {}, showCode: false, signing: { algorithm: "none" }, targets: ["survey"], ...(a.completesTarget ? { completesTarget: a.completesTarget } : {}),
+  });
+  if (!parsed.success) return stop(`the vendor settings are not valid: ${parsed.error.issues[0]?.path.join(".")} ${parsed.error.issues[0]?.message ?? ""}`);
+  return { ok: true, reading, kind: "new", key, label, existing: null, panel: parsed.data, others: others(null), linkQuery: vendorLinkQuery(parsed.data) };
+}
+
+function applyVendor(def: SurveyDefinition, a: AddVendorAction): IntegrationApplied {
+  const plan = planVendor(def, a);
+  if (!plan.ok || !plan.panel) fail(plan.question ?? "the vendor could not be read");
+  const p = plan.panel!;
+  const before: SurveyDefinition = JSON.parse(JSON.stringify(def));
+  const panels = [...(def.panels ?? [])];
+  const i = panels.findIndex((x) => x.key === p.key);
+  if (plan.kind === "new" && i >= 0) fail(`the vendor code ${p.key} is already in use`);
+  if (i >= 0) panels[i] = p; else panels.push(p);
+  def.panels = panels;
+  const added = declareVendorFields(def, p);
+  /* the source and respondent parameters the response records: set only when the study has none of its own */
+  const sample = def.deployment?.sample ?? {};
+  if (!sample.sourceParam || !sample.respondentParam) def.deployment = { ...def.deployment, sample: { ...sample, sourceParam: sample.sourceParam ?? VENDOR_SOURCE_PARAM, respondentParam: sample.respondentParam ?? p.idParam } } as SurveyDefinition["deployment"];
+  /* THE ADDITIVE RULE, CHECKED: nothing but this vendor (and the fields it captures) may differ */
+  const changed = vendorsUntouched(before, def, p.key);
+  if (changed) fail(`adding ${p.label} was stopped: ${changed}. Nothing was changed.`);
+  const check = checkVendors(def, { only: p.key });
+  const failed = check.checks.filter((c) => !c.ok);
+  if (failed.length) fail(`${p.label} would not pass its checks — ${failed.map((c) => c.detail).join("; ")}. Nothing was changed.`);
+  const lines = VENDOR_OUTCOMES.map((o) => { const u = plan.reading.urls.find((x) => x.outcome === o); return `${VENDOR_OUTCOME_WORDS[o]} → ${p.redirects[o]}${u ? ` (${u.evidence})` : ""}`; });
+  const warnings = [
+    ...plan.reading.notes.map((n) => `${p.label}: ${n}`),
+    ...plan.reading.urls.filter((u) => u.confidence === "inferred").map((u) => `${p.label}: the ${VENDOR_OUTCOME_WORDS[u.outcome!].toLowerCase()} link was worked out, not stated (${u.evidence}) — check it.`),
+    ...(!plan.others.length && p.requireId ? [`While ${p.label} is the only vendor, the live link expects ${p.idParam} — an arrival without it is turned back. Give ${p.label} the link with ?${plan.linkQuery}.`] : []),
+    ...(p.preset !== "custom" ? [PANEL_PRESETS[p.preset].verify] : []),
+  ];
+  const description = `${plan.kind === "update" ? "Update vendor" : "Add vendor"} ${p.label} — code ${p.key}${plan.kind === "new" ? " (new, independent)" : ""}. ${lines.join(" · ")}. Respondent id: ${p.idParam}${p.params.length ? `; kept: ${p.params.map((x) => x.param).join(", ")}` : ""}${added.length ? `; captures ${added.join(", ")} from the link` : ""}. Link for the vendor: ?${plan.linkQuery}. ${plan.others.length ? `Unchanged: ${plan.others.map((o) => `${o.label} (${o.key})`).join(", ")}. ` : ""}${check.simulations.length} exits simulated, each to ${p.label}'s own link.`;
+  return { description, warnings, touched: [], ...(plan.kind === "update" ? { destructive: `changes the redirect links of the existing vendor ${p.label} (${p.key})` } : {}) };
+}
+
 export function applyIntegrationAction(def: SurveyDefinition, a: IntegrationAction): IntegrationApplied {
+  if (a.op === "add_vendor") return applyVendor(def, a);
   if (a.op === "disconnect_panel") {
     const before = def.panels ?? [];
     const hit = before.find((p) => p.key === a.key) ?? before.find((p) => p.preset === panelPresetOf(a.key)) ?? fail(`there is no panel “${a.key}” on this study${before.length ? ` (connected: ${before.map((p) => p.key).join(", ")})` : ""}`);
@@ -383,6 +515,7 @@ export function applyIntegrationAction(def: SurveyDefinition, a: IntegrationActi
 
 export function describeIntegrationAction(a: IntegrationAction): string {
   if (a.op === "connect_panel") return `Connect ${PANEL_PRESETS[a.preset].label}${a.completionCode ? ` (completion code ${a.completionCode})` : ""}`;
+  if (a.op === "add_vendor") return `${a.mode === "update" ? "Update" : "Add"} the vendor ${a.name ?? a.key ?? "from its redirect links"}`;
   if (a.op === "disconnect_panel") return `Disconnect the panel ${a.key}`;
   return `Configure alerts${a.events ? ` for ${a.events.join(", ")}` : ""}`;
 }

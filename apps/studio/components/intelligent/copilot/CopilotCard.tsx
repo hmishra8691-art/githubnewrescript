@@ -2,6 +2,7 @@
 import { CleaningTurnCard } from "./CleaningTurnCard";
 import { taskOutcome } from "../../../lib/copilot/stepOutcome";
 import { VerifyCard } from "./VerifyCard";
+import { VendorCard } from "./VendorCard";
 import type { VerifyView } from "./useCopilot";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
@@ -283,6 +284,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
                 {shapeRejected.some((x) => x.reason) && <ul style={{ margin: "4px 0 0 16px" }}>{shapeRejected.filter((x) => x.reason).slice(0, 5).map((x, i) => <li key={i} data-testid="cp-rejected-reason">{x.reason}</li>)}</ul>}
               </div>
             )}
+            {/* a vendor from its redirect links (2026-11-11): the whole configuration, its checks, the redirect test — and Launch once applied */}
+            {r.actions.filter((a) => a.op === "add_vendor").map((a, i) => <VendorCard key={i} action={a as never} def={def} state={state} />)}
             {r.actions.length > 0 && state === "open" && refused.length > 0 && (
               <div className={`cp-refused${counts?.length ? "" : " all"}`} role="alert" data-testid="cp-card-refused">
                 <span className="iq-label">{counts?.length ? `Not included — the Studio refused ${refused.length === 1 ? "one change" : `${refused.length} changes`}` : "Nothing can be applied — the Studio refused this proposal"}</span>

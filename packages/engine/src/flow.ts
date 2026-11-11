@@ -27,6 +27,7 @@ import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
 import { designSlot, designRowSlot, experimentArmSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
 import { designRows, randomizerOrderKind, randomizerWeights, seededDesignRow } from "./randomizerDesign.js";
 import { randomizerOrderVariable } from "./displayOrder.js";
+import { vendorExit } from "./vendorSetup.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -616,7 +617,7 @@ export function advance(
       if (skip.rule.target.kind === "end" || skip.rule.target.kind === "terminate") {
         const status = skip.rule.target.status ?? (skip.rule.target.kind === "terminate" ? "terminated" : "complete");
         state.status = status;
-        return { steps, stepIndex: steps.length - 1, done: true, endStatus: status, triggeredSkips, quotaFull: [] };
+        return vendorExitOf(def, state, { steps, stepIndex: steps.length - 1, done: true, endStatus: status, triggeredSkips, quotaFull: [] });
       }
       const j = findStepIndexForTarget(steps, skip.rule.target, idx);
       if (j >= 0) {
@@ -710,6 +711,34 @@ export function arriveAt(
  * ends). Shared by `advance` and `start`.
  */
 function moveForward(
+  def: SurveyDefinition,
+  state: ResponseState,
+  quotaCounts: QuotaCounts,
+  idx: number,
+  triggeredSkips: NavigationResult["triggeredSkips"],
+  view: VisibilityOptions = {},
+): NavigationResult {
+  return vendorExitOf(def, state, walkForward(def, state, quotaCounts, idx, triggeredSkips, view));
+}
+
+/**
+ * A VENDOR'S RESPONDENT LEAVES BY THAT VENDOR'S LINK (2026-11-11, vendorSetup.ts).
+ *
+ * Applied to every finished navigation that is an exit — an end, a full quota, a terminating skip rule, running
+ * off the end of the flow. A study with no vendors, and a respondent who came from none, get exactly what the
+ * flow said. A redirect element (`redirectNewWindow` or a step of kind "redirect") and a skip rule that jumps to
+ * an address are the survey's own routing and are returned as they are.
+ */
+function vendorExitOf(def: SurveyDefinition, state: ResponseState, r: NavigationResult): NavigationResult {
+  if (!r.done || !def.panels?.length) return r;
+  if (r.steps[r.stepIndex]?.kind === "redirect" && r.endStatus === "complete" && r.redirectUrl) return r;
+  const exit = vendorExit(def, state, r.endStatus ?? "complete", r.redirectUrl);
+  if (exit.url === r.redirectUrl) return r;
+  const { redirectUrl: _was, ...rest } = r;
+  return exit.url ? { ...rest, redirectUrl: exit.url } : rest;
+}
+
+function walkForward(
   def: SurveyDefinition,
   state: ResponseState,
   quotaCounts: QuotaCounts,

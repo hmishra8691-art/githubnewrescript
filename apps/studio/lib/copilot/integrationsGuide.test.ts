@@ -23,7 +23,8 @@ test("sent for panel and alert requests, not otherwise; cached; the system promp
   for (const m of ["Add a question about price", "make Q3 required", "show an alert popup when Q2 is empty", "Which panel of the dashboard shows awareness?"]) assert.ok(!integrationsIntent(m), m);
   assert.ok(COPILOT_STABLE_GUIDES.includes(COPILOT_INTEGRATIONS_GUIDE));
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800);
-  assert.ok(COPILOT_INTEGRATIONS_GUIDE.length < 2_600, `${COPILOT_INTEGRATIONS_GUIDE.length}`);
+  /* 2026-11-11: + add_vendor (a vendor from its four pasted redirect links) and its worked example */
+  assert.ok(COPILOT_INTEGRATIONS_GUIDE.length < 3_400, `${COPILOT_INTEGRATIONS_GUIDE.length}`);
   for (const w of ["NEVER put a webhook URL", "verified with the panel's current docs", "Never say alerts were sent"]) assert.ok(COPILOT_INTEGRATIONS_GUIDE.includes(w), w);
 });
 
@@ -37,10 +38,21 @@ test("the two worked examples are the brief's sentences and apply as written", (
   assert.deepEqual(r.def.alerts!.rules[0].channels, [{ kind: "slack", to: "#research-ops" }, { kind: "email", to: "@me" }]);
 });
 
+test("add_vendor: its worked example applies as written, and vendor requests get the guide", () => {
+  const ex = lines(COPILOT_INTEGRATIONS_GUIDE).find((l) => l.op === "add_vendor");
+  const c = coerceSurveyActions([ex]);
+  assert.deepEqual(c.rejected, []);
+  const r = applySurveyActions(def(), c.actions);
+  assert.deepEqual(r.errors, []);
+  assert.equal(r.def.panels![0].key, "acme");
+  assert.equal(r.def.panels![0].redirects.terminate, "https://a.example.com/e?st=quality&rid={{pid}}");
+  for (const m of ["add a new vendor", "set up the supplier's redirect links", "here are the redirect URLs from the sample vendor"]) assert.ok(integrationsIntent(m), m);
+});
+
 test("the registry knows panels and alerts (the actions it names exist), and their configuration", () => {
   const reg = capabilityRegistry();
   const panels = reg.find((x) => x.id === "platform:panels")!, alerts = reg.find((x) => x.id === "platform:alerts")!;
-  assert.deepEqual(panels.implementedAs?.actions, ["connect_panel", "disconnect_panel"]);
+  assert.deepEqual(panels.implementedAs?.actions, ["connect_panel", "add_vendor", "disconnect_panel"]);
   assert.deepEqual(alerts.implementedAs?.actions, ["configure_alerts"]);
   assert.equal(panels.status, "supported"); assert.deepEqual(panels.services, [], "configuring never needs a database: the sandbox is not refused");
   assert.deepEqual(reg.find((x) => x.id === "platform:alert_channels")!.configuration, ["INTEGRATIONS_SECRET_KEY"]);

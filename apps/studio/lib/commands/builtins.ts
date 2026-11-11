@@ -56,6 +56,8 @@ export interface StudioCommandContext extends CommandContextBase {
     testSurvey?(): void | Promise<void>;
     preview?(): void;
     openPalette?(): void;
+    /** save a version, publish it live, and report the link or the reasons (Studio.tsx `launch`) */
+    launch?(): Promise<{ ok: boolean; url?: string; version?: string; error?: string; problems?: { area: string; message: string }[] }>;
   };
   toast(msg: string, kind?: "ok" | "err"): void;
   /** the tabs the left nav offers, for the Navigate group */

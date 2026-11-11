@@ -95,7 +95,7 @@ export interface SampleCapture {
  * field before someone set the option must keep working.
  */
 export function resolveSampleSource(
-  def: Pick<SurveyDefinition, "deployment"> | null | undefined,
+  def: Pick<SurveyDefinition, "deployment" | "panels"> | null | undefined,
   params: Record<string, string | string[] | undefined> | null | undefined,
 ): SampleCapture {
   if (!params) return { source: null, respondent: null };
@@ -120,6 +120,23 @@ export function resolveSampleSource(
   for (const name of respondentNames) {
     const v = tidy(first(params[name]), RESPONDENT_ID_MAX_LENGTH);
     if (v) { out.respondent = v; out.respondentParam = name; break; }
+  }
+  /*
+   * SEVERAL VENDORS, EACH WITH ITS OWN ID PARAMETER (2026-11-11). `sample.respondentParam` names one parameter,
+   * and the second vendor's is another. Where the link names a vendor on the study (`rp=<code>`, or that
+   * vendor's id parameter is present) and nothing above found a value, the vendor's code is the source and
+   * its id parameter is the respondent — so reporting by source shows the same code the redirects use. What a
+   * study's own configuration or the aliases found is never overridden.
+   */
+  const vendors = (def?.panels ?? []).filter((p) => p.targets.includes("survey"));
+  if (vendors.length && (!out.source || !out.respondent)) {
+    const rp = tidy(first(params.rp), 32)?.toLowerCase();
+    const vendor = (rp ? vendors.find((p) => p.key === rp) : undefined) ?? vendors.find((p) => tidy(first(params[p.idParam]), RESPONDENT_ID_MAX_LENGTH));
+    if (vendor) {
+      if (!out.source) { out.source = vendor.key; out.sourceParam = rp ? "rp" : vendor.idParam; }
+      const id = tidy(first(params[vendor.idParam]), RESPONDENT_ID_MAX_LENGTH);
+      if (!out.respondent && id) { out.respondent = id; out.respondentParam = vendor.idParam; }
+    }
   }
   return out;
 }
