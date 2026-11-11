@@ -27,7 +27,7 @@ const FOCUS_EXAMPLES = ["Cross-tab this by gender", "Test whether this differs b
 const histKey = (id: string) => `ax-ask-history:${id}`;
 const loadHistory = (id: string): HistoryEntry[] => { try { const r = JSON.parse(localStorage.getItem(histKey(id)) ?? "[]"); return Array.isArray(r) ? r.slice(0, 20) : []; } catch { return []; } };
 const saveHistory = (id: string, h: HistoryEntry[]) => { try { localStorage.setItem(histKey(id), JSON.stringify(h.slice(0, 20))); } catch { /* history is a convenience */ } };
-const BADGE: Record<Status, { text: string; color: string }> = { proposed: { text: "Proposed — not applied", color: "#2563eb" }, done: { text: "Done", color: "#15803d" }, blocked: { text: "Blocked", color: "#b45309" }, failed: { text: "Failed", color: "#b91c1c" } };
+const BADGE: Record<Status, { text: string; color: string }> = { proposed: { text: "Proposed — not applied", color: "var(--c-primary)" }, done: { text: "Done", color: "var(--c-success-fg)" }, blocked: { text: "Blocked", color: "var(--c-warning-fg)" }, failed: { text: "Failed", color: "var(--c-error-fg)" } };
 
 export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = null, embedded = false, where, whyChart }: { api: AxApi; dataset: DatasetSpec; analyses: Row[]; canEdit: boolean; onChanged: () => Promise<void> | void;
   /** the analysis open in Explore / Architect: "this" in a request means it (Phase 5) */ focus?: { analysisId: string; name: string } | null; /** shown in the side panel, which has its own heading */ embedded?: boolean;
@@ -137,8 +137,8 @@ export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = n
                   <span style={{ fontSize: 12, color: b.color, whiteSpace: "nowrap" }} data-testid="ax-ask-status">{b.text}</span>
                 </div>
                 <div className="muted" style={{ fontSize: 12.5, marginLeft: 24 }}>{s.item.why}</div>
-                {s.item.blocked.map((t, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 24, color: "#b91c1c" }} data-testid="ax-ask-blocked">Cannot be applied: {t}</div>)}
-                {s.item.warnings.map((t, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 24, color: "#b45309" }}>{t}</div>)}
+                {s.item.blocked.map((t, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 24, color: "var(--c-error-fg)" }} data-testid="ax-ask-blocked">Cannot be applied: {t}</div>)}
+                {s.item.warnings.map((t, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 24, color: "var(--c-warning-fg)" }}>{t}</div>)}
                 {s.message && <div style={{ fontSize: 12.5, marginLeft: 24, color: b.color }} data-testid="ax-ask-result">{s.message}</div>}
                 {op.op === "set_chart" && s.status === "proposed" && !!s.item.options?.length && !s.item.blocked.length && (
                   <label className="ax-toggle" style={{ marginLeft: 24, fontSize: 12.5 }}>Or use <select className="select small" value="" onChange={(e) => e.target.value && swapChart(i, e.target.value)} data-testid="ax-ask-alt"><option value="">another chart that suits it…</option>{s.item.options!.map((o) => <option key={o.chart} value={o.chart}>{o.chart.replace(/_/g, " ")} — {o.reason}</option>)}</select></label>)}

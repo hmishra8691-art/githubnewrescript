@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   description: "Professional survey programming, data collection, analytics and reporting",
 };
 
-export const viewport: Viewport = { themeColor: "#4f46e5", width: "device-width", initialScale: 1 };
+export const viewport: Viewport = { themeColor: "#4a3aff", width: "device-width", initialScale: 1 };
 
 /*
  * The typeface is loaded as a plain stylesheet with `display=swap` and a full

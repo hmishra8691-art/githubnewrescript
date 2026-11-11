@@ -124,8 +124,8 @@ const pct = (v: number | null | undefined): string =>
 
 /** Bands, not a traffic light: the point is that none of these are verdicts. */
 function band(score: number): { label: string; tone: string } {
-  if (score >= 85) return { label: "Severe", tone: "#b42318" };
-  if (score >= 70) return { label: "High", tone: "#b54708" };
+  if (score >= 85) return { label: "Severe", tone: "var(--c-error-fg)" };
+  if (score >= 70) return { label: "High", tone: "var(--c-warning-fg)" };
   if (score >= 50) return { label: "Elevated", tone: "#854a0e" };
   return { label: "Low", tone: "#475467" };
 }

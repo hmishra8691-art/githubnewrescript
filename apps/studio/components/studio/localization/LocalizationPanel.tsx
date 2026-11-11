@@ -200,13 +200,13 @@ function Languages({ reports, onTranslate, onQa }: { reports: LanguageReport[]; 
                   </select>
                 )}
               </div>
-              <div className="loc-bar" title={`${r.translated} of ${r.elements} elements translated; ${r.mandatory - r.missing} of ${r.mandatory} mandatory`}><div className="loc-bar-fill" style={{ width: `${r.completion}%`, background: r.completion === 100 ? "#15803d" : "#2563eb" }} /></div>
+              <div className="loc-bar" title={`${r.translated} of ${r.elements} elements translated; ${r.mandatory - r.missing} of ${r.mandatory} mandatory`}><div className="loc-bar-fill" style={{ width: `${r.completion}%`, background: r.completion === 100 ? "var(--c-success-fg)" : "var(--c-primary)" }} /></div>
               <div className="row" style={{ gap: 10, fontSize: 12.5, flexWrap: "wrap" }}>
                 <span data-testid={`loc-completion-${r.language}`}><strong>{r.completion}%</strong> translated</span>
                 {!source && <span>{r.approved} approved</span>}
-                {!source && r.missing > 0 && <span style={{ color: "#b45309" }}>{r.missing} missing</span>}
+                {!source && r.missing > 0 && <span style={{ color: "var(--c-warning-fg)" }}>{r.missing} missing</span>}
                 <span>{r.audio.withAudio} with audio{r.audio.stale ? ` · ${r.audio.stale} outdated` : ""}</span>
-                {!source && (r.ready ? <span className="chip" style={{ color: "#15803d", borderColor: "#15803d" }}>ready for live</span> : <span className="chip warn">{blocking} blocking issue{blocking === 1 ? "" : "s"}</span>)}
+                {!source && (r.ready ? <span className="chip" style={{ color: "var(--c-success-fg)", borderColor: "var(--c-success-fg)" }}>ready for live</span> : <span className="chip warn">{blocking} blocking issue{blocking === 1 ? "" : "s"}</span>)}
               </div>
               {!source && cfg && (
                 <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 6 }}>
@@ -256,7 +256,7 @@ function QaReport({ reports, onFix }: { reports: LanguageReport[]; onFix(i: Loca
           <div key={r.language} className="card" style={{ padding: 12, marginBottom: 10 }} data-testid={`qa-${r.language}`} data-ready={r.ready ? "1" : "0"}>
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               <strong style={{ fontSize: 15 }}>{r.name}</strong>
-              {r.ready ? <span className="chip" style={{ color: "#15803d", borderColor: "#15803d" }}>ready for live</span> : <span className="chip warn">{r.issues.filter((i) => i.blocking).length} blocking</span>}
+              {r.ready ? <span className="chip" style={{ color: "var(--c-success-fg)", borderColor: "var(--c-success-fg)" }}>ready for live</span> : <span className="chip warn">{r.issues.filter((i) => i.blocking).length} blocking</span>}
               <span className="grow" />
               <span className="muted" style={{ fontSize: 12.5 }}>{r.elements} elements · {r.translated} translated · {r.approved} approved · {r.missing} missing · {r.audio.missing} audio files missing · {r.audio.stale} outdated audio</span>
             </div>

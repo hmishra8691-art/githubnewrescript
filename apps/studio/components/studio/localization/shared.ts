@@ -44,7 +44,7 @@ export const STATUS_LABEL: Record<string, string> = {
   not_translated: "Not translated", ai: "Machine translated", edited: "Manually edited", reviewed: "Reviewed", approved: "Approved", outdated: "Outdated",
 };
 export const STATUS_COLOR: Record<string, string> = {
-  not_translated: "#94a3b8", ai: "#7c3aed", edited: "#0369a1", reviewed: "#b45309", approved: "#15803d", outdated: "#b91c1c",
+  not_translated: "var(--c-text-4)", ai: "var(--c-violet)", edited: "var(--c-info-fg)", reviewed: "var(--c-warning-fg)", approved: "var(--c-success-fg)", outdated: "var(--c-error-fg)",
 };
 
 /** the project a translation request belongs to — it decides whose provider (the project's choice, else the person's own, else the platform's) */

@@ -474,7 +474,7 @@ function Bar({ done, target }: { done: number; target: number }) {
     <div style={{ background: "rgba(0,0,0,.07)", borderRadius: 3, height: 6, width: "100%", position: "relative" }}>
       <div style={{
         width: `${Math.min(pct, 100)}%`, height: "100%", borderRadius: 3,
-        background: over ? "#b54708" : pct >= 100 ? "#067647" : "#4338ca",
+        background: over ? "var(--c-warning-fg)" : pct >= 100 ? "var(--c-success-fg)" : "#4338ca",
       }} />
     </div>
   );
@@ -555,7 +555,7 @@ function DashboardCard({ plan, quotas }: { plan: ResearcherPlanView; quotas: Quo
                   <tr key={q.cell_id}>
                     <td>
                       {q.label || q.cell_id}
-                      {over && <div style={{ color: "#b54708", fontSize: 12 }}>over by {int(q.accepted - q.target)}</div>}
+                      {over && <div style={{ color: "var(--c-warning-fg)", fontSize: 12 }}>over by {int(q.accepted - q.target)}</div>}
                       {full && !over && <div className="muted" style={{ fontSize: 12 }}>full</div>}
                     </td>
                     <td className="muted mono" style={{ fontSize: 12.5 }}>{q.dimension}</td>
@@ -578,11 +578,11 @@ function DashboardCard({ plan, quotas }: { plan: ResearcherPlanView; quotas: Quo
 
 function VerdictCard({ v, onApply }: { v: PlanVerdictView; onApply?: (patch: Record<string, unknown>) => void }) {
   const tone =
-    v.verdict === "achievable" ? { label: "Achievable", colour: "#067647" }
+    v.verdict === "achievable" ? { label: "Achievable", colour: "var(--c-success-fg)" }
     : v.verdict === "cannot_price" ? { label: "Not yet priced", colour: "#854a0e" }
-    : v.verdict === "short_of_capacity" ? { label: "Not enough sample", colour: "#b42318" }
-    : v.verdict === "too_fast" ? { label: "Timeline too short", colour: "#b54708" }
-    : { label: "Over budget", colour: "#b54708" };
+    : v.verdict === "short_of_capacity" ? { label: "Not enough sample", colour: "var(--c-error-fg)" }
+    : v.verdict === "too_fast" ? { label: "Timeline too short", colour: "var(--c-warning-fg)" }
+    : { label: "Over budget", colour: "var(--c-warning-fg)" };
 
   return (
     <div className="card" data-testid="recruitment-verdict">
@@ -1079,7 +1079,7 @@ function QuotasEditor() {
           <div key={dim} style={{ marginTop: 6 }}>
             <div className="row">
               <span className="muted mono" style={{ fontSize: 12.5 }}>{dim}</span>
-              <span className="muted" style={{ fontSize: 12.5, color: over ? "#b42318" : undefined }}>
+              <span className="muted" style={{ fontSize: 12.5, color: over ? "var(--c-error-fg)" : undefined }}>
                 {pct.toFixed(0)}%{over ? " — cannot be filled" : pct < 99.5 ? ` · ${(100 - pct).toFixed(0)}% unconstrained` : ""}
               </span>
             </div>

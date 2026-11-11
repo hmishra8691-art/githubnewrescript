@@ -222,12 +222,12 @@ export function TranslationEditor({ focusKey, onFocused }: { focusKey?: string |
         </button>
       </div>
       <div className="muted" style={{ fontSize: 12, marginBottom: 6 }} data-testid="loc-provider-line">
-        {provider.status ? (provider.status.provider.connected ? <>Provider: <strong>{provider.status.provider.name}</strong>{provider.status.provider.via === "user" ? " · yours" : ""} · cache: {provider.status.cache.backend}{loc.cache === false ? " (off for this survey)" : ""}</> : provider.status.provider.refused ? <span style={{ color: "#b45309" }}>{provider.status.provider.refused.message} You can still translate by hand or import a file.</span> : <span style={{ color: "#b45309" }}>No translation provider is configured on this Studio — Settings tab explains what to set. You can still translate by hand or import a file.</span>) : "…"}
+        {provider.status ? (provider.status.provider.connected ? <>Provider: <strong>{provider.status.provider.name}</strong>{provider.status.provider.via === "user" ? " · yours" : ""} · cache: {provider.status.cache.backend}{loc.cache === false ? " (off for this survey)" : ""}</> : provider.status.provider.refused ? <span style={{ color: "var(--c-warning-fg)" }}>{provider.status.provider.refused.message} You can still translate by hand or import a file.</span> : <span style={{ color: "var(--c-warning-fg)" }}>No translation provider is configured on this Studio — Settings tab explains what to set. You can still translate by hand or import a file.</span>) : "…"}
       </div>
       {Object.entries(progress).length > 0 && (
         <div className="row" style={{ flexWrap: "wrap", gap: 10, marginBottom: 8 }} data-testid="loc-progress">
           {Object.entries(progress).map(([l, p]) => (
-            <span key={l} className="chip" data-testid={`loc-progress-${l}`} data-error={p.error ? "1" : "0"} title={p.error ?? ""} style={p.error ? { color: "#b91c1c" } : undefined}>
+            <span key={l} className="chip" data-testid={`loc-progress-${l}`} data-error={p.error ? "1" : "0"} title={p.error ?? ""} style={p.error ? { color: "var(--c-error-fg)" } : undefined}>
               {languageName(l, loc.languages.find((x) => x.code === l))} — {p.total ? `${Math.round((p.done / p.total) * 100)}%` : "up to date"}{p.cached ? ` · ${p.cached} from memory` : ""}{p.error ? ` · ${p.error}` : ""}
               {p.error && <button type="button" className="btn small" style={{ marginLeft: 6 }} data-testid={`loc-retry-${l}`} disabled={busy} onClick={() => retry(l)}>Retry</button>}
             </span>

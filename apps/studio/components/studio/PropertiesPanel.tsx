@@ -1704,7 +1704,7 @@ function PropertiesPanelBody() {
               value={q.probe.stopWhen} onChange={(c) => patch({ probe: { ...q.probe!, stopWhen: c } })} />
           </div>
           {lintProbeQuestion(q).map((m, i) => (
-            <div key={i} className="muted" data-testid="probe-lint" style={{ fontSize: 12.5, color: "#7a4b00", marginTop: 6 }}>{m}</div>
+            <div key={i} className="muted" data-testid="probe-lint" style={{ fontSize: 12.5, color: "var(--c-warning-fg)", marginTop: 6 }}>{m}</div>
           ))}
           <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
             Answers export as <code>{q.variableName}_PROBE_1</code>{q.probe.maxProbes > 1 ? ` … _PROBE_${q.probe.maxProbes}` : ""}, the wording asked as <code>{q.variableName}_PROBE_1_Q</code>. The programmed flow is not changed.

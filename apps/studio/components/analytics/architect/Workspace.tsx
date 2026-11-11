@@ -251,7 +251,7 @@ function Details({ entry: e, result: r, api, nonce }: { entry: CatalogueEntry; r
       <section className="card">
         <div className="card-title">What the engine reads in it</div>
         {r.insights.length ? <ul className="ax-insights">{r.insights.map((s, i) => <li key={i}>{s}</li>)}</ul> : <div className="muted">No insight was generated.</div>}
-        {r.warnings.length > 0 && <ul className="ax-insights" style={{ color: "#b45309" }}>{r.warnings.map((s, i) => <li key={i}>{s}</li>)}</ul>}
+        {r.warnings.length > 0 && <ul className="ax-insights" style={{ color: "var(--c-warning-fg)" }}>{r.warnings.map((s, i) => <li key={i}>{s}</li>)}</ul>}
         <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Every statement is computed from the tables of this analysis (n = {r.base.n.toLocaleString("en-US")}). Interpretation in plain language is in the Properties panel.</div>
       </section>
     </div>
