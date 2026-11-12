@@ -42,7 +42,7 @@ const survey = (config) => ({
   questions: [{
     id: "q_md", code: "Q1", variableName: "MD", type: "maxdiff_task", required: true,
     text: "For each set, pick the one that matters most and the one that matters least.",
-    settings: { designRef: "d_md" },
+    settings: { designRef: "d_md", taskPaging: "all" },
   }],
   flow: [{ type: "page", id: "p1", questionIds: ["q_md"] }, { type: "end", id: "e1", status: "complete" }],
   deployment: { clientSlug: "c", studySlug: "s" },

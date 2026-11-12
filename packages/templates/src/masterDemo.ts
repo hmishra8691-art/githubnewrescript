@@ -971,7 +971,9 @@ export function buildMasterDemoSurvey(surveyId = "master-demo"): SurveyDefinitio
     ] },
 
     section("sec_01_introduction", "01_Introduction", [
-      page("p_intro_welcome", "Welcome", ["info_welcome", "q_consent", "q_confirm"]),
+      /* consent alone on the first page (2026-11-12) — the confirmation follows on its own */
+      page("p_intro_welcome", "Welcome", ["info_welcome", "q_consent"]),
+      page("p_intro_confirm", "Before we start", ["q_confirm"]),
       page("p_intro_about", "About you", ["q_age", "q_country", "q_region", "q_city"]),
       page("p_intro_contact", "Contact details", ["q_email", "q_contact_ok", "q_phone"]),
     ]),

@@ -1,3 +1,4 @@
+import { lintPageStructure } from "./structureLint.js";
 import type { SurveyDefinition } from "@rescript/schema";
 import { designGeneratorRegistry } from "@rescript/schema";
 import { lintSurveyLogic, type LogicIssue } from "./lintLogic.js";
@@ -186,6 +187,13 @@ export function runQualityCheck(def: SurveyDefinition): QualityCheckResult {
 
   /* is each design in use actually sound, not merely present */
   collected.push(...designIssues(def));
+
+  /* is it laid out the way its methods ask — an exercise, consent, a concept, a funnel stage each on the right page (structureLint.ts) */
+  try {
+    for (const i of lintPageStructure(def)) {
+      collected.push({ level: "warning", path: "flow", message: i.fix === "auto" ? i.message : `${i.message}`, ...(i.pageId ? { objectKey: `flowNode:${i.pageId}` as const } : {}) });
+    }
+  } catch { /* never takes the check down */ }
 
   /* duplicate variable names, in the same shape as everything else */
   for (const problem of lintVariables(def)) {

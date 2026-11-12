@@ -52,3 +52,4 @@ export { GamificationHud } from "./Gamification";
 export { openUxPopup } from "./uxPopup";
 export { ReviewPanel } from "./ReviewPanel";
 export { progressModel, STEP_DOTS_MAX, type ProgressModel, type ProgressPosition, type ProgressStyle } from "./progress";
+export { TaskStepContext, createTaskStepHost, taskPagingOf, useTaskPager, type TaskStepHost, type TaskStepper, type TaskPaging } from "./taskPager";

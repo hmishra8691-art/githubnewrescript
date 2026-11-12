@@ -1525,3 +1525,14 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 @media (max-width: 560px) { .rs-motif-kids.rs-illus::after { display: none; } }
 .rs-viewport.mobile .rs-motif-kids.rs-illus::after { display: none; }
 .rs-motif-kids .rs-progress-dot.current { box-shadow: none; outline: none; border: none; }
+
+/* ONE TASK AT A TIME (taskPager.tsx): the strip of segments above the task — one per task, filled when answered */
+.rs-taskpager { display: flex; align-items: center; gap: 10px; scroll-margin-top: 72px; }
+.rs-taskpager-track { display: flex; flex: 1; gap: 4px; min-width: 0; }
+.rs-taskpager-seg { flex: 1 1 0; height: 6px; min-width: 4px; border-radius: 999px; background: color-mix(in srgb, var(--rs-progress, var(--rs-primary)) 16%, transparent); transition: background-color .2s ease, transform .2s ease; }
+.rs-taskpager-seg.done { background: color-mix(in srgb, var(--rs-progress, var(--rs-primary)) 55%, transparent); }
+.rs-taskpager-seg.current { background: var(--rs-progress, var(--rs-primary)); transform: scaleY(1.35); }
+.rs-taskpager-seg.practice:not(.current):not(.done) { background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--rs-progress, var(--rs-primary)) 22%, transparent) 0 4px, transparent 4px 8px); }
+.rs-taskpager-nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; }
+.rs-taskpager-notice { margin-top: 2px; }
+@media (prefers-reduced-motion: reduce) { .rs-taskpager-seg { transition: none; } }

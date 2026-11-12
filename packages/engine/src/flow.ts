@@ -28,7 +28,7 @@ import { designSlot, designRowSlot, experimentArmSlot, randomizerSlot, seedWindo
 import { designRows, randomizerOrderKind, randomizerWeights, seededDesignRow } from "./randomizerDesign.js";
 import { randomizerOrderVariable } from "./displayOrder.js";
 import { vendorExit } from "./vendorSetup.js";
-import { applyForcedAnswers, forcedSingleAnswer } from "./singleOption.js";
+import { applyForcedAnswers, forcedAndHidden } from "./singleOption.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -412,7 +412,7 @@ export function visibleQuestions(
      */
     .filter((q) => visibleByRules(def, "question", q.id, ctx))
     /* the only answer there is (singleOption.ts): the engine gives it, the respondent is not asked — the programmer's view still shows it */
-    .filter((q) => opts.revealHidden || opts.keepForced || forcedSingleAnswer(q, ctx) === undefined);
+    .filter((q) => opts.revealHidden || opts.keepForced || !forcedAndHidden(q, ctx));
 }
 
 /** Run calculations whose trigger matches; write into state.calculated. */
@@ -816,7 +816,7 @@ function walkForward(
        * left the way a submitted page is — its skip logic and page calculations run (leaveAnsweredPage).
        */
       settleForcedAnswers(def, state, s, quotaCounts);
-      const auto = visibleQuestions(def, s, state, quotaCounts, { keepForced: true }).filter((x) => forcedSingleAnswer(x, { def, state, loop: s.loop, quotaCounts }) !== undefined);
+      const auto = visibleQuestions(def, s, state, quotaCounts, { keepForced: true }).filter((x) => forcedAndHidden(x, { def, state, loop: s.loop, quotaCounts }));
       const visible = visibleQuestions(def, s, state, quotaCounts);
       if (auto.length && visible.length === 0 && !view.revealHidden) {
         const left = leaveAnsweredPage(def, state, quotaCounts, steps, idx, triggeredSkips);

@@ -100,8 +100,13 @@ export function buildAdvDiarySurvey(surveyId = "adv-diary"): SurveyDefinition {
   ];
   return survey(surveyId, { code: "DIARY", title: "Seven-day diary — product usage" }, questions, [
     { type: "embedded_data", id: "ed_wave", title: "Participant and day", fields: [{ name: "PID", source: "url", defaultValue: "TEST" }, { name: "DAY", source: "url", defaultValue: "0", dataType: "integer" }] } as FlowNode,
-    page("p_base", "Before you start", ["q_consent", "q_skin", "q_routine", "q_expect"]),
-    page("p_day", "Today", ["q_used", "q_whynot", "q_feel", "q_react", "q_daysat"]),
+    /* consent has a page of its own — it is given before anything else is asked (2026-11-12) */
+    page("p_consent", "Taking part", ["q_consent"]),
+    page("p_base", "Before you start", ["q_skin", "q_routine", "q_expect"]),
+    /* the daily entry in three steps: use, how the skin felt (with its follow-up), the day's rating */
+    page("p_day", "Today", ["q_used", "q_whynot"]),
+    page("p_feel", "Your skin today", ["q_feel", "q_react"]),
+    page("p_daysat", "Today overall", ["q_daysat"]),
     page("p_wrap", "Looking back", ["q_overall", "q_buy", "q_change"]),
   ]);
 }

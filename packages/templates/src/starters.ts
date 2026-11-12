@@ -293,7 +293,11 @@ export function buildBrandTrackerSurvey(surveyId = "brand-tracker"): SurveyDefin
       type: "embedded_data", id: "ed_wave",
       fields: [{ name: "WAVE", source: "url", dataType: "string" }],
     } as FlowNode,
-    page("p_funnel", "Brand funnel", ["q_aware", "q_consider", "q_used", "q_main"]),
+    /* one funnel stage per page (2026-11-12): each stage's list is built from the answer of the stage before */
+    page("p_funnel", "Awareness", ["q_aware"]),
+    page("p_consider", "Consideration", ["q_consider"]),
+    page("p_used", "Usage", ["q_used"]),
+    page("p_main", "Main brand", ["q_main"]),
     page("p_image", "Brand image", ["q_image"]),
     page("p_sat", "Your main brand", ["q_sat"]),
   ]);

@@ -23,7 +23,7 @@ const design = conjointPlugin.generate(config, 20261110);
 const def = {
   meta: { id: "cbc_fixed", code: "CF", title: "Phones", version: "1.0", schemaVersion: 1, status: "draft" },
   questions: [
-    { id: "q_cbc", code: "Q1", variableName: "CBC", type: "conjoint_task", variant: "conjoint.cbc", required: true, text: "Which would you choose?", settings: { designRef: "d1" } },
+    { id: "q_cbc", code: "Q1", variableName: "CBC", type: "conjoint_task", variant: "conjoint.cbc", required: true, text: "Which would you choose?", settings: { designRef: "d1", taskPaging: "all" } },
     { id: "q_after", code: "Q2", variableName: "AFTER", type: "text", variant: "text.single_line", required: false, text: "Anything else?" },
   ],
   flow: [{ type: "page", id: "p1", questionIds: ["q_cbc"] }, { type: "page", id: "p2", questionIds: ["q_after"] }, { type: "end", id: "e1", status: "complete" }],

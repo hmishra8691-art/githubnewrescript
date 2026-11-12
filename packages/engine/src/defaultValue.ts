@@ -1,3 +1,4 @@
+import { isConsentQuestion } from "./consent.js";
 import type { Option, Question, QuestionColumn, QuestionRow } from "@rescript/schema";
 import { effectiveResponseModel } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
@@ -168,6 +169,8 @@ export function applyDefaultValues(questions: Question[], ctx: EvalContext, answ
   const filled: string[] = [];
   for (const q of questions) {
     if (!questionHasDefaults(q)) continue;
+    /* consent is given by the respondent: a default never answers it (consent.ts) */
+    if (isConsentQuestion(q)) continue;
     const key = answerKeyFor(q);
     const meta = (ctx.state.meta ??= {});
     const done = (Array.isArray(meta[APPLIED]) ? meta[APPLIED] : []) as string[];

@@ -10,7 +10,7 @@ import { honoursColumns, drawsOptionImages, honoursOrientation, readsCellColumns
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { DefaultValueBox } from "./DefaultValueBox";
-import { autoNextKind } from "@rescript/engine";
+import { autoNextKind, isConsentQuestion } from "@rescript/engine";
 
 /** Put the caret at the end of a label field — an input or a contentEditable line. */
 function focusLabel(el: HTMLElement | null | undefined) {
@@ -106,6 +106,8 @@ import {
 import { optionLogicHasEffect, isEmptyConditionTree } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 import { LibraryInsertDialog } from "./LibraryInsertDialog";
+import { BlockPlacementDialog, type BlockPlacementRequest } from "./BlockPlacementDialog";
+import { insertBlockAt, moveBlockTo, type BlockPosition } from "@rescript/engine";
 import {
   type PageRef, type BlockRef, listPages, listBlocks, wrapBlock, unwrapIfSingle, newBlockNode,
 } from "./blockModel";
@@ -2253,6 +2255,55 @@ export function QuestionEditor({ q }: { q: Question }) {
           </select>
         </label>
       )}
+      {/*
+        WHAT MAY ANSWER OR LEAVE THIS QUESTION BY ITSELF (2026-11-12) — three separate switches, never one:
+        auto-next above (leaving), the single-option rule (selecting, and whether the question is still shown), and
+        consent, which turns every one of them off for this question.
+      */}
+      {["single_select", "multi_select", "dropdown", "image_select", "ranking"].includes(q.type) && !isConsentQuestion(q) && (
+        <label className="f" style={{ maxWidth: 420 }} title="When this respondent's list has been narrowed to exactly one ordinary answer on a required question">
+          <span>When only one answer is left</span>
+          <select className="select" data-testid="question-single-option" value={(q.settings as { singleOption?: string }).singleOption ?? ""}
+            onChange={(e) => patchSettings({ singleOption: e.target.value || undefined } as never)}>
+            <option value="">Select it and skip the question (default)</option>
+            <option value="select">Select it and still show the question</option>
+            <option value="ask">Do nothing — the respondent answers</option>
+          </select>
+        </label>
+      )}
+      {["single_select", "multi_select", "dropdown", "image_select"].includes(q.type) && (
+        <label className="f" style={{ maxWidth: 420 }} title="A consent question is never answered for the respondent (no auto-punch, no default, no single-option rule) and never moves the page on by itself">
+          <span>Consent question</span>
+          <select className="select" data-testid="question-consent" value={(q.settings as { consent?: boolean }).consent === undefined ? "" : (q.settings as { consent?: boolean }).consent ? "yes" : "no"}
+            onChange={(e) => patchSettings({ consent: e.target.value === "" ? undefined : e.target.value === "yes" } as never)}>
+            <option value="">Recognise automatically ({isConsentQuestion({ ...q, settings: { ...q.settings, consent: undefined } } as never) ? "yes — treated as consent" : "no"})</option>
+            <option value="yes">Yes — the respondent must choose and press Next</option>
+            <option value="no">No — an ordinary question</option>
+          </select>
+        </label>
+      )}
+      {(q.type === "conjoint_task" || q.type === "maxdiff_task") && (
+        <>
+          <label className="f" style={{ maxWidth: 420 }} title="How the tasks of this exercise are shown. The stored answer is the same either way.">
+            <span>Tasks on screen</span>
+            <select className="select" data-testid="question-task-paging" value={(q.settings as { taskPaging?: string }).taskPaging ?? "one"}
+              onChange={(e) => patchSettings({ taskPaging: e.target.value === "all" ? "all" : undefined } as never)}>
+              <option value="one">One task at a time (Next steps through them)</option>
+              <option value="all">All tasks stacked on one page</option>
+            </select>
+          </label>
+          {(q.settings as { taskPaging?: string }).taskPaging !== "all" && (
+            <label className="f" style={{ maxWidth: 420 }} title="After a task is answered, show the next task by itself. The page itself is still left with Next.">
+              <span>Move to the next task when answered</span>
+              <select className="select" data-testid="question-task-auto-next" value={(q.settings as { taskAutoNext?: boolean }).taskAutoNext ? "on" : "off"}
+                onChange={(e) => patchSettings({ taskAutoNext: e.target.value === "on" ? true : undefined } as never)}>
+                <option value="off">Off — the respondent presses Next</option>
+                <option value="on">On</option>
+              </select>
+            </label>
+          )}
+        </>
+      )}
       {SCALAR_TEXT_TYPES.includes(q.type) && <OpenEndResponseField q={q} patchSettings={patchSettings} />}
 
       {SCALAR_TEXT_TYPES.includes(q.type) && (
@@ -2704,6 +2755,27 @@ export function QuestionsPanel() {
       flow.splice(at < 0 ? flow.length : at, 0, newBlockNode());
     });
     s.toast("Block added");
+  };
+
+  /*
+   * A BLOCK AT A CHOSEN PLACE, AND A BLOCK MOVED BEFORE / AFTER ANOTHER (2026-11-12). Both go through the engine's
+   * blockPlacement (the calls Intelligent Mode's create_block / move_block make), so the Studio and the assistant
+   * cannot disagree about where "before Block 3" is. The dialog previews a move before it happens.
+   */
+  const [placement, setPlacement] = React.useState<BlockPlacementRequest | null>(null);
+  const addBlockAt = (title: string, position: BlockPosition) => {
+    let bad: string | null = null;
+    s.update((d) => {
+      const node = newBlockNode() as any;
+      if (title) node.title = title;
+      bad = insertBlockAt(d as never, node, position);
+    });
+    s.toast(bad ? `Block not added: ${bad}` : "Block added");
+  };
+  const moveBlockToPosition = (blockId: string, position: BlockPosition) => {
+    let bad: string | null = null;
+    s.update((d) => { bad = moveBlockTo(d as never, blockId, position); });
+    s.toast(bad ? `Block not moved: ${bad}` : "Block moved");
   };
 
   /** The same block, resolved inside a draft definition. */
@@ -3169,6 +3241,13 @@ export function QuestionsPanel() {
         <span className="grow" />
         <button className="btn" onClick={addBlock}
           data-testid="add-block" data-command={BLOCK_COMMANDS.ADD_BLOCK}>+ Add block</button>
+        <button className="btn" onClick={() => setPlacement({ mode: "add" })} data-testid="add-block-at"
+          title="Add a block at the beginning, before or after a block, or at the end">+ Add block at…</button>
+        {placement && (
+          <BlockPlacementDialog def={s.def as never} request={placement} onCancel={() => setPlacement(null)}
+            onAdd={(title, pos) => { setPlacement(null); addBlockAt(title, pos); }}
+            onMove={(id, pos) => { setPlacement(null); moveBlockToPosition(id, pos); }} />
+        )}
         <button className="btn" onClick={() => setLibraryOpen(true)} data-testid="library-open"
           title="Copy pages or questions from another of your surveys — codes, rules and piping follow">⇣ From another survey</button>
         {libraryOpen && <LibraryInsertDialog onClose={() => setLibraryOpen(false)} />}
@@ -3231,6 +3310,12 @@ export function QuestionsPanel() {
                       onClick={() => { setMenuFor(null); moveBlock(b.id, -1); }}>↑ Move block up</button>
                     <button className="menu-item" disabled={pi === blocks.length - 1}
                       onClick={() => { setMenuFor(null); moveBlock(b.id, 1); }}>↓ Move block down</button>
+                    <button className="menu-item" data-testid="move-block-to"
+                      onClick={() => { setMenuFor(null); setPlacement({ mode: "move", blockId: b.id, title: b.title || `Block ${pi + 1}` }); }}>⇅ Move block before / after…</button>
+                    <button className="menu-item" data-testid="add-block-before"
+                      onClick={() => { setMenuFor(null); addBlockAt("", { at: "before", block: b.id }); }}>＋ Add a block before this one</button>
+                    <button className="menu-item" data-testid="add-block-after"
+                      onClick={() => { setMenuFor(null); addBlockAt("", { at: "after", block: b.id }); }}>＋ Add a block after this one</button>
                     <button className="menu-item"
                       data-command={BLOCK_COMMANDS.DUPLICATE_BLOCK} data-testid="duplicate-block"
                       onClick={() => { setMenuFor(null); duplicateBlock(b.id); }}>⧉ Duplicate block</button>

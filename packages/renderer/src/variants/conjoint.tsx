@@ -3,6 +3,7 @@ import React from "react";
 import { designRowsFor } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { useTaskPager } from "../taskPager";
 
 /**
  * MENU-BASED CONJOINT — the renderer for `conjoint_task` questions whose
@@ -48,7 +49,13 @@ export function MenuTasks(p: QRProps) {
   if (design.kind !== "menu") {
     return <div className="rs-error-msg">This question needs a Menu design; “{design.name}” is a {design.kind} design.</div>;
   }
-  const rows = designRowsFor(p.q, design.file.rows as Record<string, unknown>[], p.state.seed, p.state.calculated);
+  return <MenuTasksBody {...p} />;
+}
+
+/* the menus themselves — a component of its own so the task pager's hooks run on every render */
+function MenuTasksBody(p: QRProps) {
+  const design = p.def.designs.find((d) => d.id === p.q.settings.designRef)!;
+  const rows = designRowsFor(p.q, design.file!.rows as Record<string, unknown>[], p.state.seed, p.state.calculated);
   const tasks = [...new Set(rows.map((r) => String(r.task)))];
   const cfg = (design.config ?? {}) as { noneOption?: boolean; minSelections?: number; maxSelections?: number; currency?: string };
   const summary = (design.file as { summary?: { currency?: string } }).summary;
@@ -59,10 +66,17 @@ export function MenuTasks(p: QRProps) {
 
   const chosenOf = (t: string): string[] => (Array.isArray(vals[t]) ? (vals[t] as unknown[]).map(String) : []);
   const setTask = (t: string, chosen: string[]) => p.onChange({ ...vals, [t]: chosen });
+  /* one menu at a time (taskPager.tsx): a menu is answered when it holds a decision — the same rule as the engine's validation */
+  const requiredOn = (t: string) => rows.filter((r) => String(r.task) === t && Number(r.required) === 1).length;
+  const pager = useTaskPager({
+    tasks, settings: p.q.settings, required: !!p.q.required, errorCount: p.errors.length, noun: "menu", readOnly,
+    complete: (t) => Array.isArray(vals[t]) && ((vals[t] as unknown[]).length > 0 || requiredOn(t) > 0),
+  });
 
   return (
-    <div className="rs-menu-tasks" data-testid="rs-menu-tasks" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      {tasks.map((t) => {
+    <div className="rs-menu-tasks" data-testid="rs-menu-tasks" data-paging={pager.paged ? "one" : "all"} style={{ display: "flex", flexDirection: "column", gap: pager.paged ? 12 : 24 }}>
+      {pager.header}
+      {pager.shown.map((t) => {
         const menu = menuOf(rows, t);
         const chosen = chosenOf(t);
         const none = chosen.includes("none");
@@ -120,6 +134,7 @@ export function MenuTasks(p: QRProps) {
           </div>
         );
       })}
+      {pager.footer}
     </div>
   );
 }

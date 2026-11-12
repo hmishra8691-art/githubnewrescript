@@ -1,6 +1,7 @@
 import type { Question, SurveyDefinition } from "@rescript/schema";
 import { effectiveResponseModel } from "@rescript/schema";
 import { isOtherOption } from "./otherSpecify.js";
+import { isConsentQuestion } from "./consent.js";
 
 /**
  * AUTO-NEXT (2026-11-07) — "choosing an answer moves the page on", decided in one place for the Runner, the Studio
@@ -23,6 +24,8 @@ const NEVER = new Set(["slider", "ranking", "image_ranking", "allocation", "open
 /** whether — and how — a question can move the page on by itself */
 export function autoNextKind(q: Pick<Question, "type" | "variant" | "settings">): AutoNextKind {
   if (NEVER.has(q.type)) return null;
+  /* consent is never left by itself: the respondent chooses, then presses Next (consent.ts) */
+  if (isConsentQuestion(q as never)) return null;
   if (GRID_TYPES.has(q.type)) return "grid";
   const model = effectiveResponseModel(q);
   if (model !== "single_choice") return null;

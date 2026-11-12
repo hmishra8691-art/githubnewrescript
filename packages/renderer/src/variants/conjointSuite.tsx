@@ -4,6 +4,7 @@ import { conjointMethodOf, cvaTasksFor, dualKey, dualPrompt } from "@rescript/en
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { useTaskPager } from "../taskPager";
 
 /**
  * THE CONJOINT SUITE'S RESPONDENT TASKS (F4, 2026-10-22).
@@ -24,6 +25,10 @@ export function CvaTasks(p: QRProps) {
   const design = p.def.designs.find((d) => d.id === p.q.settings.designRef);
   if (!design?.file?.rows?.length) return <div className="rs-error-msg">Design “{p.q.settings.designRef ?? "(none)"}” not generated yet — create a Rating-based conjoint (CVA) design in Design Generators and pick it here.</div>;
   if (design.kind !== "cva") return <div className="rs-error-msg">This question needs a Rating-based conjoint (CVA) design; “{design.name}” is a {design.kind} design.</div>;
+  return <CvaTasksBody {...p} />;
+}
+
+function CvaTasksBody(p: QRProps) {
   const info = conjointMethodOf(p.def, p.q)!;
   const scale = info.cva!;
   const tasks = cvaTasksFor(p.def, p.q, p.state.seed, p.state.calculated);
@@ -34,9 +39,16 @@ export function CvaTasks(p: QRProps) {
   const minLabel = scale.minLabel ?? (paired ? "Strongly prefer the left" : "Definitely would not buy");
   const maxLabel = scale.maxLabel ?? (paired ? "Strongly prefer the right" : "Definitely would buy");
   const attrs = tasks[0] ? Object.keys(tasks[0].profiles[0].levels) : [];
+  /* one product / pair at a time (taskPager.tsx) */
+  const pager = useTaskPager({
+    tasks: tasks.map((t) => String(t.task)), settings: p.q.settings, required: !!p.q.required, errorCount: p.errors.length,
+    noun: paired ? "pair" : "product", readOnly, complete: (t) => vals[t] != null && vals[t] !== "",
+  });
+  const order = new Map(tasks.map((t, i) => [String(t.task), i]));
   return (
-    <div className="rs-cva-tasks" data-testid="rs-cva-tasks" data-mode={scale.mode} style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      {tasks.map((t, ti) => (
+    <div className="rs-cva-tasks" data-testid="rs-cva-tasks" data-mode={scale.mode} data-paging={pager.paged ? "one" : "all"} style={{ display: "flex", flexDirection: "column", gap: pager.paged ? 12 : 24 }}>
+      {pager.header}
+      {tasks.filter((t) => pager.shown.includes(String(t.task))).map((t) => { const ti = order.get(String(t.task)) ?? 0; return (
         <div key={t.task} className="rs-card rs-cva-task" style={{ margin: 0 }} data-testid={`cva-task-${t.task}`} data-task={t.task}>
           <div style={{ fontWeight: 600, marginBottom: 10 }}>{paired ? "Pair" : "Product"} {ti + 1} of {tasks.length}</div>
           <div className="rs-cva-profiles" style={{ display: "grid", gridTemplateColumns: paired ? "repeat(auto-fit, minmax(180px, 1fr))" : "1fr", gap: 12 }}>
@@ -57,7 +69,7 @@ export function CvaTasks(p: QRProps) {
                   <label key={v} className={`rs-scale-btn${on ? " selected" : ""}`} style={{ minWidth: 36, textAlign: "center" }}>
                     <input type="radio" name={`${p.q.id}_${t.task}`} value={v} checked={on} disabled={readOnly}
                       data-testid={`cva-rate-${t.task}-${v}`} aria-label={`${v}`}
-                      onChange={() => p.onChange({ ...vals, [t.task]: v })} />
+                      onChange={() => { p.onChange({ ...vals, [t.task]: v }); pager.answered(String(t.task), true); }} />
                     <span>{v}</span>
                   </label>
                 );
@@ -68,7 +80,8 @@ export function CvaTasks(p: QRProps) {
             </div>
           </div>
         </div>
-      ))}
+      ); })}
+      {pager.footer}
     </div>
   );
 }

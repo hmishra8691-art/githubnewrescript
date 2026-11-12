@@ -1057,6 +1057,28 @@ const QuestionObject = z.object({
        */
       autoNext: z.boolean().optional(),
       /**
+       * TASK PAGING (2026-11-12) for a design-driven question (CBC, MaxDiff, menu-based, rating-based conjoint):
+       * absent / "one" = one task on screen at a time, stepped with the page's own Next and Back; "all" = every task
+       * stacked on the page. Presentation only — the stored answer is the same object keyed by task either way.
+       */
+      taskPaging: z.enum(["one", "all"]).optional(),
+      /** TASK AUTO-NEXT (2026-11-12): a task that has just been completed moves on to the NEXT TASK by itself. Never leaves the page. Off unless true. */
+      taskAutoNext: z.boolean().optional(),
+      /**
+       * CONSENT (2026-11-12): this question records the respondent's consent. It is never answered for them (no
+       * auto-punch, no single-option rule, no default) and never moves the page on by itself — the respondent
+       * chooses and presses Next. true / false is the author saying so; absent = recognised from the question
+       * (the engine's `isConsentQuestion`).
+       */
+      consent: z.boolean().optional(),
+      /**
+       * THE SINGLE-OPTION RULE ON THIS QUESTION (2026-11-12; engine singleOption.ts) — what happens when the list this
+       * respondent would see has been shortened to exactly one ordinary answer on a required question:
+       * absent / "skip" = the engine answers and the question is not shown; "select" = the engine answers and the
+       * question IS shown, the respondent presses Next; "ask" = nothing is answered for the respondent.
+       */
+      singleOption: z.enum(["skip", "select", "ask"]).optional(),
+      /**
        * "I DON'T KNOW" beside an open-text or numeric answer (2026-11-02). Off unless the researcher turns it on for
        * this question. The choice is stored BESIDE the answer (`<answer key>__dk` = true, see the engine's
        * dontKnow.ts), never as text or a number in the answer itself, and it is mutually exclusive with one: typing

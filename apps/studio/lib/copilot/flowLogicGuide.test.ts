@@ -51,3 +51,29 @@ test("every example in the guide is accepted by the gate and applied by the engi
     d = r.def;
   }
 });
+
+/* 2026-11-12: page structure, block placement, auto-select vs auto-advance, consent — written from this guide */
+test("page structure and block placement: the intent, the inline examples through the gate, and the engine's repair of a batch", () => {
+  for (const m of ["move the Demographics block before Screening", "add a new block after the Intro block", "put the consent question on its own page", "auto-select the same brand on the next page", "show one task per page", "don't auto-advance on Q2"]) assert.ok(flowLogicIntent(m), m);
+  for (const m of ["Add a question about price", "make Q3 required", "rename the survey"]) assert.ok(!flowLogicIntent(m), m);
+  assert.ok(COPILOT_FLOW_LOGIC_GUIDE.includes('"op":"move_block"') && COPILOT_FLOW_LOGIC_GUIDE.includes('"taskPaging"') && COPILOT_FLOW_LOGIC_GUIDE.includes('"singleOption"') && COPILOT_FLOW_LOGIC_GUIDE.includes('"consent":true'), "the guide names the new vocabulary");
+  const c = coerceSurveyActions([
+    { op: "create_block", title: "Warm-up", before: "Intro" },
+    { op: "move_block", target: "Follow-up", after: "Intro" },
+    { op: "update_question", target: "Q2", settings: { singleOption: "select" } },
+    { op: "update_question", target: "Q1", settings: { consent: true } },
+  ]);
+  assert.deepEqual(c.rejected, []);
+  const r = applySurveyActions(def(), c.actions);
+  assert.deepEqual(r.errors, []);
+  const titles = (r.def.flow as { title?: string; type: string }[]).filter((n) => n.type === "page" || n.type === "block").map((n) => n.title);
+  assert.deepEqual(titles, ["Warm-up", "Intro", "Follow-up", "Product A block", "Product B block", "General block"]);
+  /* a batch that puts a consent question beside another question is repaired, and the reply is told */
+  const built = applySurveyActions(def(), coerceSurveyActions([
+    { op: "create_block", title: "Start", ref: "s", after: "start" },
+    { op: "create_question", block: "s", type: "single_select", code: "CONSENT", text: "Do you agree to take part in this study?", options: ["Yes", "No"] },
+    { op: "create_question", block: "s", type: "numeric", code: "AGE", text: "How old are you?" },
+  ]).actions);
+  assert.deepEqual(built.errors, []);
+  assert.ok(built.warnings.some((w) => /^Page structure \(corrected\)/.test(w)), built.warnings.join(" | "));
+});

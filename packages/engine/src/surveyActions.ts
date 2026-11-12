@@ -16,6 +16,8 @@ import { migrateQuestionType } from "./questionShape.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { applySemantic, inferSemantic, SEMANTICS, type Semantic } from "./semanticValidation.js";
 import { runQualityCheck } from "./qualityCheck.js";
+import { lintPageStructure, fixPageStructure, type StructureIssue } from "./structureLint.js";
+import { insertBlockAt, moveBlockTo, previewBlockMove, type BlockPosition } from "./blockPlacement.js";
 import { questionOrder, conditionRefs } from "./dependencies.js";
 import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
 import { applyAnalysisAction, coerceAnalysisAction, describeAnalysisAction, isAnalysisOp, ANALYSIS_ACTION_OPS, type AnalysisAction } from "./analysisActions.js";
@@ -48,7 +50,7 @@ import { relabelHypotheses } from "./hypotheses.js";
 import { normalizeCalcExpression, calcNameHint } from "./calcRewrite.js";
 import { buildVariableDictionary } from "./variables.js";
 import { questionCodeAlias } from "./calcContext.js";
-import { settableSettings, settingProblem } from "./capabilityRegistry.js";
+import { settableSettings, settingProblem, OFF_CATALOGUE_SETTINGS } from "./capabilityRegistry.js";
 import { rewriteScriptReferences, scriptLiteralRefs, surveyScripts } from "./scriptRefs.js";
 
 /**
@@ -105,7 +107,10 @@ export interface ValidationSpec {
 export type CondInput = string | Condition;
 
 export type SurveyAction =
-  | { op: "create_block"; ref?: string; title: string; after?: string }
+  /* WHERE: `after` a block (or "start" / "end"), or `before` a block; absent = the end (blockPlacement.ts) */
+  | { op: "create_block"; ref?: string; title: string; after?: string; before?: string }
+  /* move a whole block: `before` / `after` another block, or `to` "start" / "end" — ids, variables and logic are kept */
+  | { op: "move_block"; target: string; before?: string; after?: string; to?: "start" | "end" }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
   | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none"; /** S2b: the variant's own settings, as update_question */ settings?: Record<string, unknown> }
@@ -176,7 +181,7 @@ export type SurveyAction =
   | FlowLogicAction;
 
 export const SURVEY_ACTION_OPS = [
-  "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
+  "create_block", "rename_block", "delete_block", "move_block", "create_question", "update_question", "delete_question", "move_question",
   "set_display_logic", "add_skip", "clear_skips", "set_validation", "page_break", "create_embedded", "create_calculation",
   "create_randomizer", "set_randomizer", "create_branch", "create_loop", "set_research", "link_constructs", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
@@ -341,7 +346,15 @@ function coerceOne(item: unknown): SurveyAction | string {
   switch (op) {
     case "create_block": {
       const title = str(o.title); if (!title) return "create_block needs a title";
-      return { op, title: title.slice(0, 160), ...(str(o.ref) ? { ref: str(o.ref) } : {}), ...(str(o.after) ? { after: str(o.after) } : {}) };
+      if (str(o.after) && str(o.before)) return "create_block takes after OR before, not both";
+      return { op, title: title.slice(0, 160), ...(str(o.ref) ? { ref: str(o.ref) } : {}), ...(str(o.after) ? { after: str(o.after) } : {}), ...(str(o.before) ? { before: str(o.before) } : {}) };
+    }
+    case "move_block": {
+      const target = str(o.target), before = str(o.before), after = str(o.after), to = str(o.to)?.toLowerCase();
+      if (!target) return "move_block needs a target (the block's title)";
+      if ([before, after, to].filter(Boolean).length !== 1) return "move_block needs exactly one of before (a block), after (a block) or to (start | end)";
+      if (to && to !== "start" && to !== "end") return "move_block to must be start or end";
+      return { op, target, ...(before ? { before } : {}), ...(after ? { after } : {}), ...(to ? { to: to as "start" | "end" } : {}) };
     }
     case "rename_block": { const target = str(o.target), title = str(o.title); return target && title ? { op, target, title: title.slice(0, 160) } : "rename_block needs target and title"; }
     case "delete_block": { const target = str(o.target); return target ? { op, target } : "delete_block needs a target"; }
@@ -658,7 +671,30 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   if (!parsed.success) {
     return { def: before, results, errors: [...errors, ...parsed.error.issues.slice(0, 5).map((i) => `The result does not pass the survey schema at ${i.path.join(".")}: ${i.message}`)], warnings: [], destructive: [], refs: Object.fromEntries(ctx.refs), valid: false, uxOnly: false, structureUnchanged: false };
   }
-  const after = parsed.data;
+  let after = parsed.data;
+  /*
+   * PAGE STRUCTURE (2026-11-12, structureLint.ts). What this batch laid out against a method's rules — a choice
+   * exercise sharing its page, consent beside the screener, two concepts on one screen, a funnel stage beside the
+   * stage that feeds it, the four price questions as one form, consent with a rule that answers it — is repaired
+   * here when there is one right repair (pages are divided; every id, variable and rule is kept) and said. Only
+   * what the batch NEWLY caused: a layout the survey already had is the quality check's to report, never rewritten
+   * under the author. A judgement (a long page, tasks stacked on one page) is asked, not decided.
+   */
+  if (!opts.uxOnly) {
+    try {
+      const key = (i: StructureIssue) => `${i.code}|${[...i.questionIds].sort().join(",")}`;
+      const had = new Set(lintPageStructure(before).map(key));
+      const fixed = fixPageStructure(after, (i) => !had.has(key(i)));
+      if (fixed.applied.length) {
+        const again = SurveyDefinitionSchema.safeParse(fixed.def);
+        if (again.success) {
+          after = again.data;
+          for (const i of fixed.applied) ctx.uxWarnings.push(`Page structure (corrected): ${i.message}`);
+        }
+      }
+      for (const i of lintPageStructure(after)) if (i.fix === "ask" && !had.has(key(i))) ctx.uxWarnings.push(`Page structure (your call): ${i.message}`);
+    } catch { /* a layout check must never take the batch down */ }
+  }
   /*
    * THE RESEARCH DESIGN ENFORCED (Phase 7). When the researcher asked for
    * it, a batch that opens a research-level gap — a construct left with no
@@ -748,14 +784,35 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       const id = ctx.ids("block");
       const node = { type: "block", id, title: a.title, children: [{ type: "page", id: ctx.ids("page"), questionIds: [] }] } as unknown as FlowNode;
       const flow = def.flow as FlowNode[];
-      let at: number;
-      if (a.after && a.after.toLowerCase() === "start") at = leadingSetupEnd(flow);
-      else if (a.after && a.after.toLowerCase() !== "end") at = topIndexOf(flow, resolveBlock(ctx, a.after)) + 1;
-      else at = endIndex(flow);
-      flow.splice(at, 0, node);
+      let where = "";
+      if (a.before && !["start", "end"].includes(a.before.toLowerCase())) {
+        /* before a named block: beside it, in its own container (blockPlacement.ts) */
+        const refId = resolveBlock(ctx, a.before);
+        const bad = insertBlockAt(def, node, { at: "before", block: refId });
+        if (bad) fail(bad);
+        where = ` before “${(findFlow(flow, refId) as { title?: string } | null)?.title ?? a.before}”`;
+      } else {
+        let at: number;
+        if ((a.after && a.after.toLowerCase() === "start") || (a.before && a.before.toLowerCase() === "start")) { at = leadingSetupEnd(flow); where = " at the beginning"; }
+        else if (a.after && a.after.toLowerCase() !== "end") { at = topIndexOf(flow, resolveBlock(ctx, a.after)) + 1; where = ` after “${a.after}”`; }
+        else at = endIndex(flow);
+        flow.splice(at, 0, node);
+      }
       if (a.ref) ctx.blockRefs.set(a.ref.toLowerCase(), id);
       ctx.lastBlock = id;
-      return { description: `Created block “${a.title}”`, touched: [id] };
+      return { description: `Created block “${a.title}”${where}`, touched: [id] };
+    }
+    case "move_block": {
+      const id = resolveBlock(ctx, a.target);
+      const pos: BlockPosition = a.to ? { at: a.to } : a.before ? { at: "before", block: resolveBlock(ctx, a.before) } : { at: "after", block: resolveBlock(ctx, a.after!) };
+      const preview = previewBlockMove(def, id, pos);
+      if (!preview.ok) fail(preview.error ?? "the block cannot be moved there");
+      const bad = moveBlockTo(def, id, pos);
+      if (bad) fail(bad);
+      const title = (findFlow(def.flow as FlowNode[], id) as { title?: string } | null)?.title ?? a.target;
+      /* what the new order breaks is said with the move — never hidden, never a silent refusal */
+      for (const c of preview.conflicts) ctx.uxWarnings.push(`Moving “${title}”: ${c}`);
+      return { description: `Moved block “${title}” ${a.to ? `to the ${a.to}` : a.before ? `before “${a.before}”` : `after “${a.after}”`}${preview.conflicts.length ? ` — ${preview.conflicts.length} order conflict${preview.conflicts.length === 1 ? "" : "s"} to review` : ""}`, touched: [id] };
     }
     case "rename_block": {
       const id = resolveBlock(ctx, a.target);
@@ -1618,7 +1675,7 @@ function applyVariantSettings(q: Question, patch: Record<string, unknown>): stri
   const v = q.variant ? variantRegistry.get(q.variant) : undefined;
   /* S2b: the registry decides (capabilityRegistry.settingProblem) — declared, capability, family and universal keys, each value against the schema field and the bounds */
   /* autoNext is judged by settingProblem alone (one answer, or refused with the reason) — it is not in the per-variant catalogue */
-  const bad = Object.keys(patch).filter((k) => k !== "autoNext" && !settableSettings(q.variant, q.type).includes(k));
+  const bad = Object.keys(patch).filter((k) => !OFF_CATALOGUE_SETTINGS.has(k) && !settableSettings(q.variant, q.type).includes(k));
   if (bad.length) fail(`${q.code} (${v?.name ?? q.type}) has no setting ${bad.join(", ")} an action can set — its settings are ${settableSettings(q.variant, q.type).join(", ")}`);
   const done: string[] = [];
   const settings = (q.settings ??= {} as typeof q.settings) as Record<string, unknown>;
@@ -1757,6 +1814,7 @@ const condWords = (c: CondInput): string => (typeof c === "string" ? c : "a stru
 export function describeAction(a: SurveyAction): string {
   switch (a.op) {
     case "create_block": return `Create block “${a.title}”`;
+    case "move_block": return `Move block ${a.target}`;
     case "rename_block": return `Rename block ${a.target} to “${a.title}”`;
     case "delete_block": return `Delete block ${a.target}`;
     case "create_question": return `Create ${a.type} question “${plain(a.text, 50)}”`;

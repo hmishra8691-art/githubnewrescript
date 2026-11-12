@@ -1,3 +1,4 @@
+import { isConsentQuestion } from "./consent.js";
 import type {
   SetExpr, SetOperator, SetSelection, SurveyDefinition, Question, PunchRule, ListFill,
 } from "@rescript/schema";
@@ -1112,6 +1113,8 @@ export function applyPunches(
   answerKeyFor: (q: Question) => string,
 ): { key: string; value: unknown } | null {
   if (!q.punches?.length) return null;
+  /* consent is given by the respondent: no rule selects it for them (consent.ts) — a hidden variable is not a question */
+  if (!q.settings?.hidden && q.type !== "hidden" && q.type !== "calculated" && isConsentQuestion(q)) return null;
 
   const result = resolvePunches(q, ctx);
   const nothingFlat =

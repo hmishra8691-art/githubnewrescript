@@ -194,7 +194,13 @@ export function methodTemplateFragment(a: Omit<MethodTemplateAction, "op">, ids:
         q("NMS_CHEAP", "single_select", `At ${cur}{{${P}PSM_CHEAP}}, how likely would you be to buy ${product}?`, { options: LIKELY_5 }),
         q("NMS_EXPENSIVE", "single_select", `At ${cur}{{${P}PSM_EXPENSIVE}}, how likely would you be to buy ${product}?`, { options: LIKELY_5 }),
       ];
-      const pages = [page("Price perception", vw), ...(nms.length ? [page("Purchase likelihood", nms)] : [])];
+      /*
+       * ONE PRICE QUESTION PER PAGE (2026-11-12). The four questions are four separate judgements; side by side the
+       * respondent fills them as a form (ascending numbers, anchored on the first). Each has its own page, in the
+       * method's order; the two likelihood questions pipe the prices just given and share the page after.
+       */
+      const VW_PAGES = ["Too cheap", "Good value", "Getting expensive", "Too expensive"];
+      const pages = [...vw.map((x, i) => page(VW_PAGES[i], [x])), ...(nms.length ? [page("Purchase likelihood", nms)] : [])];
       return {
         title: "Price sensitivity (Van Westendorp" + (nms.length ? " + Newton–Miller–Smith)" : ")"),
         questions: [...vw, ...nms],

@@ -136,7 +136,7 @@ const runScripts: typeof runScriptsRaw = (...args) => {
   if (r.refusedScripts?.length) for (const l of r.logs) if (/^\[[^\]]*\] refused: /.test(l)) console.warn(`[rescript:script] ${l}`);
   return r;
 };
-import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, LogicFrameHost, type SpeechService } from "@rescript/renderer";
+import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, LogicFrameHost, TaskStepContext, createTaskStepHost, type SpeechService } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { useAssessmentResults } from "./AssessmentResults";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
@@ -522,6 +522,15 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const reveal = revealsHiddenQuestions(mode, mode === "preview" && !!respondentView);
   const view = reveal ? { revealHidden: true as const } : {};
   const [, force] = React.useReducer((x: number) => x + 1, 0);
+  /*
+   * ONE TASK AT A TIME (renderer taskPager.tsx): a design-driven question on the page (MaxDiff, conjoint) registers
+   * its task pager here, and the page's own Next and Back step through its tasks before they leave the page — one
+   * pair of buttons for the respondent. Only the BUTTONS step tasks: a timer's "advance" and auto-next go straight
+   * to the page's Next, as before.
+   */
+  const taskHostRef = React.useRef<ReturnType<typeof createTaskStepHost> | null>(null);
+  if (!taskHostRef.current) taskHostRef.current = createTaskStepHost(() => force());
+  const taskHost = taskHostRef.current;
   /*
    * THE ONE SCRIPT PIPELINE. A survey saved before "Custom code" was folded
    * into Styles, animations & scripts still carries `customJs` on questions
@@ -2521,6 +2530,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       )}
       <SpeechServiceContext.Provider value={speechService}>
       <MediaGateContext.Provider value={mediaGate.gate}>
+      <TaskStepContext.Provider value={conversational ? null : taskHost}>
       {/* S5a (AQ-12): a review page lists the answers so far; Change jumps back (visited pages only), Return comes forward */}
       {(() => {
         const rc = reviewConfig(def, pageStep.pageId);
@@ -2636,6 +2646,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         );
       })}
       </div>
+      </TaskStepContext.Provider>
       </MediaGateContext.Provider>
       </SpeechServiceContext.Provider>
       {mediaGate.held && (
@@ -2669,15 +2680,15 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     }} />
       )}
       <div className="rs-nav">
-        {b.buttons.showBack && (backPossible || (conversational && convoIndex > 0)) ? (
-          <button type="button" data-testid="rs-back" data-rs-button="back" className={`rs-btn secondary ${b.buttons.style}`} onClick={conversational ? convoBack : handleBack}>
+        {b.buttons.showBack && (backPossible || (conversational && convoIndex > 0) || (!conversational && taskHost.pendingBack())) ? (
+          <button type="button" data-testid="rs-back" data-rs-button="back" className={`rs-btn secondary ${b.buttons.style}`} onClick={conversational ? convoBack : () => { if (taskHost.back()) return; handleBack(); }}>
             {b.buttons.backLabel}
           </button>
         ) : <span />}
         <button
           type="button"
           data-testid="rs-next"
-          data-rs-button={pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= pageQuestions.length - 1) ? "submit" : "next"}
+          data-rs-button={pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= pageQuestions.length - 1) && (conversational || !taskHost.pendingForward()) ? "submit" : "next"}
           className={`rs-btn ${b.buttons.style}`}
           /* the ref above is what actually prevents the second submit; this
              is so the respondent can see why the button stopped responding —
@@ -2685,9 +2696,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           disabled={advancing || mediaGate.held || waitNext}
           aria-busy={advancing || undefined}
           aria-describedby={waitNext ? "rs-min-wait" : undefined}
-          onClick={conversational ? convoNext : handleNext}
+          onClick={conversational ? convoNext : () => { if (taskHost.forward()) return; void handleNext(); }}
         >
-          {pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= pageQuestions.length - 1) ? b.buttons.submitLabel : b.buttons.nextLabel}
+          {pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= pageQuestions.length - 1) && (conversational || !taskHost.pendingForward()) ? b.buttons.submitLabel : b.buttons.nextLabel}
         </button>
       </div>
     </>

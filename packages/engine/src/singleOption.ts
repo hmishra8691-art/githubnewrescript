@@ -26,6 +26,7 @@ import { answerKey } from "./state.js";
 import type { EvalContext } from "./evaluate.js";
 import { effectiveQuestion } from "./carryforward.js";
 import { effectiveResponseModel } from "@rescript/schema";
+import { isConsentQuestion } from "./consent.js";
 
 const AUTO_KEY = "__auto";
 
@@ -35,11 +36,30 @@ export function autoAnswered(state: Pick<ResponseState, "meta">): string[] {
   return Array.isArray(v) ? (v as string[]) : [];
 }
 
+/**
+ * WHAT THE RULE DOES ON THIS QUESTION — selection and skipping are separate decisions (2026-11-12):
+ *   "skip"    (default) the engine answers and the question is not shown — the page moves past it
+ *   "select"  the engine answers, the question is SHOWN with the answer in place, and the respondent presses Next
+ *   "ask"     the engine does nothing: the respondent answers a one-answer question themselves
+ */
+export type SingleOptionMode = "skip" | "select" | "ask";
+export function singleOptionMode(q: Pick<Question, "settings">): SingleOptionMode {
+  const m = (q.settings as { singleOption?: string } | undefined)?.singleOption;
+  return m === "select" || m === "ask" ? m : "skip";
+}
+
+/** the engine answered it AND it is not shown (the "skip" mode) */
+export function forcedAndHidden(q: Question, ctx: EvalContext): boolean {
+  return singleOptionMode(q) === "skip" && forcedSingleAnswer(q, ctx) !== undefined;
+}
+
 const SPECIAL = new Set(["exclusive", "other_specify", "none_of_above", "dont_know", "refused"]);
 
 /** could this question ever be answered by the engine? — the cheap test, before any list is worked out */
 function eligible(q: Question): boolean {
   if (!q.required || q.settings?.hidden || q.settings?.readOnly) return false;
+  /* consent is given by the respondent, never by the engine (consent.ts); "ask" is the author switching the rule off here */
+  if (singleOptionMode(q) === "ask" || isConsentQuestion(q)) return false;
   if (q.type === "hidden" || q.type === "calculated") return false;
   if (q.punches?.length) return false;
   const dv = (q.settings as { defaultValue?: unknown } | undefined)?.defaultValue;

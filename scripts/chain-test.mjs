@@ -38,7 +38,7 @@ const def = {
     { id: "cat", code: "WHY_CAT", variableName: "WHY_CAT", type: "calculated", text: "", settings: { expression: 'ai_classify(WHY, "Price|Range|Service|Other")' } },
     { id: "price", code: "PRICE", variableName: "PRICE", type: "single_select", text: "You mentioned price. Which matters more?", options: [{ code: 1, label: "Everyday prices" }, { code: 2, label: "Promotions" }],
       displayLogic: { type: "rule", source: { kind: "question", ref: "WHY_CAT" }, operator: "eq", value: "Price" } },
-    { id: "extras", code: "EXTRAS", variableName: "EXTRAS", type: "conjoint_task", variant: "conjoint.menu", text: "Which extras would you pay for?", required: true, settings: { designRef: "menu1" } },
+    { id: "extras", code: "EXTRAS", variableName: "EXTRAS", type: "conjoint_task", variant: "conjoint.menu", text: "Which extras would you pay for?", required: true, settings: { designRef: "menu1", taskPaging: "all" } },
   ],
   flow: [
     { type: "page", id: "p1", questionIds: ["home", "store"] },

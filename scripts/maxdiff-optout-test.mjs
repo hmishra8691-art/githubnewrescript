@@ -27,7 +27,7 @@ function surveyWith(id, config, seed) {
   const def = {
     meta: { id, code: "MDO", title: "Phone features", version: "1.0", schemaVersion: 1, status: "draft" },
     questions: [
-      { id: "q_md", code: "Q1", variableName: "MD", type: "maxdiff_task", variant: "maxdiff.best_worst", required: true, text: "Which feature matters most, and which least?", settings: { designRef: "d1" } },
+      { id: "q_md", code: "Q1", variableName: "MD", type: "maxdiff_task", variant: "maxdiff.best_worst", required: true, text: "Which feature matters most, and which least?", settings: { designRef: "d1", taskPaging: "all" } },
       { id: "q_after", code: "Q2", variableName: "AFTER", type: "text", variant: "text.single_line", required: false, text: "Anything else?" },
     ],
     flow: [{ type: "page", id: "p1", questionIds: ["q_md"] }, { type: "page", id: "p2", questionIds: ["q_after"] }, { type: "end", id: "e1", status: "complete" }],

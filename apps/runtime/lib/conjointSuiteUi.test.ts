@@ -28,11 +28,12 @@ async function loadRenderer() {
   const engine = pathToFileURL(join(ROOT, "packages", "engine", "dist", "index.js")).href;
   const reactJsx = pathToFileURL(req.resolve("react/jsx-runtime")).href;
   const react = pathToFileURL(req.resolve("react")).href;
-  for (const f of ["conjointSuite", "registry"]) {
+  /* taskPager.tsx (2026-11-12) is the shared one-task-at-a-time pager the task renderers use */
+  for (const f of ["conjointSuite", "registry", "../taskPager"]) {
     const src = readFileSync(join(ROOT, "packages", "renderer", "src", "variants", `${f}.tsx`), "utf8");
     let js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
-    js = js.replace(/from "@rescript\/engine"/g, `from "${engine}"`).replace(/from "react\/jsx-runtime"/g, `from "${reactJsx}"`).replace(/from "react"/g, `from "${react}"`).replace(/from "\.\/registry"/g, `from "./registry.mjs"`);
-    writeFileSync(join(out, `${f}.mjs`), js);
+    js = js.replace(/from "@rescript\/engine"/g, `from "${engine}"`).replace(/from "react\/jsx-runtime"/g, `from "${reactJsx}"`).replace(/from "react"/g, `from "${react}"`).replace(/from "\.\/registry"/g, `from "./registry.mjs"`).replace(/from "\.\.\/taskPager"/g, `from "./taskPager.mjs"`);
+    writeFileSync(join(out, `${f.replace("../", "")}.mjs`), js);
   }
   const mod = await import(pathToFileURL(join(out, "conjointSuite.mjs")).href);
   const reg = await import(pathToFileURL(join(out, "registry.mjs")).href);
@@ -52,8 +53,8 @@ const def = {
     { id: "d_plain", kind: "conjoint", name: "Plain", version: 1, config: { attributes: [{ name: "Brand", levels: ["Alpha", "Beta"] }] }, file: { format: "json", columns: [], rows: [] } },
   ],
   questions: [
-    { id: "q_cva", code: "Q1", variableName: "CVA", type: "conjoint_task", variant: "conjoint.cva", text: "Rate", settings: { designRef: "d_cva" } },
-    { id: "q_pair", code: "Q2", variableName: "PAIR", type: "conjoint_task", variant: "conjoint.cva", text: "Compare", settings: { designRef: "d_pair" } },
+    { id: "q_cva", code: "Q1", variableName: "CVA", type: "conjoint_task", variant: "conjoint.cva", text: "Rate", settings: { designRef: "d_cva", taskPaging: "all" } },
+    { id: "q_pair", code: "Q2", variableName: "PAIR", type: "conjoint_task", variant: "conjoint.cva", text: "Compare", settings: { designRef: "d_pair", taskPaging: "all" } },
     { id: "q_dual", code: "Q3", variableName: "DUAL", type: "conjoint_task", text: "Choose", settings: { designRef: "d_dual" } },
     { id: "q_plain", code: "Q4", variableName: "PLAIN", type: "conjoint_task", text: "Choose", settings: { designRef: "d_plain" } },
   ],
@@ -73,6 +74,11 @@ test("CVA renderer: the respondent's tasks with their profiles, a 0–10 scale w
   assert.equal((out.match(/data-testid="cva-rate-1-/g) ?? []).length, 11, "0 … 10");
   assert.ok(/data-testid="cva-rate-2-7"[^>]*checked|checked=""[^>]*data-testid="cva-rate-2-7"/.test(out), "the stored rating is checked");
   assert.ok(out.includes("Definitely would not buy") && out.includes("Would surely buy"), "default and configured end labels");
+  /* the default (no taskPaging): one product at a time — the first unanswered one — with the pager's progress strip */
+  const paged = html(mod.CvaTasks, { ...props(0, { "1": 7 }, seed), q: { ...def.questions[0], settings: { designRef: "d_cva" } } });
+  assert.deepEqual((paged.match(/data-testid="cva-task-\d+"/g) ?? []), ['data-testid="cva-task-2"'], "only the first open product is drawn");
+  assert.ok(paged.includes('data-testid="rs-taskpager"') && paged.includes('data-task-index="2"') && paged.includes('data-task-count="3"'));
+  assert.ok(paged.includes('data-testid="rs-task-next"'), "outside a Runner the pager draws its own Next");
   const pair = html(mod.CvaTasks, props(1, {}, 1));
   assert.equal((pair.match(/data-testid="cva-profile"/g) ?? []).length, 2);
   assert.ok(pair.includes("Left") && pair.includes("Right") && pair.includes("Strongly prefer the left"));

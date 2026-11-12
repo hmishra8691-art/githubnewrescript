@@ -411,7 +411,23 @@ export function settableSettings(variantId: string | null | undefined, baseType?
  * ONE SETTING, CHECKED (the gate's rule for update_question / create_question settings): the key must be settable on
  * this variant, the value must fit the schema's own field and the registry's bounds. Returns the reason, or null.
  */
+/**
+ * SETTINGS JUDGED HERE ALONE (like auto-next): what may answer or leave a question by itself, and how a choice
+ * exercise pages its tasks. They are one paragraph in the flow guide, not a key on every line of the variant
+ * catalogue (which is sent with every build).
+ */
+export const OFF_CATALOGUE_SETTINGS: ReadonlySet<string> = new Set(["autoNext", "consent", "singleOption", "taskPaging", "taskAutoNext"]);
+const TASK_BASES = new Set(["conjoint_task", "maxdiff_task"]);
+
 export function settingProblem(variantId: string | null | undefined, key: string, value: unknown, baseType?: string): string | null {
+  if (key === "consent") return typeof value === "boolean" ? null : "consent must be true or false";
+  if (key === "singleOption") return value === "skip" || value === "select" || value === "ask" ? null : "singleOption must be skip, select or ask";
+  if (key === "taskPaging" || key === "taskAutoNext") {
+    const base = baseType ?? (variantId ? variantRegistry.get(variantId)?.baseType : undefined);
+    if (!base || !TASK_BASES.has(base)) return `has no ${key} — only a choice exercise (MaxDiff, conjoint) shows tasks`;
+    if (key === "taskPaging") return value === "one" || value === "all" ? null : "taskPaging must be one or all";
+    return typeof value === "boolean" ? null : "taskAutoNext must be true or false";
+  }
   /* auto-next (autoNext.ts): on any question that takes ONE answer — kept out of the per-variant catalogue (it is one line in the flow guide) */
   if (key === "autoNext") {
     const base = baseType ?? (variantId ? variantRegistry.get(variantId)?.baseType : undefined);

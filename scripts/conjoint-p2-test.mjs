@@ -45,7 +45,7 @@ const ATTRS = config.attributes.map((a) => a.name);
 const def = {
   meta: { id: "cbc_p2", code: "CBC", title: "Phones", version: "1.0", schemaVersion: 1, status: "draft" },
   questions: [
-    { id: "q_cj", code: "Q1", variableName: "CJ", type: "conjoint_task", variant: "conjoint.cbc", required: true, text: "Which phone would you buy?", settings: { designRef: "d1" } },
+    { id: "q_cj", code: "Q1", variableName: "CJ", type: "conjoint_task", variant: "conjoint.cbc", required: true, text: "Which phone would you buy?", settings: { designRef: "d1", taskPaging: "all" } },
     { id: "q_after", code: "Q2", variableName: "AFTER", type: "text", variant: "text.single_line", required: false, text: "Anything else?" },
   ],
   flow: [{ type: "page", id: "p1", questionIds: ["q_cj"] }, { type: "page", id: "p2", questionIds: ["q_after"] }, { type: "end", id: "e1", status: "complete" }],

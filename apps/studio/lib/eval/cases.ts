@@ -387,9 +387,9 @@ export const GOLDEN_CASES: EvalCase[] = [
   {
     id: "method-list-fill", category: "methods", title: "A List Fill from an awareness question", fixture: "brand_tracker",
     turns: [{ message: "Create a list fill called BRANDS from the brands selected in Q1, up to 4 of them, shown in Q2",
-      /* a List Fill runs when its source's page is submitted: the destination must be on a later page, so the right answer adds the page break too */
-      fake: { kind: "edit", reply: "Added a page break after Q1 and created the List Fill BRANDS from Q1 into Q2.", actions: [{ op: "page_break", after: "Q1" }, { op: "create_list_fill", name: "BRANDS", source: "Q1", count: 4, method: "random", destinations: ["Q2"], whenUnused: "hide" }] },
-      expect: { modelCalled: true, opsPresent: ["create_list_fill"], appliedMin: 2 } }],
+      /* a List Fill runs when its source's page is submitted: the destination must be on a later page — since 2026-11-12 the brand tracker has one funnel stage per page, so no page break is needed */
+      fake: { kind: "edit", reply: "Created the List Fill BRANDS from Q1 into Q2.", actions: [{ op: "create_list_fill", name: "BRANDS", source: "Q1", count: 4, method: "random", destinations: ["Q2"], whenUnused: "hide" }] },
+      expect: { modelCalled: true, opsPresent: ["create_list_fill"], appliedMin: 1 } }],
   },
 
   /* ---------------------------------------------------------------- qualitative guide */

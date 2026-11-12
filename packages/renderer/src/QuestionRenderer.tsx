@@ -66,6 +66,7 @@ import { ZoomProvider, Zoomable, ZoomButton, useZoom, enhanceZoomableImages } fr
 import { CardFace, cardFrameClass } from "./CardFace";
 import { programmerCardClass, HiddenQuestionHead, ProgrammerFoot, type ProgrammerView } from "./programmerView";
 import { DefaultsNote } from "./defaultsNote";
+import { useTaskPager } from "./taskPager";
 import { GroupedItems, useGroupOpen } from "./OptionGroups";
 // side-effect: every family registers its renderers
 import "./variants";
@@ -1995,8 +1996,6 @@ export function Composite(p: QRProps) {
 
 /* --------------------------------------------- design-driven task questions */
 function DesignTasks(p: QRProps) {
-  /* MaxDiff: the last best/worst conflict the respondent ran into, per task (MD-P1, see the radios below) */
-  const [mdNotice, setMdNotice] = React.useState<Record<string, string>>({});
   const design = p.def.designs.find((d) => d.id === p.q.settings.designRef);
   if (!design?.file?.rows?.length) {
     return <div className="rs-error-msg">Design file “{p.q.settings.designRef}” not generated yet.</div>;
@@ -2011,6 +2010,14 @@ function DesignTasks(p: QRProps) {
     const Cva = variantRenderers.cvatasks;
     return <Cva {...p} />;
   }
+  return <ChoiceTasks {...p} design={design} />;
+}
+
+/* the choice-based tasks (CBC, MaxDiff) — a component of its own so the task pager's hooks run unconditionally */
+function ChoiceTasks(p: QRProps & { design: SurveyDefinition["designs"][number] }) {
+  const design = p.design as SurveyDefinition["designs"][number] & { file: NonNullable<SurveyDefinition["designs"][number]["file"]> };
+  /* MaxDiff: the last best/worst conflict the respondent ran into, per task (MD-P1, see the radios below) */
+  const [mdNotice, setMdNotice] = React.useState<Record<string, string>>({});
   const allRows = design.file.rows as Record<string, unknown>[];
   /*
    * THE VERSION THIS RESPONDENT ANSWERS.
@@ -2055,11 +2062,42 @@ function DesignTasks(p: QRProps) {
   const realTasks = tasks.filter((t) => !practiceTasks.has(t));
   /* TASK OPT-OUTS (2026-11-10): the design's switches — never items of the set (see @rescript/engine maxdiffOptOut.ts) */
   const mdOptOuts = isMaxdiff ? maxdiffOptOutsOf(design.config) : [];
+  /*
+   * ONE TASK AT A TIME (taskPager.tsx). "Complete" is what the engine's validation asks of a required question:
+   * CBC — a choice (its "specify" text when the choice is a fixed specify alternative; the buy answer when the
+   * design is dual-response); MaxDiff — a best and (unless best-only) a worst, or one of the design's opt-outs.
+   */
+  const dualNone = !isMaxdiff && (design.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true;
+  const taskComplete = (t: string, v: Record<string, unknown> = vals): boolean => {
+    const a = v[t];
+    if (isMaxdiff) {
+      if (maxdiffTaskOptOut(design.config, a) !== null) return true;
+      const bw = (a && typeof a === "object" ? a : {}) as { best?: unknown; worst?: unknown };
+      const has = (x: unknown) => x !== undefined && x !== null && x !== "";
+      return has(bw.best) && (bestOnly || has(bw.worst));
+    }
+    if (a == null || a === "") return false;
+    const row = rows.find((r) => String(r.task) === t && String(r.alt) === String(a));
+    const fx = row ? fixedAlternativeOfRow(design.config, row) : null;
+    if (fx?.specify && !String(v[fixedOtherKey(t)] ?? "").trim()) return false;
+    if (dualNone && v[`${t}_buy`] !== "yes" && v[`${t}_buy`] !== "no") return false;
+    return true;
+  };
+  const pager = useTaskPager({
+    tasks, settings: p.q.settings, required: !!p.q.required, complete: (t) => taskComplete(t), errorCount: p.errors.length,
+    noun: isMaxdiff ? "set" : "task", uncounted: (t) => practiceTasks.has(t), readOnly: !!p.q.settings.readOnly,
+  });
+  /* every change goes through here, so the pager hears about a task that has just been completed */
+  const change = (next: Record<string, unknown>, task?: string) => {
+    p.onChange(next);
+    if (task !== undefined) pager.answered(task, taskComplete(task, next));
+  };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+    <div className="rs-design-tasks" data-paging={pager.paged ? "one" : "all"} style={{ display: "flex", flexDirection: "column", gap: pager.paged ? 12 : 24 }}>
       {mdInstructions && <div className="rs-md-instructions" data-testid="md-instructions">{mdInstructions}</div>}
-      {tasks.map((t) => {
+      {pager.header}
+      {pager.shown.map((t) => {
         // the design fixes which concepts share a task, not the order they
         // appear in; position effects are real, so the order is rolled per
         // respondent per task and the None option stays last
@@ -2122,7 +2160,7 @@ function DesignTasks(p: QRProps) {
                         /* a best or worst is a choice: it replaces an opt-out given for this set */
                         delete next.optOut;
                         setMdNotice((m) => ({ ...m, [t]: notice }));
-                        p.onChange({ ...vals, [t]: next });
+                        { const nv = { ...vals, [t]: next }; p.onChange(nv); pager.answered(t, taskComplete(t, nv) && (!anchored || !!(next as { anchor?: string }).anchor)); }
                       };
                       return (
                         <tr key={altKey} data-testid="md-item" data-task={t} data-item={altKey} data-position={i + 1}>
@@ -2175,7 +2213,7 @@ function DesignTasks(p: QRProps) {
                             <input type="radio" name={`${p.q.id}_${t}`} aria-label={`Choose ${optLabel}`}
                               data-testid={`cbc-choose-${t}-${altKey}`}
                               checked={isChosen}
-                              onChange={() => { const next: Record<string, unknown> = { ...vals, [t]: altKey }; if (!fixedAlt?.specify) delete next[fixedOtherKey(t)]; p.onChange(next); }} />
+                              onChange={() => { const next: Record<string, unknown> = { ...vals, [t]: altKey }; if (!fixedAlt?.specify) delete next[fixedOtherKey(t)]; change(next, t); }} />
                             <span className="rs-mcap" aria-hidden="true">Choose</span>
                           </label>
                         </td>
@@ -2200,7 +2238,7 @@ function DesignTasks(p: QRProps) {
                 </label>
               );
             })()}
-            {!isMaxdiff && <DualResponseFollowUp def={p.def} q={p.q} task={t} value={vals} onChange={p.onChange} readOnly={!!p.q.settings.readOnly} />}
+            {!isMaxdiff && <DualResponseFollowUp def={p.def} q={p.q} task={t} value={vals} onChange={(v) => change(v as Record<string, unknown>, t)} readOnly={!!p.q.settings.readOnly} />}
             {isMaxdiff && mdOptOuts.length > 0 && (
               /*
                * The opt-out sits UNDER the set, apart from the items: it answers the set as a whole. Choosing it clears
@@ -2216,7 +2254,7 @@ function DesignTasks(p: QRProps) {
                           setMdNotice((m) => ({ ...m, [t]: "" }));
                           const next = { ...vals };
                           if (on) delete next[t]; else next[t] = { optOut: o.kind };
-                          p.onChange(next);
+                          change(next, t);
                         }} />
                       <span>{o.label}</span>
                     </label>
@@ -2252,7 +2290,7 @@ function DesignTasks(p: QRProps) {
                           value={choice.value}
                           checked={cur.anchor === choice.value}
                           data-testid={`md-anchor-${t}-${choice.value}`}
-                          onChange={() => p.onChange({ ...vals, [t]: { ...(vals[t] as object ?? {}), anchor: choice.value } })}
+                          onChange={() => change({ ...vals, [t]: { ...(vals[t] as object ?? {}), anchor: choice.value } }, t)}
                         />
                         <span>{choice.label}</span>
                       </label>
@@ -2264,6 +2302,7 @@ function DesignTasks(p: QRProps) {
           </div>
         );
       })}
+      {pager.footer}
     </div>
   );
 }
