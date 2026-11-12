@@ -28,6 +28,7 @@ import { designSlot, designRowSlot, experimentArmSlot, randomizerSlot, seedWindo
 import { designRows, randomizerOrderKind, randomizerWeights, seededDesignRow } from "./randomizerDesign.js";
 import { randomizerOrderVariable } from "./displayOrder.js";
 import { vendorExit } from "./vendorSetup.js";
+import { applyForcedAnswers, forcedSingleAnswer } from "./singleOption.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -380,6 +381,8 @@ export function compileFlow(
  */
 export interface VisibilityOptions {
   revealHidden?: boolean;
+  /** keep the questions the engine answers itself (singleOption.ts) in the list — for the code that gives those answers */
+  keepForced?: boolean;
 }
 
 /** Questions actually visible on a page step (display logic + displayRules). */
@@ -407,7 +410,9 @@ export function visibleQuestions(
      * The semantics here are unchanged: HIDE beats SHOW, and the last SHOW
      * rule decides.
      */
-    .filter((q) => visibleByRules(def, "question", q.id, ctx));
+    .filter((q) => visibleByRules(def, "question", q.id, ctx))
+    /* the only answer there is (singleOption.ts): the engine gives it, the respondent is not asked — the programmer's view still shows it */
+    .filter((q) => opts.revealHidden || opts.keepForced || forcedSingleAnswer(q, ctx) === undefined);
 }
 
 /** Run calculations whose trigger matches; write into state.calculated. */
@@ -599,6 +604,9 @@ export function advance(
    */
   const leaving = compileFlow(def, state, quotaCounts)[state.stepIndex];
   const leavingPageId = opts.fromPageId ?? (leaving?.kind === "page" ? leaving.pageId : null);
+  /* a question on this page whose list became one answer long while the respondent was on it (singleOption.ts) */
+  { const page = leavingPageId ? compileFlow(def, state, quotaCounts).find((x) => x.kind === "page" && x.pageId === leavingPageId) : leaving;
+    if (page?.kind === "page") applyForcedAnswers(def, visibleQuestions(def, page, state, quotaCounts, { keepForced: true }), { def, state, loop: page.loop, quotaCounts }); }
   runCalculations(def, state, "on_page_submit");
   let steps = compileFlow(def, state, quotaCounts);
   const relocated = leavingPageId ? steps.findIndex((s) => s.kind === "page" && s.pageId === leavingPageId) : -1;
@@ -738,6 +746,32 @@ function vendorExitOf(def: SurveyDefinition, state: ResponseState, r: Navigation
   return exit.url ? { ...rest, redirectUrl: exit.url } : rest;
 }
 
+/**
+ * Leave a page nobody had to look at (every question on it was answered by the engine): what `advance` does for a
+ * submitted page — page calculations, then the first skip rule that fires — without a visit being recorded, so
+ * Back passes over it.
+ */
+function leaveAnsweredPage(
+  def: SurveyDefinition, state: ResponseState, quotaCounts: QuotaCounts, steps: RuntimeStep[], idx: number,
+  triggeredSkips: NavigationResult["triggeredSkips"],
+): { result?: NavigationResult; next: number } {
+  const page = steps[idx];
+  runCalculations(def, state, "on_page_submit");
+  if (page?.kind !== "page") return { next: idx + 1 };
+  const skip = firstTriggeredSkip(def, page, state, quotaCounts);
+  if (!skip) return { next: idx + 1 };
+  triggeredSkips.push({ questionId: skip.questionId, ruleId: skip.rule.id });
+  if (skip.rule.target.kind === "url") { state.status = "complete"; return { next: idx, result: { steps, stepIndex: idx, done: true, endStatus: "complete", redirectUrl: skip.rule.target.ref, triggeredSkips, quotaFull: [] } }; }
+  if (skip.rule.target.kind === "end" || skip.rule.target.kind === "terminate") {
+    const status = skip.rule.target.status ?? (skip.rule.target.kind === "terminate" ? "terminated" : "complete");
+    state.status = status;
+    return { next: idx, result: { steps, stepIndex: steps.length - 1, done: true, endStatus: status, triggeredSkips, quotaFull: [] } };
+  }
+  const j = findStepIndexForTarget(steps, skip.rule.target, idx);
+  /* only ever forward: a rule that points back at or before this page would answer and leave it again, for ever */
+  return { next: j > idx ? j : idx + 1 };
+}
+
 function walkForward(
   def: SurveyDefinition,
   state: ResponseState,
@@ -758,7 +792,19 @@ function walkForward(
     }
     const s = steps[idx];
     if (s.kind === "page") {
+      /*
+       * Questions with one answer to give are answered here, before anything asks what the page shows: the
+       * answer may decide a display condition on this same page, and a page left with nothing to show is
+       * left the way a submitted page is — its skip logic and page calculations run (leaveAnsweredPage).
+       */
+      const auto = applyForcedAnswers(def, visibleQuestions(def, s, state, quotaCounts, { keepForced: true }), { def, state, loop: s.loop, quotaCounts });
       const visible = visibleQuestions(def, s, state, quotaCounts);
+      if (auto.length && visible.length === 0 && !view.revealHidden) {
+        const left = leaveAnsweredPage(def, state, quotaCounts, steps, idx, triggeredSkips);
+        if (left.result) return vendorExitOf(def, state, left.result);
+        idx = left.next;
+        continue;
+      }
       /*
        * "Is there anything to show?" is asked of the viewer. For a respondent
        * a page holding only hidden questions is empty and is passed over —

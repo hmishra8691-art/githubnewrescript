@@ -774,6 +774,11 @@ function convertKnownJs(questions: Map<string, CanonicalQuestion>, qsfQ: Map<str
       settle(qid, q, "converted", "the script that chooses the only choice shown became auto-punch rules: when exactly one choice is shown it is already selected. The source also hid the question and pressed Next in that case; here the page is still shown, with the answer in place.", "medium");
     }
   }
+  /* "rank the only item first, hide, press Next" is what the engine itself does for a required ranking with one item (engine singleOption.ts) */
+  for (const { qid, q, pattern } of found) {
+    if (pattern?.kind !== "only_shown" || !pattern.rank || q.kind !== "ranking" || !q.required || q.custom.some((c) => c.converted)) continue;
+    settle(qid, q, "converted", "the script that ranks the only item shown first, hides the question and presses Next is not needed: a required ranking that shows one item is answered and passed over by the survey engine itself. The code is kept, switched off, for reference.");
+  }
   /* the rest: said precisely, still for a person */
   for (const { qid, q, pattern } of found) {
     if (!pattern || q.custom.some((c) => c.converted)) continue;

@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import type { FlowNode, Question, SurveyDefinition } from "@rescript/schema";
 import { analyzeImport } from "./index.js";
 import { walkSurvey } from "./verify.js";
+import { autoAnswered } from "@rescript/engine";
 import { readExecAssignments, readDispatchers, inlineDispatchers, expandCounts, exclusive } from "./adapters/decipherExec.js";
 import { rewriteIdioms } from "./adapters/decipher.js";
 import { applyRecode, recogniseQualtricsJs } from "./jsPatterns.js";
@@ -190,6 +191,14 @@ test("Qualtrics corpus 2: every hidden-question script is native — the chain c
   assert.deepEqual(ans[by("hQ15_Moderate").id], ["1"]);
   assert.deepEqual(ans[by("hQ15").id], ["17", "19", "21"], "recode + 16, as the script computes it");
   assert.deepEqual([ans[by("WORKFLOW_1").id], ans[by("WORKFLOW_2").id], ans[by("WORKFLOW_3").id]], ["21", "17", "19"], "the items ranked first, second, third");
+  /* one workflow only: the ranking has one item, so the ENGINE ranks it first and passes the page over (engine singleOption.ts) — the script that did this is not needed */
+  const one = walkSurvey(def, "deepest", 2, { force: { [by("Q13").id]: [3], [by("Q14").id]: { 3: 6 }, [by("Q15").id]: { 3: 6 } }, keepState: true });
+  const oneAns = one.state!.answers as Record<string, unknown>;
+  assert.deepEqual(oneAns[by("Q17").id], [19], "the only item, ranked first");
+  assert.equal(oneAns[by("WORKFLOW_1").id], "19", "…and what reads the ranking sees it");
+  assert.ok(autoAnswered(one.state!).includes(by("Q17").id), "recorded as answered by the engine");
+  assert.ok(!one.seen.has(by("Q17").id), "the respondent was not shown the question");
+  assert.ok(a.result!.issues.some((i) => i.location === "QID27 · JavaScript" && i.type === "converted" && /engine itself/.test(i.message)));
   /* a count over a grid whose rows are carried, and the device-flag branches */
   assert.ok(!a.result!.issues.some((i) => /SelectedAnswerCount|count of rows with one answer/.test(i.message)));
   /* "device type is mobile" reads the native device class — the branch keeps its condition instead of applying to everyone */

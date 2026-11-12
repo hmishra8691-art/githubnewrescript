@@ -30,6 +30,9 @@ export function detectFormat(bytes: Uint8Array, fileName = ""): Detection {
 
   if (bytes.length === 0) { reasons.push("the file is empty"); return d("unknown", "unknown", "Nothing to import", "Empty file", "high"); }
 
+  // SPSS system file
+  if (bytes[0] === 0x24 && bytes[1] === 0x46 && bytes[2] === 0x4c && (bytes[3] === 0x32 || bytes[3] === 0x33)) { reasons.push("SPSS system file header ($FL2)"); return d("sav", "spreadsheet", "Survey data file", "SPSS data file (.sav)", "high"); }
+
   // PDF: the header, within the first KiB (some writers put junk first)
   const headAscii = dec.decode(bytes.subarray(0, Math.min(bytes.length, 1024)));
   if (headAscii.includes("%PDF-")) { reasons.push(`PDF header ${/%PDF-[\d.]+/.exec(headAscii)?.[0] ?? "%PDF-"}`); return d("pdf", "document", "Questionnaire document", "PDF questionnaire", "high"); }

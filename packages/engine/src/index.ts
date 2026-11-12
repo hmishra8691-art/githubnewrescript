@@ -1,4 +1,5 @@
 export * from "./state.js";
+export * from "./singleOption.js";
 export * from "./random.js";
 export * from "./evaluate.js";
 export * from "./logicTree.js";

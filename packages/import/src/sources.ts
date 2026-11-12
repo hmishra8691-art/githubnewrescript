@@ -6,6 +6,7 @@ import { readDecipher } from "./adapters/decipher.js";
 import { readDocx, type DocBlock } from "./adapters/docx.js";
 import { readDocument } from "./adapters/document.js";
 import { readTable } from "./adapters/table.js";
+import { looksLikeDataFile, readCodebook, readDataFile, readSavDictionary, variablesFromRows } from "./adapters/dataFile.js";
 import { extractPdfText } from "./pdf.js";
 
 /**
@@ -56,8 +57,24 @@ export async function readSource(bytes: Uint8Array, fileName: string): Promise<R
         c.issues.push({ location: fileName, type: "inferred", severity: "info", message: `Read ${pdf.pages.length} PDF page${pdf.pages.length === 1 ? "" : "s"} of text. PDF layout (columns, tables) is flattened to lines, so check grids and multi-column option lists.`, autoAttempted: true });
         return { detection, canonical: c, issues: [] };
       }
-      case "xlsx": return { detection, canonical: readTable(await readSheets(bytes, fileName), meta), issues: [] };
-      case "csv": return { detection, canonical: readTable(await readSheets(bytes, fileName), meta), issues: [] };
+      case "sav": {
+        const vars = readSavDictionary(bytes);
+        detection.reasons.push(`${vars.length} variables in the dictionary`);
+        return { detection, canonical: readDataFile(vars, meta), issues: [] };
+      }
+      case "xlsx": case "csv": {
+        const sheets = await readSheets(bytes, fileName);
+        /* a table of RESPONSES (variable names over rows of codes) is a data file, not a questionnaire written as a table */
+        const data = sheets.find((sh) => looksLikeDataFile(sh.rows));
+        if (data) {
+          const codebook = sheets.filter((sh) => sh !== data).map((sh) => readCodebook(sh.rows)).find(Boolean) ?? null;
+          const { vars, respondents, table } = variablesFromRows(data.rows, codebook);
+          detection.importType = "Survey data file"; detection.label = detection.format === "xlsx" ? "Excel data file" : "Data file (CSV)";
+          detection.reasons.push(`a header of ${vars.length} variable names over ${respondents} rows of codes${codebook ? "; a codebook sheet gives labels" : ""}`);
+          return { detection, canonical: readDataFile(vars, { ...meta, rows: table, respondents }), issues: [] };
+        }
+        return { detection, canonical: readTable(sheets, meta), issues: [] };
+      }
       case "text": {
         const blocks: DocBlock[] = text().split(/\r?\n/).map((t) => ({ kind: "para" as const, text: t })).filter((b) => b.text.trim());
         return { detection, canonical: readDocument(blocks, meta), issues: [] };

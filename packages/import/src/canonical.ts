@@ -21,7 +21,7 @@
  * exactly what was not reproduced.
  */
 
-export type SourceFormat = "qsf" | "decipher" | "docx" | "xlsx" | "csv" | "pdf" | "text" | "json" | "unknown";
+export type SourceFormat = "qsf" | "decipher" | "docx" | "xlsx" | "csv" | "pdf" | "text" | "json" | "sav" | "unknown";
 export type SourcePlatform = "qualtrics" | "decipher" | "document" | "spreadsheet" | "rescript" | "unknown";
 
 /** how sure the adapter is about one element (UI upgrade §23) */
