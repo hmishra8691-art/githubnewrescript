@@ -66,9 +66,41 @@ registerVariantSettings("summatrix", ({ q, patch, patchSettings }) => (
           value={q.settings.sumUnit ?? ""}
           onChange={(e) => patchSettings({ sumUnit: e.target.value || undefined })} />
       </label>
+      {/* 2026-11-13: the calculation method — rows (default), columns or both; storage is the same cells either way */}
+      <label className="row" style={{ gap: 6, fontSize: 13 }}>
+        Calculation method
+        <select className="select" data-testid="summatrix-axis" value={(q.settings as { sumAxis?: string }).sumAxis ?? "row"}
+          onChange={(e) => patchSettings({ sumAxis: e.target.value === "row" ? undefined : e.target.value } as never)}>
+          <option value="row">Row total</option>
+          <option value="column">Column total</option>
+          <option value="both">Both</option>
+        </select>
+      </label>
+      {((q.settings as { sumAxis?: string }).sumAxis ?? "row") !== "row" && (
+        <label className="row" style={{ gap: 6, fontSize: 13 }}>
+          Column total
+          <CountInput min={1} width={90} allowEmpty
+            data-testid="summatrix-column-target"
+            value={(q.settings as { columnSumTarget?: number }).columnSumTarget ?? undefined}
+            onChange={(v) => patchSettings({ columnSumTarget: v ?? undefined } as never)} />
+        </label>
+      )}
+      <label className="row" style={{ gap: 6, fontSize: 13 }}>
+        Total label
+        <input className="input" style={{ width: 130 }} placeholder="Total" maxLength={80}
+          data-testid="summatrix-total-label-input"
+          value={(q.settings as { totalLabel?: string }).totalLabel ?? ""}
+          onChange={(e) => patchSettings({ totalLabel: e.target.value || undefined } as never)} />
+      </label>
       <span className="muted" style={{ fontSize: 12.5 }}>
-        every row must spread exactly {q.settings.sumTarget ?? 100}
-        {q.settings.sumUnit ?? ""} across the columns
+        {(() => {
+          const axis = (q.settings as { sumAxis?: string }).sumAxis ?? "row";
+          const t = q.settings.sumTarget ?? 100, u = q.settings.sumUnit ?? "";
+          const ct = (q.settings as { columnSumTarget?: number }).columnSumTarget ?? t;
+          return axis === "row" ? `every row must spread exactly ${t}${u} across the columns`
+            : axis === "column" ? `every column must total exactly ${ct}${u} down the rows`
+            : `every row must total ${t}${u} and every column ${ct}${u}`;
+        })()}
       </span>
     </div>
     {q.columns.length === 0 && (

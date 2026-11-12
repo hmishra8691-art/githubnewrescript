@@ -3,7 +3,7 @@ import React from "react";
 import type { QuestionColumn } from "@rescript/schema";
 import { effectiveQuestion, ratingLabelMode } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
-import { NumberField, ctxOf, RowLabel, headerEveryFor, RepeatedHeaderRow } from "../QuestionRenderer";
+import { NumberField, ctxOf, RowLabel, headerEveryFor, RepeatedHeaderRow, totalLabelOf } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useOptions, useRows, activate, usePointerDrag, dropTargetAt, radioGroupKeyDown, rovingTabIndex } from "./shared";
 import { anchor, cellAnchor } from "../authoring";
@@ -151,6 +151,17 @@ export function SumMatrix(p: QRProps) {
   };
   const totalOf = (rc: string) =>
     columns.reduce((a, c) => a + (Number(cells[rc]?.[c.id]) || 0), 0);
+  /*
+   * THE CALCULATION METHOD (2026-11-13, settings.sumAxis): "row" (default — a total at the end of each row, as
+   * before), "column" (a total under each column) or "both". Display follows the same setting the engine's
+   * validation reads, and the word beside the totals is the programmer's (settings.totalLabel, default "Total").
+   */
+  const axis = ((p.q.settings as { sumAxis?: string }).sumAxis ?? "row") as "row" | "column" | "both";
+  const showRowTotals = axis !== "column";
+  const showColTotals = axis !== "row";
+  const colTarget = (p.q.settings as { columnSumTarget?: number }).columnSumTarget ?? target;
+  const colTotalOf = (colId: string) => rows.reduce((a, r) => a + (Number(cells[String(r.code)]?.[colId]) || 0), 0);
+  const totalLabel = totalLabelOf(p.q);
 
   const headCells = (repeat: boolean) => (
     <>
@@ -159,7 +170,7 @@ export function SumMatrix(p: QRProps) {
         <th key={c.id} scope="col" {...(repeat ? {} : anchor("column", c.id))} style={c.width ? { width: c.width } : undefined}
           dangerouslySetInnerHTML={{ __html: c.label }} />
       ))}
-      <th className="rs-summatrix-th-total" scope="col">Total</th>
+      {showRowTotals && <th className="rs-summatrix-th-total" scope="col" data-testid="summatrix-total-label">{totalLabel}</th>}
     </>
   );
   const every = headerEveryFor(p, rows.length);
@@ -189,15 +200,30 @@ export function SumMatrix(p: QRProps) {
                       onChange={(n) => setCell(rc, c.id, n)} />
                   </td>
                 ))}
-                <td className={`rs-summatrix-total ${state}`}
-                  data-testid={`summatrix-total-${rc}`}>
-                  {total} / {target}{unit}
-                </td>
+                {showRowTotals && (
+                  <td className={`rs-summatrix-total ${state}`}
+                    data-testid={`summatrix-total-${rc}`}>
+                    {total} / {target}{unit}
+                  </td>
+                )}
               </tr>
               </React.Fragment>
             );
           })}
         </tbody>
+        {showColTotals && (
+          <tfoot>
+            <tr className="rs-summatrix-coltotals" data-testid="summatrix-coltotals">
+              <th className="rowlabel" scope="row" data-testid="summatrix-coltotal-label">{totalLabel}</th>
+              {columns.map((c) => {
+                const t = colTotalOf(c.id);
+                const st = t === colTarget ? "ok" : t > colTarget ? "over" : "under";
+                return <td key={c.id} className={`rs-summatrix-total ${st}`} data-testid={`summatrix-coltotal-${c.id}`}>{t} / {colTarget}{unit}</td>;
+              })}
+              {showRowTotals && <td className="rs-summatrix-total" aria-hidden="true" />}
+            </tr>
+          </tfoot>
+        )}
       </table>
     </div>
   );

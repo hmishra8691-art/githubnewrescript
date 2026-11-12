@@ -2,7 +2,7 @@
 import React from "react";
 import type { Question } from "@rescript/schema";
 import { SurveyDefinition } from "@rescript/schema";
-import { normaliseQuestionOrder, canonicalizeSurveyConditions, ensureElementIds, migrateLegacyCustomCode } from "@rescript/engine";
+import { normaliseQuestionOrder, canonicalizeSurveyConditions, ensureElementIds, migrateLegacyCustomCode, autoCodeAfterEdit } from "@rescript/engine";
 import { serialRunner, isOwnWrite, rememberSent } from "@/lib/draftSave";
 import { codesFrozenBy } from "@/lib/responseSummary";
 
@@ -256,6 +256,8 @@ export function StudioProvider({
   const [currentVersionId, setVersionId] = React.useState<string | null>(versionId);
   const [toastMsg, setToastMsg] = React.useState<{ msg: string; kind: "ok" | "err" } | null>(null);
   const [codesFrozen, setCodesFrozen] = React.useState(false);
+  const codesFrozenRef = React.useRef(false);
+  codesFrozenRef.current = codesFrozen;
   const [revision, setRevision] = React.useState<number | null>(initialRevision ?? null);
   const [unguarded, setUnguarded] = React.useState(false);
   const [readOnly, setReadOnlyState] = React.useState(initialReadOnly ?? true);
@@ -726,6 +728,17 @@ export function StudioProvider({
        * screen has to remember to sort, and none can disagree.
        */
       normaliseQuestionOrder(draft);
+      /*
+       * AUTOMATIC QUESTION CODES (2026-11-13, engine autoCode.ts). A block switched to automatic coding is
+       * renumbered when its questions are added, removed or moved — here, where every edit passes — with every
+       * reference following. Never once responses exist (codes are frozen then), and never while a code is typed.
+       */
+      if (!codesFrozenRef.current) {
+        try {
+          const auto = autoCodeAfterEdit(prev, draft);
+          if (auto.changes.length) { draft = auto.def; normaliseQuestionOrder(draft); }
+        } catch { /* numbering must never lose an edit */ }
+      }
       latest.current = draft;
       pushHistory(prev, label);
       setDef(draft);

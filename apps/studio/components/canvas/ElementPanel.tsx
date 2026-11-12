@@ -206,11 +206,14 @@ function RowProps({ q, code, ann, patch, onSelect }: {
             onSelect({ type: "row", questionId: q.id, rowCode: next });
           }} /></label>
 
-      <label className="row" style={{ gap: 8, marginBottom: 12 }}>
-        <input type="checkbox" checked={r.required} data-testid="row-required"
-          onChange={(e) => patch(code, { required: e.target.checked })} />
-        <span>Required</span>
-      </label>
+      {/* 2026-11-13: "Required" is the question's own property (Question Properties) — a row set required before keeps its setting and is shown so it can be switched off */}
+      {r.required && (
+        <label className="row" style={{ gap: 8, marginBottom: 12 }}>
+          <input type="checkbox" checked={r.required} data-testid="row-required"
+            onChange={(e) => patch(code, { required: e.target.checked })} />
+          <span>Required (set on this row earlier — the question's Required setting is the place for it)</span>
+        </label>
+      )}
 
       <h3 className="sec">Row logic</h3>
       <OptionLogicEditor
@@ -313,15 +316,21 @@ function ColumnProps({ q, id, patch, patchOption }: {
           <input className="input" type="number" value={col.max ?? ""}
             onChange={(e) => patch(id, { max: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
       </div>
-      <label className="row" style={{ gap: 8, marginBottom: 12 }}>
-        <input type="checkbox" checked={col.readOnly} onChange={(e) => patch(id, { readOnly: e.target.checked })} />
-        <span>Read only</span>
-      </label>
+      {/* 2026-11-13: Read only / Required live in Question Properties; a column made read-only earlier can still be released here */}
+      {col.readOnly && (
+        <label className="row" style={{ gap: 8, marginBottom: 12 }}>
+          <input type="checkbox" checked={col.readOnly} data-testid="col-readonly-legacy" onChange={(e) => patch(id, { readOnly: e.target.checked })} />
+          <span>Read only (set on this column earlier)</span>
+        </label>
+      )}
 
-      <h3 className="sec">Display</h3>
-      <OptionalCondition label="Show this column when" value={col.visibleIf}
-        workspace={{ title: "Column display logic", subject: col.label || id, description: "Show this column only when the following condition is met:" }}
-        onChange={(c) => patch(id, { visibleIf: c })} />
+      {/* the same four choices a row has — always show, always hide, show when, hide when — each column on its own */}
+      <h3 className="sec">Column logic</h3>
+      <div data-testid="column-logic-panel">
+        <OptionLogicEditor title={`Column “${(col.label || id).replace(/<[^>]*>/g, "")}”`} logic={col.logic} visibleIf={col.visibleIf}
+          onChange={(p) => patch(id, p as Partial<QuestionColumn>)} />
+      </div>
+      <p className="muted" style={{ fontSize: 12 }}>A hidden column takes no input and stores nothing. Row logic and question logic still apply.</p>
     </>
   );
 }

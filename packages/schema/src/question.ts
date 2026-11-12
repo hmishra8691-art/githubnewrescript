@@ -574,6 +574,23 @@ export const CarryForward = z.object({
    * `filter`, before `where`. Empty or absent = no column filter.
    */
   columns: z.array(z.union([z.string(), z.number()])).optional(),
+  /**
+   * WHAT IS INHERITED, AND HOW IT READS HERE (2026-11-13). All by SOURCE CODE, so the link to the source question
+   * stays live and the stored answer is always the source's own code:
+   *
+   *   exclude   source codes that are never carried, even when the respondent chose them
+   *   always    source codes that are shown here whatever the respondent chose ("Other", "None of these")
+   *   labels    the wording a carried option shows HERE (code → text). The source's label and answer are untouched.
+   *   labelTemplate   wording for every carried option without its own entry — "{{label}} products"
+   *
+   * Order, always the same: the filter's set → plus `always` → minus `exclude` (exclude wins) → `where` (never
+   * removes an `always` code) → wording. This question's own options (`keepOwn`) follow the carried ones; an own
+   * option whose code a carried option already uses is dropped, so a code is never listed twice.
+   */
+  exclude: z.array(z.union([z.string(), z.number()])).optional(),
+  always: z.array(z.union([z.string(), z.number()])).optional(),
+  labels: z.record(z.string()).optional(),
+  labelTemplate: z.string().max(300).optional(),
 });
 export type CarryForward = z.infer<typeof CarryForward>;
 
@@ -1460,6 +1477,19 @@ const QuestionObject = z.object({
        * custom_table can opt in.
        */
       rowSum: z.boolean().optional(),
+      /**
+       * CONSTANT-SUM MATRIX: WHICH WAY IT ADDS UP (2026-11-13). absent / "row" = every row totals `sumTarget`
+       * (as before); "column" = every column does (total drawn under each column); "both" = rows and columns are
+       * each held to their total. The column total is `columnSumTarget`, or `sumTarget` when that is absent.
+       * Storage is unchanged — the same cells — so switching the method never discards an answer.
+       */
+      sumAxis: z.enum(["row", "column", "both"]).optional(),
+      columnSumTarget: z.number().optional(),
+      /**
+       * THE WORD BESIDE THE TOTAL (2026-11-13) of an allocation / constant-sum question: "Total" unless the
+       * programmer writes another ("Sum", "Grand total", …). Display only — it never enters a calculation or a rule.
+       */
+      totalLabel: z.string().max(80).optional(),
 
       /* ---- October 2026 review: subtype-specific builder settings ---- */
 

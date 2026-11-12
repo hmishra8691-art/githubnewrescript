@@ -1565,6 +1565,12 @@ export function Ranking(p: QRProps) {
 }
 
 /* -------------------------------------------------------------- allocation */
+/** the word beside an allocation's total: the programmer's (`settings.totalLabel`), else "Total" — display only */
+export function totalLabelOf(q: Question): string {
+  const own = String((q.settings as { totalLabel?: string }).totalLabel ?? "").trim();
+  return own || "Total";
+}
+
 export function Allocation(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const vals = (p.value ?? {}) as Record<string, number | null>;
@@ -1587,7 +1593,7 @@ export function Allocation(p: QRProps) {
         </div>
       ))}
       <div className={`rs-alloc-total ${target != null ? (total === target ? "ok" : "bad") : ""}`}>
-        Total: {total}{target != null ? ` / ${target}` : ""}{p.q.settings.sumUnit ?? ""}
+        <span data-testid="alloc-total-label">{totalLabelOf(p.q)}</span>: {total}{target != null ? ` / ${target}` : ""}{p.q.settings.sumUnit ?? ""}
       </div>
     </div>
   );

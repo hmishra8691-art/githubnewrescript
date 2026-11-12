@@ -31,6 +31,7 @@ import { applyMethodAction, coerceMethodAction, describeMethodAction, designDiff
 import { DESIGN_TASK_TYPES } from "./lintLogic.js";
 import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
+import { orderIndex } from "./dependencies.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
 import { diffUx, type UxDiff } from "./ux.js";
 import { applyOptionAction, coerceOptionAction, describeOptionAction, isOptionOp, OPTION_ACTION_OPS, type OptionAction } from "./optionActions.js";
@@ -111,6 +112,14 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string; before?: string }
   /* move a whole block: `before` / `after` another block, or `to` "start" / "end" — ids, variables and logic are kept */
   | { op: "move_block"; target: string; before?: string; after?: string; to?: "start" | "end" }
+  /*
+   * CARRY FORWARD AS ANSWER-OPTION MANAGEMENT (2026-11-13, carryforward.ts): the target's list comes from `source`
+   * (filter: selected | not_selected | displayed | all), with options named by code or label — `always` shown
+   * whatever was chosen, `exclude` never carried, `labels` the wording here (source code or label → text),
+   * `labelTemplate` ("{{label}} products"), `keepOwn` the target's own options after the carried ones.
+   * `remove: true` takes the carry-forward off.
+   */
+  | { op: "set_carry_forward"; target: string; source?: string; filter?: "selected" | "not_selected" | "displayed" | "all"; always?: string[]; exclude?: string[]; labels?: Record<string, string>; labelTemplate?: string; keepOwn?: boolean; remove?: boolean }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
   | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none"; /** S2b: the variant's own settings, as update_question */ settings?: Record<string, unknown> }
@@ -181,7 +190,7 @@ export type SurveyAction =
   | FlowLogicAction;
 
 export const SURVEY_ACTION_OPS = [
-  "create_block", "rename_block", "delete_block", "move_block", "create_question", "update_question", "delete_question", "move_question",
+  "create_block", "rename_block", "delete_block", "move_block", "set_carry_forward", "create_question", "update_question", "delete_question", "move_question",
   "set_display_logic", "add_skip", "clear_skips", "set_validation", "page_break", "create_embedded", "create_calculation",
   "create_randomizer", "set_randomizer", "create_branch", "create_loop", "set_research", "link_constructs", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
@@ -411,6 +420,19 @@ function coerceOne(item: unknown): SurveyAction | string {
     case "set_display_logic": { const target = str(o.target); if (!target) return "set_display_logic needs a target"; const raw = o.expression !== undefined ? o.expression : o.condition !== undefined ? o.condition : o.when; const e = raw === null ? null : condIn(raw); if (e === undefined) return "set_display_logic needs an expression or a condition (or null to remove it)"; return { op, target, expression: e }; }
     case "add_skip": { const from = str(o.from), when = condIn(o.when ?? o.condition), to = str(o.to); return from && when && to ? { op, from, when, to } : "add_skip needs from, when and to"; }
     case "clear_skips": { const target = str(o.target); return target ? { op, target } : "clear_skips needs a target"; }
+    case "set_carry_forward": {
+      const target = str(o.target), source = str(o.source);
+      if (!target) return "set_carry_forward needs a target";
+      if (bool(o.remove)) return { op, target, remove: true };
+      if (!source) return "set_carry_forward needs a source question (or remove: true)";
+      const filter = str(o.filter);
+      if (filter && !["selected", "not_selected", "displayed", "all"].includes(filter)) return "set_carry_forward filter must be selected, not_selected, displayed or all";
+      const list = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean).slice(0, 200) : undefined);
+      const labels = o.labels && typeof o.labels === "object" && !Array.isArray(o.labels)
+        ? Object.fromEntries(Object.entries(o.labels as Record<string, unknown>).filter(([k, v]) => k.trim() && typeof v === "string" && v.trim()).slice(0, 200).map(([k, v]) => [k.trim(), String(v).slice(0, 500)])) : undefined;
+      return { op, target, source, ...(filter ? { filter: filter as "selected" } : {}), ...(list(o.always)?.length ? { always: list(o.always) } : {}), ...(list(o.exclude)?.length ? { exclude: list(o.exclude) } : {}),
+        ...(labels && Object.keys(labels).length ? { labels } : {}), ...(str(o.labelTemplate) ? { labelTemplate: str(o.labelTemplate)!.slice(0, 300) } : {}), ...(typeof o.keepOwn === "boolean" ? { keepOwn: o.keepOwn } : {}) };
+    }
     case "set_validation": { const target = str(o.target); const rules = validations(o.rules); return target && rules ? { op, target, rules } : "set_validation needs a target and rules"; }
     case "add_punch": case "punch": case "code_response": {
       const expression = str(o.expression) ?? str(o.rule);
@@ -1293,6 +1315,41 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       q.punches = [...(q.punches ?? []), rule] as never;
       return { description: `Punch ${q.code}: ${formatPunchExpression(def, q, rule as never)}`, touched: [q.id] };
     }
+    case "set_carry_forward": {
+      const q = resolveQuestion(ctx, a.target);
+      if (a.remove) {
+        if (!q.carryForward) fail(`${q.code} has no carry-forward`);
+        delete (q as { carryForward?: unknown }).carryForward;
+        return { description: `Removed the carry-forward of ${q.code}`, touched: [q.id] };
+      }
+      const src = resolveQuestion(ctx, a.source!);
+      if (src.id === q.id) fail(`${q.code} cannot carry its own answers forward`);
+      const order = orderIndex(def);
+      if ((order[src.id] ?? -1) > (order[q.id] ?? -1)) fail(`${src.code} is asked after ${q.code} — a question can only carry answers from an earlier one`);
+      const view = authoringQuestionView(src, def);
+      const items = (view.options.length ? view.options : view.rows) as { code: string | number; label: string }[];
+      if (!items.length) fail(`${src.code} has no options or rows to carry forward`);
+      const plain = (x: string) => x.replace(/<[^>]*>/g, "").trim().toLowerCase();
+      const code = (name: string): string | number => {
+        const hit = items.find((i) => String(i.code) === name.trim()) ?? items.find((i) => plain(i.label) === plain(name));
+        return hit ? hit.code : fail(`${src.code} has no option “${name}” (its options: ${items.map((i) => `${i.code} ${i.label.replace(/<[^>]*>/g, "")}`).join(", ").slice(0, 300)})`);
+      };
+      const always = (a.always ?? []).map(code), exclude = (a.exclude ?? []).map(code);
+      const both = always.filter((c) => exclude.some((x) => String(x) === String(c)));
+      if (both.length) fail(`an option cannot be both always shown and excluded (${both.join(", ")})`);
+      const labels = a.labels ? Object.fromEntries(Object.entries(a.labels).map(([k, v]) => [String(code(k)), v])) : undefined;
+      const into = (q.rows?.length && !q.options?.length) || /^matrix|^composite$|^custom_table$/.test(q.type) ? "rows" : "options";
+      const own = into === "rows" ? q.rows.length : q.options.length;
+      (q as { carryForward?: unknown }).carryForward = {
+        ...(q.carryForward && q.carryForward.sourceQuestionId === src.id ? q.carryForward : {}),
+        sourceQuestionId: src.id, filter: a.filter ?? q.carryForward?.filter ?? "selected", into: q.carryForward?.into ?? into,
+        /* the target's own options stay visible unless the action says otherwise: nothing the author wrote is silently dropped */
+        keepOwn: a.keepOwn ?? q.carryForward?.keepOwn ?? own > 0,
+        ...(always.length ? { always } : {}), ...(exclude.length ? { exclude } : {}), ...(labels && Object.keys(labels).length ? { labels } : {}), ...(a.labelTemplate ? { labelTemplate: a.labelTemplate } : {}),
+      };
+      const extras = [always.length ? `always ${always.join(", ")}` : "", exclude.length ? `never ${exclude.join(", ")}` : "", labels ? `${Object.keys(labels).length} reworded` : "", a.labelTemplate ? `wording “${a.labelTemplate}”` : ""].filter(Boolean);
+      return { description: `${q.code} carries the ${(a.filter ?? "selected").replace("_", " ")} ${into === "rows" ? "items" : "options"} of ${src.code}${extras.length ? ` (${extras.join("; ")})` : ""}`, touched: [q.id] };
+    }
     case "remove_punches": {
       const q = resolveQuestion(ctx, a.target);
       const had = q.punches ?? [];
@@ -1815,6 +1872,7 @@ export function describeAction(a: SurveyAction): string {
   switch (a.op) {
     case "create_block": return `Create block “${a.title}”`;
     case "move_block": return `Move block ${a.target}`;
+    case "set_carry_forward": return a.remove ? `Remove the carry-forward of ${a.target}` : `Carry ${a.source} forward into ${a.target}`;
     case "rename_block": return `Rename block ${a.target} to “${a.title}”`;
     case "delete_block": return `Delete block ${a.target}`;
     case "create_question": return `Create ${a.type} question “${plain(a.text, 50)}”`;

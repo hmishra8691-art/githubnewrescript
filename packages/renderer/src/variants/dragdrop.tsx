@@ -492,7 +492,7 @@ export function ChipAllocation(p: QRProps) {
   return (
     <div className="rs-dd rs-ca">
       <div className={`rs-ca-status ${total === target ? "ok" : "bad"}`} data-testid="chipalloc-total">
-        {Number(total.toFixed(6))} / {target}{unit} allocated
+        {String((p.q.settings as { totalLabel?: string }).totalLabel ?? "").trim() && <><span data-testid="alloc-total-label">{String((p.q.settings as { totalLabel?: string }).totalLabel).trim()}</span>: </>}{Number(total.toFixed(6))} / {target}{unit} allocated
         <span className="rs-dd-hint"> — {left} chip{left === 1 ? "" : "s"} left, {Number(chipValue.toFixed(6))}{unit} each</span>
       </div>
 

@@ -106,8 +106,9 @@ import {
 import { optionLogicHasEffect, isEmptyConditionTree } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 import { LibraryInsertDialog } from "./LibraryInsertDialog";
+import { CarriedOptionsPanel } from "./CarriedOptionsPanel";
 import { BlockPlacementDialog, type BlockPlacementRequest } from "./BlockPlacementDialog";
-import { insertBlockAt, moveBlockTo, type BlockPosition } from "@rescript/engine";
+import { insertBlockAt, moveBlockTo, applyBlockAutoCodes, codePrefix, type BlockPosition } from "@rescript/engine";
 import {
   type PageRef, type BlockRef, listPages, listBlocks, wrapBlock, unwrapIfSingle, newBlockNode,
 } from "./blockModel";
@@ -771,7 +772,12 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
   return (
     <div>
       {cols.map((c, i) => (
-        <div key={c.id} className="card" style={{ padding: 10 }}>
+        <div key={c.id} className="card" style={{ padding: 10 }} data-testid="column-card" data-column={c.id}>
+          {/* every column is its own element (2026-11-13): named, numbered, with its own settings and logic */}
+          <div className="flabel" style={{ marginBottom: 4 }} data-testid="column-heading">
+            Column {i + 1}
+            {c.logic?.visibility === "always_hide" ? " · always hidden" : c.logic?.visibility === "show_when" ? " · shown when…" : c.logic?.visibility === "hide_when" ? " · hidden when…" : c.visibleIf ? " · shown when…" : ""}
+          </div>
           <div className="row" style={{ marginBottom: 6 }}>
             <InlineRichText className="grow" value={c.label} placeholder="Column label" testId="column-label"
               onChange={(label) => set(i, { label })} />
@@ -885,20 +891,19 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
             )}
             <input className="input" style={{ width: 110 }} placeholder="width e.g. 120px"
               value={c.width ?? ""} onChange={(e) => set(i, { width: e.target.value || undefined })} />
-            <label className="row" style={{ gap: 4, fontSize: 13 }}>
-              <input type="checkbox" checked={c.readOnly}
-                onChange={(e) => set(i, { readOnly: e.target.checked })} /> read-only
-            </label>
-            <label className="row" style={{ gap: 4, fontSize: 13 }}>
-              required
-              <input type="checkbox"
-                checked={c.validation.some((v) => v.kind === "required")}
-                onChange={(e) => set(i, {
-                  validation: e.target.checked
-                    ? [...c.validation, { kind: "required" as const }]
-                    : c.validation.filter((v) => v.kind !== "required"),
-                })} />
-            </label>
+            {/*
+              * 2026-11-13: "Read only" and "Required" were here on every column, duplicating Question Properties.
+              * They are no longer offered. A column that already carries one keeps it (nothing changes in a saved
+              * survey) and shows a chip that removes it, so it can never be stuck on.
+              */}
+            {c.readOnly && (
+              <button className="chip" data-testid="column-readonly-legacy" title="Set on this column earlier — click to remove"
+                onClick={() => set(i, { readOnly: false })}>read-only ×</button>
+            )}
+            {c.validation.some((v) => v.kind === "required") && (
+              <button className="chip" data-testid="column-required-legacy" title="Set on this column earlier — click to remove (the question's Required setting covers every cell)"
+                onClick={() => set(i, { validation: c.validation.filter((v) => v.kind !== "required") })}>required ×</button>
+            )}
           </div>
           <input className="input mono" style={{ marginTop: 6 }}
             placeholder="calculated expression (makes cell read-only), e.g. RATING_{{row}} * 2"
@@ -1515,6 +1520,19 @@ export function QuestionEditor({ q }: { q: Question }) {
         ? `${r.rewritten.length} reference${r.rewritten.length === 1 ? "" : "s"} rewritten (${r.rewritten.slice(0, 3).join("; ")}${r.rewritten.length > 3 ? "; …" : ""})`
         : "nothing else needed rewriting";
       pendingRecodeNote.current = { msg: `Question code ${from} → ${to} — ${done}${review}`, kind: "ok" };
+      /*
+       * AUTOMATIC CODES (2026-11-13): in a block that numbers itself, a retyped code is the pattern being changed —
+       * S1 → Q1 on the first question renames the run (Q1, Q2, Q3 …); any other code falls back into sequence.
+       */
+      const block = listBlocks(d.flow as any[]).find((b) => b.pages.some((p) => p.node.questionIds.includes(q.id)));
+      if (block && (block.node as any).autoCode === true && !s.codesFrozen) {
+        const was = codePrefix(from), now = codePrefix(to);
+        const auto = applyBlockAutoCodes(d as never, block.id, was && now && was !== now ? { adoptPrefix: was } : {});
+        if (auto.changes.length) {
+          Object.assign(d, auto.def);
+          pendingRecodeNote.current = { msg: `Question code ${from} → ${to}; ${auto.changes.length} code${auto.changes.length === 1 ? "" : "s"} in this block renumbered to follow (${auto.changes.slice(0, 4).map((c) => `${c.from} → ${c.to}`).join(", ")}${auto.changes.length > 4 ? ", …" : ""})`, kind: "ok" };
+        }
+      }
     });
   };
 
@@ -1634,6 +1652,7 @@ export function QuestionEditor({ q }: { q: Question }) {
             Row flags anchor a statement to the top or bottom of the grid — anchored rows
             are never moved by row randomization (Properties → Randomization → scope “rows”).
           </p>
+          {q.carryForward?.into === "rows" && <CarriedOptionsPanel def={s.def as never} q={q} patch={patch} />}
           {q.carryForward?.into === "rows" && (
             <p className="muted" style={{ fontSize: 13 }}>
               Rows are carried forward from {s.def.questions.find((x) => x.id === q.carryForward?.sourceQuestionId)?.code ?? "?"} —
@@ -1776,6 +1795,9 @@ export function QuestionEditor({ q }: { q: Question }) {
             * which; anything that does not say keeps the plain heading.
             */}
           <h3 className="sec" data-testid="options-heading">{optionsLabelBySetting ?? variantDef?.optionsLabel ?? "Options"}</h3>
+          {/* 2026-11-13: a carry-forward question shows what it inherits — locked, grey — with this question's own controls; options added below are "own" */}
+          {q.carryForward && (q.carryForward.into ?? "options") === "options" && <CarriedOptionsPanel def={s.def as never} q={q} patch={patch} />}
+          {q.carryForward && (q.carryForward.into ?? "options") === "options" && <div className="flabel" style={{ margin: "4px 0" }} data-testid="own-options-label">Added in this question</div>}
           {(optionsHintBySetting ?? variantDef?.optionsHint) && (
             <p className="muted" style={{ fontSize: 12.5, marginTop: -6 }} data-testid="options-hint">
               {optionsHintBySetting ?? variantDef?.optionsHint}
@@ -1982,6 +2004,13 @@ export function QuestionEditor({ q }: { q: Question }) {
           )}
           {feats.sum && (
             <>
+              {/* 2026-11-13: the word beside the total — "Total" unless the programmer writes another; display only */}
+              {q.type === "allocation" && (
+                <label className="f"><span>Total label</span>
+                  <input className="input" style={{ width: 130 }} placeholder="Total" maxLength={80} data-testid="total-label"
+                    value={(q.settings as { totalLabel?: string }).totalLabel ?? ""}
+                    onChange={(e) => patchSettings({ totalLabel: e.target.value || undefined } as never)} /></label>
+              )}
               <label className="f"><span>Sum target</span>
                 <input className="input" type="number" style={{ width: 90 }} data-testid="sum-target"
                   value={q.settings.sumTarget ?? ""}
@@ -3310,6 +3339,11 @@ export function QuestionsPanel() {
                       onClick={() => { setMenuFor(null); moveBlock(b.id, -1); }}>↑ Move block up</button>
                     <button className="menu-item" disabled={pi === blocks.length - 1}
                       onClick={() => { setMenuFor(null); moveBlock(b.id, 1); }}>↓ Move block down</button>
+                    {/* 2026-11-13: automatic sequential codes for this block (engine autoCode.ts) — off for blocks made before */}
+                    <button className="menu-item" data-testid="block-auto-code" disabled={s.codesFrozen}
+                      title={s.codesFrozen ? "Codes are frozen once responses exist" : "Codes follow the first question's code (S1 → S2, S3 …) and stay in sequence when questions are added, deleted or moved; logic, piping and calculations follow"}
+                      onClick={() => { setMenuFor(null); s.update((d) => { const n = blockIn(d, b.id)?.node as any; if (n) { if (n.autoCode) delete n.autoCode; else n.autoCode = true; } }); }}>
+                      {(b.node as any).autoCode ? "✓ Automatic question codes (on)" : "Automatic question codes (off — manual)"}</button>
                     <button className="menu-item" data-testid="move-block-to"
                       onClick={() => { setMenuFor(null); setPlacement({ mode: "move", blockId: b.id, title: b.title || `Block ${pi + 1}` }); }}>⇅ Move block before / after…</button>
                     <button className="menu-item" data-testid="add-block-before"

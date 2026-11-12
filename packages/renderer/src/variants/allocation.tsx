@@ -5,6 +5,9 @@ import { registerVariantRenderer } from "./registry";
 import { useOptions } from "./shared";
 import { anchor } from "../authoring";
 
+/** the programmer's own word for the total (settings.totalLabel); empty = this layout shows the number alone, as before */
+export const ownTotalLabel = (q: QRProps["q"]): string => String((q.settings as { totalLabel?: string }).totalLabel ?? "").trim();
+
 /**
  * allocation family renderers — see docs/VARIANT-BATCH.md.
  *
@@ -81,7 +84,7 @@ export function SliderAllocation(p: QRProps) {
         );
       })}
       <div className={`rs-sliderallocation-total ${state}`} data-testid="alloc-total">
-        <strong>{total}{target != null ? ` / ${target}` : ""}{unit}</strong>
+        <strong>{ownTotalLabel(p.q) && <><span data-testid="alloc-total-label">{ownTotalLabel(p.q)}</span>: </>}{total}{target != null ? ` / ${target}` : ""}{unit}</strong>
         {remaining != null && remaining > 0 && (
           <span className="rs-sliderallocation-left">{remaining}{unit} left to assign</span>
         )}

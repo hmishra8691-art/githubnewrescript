@@ -56,9 +56,16 @@ const INLINE_TOOLS = TOOLS.filter((t) => !t.cmd.startsWith("insert"));
  * what the brief asks for and what a stylesheet can override. The size is
  * applied as a span with `font-size`, by wrapping the selection.
  */
-const SIZES: { value: string; label: string }[] = [
-  { value: "0.8em", label: "small" }, { value: "1em", label: "normal" }, { value: "1.25em", label: "large" }, { value: "1.5em", label: "x-large" }, { value: "2em", label: "xx-large" },
-];
+/*
+ * NUMERIC SIZES (2026-11-13), like a spreadsheet's size box: 8 … 72, or any number typed in. Stored as `font-size: Npx`
+ * on the span. Text sized with the earlier names (small / large / x-large …, stored in em) keeps its size; picking a
+ * number replaces it.
+ */
+const SIZES: number[] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+const sizeCss = (raw: string): string | null => {
+  const n = Number(String(raw).trim().replace(/px$/i, ""));
+  return Number.isFinite(n) && n >= 6 && n <= 200 ? `font-size: ${Math.round(n * 10) / 10}px` : null;
+};
 
 function applyInlineStyle(css: string) {
   const sel = window.getSelection();
@@ -93,6 +100,20 @@ export function RteToolbar({ exec, onLink, onMedia, insertPipe, questionId, mode
 }) {
   const tools = compact ? INLINE_TOOLS : TOOLS;
   const stop = (e: React.MouseEvent) => e.preventDefault();
+  /*
+   * The size box takes the focus (it is typed into), which would drop the selection in the text. The selection is
+   * remembered when the box is entered and put back before the size is applied.
+   */
+  const savedRange = React.useRef<Range | null>(null);
+  const rememberSelection = () => { const sel = window.getSelection(); savedRange.current = sel && sel.rangeCount && !sel.getRangeAt(0).collapsed ? sel.getRangeAt(0).cloneRange() : null; };
+  const applySize = (raw: string) => {
+    const css = sizeCss(raw);
+    if (!css) return;
+    const sel = window.getSelection();
+    if (savedRange.current && sel) { sel.removeAllRanges(); sel.addRange(savedRange.current); }
+    onStyle(css);
+    savedRange.current = null;
+  };
   return (
     <div className={`rte-bar ${compact ? "rte-bar-compact" : ""}`} onMouseDown={stop}>
       {tools.map((t) => (
@@ -102,11 +123,13 @@ export function RteToolbar({ exec, onLink, onMedia, insertPipe, questionId, mode
       ))}
       <button type="button" className="rte-btn" title="Insert link" onMouseDown={stop} onClick={onLink}>🔗</button>
       <button type="button" className="rte-btn" title="Insert image, video or audio — from the asset library or a URL" data-testid="rte-media" onMouseDown={stop} onClick={onMedia}>🖼</button>
-      <select className="rte-btn rte-size" title="Font size" defaultValue="" onMouseDown={(e) => e.stopPropagation()}
-        onChange={(e) => { if (e.target.value) { onStyle(`font-size: ${e.target.value}`); e.target.value = ""; } }}>
-        <option value="" disabled>size</option>
-        {SIZES.map((sz) => <option key={sz.value} value={sz.value}>{sz.label}</option>)}
-      </select>
+      {/* a number box with the usual sizes offered: pick one or type any size (6–200), Enter applies it to the selection */}
+      <input className="rte-btn rte-size" list="rte-font-sizes" inputMode="decimal" placeholder="size" title="Font size — pick a size or type a number" aria-label="Font size"
+        data-testid="rte-font-size" style={{ width: 54 }} onMouseDown={(e) => { e.stopPropagation(); rememberSelection(); }}
+        onChange={(e) => { /* a size chosen from the list applies at once; a typed one waits for Enter */ const native = e.nativeEvent as InputEvent; if (native.inputType === "insertReplacementText" || native.inputType === undefined) { applySize(e.target.value); e.target.value = ""; } }}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applySize((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = ""; } }}
+        onBlur={(e) => { if (e.target.value) { applySize(e.target.value); e.target.value = ""; } }} />
+      <datalist id="rte-font-sizes">{SIZES.map((n) => <option key={n} value={n} />)}</datalist>
       <label className="rte-btn" title="Text color" style={{ padding: "0 4px" }} onMouseDown={(e) => e.stopPropagation()}>
         A<input type="color" style={{ width: 16, height: 14, border: "none", padding: 0, background: "none", verticalAlign: "middle", marginLeft: 2 }}
           onChange={(e) => exec("foreColor", e.target.value)} />

@@ -1273,7 +1273,23 @@ export function validateQuestion(
     const cols = view.columns.filter((c) => !c.readOnly && !c.expression);
     const target = q.settings.sumTarget;
     const unit = q.settings.sumUnit ?? "";
-    for (const row of view.rows) {
+    /* 2026-11-13: the calculation method — rows (default, as before), columns, or both, each checked on its own */
+    const axis = (q.settings as { sumAxis?: string }).sumAxis ?? "row";
+    if (axis === "column" || axis === "both") {
+      const colTarget = (q.settings as { columnSumTarget?: number }).columnSumTarget ?? target;
+      /* an untouched optional grid is not a failed total (the same rule the rows follow) */
+      if (!(isEmpty(value) && !q.required)) {
+        for (const col of cols) {
+          const vals = view.rows.map((r) => cells?.[String(r.code)]?.[col.id]);
+          const filled = vals.filter((v) => !isEmpty(v));
+          const label = col.label.replace(/<[^>]*>/g, "");
+          if (!filled.length && !q.required) continue;
+          const total = vals.reduce((a: number, b) => a + (Number(b) || 0), 0);
+          if (total !== colTarget) push(`Column “${label}” must total ${colTarget}${unit} (currently ${total}${unit}).`, { columnId: col.id });
+        }
+      }
+    }
+    for (const row of axis === "column" ? [] : view.rows) {
       const rc = String(row.code);
       const label = row.label.replace(/<[^>]*>/g, "");
       const vals = cols.map((c) => cells?.[rc]?.[c.id]);

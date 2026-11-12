@@ -325,6 +325,8 @@ export type FlowNode =
       timer?: Timer;
       /** S5a (AQ-12): review-your-answers page — see the zod object below */
       review?: { enabled: boolean; title?: string; textLimit?: number; excludeQuestionIds?: string[] };
+      /** 2026-11-13: automatic sequential question codes in this block (engine autoCode.ts); absent = codes are typed by hand */
+      autoCode?: boolean;
     }
   | {
       type: "section";
@@ -341,6 +343,7 @@ export type FlowNode =
       mediaUrl?: string;
       children: FlowNode[];
       visibleIf?: Condition;
+      autoCode?: boolean;
     }
   | {
       type: "randomizer";
@@ -518,6 +521,12 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       /** S4b (GA-05): a native page timer — one clock for the page; see timer.ts */
       timer: Timer.optional(),
       /**
+       * AUTOMATIC QUESTION CODES (2026-11-13). When true, the questions of this block are coded in sequence from the
+       * first one's code (S1 → S2, S3 …) and stay in sequence when one is added, deleted or moved; references follow
+       * (engine autoCode.ts). Absent / false = manual codes, which is every block made before this.
+       */
+      autoCode: z.boolean().optional(),
+      /**
        * S5a (AQ-12) REVIEW YOUR ANSWERS: this page lists the respondent's answers so far (visited pages before it),
        * grouped by section, with "Change" links back (section navigation's goToPage — visited pages only) and a
        * "Return to review". Hidden questions are never listed; open-end text is cut at `textLimit` characters.
@@ -544,6 +553,8 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       mediaUrl: z.string().optional(),
       children: z.array(FlowNode),
       visibleIf: Condition.optional(),
+      /** automatic question codes for the whole block — see the page node */
+      autoCode: z.boolean().optional(),
     }),
     z.object({
       type: z.literal("randomizer"),

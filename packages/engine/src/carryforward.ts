@@ -221,9 +221,42 @@ function carriedOptions(cf: CarryForward, ctx: EvalContext): Option[] {
     const cells = answer && typeof answer === "object" && !Array.isArray(answer) ? answer as Record<string, unknown> : {};
     codes = codes.filter((c) => rowHoldsColumn(cells[String(c)], cf.columns!));
   }
+  /* 2026-11-13: + always, − exclude (exclude wins), in the source's own order when both sets are known */
+  const always = new Set((cf.always ?? []).map(String));
+  const exclude = new Set((cf.exclude ?? []).map(String));
+  if (always.size) {
+    const have = new Set(codes.map(String));
+    const universe = codesFrom(cf.sourceQuestionId, "all", ctx);
+    const pos = new Map(universe.map((c, i) => [String(c), i]));
+    const extra = universe.filter((c) => always.has(String(c)) && !have.has(String(c)));
+    if (extra.length) {
+      const sourceOrdered = codes.every((c, i) => i === 0 || (pos.get(String(codes[i - 1])) ?? -1) < (pos.get(String(c)) ?? -1));
+      codes = sourceOrdered ? universe.filter((c) => have.has(String(c)) || always.has(String(c))) : [...codes, ...extra];
+    }
+  }
+  if (exclude.size) codes = codes.filter((c) => !exclude.has(String(c)));
   const pool: Option[] = codes.map((code) => optionFromSource(src, code, ctx.def));
-  if (!cf.where) return pool;
-  return pool.filter((o) => evaluateCondition(cf.where, withLegacyOptionLoop(ctx, o)));
+  const kept = cf.where ? pool.filter((o) => always.has(String(o.code)) || evaluateCondition(cf.where, withLegacyOptionLoop(ctx, o))) : pool;
+  return kept.map((o) => carriedWording(cf, o));
+}
+
+/**
+ * The wording a carried item shows in THIS question (2026-11-13): its own entry in `labels`, else `labelTemplate`
+ * with the source's label in place of {{label}}, else the source's label. The code — what is stored — never changes.
+ */
+export function carriedWording<T extends { code: string | number; label: string }>(cf: Pick<CarryForward, "labels" | "labelTemplate">, item: T): T {
+  const own = cf.labels?.[String(item.code)];
+  if (typeof own === "string" && own.trim()) return { ...item, label: own };
+  const tpl = cf.labelTemplate;
+  if (typeof tpl === "string" && tpl.trim()) return { ...item, label: tpl.includes("{{label}}") ? tpl.split("{{label}}").join(item.label) : `${item.label} ${tpl}` };
+  return item;
+}
+
+/** this question's own options beside the carried ones — never a code the carried list already uses */
+function withOwn<T extends { code: string | number }>(carried: T[], own: T[], keepOwn: boolean | undefined): T[] {
+  if (!keepOwn) return carried;
+  const used = new Set(carried.map((c) => String(c.code)));
+  return [...carried, ...own.filter((o) => !used.has(String(o.code)))];
 }
 
 /**
@@ -336,8 +369,10 @@ export function authoringQuestionView(
   } finally {
     resolvingView.delete(q.id);
   }
-  const pool: ResolvedListItem[] = srcView.options.length ? srcView.options : srcView.rows;
-  const tag = (i: ResolvedListItem): ResolvedListItem => ({
+  /* 2026-11-13: the builder's view follows the same rules as the respondent's — excluded codes are not listed, wording is this question's */
+  const excluded = new Set((cf.exclude ?? []).map(String));
+  const pool: ResolvedListItem[] = (srcView.options.length ? srcView.options : srcView.rows).filter((i) => !excluded.has(String(i.code)));
+  const tag = (i: ResolvedListItem): ResolvedListItem => carriedWording(cf, {
     code: i.code,
     label: i.label,
     sourceQuestionId: i.sourceQuestionId ?? src.id,
@@ -346,10 +381,11 @@ export function authoringQuestionView(
 
   if (cf.into === "rows") {
     const rows: QuestionRow[] = pool.map((i) => ({ ...tag(i), flags: [], validation: [], required: false }));
-    return { ...q, rows: cf.keepOwn ? [...rows, ...q.rows] : rows };
+    return { ...q, rows: withOwn(rows, q.rows, cf.keepOwn) };
   }
-  const options: Option[] = pool.map((i) => ({ ...tag(i), flags: [] }));
-  return { ...q, options: cf.keepOwn ? [...options, ...q.options] : options };
+  /* a carried option keeps the source's flags (an "Other — specify" stays one) */
+  const options: Option[] = pool.map((i) => ({ ...tag(i), flags: ((i as Option).flags ?? []) as Option["flags"] }));
+  return { ...q, options: withOwn(options, q.options, cf.keepOwn) };
 }
 
 /* ------------------------------------------------------------ debug trace */
@@ -1295,7 +1331,7 @@ interface RunOpts {
 export function carrySourceOptions(q: Question, ctx: EvalContext): Option[] {
   if (!q.carryForward || q.carryForward.into !== "options") return q.options;
   const carried = carriedOptions(q.carryForward, ctx);
-  return q.carryForward.keepOwn ? [...carried, ...q.options] : carried;
+  return withOwn(carried, q.options, q.carryForward.keepOwn);
 }
 
 /** Stage 1 of the row pipeline — see `carrySourceOptions`. */
@@ -1310,7 +1346,7 @@ export function carrySourceRows(q: Question, ctx: EvalContext): QuestionRow[] {
     sourceQuestionId: o.sourceQuestionId,
     sourceCode: o.sourceCode,
   }));
-  return q.carryForward.keepOwn ? [...rows, ...q.rows] : rows;
+  return withOwn(rows, q.rows, q.carryForward.keepOwn);
 }
 
 function runOptions(

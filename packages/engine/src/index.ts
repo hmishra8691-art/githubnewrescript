@@ -284,6 +284,7 @@ export * from "./autoNext.js";
 export * from "./consent.js";
 export * from "./structureLint.js";
 export * from "./blockPlacement.js";
+export * from "./autoCode.js";
 export { importQuestions } from "./questionImport.js";
 export type { ImportResult } from "./questionImport.js";
 export { programmingAuditRows } from "./programmingAudit.js";

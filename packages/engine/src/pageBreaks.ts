@@ -37,6 +37,8 @@ export function wrapBlock(b: BlockRef, ids: IdMinter = defaultIds): any {
   if (page.title) { blockNode.title = page.title; delete page.title; }
   if (page.showTitle !== undefined) { blockNode.showTitle = page.showTitle; delete page.showTitle; }
   if (page.visibleIf) { blockNode.visibleIf = page.visibleIf; delete page.visibleIf; }
+  /* automatic question codes belong to the block (2026-11-13) */
+  if (page.autoCode !== undefined) { blockNode.autoCode = page.autoCode; delete page.autoCode; }
   b.parent.splice(b.parent.indexOf(page), 1, blockNode);
   return blockNode;
 }
@@ -50,6 +52,7 @@ export function unwrapIfSingle(b: BlockRef): void {
   if (b.node.title && !page.title) page.title = b.node.title;
   if (b.node.showTitle !== undefined && page.showTitle === undefined) page.showTitle = b.node.showTitle;
   if (b.node.visibleIf && !page.visibleIf) page.visibleIf = b.node.visibleIf;
+  if (b.node.autoCode !== undefined && page.autoCode === undefined) page.autoCode = b.node.autoCode;
   b.parent.splice(b.parent.indexOf(b.node), 1, page);
 }
 

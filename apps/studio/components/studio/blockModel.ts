@@ -27,7 +27,8 @@ export { unwrapIfSingle };
 
 /** A fresh, empty block — one page, because it has no breaks yet. */
 export function newBlockNode(title?: string): any {
-  const node: any = { type: "page", id: uid("page"), questionIds: [] };
+  /* a new block numbers its own questions (2026-11-13, engine autoCode.ts); the block menu switches it to manual codes */
+  const node: any = { type: "page", id: uid("page"), questionIds: [], autoCode: true };
   if (title) node.title = title;
   return node;
 }
