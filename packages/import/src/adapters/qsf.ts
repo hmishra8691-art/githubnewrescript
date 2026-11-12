@@ -198,17 +198,6 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
           break;
         }
         case "Branch": {
-          /*
-           * "If the device is mobile, set a field" — a device flag for the data, not routing. There is no device
-           * condition here, and importing the branch without one would set the field for everybody (both branches
-           * of a mobile / not-mobile pair would run). It is left out, and said: the platform records the device.
-           */
-          const kids = arr<Json>(f.Flow);
-          if (/"LogicType":"DeviceType"/.test(JSON.stringify(f.BranchLogic ?? "")) && kids.length > 0 && kids.every((k) => k.Type === "EmbeddedData")) {
-            const fields = kids.flatMap((k) => arr<Json>(k.EmbeddedData).map((e) => `${str(e.Field)} = ${str(e.Value)}`));
-            issues.push({ location: `Flow · Branch ${fid}`, type: "dropped", severity: "medium", message: `A branch that sets ${fields.join(", ") || "a field"} when the device is ${/Is ?Not/i.test(plainText(JSON.stringify(f.BranchLogic))) ? "not mobile" : "mobile"} was not carried: there is no device condition here, and without it the field would be set for everyone.`, suggestion: "The respondent's device is recorded with the response (quality and telemetry data); use that instead of the field.", autoAttempted: true });
-            break;
-          }
           const when = f.BranchLogic ? readLogic(f.BranchLogic, `Flow · Branch ${fid}`, issues) : { t: "const", value: true } as CExpr;
           out.push({ t: "branch", sourceId: fid, when, children: readFlow(arr(f.Flow), fid), description: plainText(f.Description) || undefined });
           break;
@@ -840,6 +829,14 @@ function readExpression(x: Json, location: string, issues: Issue[]): CExpr {
     /* one cell of a cross quota (`SubQuotaID`) is that cell: "cell 0 has not been met" */
     const cell = str(x.QuotaType) === "Cross" && /^\d+$/.test(str(x.SubQuotaID)) ? `_c${str(x.SubQuotaID)}` : "";
     return { t: "cmp", ref: { kind: "quota", id: `${str(x.QuotaID || x.LeftOperand).replace(/^qo:\/\//, "").replace(/\/.*$/, "")}${cell}` }, op: full ? "eq" : "ne", value: 1 };
+  }
+  /* the device class is a native behaviour source: "mobile" / "tablet" / "desktop" */
+  if (lt === "DeviceType") {
+    const cls = str(x.LeftOperand).toLowerCase();
+    const not = /not/i.test(str(x.Operator));
+    if (!["mobile", "tablet", "desktop"].includes(cls)) return raw(`a device type “${cls}”`);
+    issues.push({ location, type: "converted", severity: "low", message: `A condition on the device type (${not ? "is not" : "is"} ${cls}) reads the device class recorded for the respondent. A tablet is its own class here, so it counts as “not mobile”.`, autoAttempted: true });
+    return { t: "cmp", ref: { kind: "behavior", id: "device" }, op: not ? "ne" : "eq", value: cls };
   }
   /* a literal the builder leaves behind ("If False") */
   if (lt === "BooleanValue") return { t: "const", value: /^true$/i.test(str(x.Value)) };

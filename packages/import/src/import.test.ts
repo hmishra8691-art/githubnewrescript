@@ -212,7 +212,9 @@ test("Decipher: labels preserved, grids, hidden questions, Python conditions tra
   const inner = walk(lp.children).flatMap((x) => (x.type === "page" ? x.questionIds : []));
   assert.equal(find(def, inner[0]).text, "Would you buy the {{loop.model}}?");
   assert.ok(a.result!.mapping.some((e) => e.source === "q7_[loopvar: model]" && e.rescript === "q7_loopvar_model" && /not a valid identifier/.test(e.reason ?? "")), "an invalid label is made valid, and the map says so");
-  assert.ok(a.report!.risks.medium.some((i) => /quota sheet/.test(i.message)));
+  /* 2026-11-11: the quota sheet is ASKED FOR — one line, with the checkpoints that wait on it */
+  assert.ok(a.report!.risks.high.some((i) => /quota sheet is needed/.test(i.message)));
+  assert.deepEqual(a.report!.requiredFiles.map((f) => f.kind), ["quota_sheet"]);
   assert.deepEqual((def.flow[0] as Extract<FlowNode, { type: "embedded_data" }>).fields.map((f) => [f.name, f.source]), [["psid", "url"], ["source", "url"]], "sample-source variables");
 });
 
@@ -341,7 +343,9 @@ test("custom code is preserved as DISABLED scripts; the project carries its revi
   const dy = await analyzeImport(enc(`<survey name="t"><radio label="q1"><title>A</title><row label="r1">x</row><row label="r2">y</row></radio><suspend/><exec>\nrec = File("zip.dat", "id").get(q1.val)\nq1.val = int(rec["x"])\n</exec><radio label="q2"><title>B</title><row label="r1">x</row></radio></survey>`), "c.xml", { surveyId: "s3", uid });
   const exec = dy.result!.def!.scripts.find((x) => x.scope === "survey" && /exec/.test(x.name));
   assert.ok(exec && exec.enabled === false && /File\(/.test(exec.code), "a Decipher <exec> that is not converted is kept, disabled");
-  assert.ok(dy.report!.risks.high.some((i) => /Python <exec>/.test(i.message)));
+  /* 2026-11-11: it reads a data file, so the report asks for that file by name */
+  assert.ok(dy.report!.risks.high.some((i) => /data file “zip\.dat” is needed/.test(i.message)));
+  assert.deepEqual(dy.report!.requiredFiles.map((f) => [f.kind, f.name, f.key]), [["data_file", "zip.dat", "id"]]);
   const rec = def.imports![0];
   assert.ok(rec.review.length >= 3);
   assert.ok(rec.review.every((r) => r.severity === "high" || r.severity === "medium"));

@@ -3,7 +3,7 @@ import type { Reconstruction } from "./reconstruct.js";
 import { clarifications, type Clarification } from "./clarify.js";
 import { compatibility, outline, blockList, type Compatibility, type OutlineNode } from "./review.js";
 import { classifyMapping, mappingSummary, type MappingDecision, type MappingClass } from "./mappingDecision.js";
-import type { CanonicalSurvey, CanonicalStats, Issue, InventoryFeature, InventoryItem, CanonicalAsset } from "./canonical.js";
+import type { RequiredFile, CanonicalSurvey, CanonicalStats, Issue, InventoryFeature, InventoryItem, CanonicalAsset } from "./canonical.js";
 import { canonicalStats } from "./canonical.js";
 import type { MapResult, ImportScope, UnresolvedReference } from "./map.js";
 import type { Detection } from "./detect.js";
@@ -112,6 +112,8 @@ export interface MigrationReport {
   outline: OutlineNode[];
   /** I7: the blocks a person can choose to import */
   blocks: { id: string; title: string; questions: number }[];
+  /** companion files the source needs and the export does not carry (quota sheet, data files): what to send, and what waits on each */
+  requiredFiles: RequiredFile[];
   /** 2026-11-02: carried lists, masks, loops and pipes — checked, self-corrected and explained (reconstruct.ts) */
   reconstruction?: Reconstruction;
 }
@@ -157,6 +159,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     { const ms = mapping.summary; const notExact = ms.components + ms.needs_runtime + ms.needs_js + ms.unsupported; if (notExact) summary.push(`Question types: ${ms.exact} native${ms.components ? `, ${ms.components} rebuilt from Studio components` : ""}${ms.needs_js ? `, ${ms.needs_js} needing their custom script reviewed` : ""}${ms.needs_runtime ? `, ${ms.needs_runtime} needing a feature Rescript does not have` : ""}${ms.unsupported ? `, ${ms.unsupported} with no equivalent (placeholders)` : ""}.`); }
     { const gf = graph.findings.filter((f) => f.severity !== "info"); if (gf.length) summary.push(`The source's dependency check found ${plural(gf.length, "problem")} in the original survey: ${Object.entries(graph.stats.findings).filter(([k]) => k !== "unused_embedded").map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(", ")}.`); }
     { const js = m.jsMigrations ?? []; if (js.length) { const n = (v: string) => js.filter((x) => x.verdict === v).length; summary.push(`${plural(js.length, "custom script")} read, none run: ${[n("compatible") ? `${n("compatible")} translated (attached, switched off for review)` : "", n("native") ? `${n("native")} reproduced by a native setting` : "", n("partial") ? `${n("partial")} need${n("partial") === 1 ? "s" : ""} a person` : "", n("incompatible") ? `${n("incompatible")} cannot run here (page or network access)` : ""].filter(Boolean).join(", ")}.`); } }
+    for (const f of c.requiredFiles ?? []) summary.push(`Needs a file: ${f.kind === "quota_sheet" ? "the quota sheet" : f.name} — ${f.why} (${plural(f.neededFor.length, "element")} wait on it).`);
     { const rc = m.reconstruction; if (rc && rc.items.length) { const k = rc.counts; summary.push(`Dynamic behaviour: ${plural(k.reconstructed, "relationship")} rebuilt natively (carried lists, masks, loops, piping)${k.alternative ? `, ${k.alternative} rebuilt another native way` : ""}${k.confirm ? `, ${k.confirm} to confirm` : ""}${k.partial ? `, ${k.partial} with a known difference` : ""}${k.unsupported ? `, ${k.unsupported} not possible here` : ""}.`); } }
     if (asks.length) summary.push(`${plural(asks.length, "decision")} the source left open ${asks.length === 1 ? "needs" : "need"} your answer before the logic is complete — each has a recommended answer.`);
     if (fid.unresolved.length) summary.push(`${plural(fid.unresolved.length, "reference")} point${fid.unresolved.length === 1 ? "s" : ""} at something that is not in the imported survey.`);
@@ -177,6 +180,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     scope, detected, created: m.def ? cr : null, converted, review, risks, confidence,
     validation: m.quality ? { errors: m.quality.errors.length, warnings: m.quality.warnings.length, deployable: m.quality.deployable } : null,
     merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid, mapping, graph, scripts: m.jsMigrations ?? [], clarifications: asks,
+    requiredFiles: c.requiredFiles ?? [],
     outline: outline(c), blocks: blockList(c), ...(m.reconstruction ? { reconstruction: m.reconstruction } : {}),
   } as Omit<MigrationReport, "compatibility">;
   return { ...out, compatibility: compatibility(out as MigrationReport, m.inventory) };

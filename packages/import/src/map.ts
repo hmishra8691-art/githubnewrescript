@@ -376,6 +376,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       const r = x.ref;
       const rule = (source: Record<string, unknown>, operator: string, value?: unknown, value2?: unknown): Condition => ({ type: "rule", source, operator, ...(value !== undefined ? { value } : {}), ...(value2 !== undefined ? { value2 } : {}) } as unknown as Condition);
       if (r.kind === "embedded") return rule({ kind: "embedded", ref: r.id }, opName(x.op), x.value);
+      /* seconds since the interview started, or the device class — native behaviour sources */
+      if (r.kind === "behavior") return rule({ kind: "behavior", ref: r.id }, opName(x.op), x.value);
       if (r.kind === "loop") return rule({ kind: "loop", ref: r.id === "field1" ? "label" : r.id }, opName(x.op), x.value);
       if (r.kind === "quota") {
         /*

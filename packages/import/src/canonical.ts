@@ -128,8 +128,8 @@ export type COp =
   | "rankEquals";
 
 export interface CRef {
-  kind: "question" | "embedded" | "loop" | "quota" | "unknown";
-  /** source id: QID15, q3, a field name, a loop field */
+  kind: "question" | "embedded" | "loop" | "quota" | "behavior" | "unknown";
+  /** source id: QID15, q3, a field name, a loop field; for "behavior": "elapsed" (seconds since the start) or "device" */
   id: string;
   /** a choice's SOURCE id (translated to its code by the mapper) */
   choice?: string;
@@ -321,6 +321,22 @@ export interface CanonicalVendor {
   redirects: { complete?: string; screenout?: string; quota_full?: string; terminate?: string };
 }
 
+/**
+ * A COMPANION FILE THE SOURCE NEEDS AND THE EXPORT DOES NOT CARRY: Decipher's quota sheet, a data file an <exec>
+ * looks answers up in. The import says which file, what it is for and which elements wait on it — one line per
+ * file, not one finding per element — so the person knows exactly what to send.
+ */
+export interface RequiredFile {
+  kind: "quota_sheet" | "data_file";
+  /** the file's name as the source names it ("zipstate.dat"), or what it is ("quota sheet") */
+  name: string;
+  /** the key column a data file is read by, when the source says */
+  key?: string;
+  why: string;
+  /** the questions, checkpoints and terminations that wait on it */
+  neededFor: string[];
+}
+
 export interface CanonicalSurvey {
   source: {
     platform: SourcePlatform;
@@ -340,6 +356,8 @@ export interface CanonicalSurvey {
   /** flow-level custom code (Decipher top-level exec, Qualtrics survey-level JS) */
   custom: CanonicalCustom[];
   issues: Issue[];
+  /** companion files the source needs and the export does not carry — see RequiredFile */
+  requiredFiles?: RequiredFile[];
   /** sample suppliers with their return links (Decipher <samplesource> with exits) */
   vendors?: CanonicalVendor[];
   /** images and files referred to, by reference — see CanonicalAsset */

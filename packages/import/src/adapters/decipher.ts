@@ -1,9 +1,9 @@
 import type {
-  CanonicalVendor, CanonicalSurveyOptions,
+  CanonicalVendor, CanonicalSurveyOptions, RequiredFile,
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CanonicalCustom,
   CanonicalEmbeddedField, CFlow, CExpr, CRef, COp, CLoop, CanonicalKind, Issue,
 } from "../canonical.js";
-import { plainText } from "../canonical.js";
+import { plainText, exprHasRaw } from "../canonical.js";
 import { parseXml, kids, kid, type XmlNode } from "../xml.js";
 import { exclusive, expandCounts, inlineDispatchers, readDispatchers, readExecAssignments, type Dispatcher, type ExecRow } from "./decipherExec.js";
 
@@ -107,7 +107,7 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
   let liveAssumed = false;
   const prepare = (src: string): string => {
     /* "is this the live survey?" is yes for every respondent a published survey has */
-    let out = rewriteIdioms(src)
+    let out = rewriteIdioms(src).replace(/\btimeSpent\(\)/g, "__elapsed__")
       /* anyCodes(Q, ['r1', 'ch:2-5']) — "any of these answers"; a `prefix:a-b` entry is a run of labels */
       .replace(/\banyCodes\(\s*(\w+)\s*,\s*\[([^\]]*)\]\s*\)/g, (m, qid: string, list: string) => {
         const q = questions.get(qid); if (!q) return m;
@@ -152,8 +152,10 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
     for (let k = leaves.length - 1; k >= 0; k--) if (dead(leaves[k].guard)) leaves.splice(k, 1);
     for (const [i, l] of leaves.entries()) {
       const q = questions.get(l.target)!;
-      if (!q.options.some((o) => o.sourceId === l.option)) return `${l.target} has no answer ${l.option}`;
       let when = l.guard ? cond(l.guard, where, scratch) : undefined;
+      /* an assignment that can never run (`if row.label != "r9"` on row r9) names nothing that has to exist */
+      if (!scratch.length && when?.t === "const" && !when.value) continue;
+      if (!q.options.some((o) => o.sourceId === l.option)) return `${l.target} has no answer ${l.option}`;
       if (scratch.length || (when && when.t === "raw")) return `the condition “${l.guard.slice(0, 140)}” could not be read`;
       /* one answer: an assignment further down the block replaces this one, so this one holds only when none of those do */
       if (l.single) {
@@ -178,6 +180,70 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
     return true;
   };
 
+  /*
+   * COMPANION FILES. Decipher keeps quotas in a quota sheet and lets <exec> look answers up in data files
+   * (`Zipfile = File("zipstate.dat", "id")`, a MaxDiff design). Neither is in the XML. Everything that waits on
+   * one is gathered under that file, so the report asks for the file once and says what it will switch on.
+   */
+  const required = new Map<string, RequiredFile>();
+  const need = (kind: RequiredFile["kind"], name: string, why: string, element: string, key?: string) => {
+    const f = required.get(name) ?? { kind, name, why, neededFor: [], ...(key ? { key } : {}) };
+    if (!f.neededFor.includes(element)) f.neededFor.push(element);
+    required.set(name, f);
+  };
+  const QUOTA_SHEET = "quota sheet";
+  const fileVars = new Map<string, { file: string; key?: string }>();
+  for (const x of findDeep(root, "exec")) {
+    const code = x.inner ?? x.text;
+    for (const m of code.matchAll(/(\w+)\s*=\s*File\(\s*["']([^"']+)["']\s*(?:,\s*["']([^"']+)["'])?/g)) fileVars.set(m[1], { file: m[2], ...(m[3] ? { key: m[3] } : {}) });
+    for (const m of code.matchAll(/(\w+)\s*=\s*setupMaxDiffFile\(\s*["']([^"']+)["']/g)) fileVars.set(m[1], { file: m[2] });
+  }
+  /* variables filled from a file lookup (`respInfo = Zipfile.get(S5.val)`) lead back to the file too */
+  for (const x of findDeep(root, "exec")) for (const m of (x.inner ?? x.text).matchAll(/(\w+)\s*=\s*(\w+)\.get\(/g)) { const f = fileVars.get(m[2]); if (f && !fileVars.has(m[1])) fileVars.set(m[1], f); }
+  /* a question whose own <exec> reads a file: code that reads or orders that question waits on the same file */
+  const fileOfQuestion = new Map<string, { file: string; key?: string }>();
+  { const scan = (n: XmlNode) => { for (const c of n.children) { if (QTAGS.has(c.name) && c.attrs.label) for (const v of kids(c, "exec")) { const code = v.inner ?? v.text; const hit = [...fileVars].find(([name]) => new RegExp(`\\b${name}\\b`).test(code)) ?? (/File\(\s*["']([^"']+)["']/.exec(code) ? ["", { file: /File\(\s*["']([^"']+)["']/.exec(code)![1] }] as const : undefined); if (hit) fileOfQuestion.set(c.attrs.label.replace(/_?\[loopvar:\s*label\]$/, ""), hit[1]); } scan(c); } }; scan(root); }
+  /** the file an <exec> waits on, if it waits on one: registers the need and returns true */
+  const waitsOnFile = (code: string, element: string): boolean => {
+    if (/\bhasMarker\(|getQuotaCells\(|\bp\.markers\b/.test(code)) { need("quota_sheet", QUOTA_SHEET, "Decipher's quota sheet holds the quota cells and their targets, and fills the hidden “picker” questions by least-fill", element); return true; }
+    const direct = /File\(\s*["']([^"']+)["']\s*(?:,\s*["']([^"']+)["'])?|setupMaxDiffFile\(\s*["']([^"']+)["']/.exec(code);
+    const via = [...fileVars].find(([v]) => new RegExp(`\\b${v}\\b`).test(code));
+    const dependent = [...fileOfQuestion].find(([label]) => new RegExp(`\\b${label}\\b`).test(code));
+    const f = direct ? { file: direct[1] ?? direct[3], key: direct[2] } : via?.[1] ?? dependent?.[1];
+    if (!f) return /\bsetupMaxDiffItems\w*\(|_expanded\.order\.index\(/.test(code) && [...fileVars.values()].some((v) => /maxdiff/i.test(v.file)) ? (need("data_file", [...fileVars.values()].find((v) => /maxdiff/i.test(v.file))!.file, "the MaxDiff design: which items each version and task shows", element), true) : false;
+    need("data_file", f.file, /maxdiff/i.test(f.file) ? "the MaxDiff design: which items each version and task shows" : `a lookup table${f.key ? ` keyed by “${f.key}”` : ""} that <exec> code reads answers from`, element, f.key);
+    return true;
+  };
+
+  /*
+   * "THE ROW WITH THE SAME ATTRIBUTE" — `for row in T.rows: if row.styles.cs.panel == S.selected.styles.cs.panel:
+   * T.val = row.index`: T takes the row whose cs:panel equals that of S's selected answer. The attributes are in
+   * the XML, so it is written out as plain assignments: `if S.r1 or S.r4: T.val = 0`.
+   */
+  const joinByRowAttribute = (code: string, target: XmlNode): string => {
+    const m = /^\s*for\s+(\w+)\s+in\s+(\w+)\.rows\s*:\s*\n\s*if\s+\1\.styles\.cs\.(\w+)\s*==\s*(\w+)\.selected\.styles\.cs\.\3\s*:\s*\n\s*\2\.val\s*=\s*\1\.index\s*$/.exec(code.replace(/\r/g, ""));
+    const src = m ? findDeep(root, "radio").concat(findDeep(root, "select")).find((x) => x.attrs.label === m[4]) : undefined;
+    /* `for row in T.rows: if Q.check(row.o.alt): T.val = row.index` — each row's own range is in its alt="18-24" */
+    const byAlt = /^\s*(?:if\s+(.+?):\s*\n\s*)?for\s+(\w+)\s+in\s+(\w+)\.rows\s*:\s*\n\s*(\w+)\s*=\s*\2\.o\.alt[^\n]*\n\s*if\s+(\w+)\.check\(\s*\4\s*\)\s*:\s*\n\s*\3\.val\s*=\s*\2\.index\s*(?:\n\s*break\s*)?$/.exec(code.replace(/\r/g, ""));
+    if (byAlt && target.attrs.label === byAlt[3]) {
+      const rows = kids(target, "row");
+      if (rows.length && rows.every((r) => /^(?:[\d\s,-]+|\s*(?:>=|<=|>|<)\s*\d+\s*)$/.test(r.attrs.alt ?? ""))) return rows.map((r, i) => `if ${byAlt[1] ? `(${byAlt[1]}) and ` : ""}${byAlt[5]}.check('${r.attrs.alt.trim()}'):\n  ${byAlt[3]}.val = ${i}`).join("\n");
+    }
+    if (!m || !src || target.attrs.label !== m[2]) return code;
+    const attr = `cs:${m[3]}`;
+    const lines = kids(target, "row").map((r, i) => { const same = kids(src, "row").concat(kids(src, "choice")).filter((x) => x.attrs[attr] !== undefined && x.attrs[attr] === r.attrs[attr]).map((x) => `${m[4]}.${x.attrs.label}`); return same.length ? `if ${same.join(" or ")}:\n  ${m[2]}.val = ${i}` : ""; }).filter(Boolean);
+    return lines.length ? lines.join("\n") : code;
+  };
+
+  /** code that changes no routing and no answer a respondent gives: said for what it is, at medium */
+  const softExec = (code: string, host: string): Pick<Issue, "type" | "severity" | "message" | "suggestion" | "autoAttempted"> | null => {
+    const bare = code.replace(/^\s*#.*$/gm, "");
+    if (/\btimeSpent\(\)/.test(bare) && /(?:^|\n)\s*(?:p\.\w+\s*=\s*timeSpent\(\)|\w+\.val\s*=\s*\(?\s*timeSpent\(\)\s*-\s*p\.\w+)/.test(bare)) return { type: "unsupported", severity: "medium", message: `${host ? `${host} records` : "Python code records"} how long a section took (timeSpent() between two points). That stopwatch is not reproduced; the time on every page is recorded with the response.`, suggestion: "Read the section time from the page timings in the data.", autoAttempted: false };
+    if (/^\s*group_rows\(/.test(bare) && !/\.val\s*=/.test(bare)) return { type: "unsupported", severity: "medium", message: `${host} keeps sets of rows together when its rows are shuffled (group_rows). The grouping is not reproduced: the rows shuffle one by one.`, suggestion: "Use option groups on the question if the sets must stay together.", autoAttempted: false };
+    if (/^\s*def\s+\w+\(/m.test(bare) && !/^\S/m.test(bare.replace(/^def\s[^\n]*\n(?:[ \t]+[^\n]*\n?|\s*\n)*/gm, ""))) return { type: "custom_logic", severity: "medium", message: `A library of Python helper functions (${[...bare.matchAll(/^def\s+(\w+)/gm)].map((m) => m[1]).join(", ")}) is defined here. Functions that conditions call were replaced by what they test; the others are used by validation or exec code that is reported where it is used.`, suggestion: "Nothing to do for the library itself.", autoAttempted: true };
+    return null;
+  };
+
   /* a block of `def`s none of which is called anywhere outside the block */
   const unusedHelpers = (code: string): boolean => {
     const rest = text.split(code).join("");
@@ -196,6 +262,45 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
     const out: CFlow[] = [];
     let pages: string[][] = [[]];
     let blockSeq = 0;
+    /*
+     * A COUNTER OVER ROWS — `cnt = 0; for xr in S12.rows: if <test on xr>: cnt += 1` — then `if cnt ge 4:`. There
+     * is no "count the rows that…" condition, but there is "count the answers selected": the rows that pass the
+     * test are coded into a hidden multiple-choice helper (one answer per row), and the counter becomes that
+     * helper's count. The helper sits on the page of the code that used the counter, and is named for it.
+     */
+    const withCounter = (code: string, host: string): string => {
+      const src = code.replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&").replace(/\r/g, "");
+      const m = /^[ \t]*(\w+)\s*=\s*0[ \t]*\n(?:[ \t]*(\w+)\s*=\s*\[([^\]]*)\][ \t]*\n)?\s*for\s+(\w+)\s+in\s+(\w+)\.rows\s*:[ \t]*\n[ \t]*if\s+(.+?):[ \t]*\n(?:[ \t]*if\s+(.+?):[ \t]*\n)?[ \t]*\1\s*\+=\s*1[ \t]*\n/m.exec(src);
+      const grid = m ? questions.get(m[5]) : undefined;
+      if (!m || !grid || !grid.rows.length || grid.rows.length > 60) return code;
+      const [, counter, listName, listBody, v, qid, c1, c2] = m;
+      const list = listBody !== undefined ? [...listBody.matchAll(/["']([^"']+)["']/g)].map((x) => x[1]) : [];
+      const helperId = `${host}_${counter}`;
+      if (questions.has(helperId)) return code;
+      const scratch: Issue[] = [];
+      const rules: { option: string; when?: CExpr }[] = [];
+      for (const row of grid.rows) {
+        const text = [c1, c2].filter(Boolean).map((c) => `(${c})`).join(" and ")
+          .replace(new RegExp(`\\b${v}\\.displayed\\b`, "g"), "True")
+          .replace(new RegExp(`\\b${v}\\.label\\s+in\\s+${listName ?? "\\w+"}\\b`, "g"), listName && list.includes(row.sourceId) ? "True" : "False")
+          .replace(new RegExp(`(\\w+)\\[\\s*${v}\\s*\\]`, "g"), `$1.${row.sourceId}`)
+          .replace(new RegExp(`\\b${v}\\.(?=c\\d|val\\b|ival\\b|any\\b)`, "g"), `${qid}.${row.sourceId}.`);
+        if (new RegExp(`\\b${v}\\b`).test(text)) return code;
+        const when = cond(text, `${host} · counter ${counter}`, scratch);
+        if (scratch.length || (when && exprHasRaw(when))) return code;
+        if (when?.t === "const" && !when.value) continue;
+        rules.push({ option: row.sourceId, ...(when && when.t !== "const" ? { when } : {}) });
+      }
+      const helper: CanonicalQuestion = {
+        sourceId: helperId, variable: helperId, text: `Counter “${counter}” of ${host}: the rows of ${qid} that pass its test`, kind: "multi", sourceType: "exec counter",
+        options: grid.rows.map((r, i) => ({ sourceId: r.sourceId, code: i + 1, label: r.label })), rows: [], required: false, validation: [], skips: [], custom: [], confidence: "confirmed",
+        notes: [`added by the import: the source counts rows of ${qid} in Python (“${counter}”); here the rows that pass are this hidden question's answers, and the count is how many are selected`], settings: { hidden: true }, punches: rules,
+      };
+      questions.set(helperId, helper);
+      pages[pages.length - 1].push(helperId);
+      issues.push({ location: `${host} · <exec>`, type: "converted", severity: "low", message: `The Python counter “${counter}” (how many rows of ${qid} pass a test) became a hidden helper question, ${helperId}, with ${rules.length} auto-punch rules; conditions on the counter read how many of its answers are selected.`, autoAttempted: true, refs: [host, qid] });
+      return src.replace(m[0], "").replace(new RegExp(`\\b${counter}\\b`, "g"), `${helperId}.count`);
+    };
     const flush = () => {
       const ps = pages.filter((p) => p.length);
       if (ps.length) out.push({ t: "block", sourceId: `${path}_part${++blockSeq}`, pages: ps });
@@ -210,9 +315,12 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
           const code = (v.inner ?? v.text).trim();
           if (!code) continue;
           if (/^(?:\s*\w+\.(?:rows|cols)\.order\s*=\s*\w+\.(?:rows|cols)\.order\s*)+$/.test(code)) { orderCopies.push(...[...code.matchAll(/(\w+)\.(?:rows|cols)\.order\s*=\s*(\w+)\./g)].map((m) => `${m[1]} ← ${m[2]}`)); continue; }
-          const done = execToPunches(code, `${q.sourceId} · <exec>`);
+          const done = execToPunches(withCounter(joinByRowAttribute(code, c), q.sourceId), `${q.sourceId} · <exec>`);
           if (done === true) continue;
+          if (waitsOnFile(code, q.sourceId)) { q.custom.push({ language: "python", code, location: q.sourceId, role: "exec in question (waits on a companion file)", refs: pyRefs(code, questions) }); q.confidence = "review"; continue; }
           q.custom.push({ language: "python", code, location: q.sourceId, role: `exec in question${v.attrs.when ? ` (${v.attrs.when})` : ""}`, refs: pyRefs(code, questions) });
+          const soft = softExec(code, q.sourceId);
+          if (soft) { issues.push({ location: `${q.sourceId} · <exec>`, ...soft }); continue; }
           issues.push({ location: `${q.sourceId} · <exec>`, type: "custom_logic", severity: "high", message: /\bhasMarker\(|getQuotaCells\(/.test(code) ? `${q.sourceId} is filled from Decipher's quota sheet (a picker / least-fill assignment that reads quota markers). The quota sheet is not part of the XML, so the assignment could not be rebuilt.` : done === null ? `${q.sourceId} runs Python code, which has no direct Rescript equivalent.` : `${q.sourceId} runs Python code that codes hidden variables, which could not be converted: ${done}.`, suggestion: "Recreate it as auto-punch rules on the hidden question.", autoAttempted: true, refs: [q.sourceId] });
           q.confidence = "review";
         }
@@ -262,13 +370,26 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
         }
       } else if (c.name === "term" && FRAUD_SERVICE.test(`${c.attrs.label ?? ""} ${c.attrs.cond ?? ""}`)) {
         fraudDropped++;
-      } else if (c.name === "term" && (/\btimeSpent\(\)/.test(c.attrs.cond ?? "") || [...qualityDropped].some((l) => new RegExp(`\\b${l}\\b`).test(c.attrs.cond ?? "")))) {
+      } else if (c.name === "term" && ([...qualityDropped].some((l) => new RegExp(`\\b${l}\\b`).test(c.attrs.cond ?? "")))) {
         qualityDropped.add(`term ${c.attrs.label ?? plainText(c.inner ?? c.text)}`);
       } else if (c.name === "term") {
         flush();
         const when = cond(c.attrs.cond, `term ${c.attrs.label ?? ""} · cond`) ?? { t: "const", value: true } as CExpr;
         /* a termination that is switched off (`cond="0"`, or a disposition defined as False) ends nobody: not carried */
         if (when.t === "const" && when.value === false) continue;
+        /*
+         * A termination whose condition could not be read is NOT carried as "terminate everyone" (it was). Nobody
+         * is ended by it, and the report says which termination is missing and why.
+         */
+        if (exprHasRaw(when)) {
+          const lookup = /\bp\.\w+/.test(c.attrs.cond ?? "") ? [...fileVars.values()].find((f) => !/maxdiff/i.test(f.file)) : undefined;
+          const waits = lookup ? { name: lookup.file, why: `a lookup table${lookup.key ? ` keyed by “${lookup.key}”` : ""} that <exec> code reads answers from` } : undefined;
+          if (waits) need("data_file", waits.name, waits.why, `termination ${c.attrs.label ?? ""} (${plainText(c.inner ?? c.text)})`, lookup?.key);
+          const at = issues.findIndex((i) => i.location === `term ${c.attrs.label ?? ""} · cond`);
+          const line: Issue = { location: `term ${c.attrs.label ?? ""}`, type: "custom_logic", severity: waits ? "medium" : "high", message: `The termination “${plainText(c.inner ?? c.text) || c.attrs.label}” (${(c.attrs.cond ?? "").trim()}) was not carried: its condition reads ${/\bp\.\w+/.test(c.attrs.cond ?? "") ? "a counter kept by Python code (how many times an answer was refused)" : "something that could not be converted"}. Nobody is ended by it here.${waits ? ` It belongs with the lookup in “${waits.name}”: once that file is in, an answer the file does not know can end the interview.` : ""}`, suggestion: "Add the termination in Architect once its rule is decided.", autoAttempted: true };
+          if (at >= 0) issues[at] = line; else issues.push(line);
+          continue;
+        }
         /* a quality termination (speeding, straight-lining, a failed check) is "terminated"; the rest are screen-outs */
         const quality = /speed|straight|quality|fraud|dupe|duplicate|attention|trap|cheat|bot\b/i.test(`${c.attrs.label ?? ""} ${c.attrs.markers ?? ""} ${plainText(c.inner ?? c.text)}`);
         out.push({ t: "branch", sourceId: c.attrs.label || `term_${out.length}`, when, children: [{ t: "end", sourceId: `${c.attrs.label || "term"}_end`, status: quality ? "terminated" : "screened", message: plainText(c.inner ?? c.text) || undefined }], description: `terminate: ${plainText(c.inner ?? c.text)}` });
@@ -291,6 +412,9 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
         else if (code && /^\w+\.val\s*=\s*str\(gv\.survey\.path\)[^\n]*$/.test(code)) issues.push({ location: "survey id", type: "dropped", severity: "info", message: "A hidden variable that records Decipher's own project path was not filled: the project has its own id here.", autoAttempted: true });
         else if (code && /^(?:\s*setMarker\(\s*["'][^"']*["']\s*\)\s*)+$/.test(code)) issues.push({ location: lastQ ? `exec after ${(lastQ as CanonicalQuestion).sourceId}` : "exec at survey start", type: "dropped", severity: "info", message: `A marker (${[...code.matchAll(/setMarker\(\s*["']([^"']*)["']/g)].map((m) => m[1]).join(", ")}) is a tag on the response for Decipher's reports; nothing in the survey reads it, so it was not carried.`, autoAttempted: true });
         else if (code && /^\s*def\s+\w+\(/m.test(code) && !/^\S/m.test(code.replace(/^\s*#.*$/gm, "").replace(/^def\s[^\n]*\n(?:[ \t]+[^\n]*\n?|\s*\n)*/gm, "")) && unusedHelpers(code)) issues.push({ location: "helper functions", type: "dropped", severity: "info", message: `A library of Python helper functions (${[...code.matchAll(/^def\s+(\w+)/gm)].map((m) => m[1]).join(", ")}) is defined but never called in this survey; it was not carried.`, autoAttempted: true });
+        else if (code && waitsOnFile(code, lastQ ? `code after ${(lastQ as CanonicalQuestion).sourceId}` : "code at the start")) custom.push({ language: "python", code, location: lastQ ? `after ${(lastQ as CanonicalQuestion).sourceId}` : "survey start", role: "exec (waits on a companion file)", refs: pyRefs(code, questions) });
+        else if (code && /^(?:\s*p\.\w+\s*=\s*\d+\s*)+$/.test(code)) { /* a Python counter set to its starting value: nothing to carry on its own */ }
+        else if (code && softExec(code, "")) { custom.push({ language: "python", code, location: lastQ ? `after ${(lastQ as CanonicalQuestion).sourceId}` : "survey start", role: "exec", refs: pyRefs(code, questions) }); issues.push({ location: lastQ ? `exec after ${(lastQ as CanonicalQuestion).sourceId}` : "exec at survey start", ...softExec(code, "")! }); }
         else if (code && (execWhy = execToPunches(code, lastQ ? `exec after ${(lastQ as CanonicalQuestion).sourceId}` : "exec at survey start")) === true) { /* converted */ }
         else if (code) {
           custom.push({ language: "python", code, location: lastQ ? `after ${(lastQ as CanonicalQuestion).sourceId}` : "survey start", role: `exec${c.attrs.when ? ` (${c.attrs.when})` : ""}`, refs: pyRefs(code, questions) });
@@ -298,6 +422,7 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
         }
       } else if (c.name === "quota") {
         quotaMarkers.push(c.attrs.sheet ?? c.attrs.label ?? "?");
+        need("quota_sheet", QUOTA_SHEET, "Decipher's quota sheet holds the quota cells and their targets, and fills the hidden “picker” questions by least-fill", `checkpoint ${c.attrs.sheet ?? c.attrs.label ?? "?"}`);
       } else if (["samplesources", "define", "res", "style", "themevars", "note", "condition", "pipe", "marker", "logic", "languages", "datasource", "looprow", "stylevar", "label"].includes(c.name)) {
         /* configuration, not flow: read elsewhere, or not needed */
       } else if (c.name === "finish") {
@@ -312,7 +437,11 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
   };
   const flow = readChildren(root, "survey");
 
-  if (quotaMarkers.length) issues.push({ location: "quotas", type: "unsupported", severity: "medium", message: `${quotaMarkers.length} quota checkpoint${quotaMarkers.length === 1 ? "" : "s"} (${[...new Set(quotaMarkers)].slice(0, 12).join(", ")}): Decipher keeps the cells and targets in a separate quota sheet, which is not part of the XML, so no quota could be created.`, suggestion: "Create the cells in the Quotas tab; the hidden variables they count are imported.", autoAttempted: false });
+  /* one line per companion file: what to send, and what it switches on */
+  for (const f of required.values()) issues.push({ location: f.kind === "quota_sheet" ? "quota sheet" : `data file ${f.name}`, type: "unsupported", severity: "high", message: f.kind === "quota_sheet"
+    ? `The quota sheet is needed. ${f.why}; it is not part of the XML, so no quota was created and ${f.neededFor.filter((x) => !x.startsWith("checkpoint ")).length} hidden question(s) are not filled. Waiting on it: ${f.neededFor.join(", ")}.`
+    : `The data file “${f.name}” is needed: ${f.why}. It is not part of the XML. Waiting on it: ${f.neededFor.join(", ")}.`,
+    suggestion: f.kind === "quota_sheet" ? "Send the quota sheet (the project's quota.xls, or an Excel / CSV with the cells and targets) in Intelligent mode; the quotas and the picker questions are then built from it." : `Send “${f.name}” (the tab-delimited file from the Decipher project) in Intelligent mode; the lookup is then rebuilt from it.`, autoAttempted: false });
   if (fraudDropped) issues.push({ location: "fraud service", type: "dropped", severity: "info", message: `${fraudDropped} element${fraudDropped === 1 ? "" : "s"} of a third-party fraud service (hidden questions, API calls and the terminations that read them) were not carried. Response quality is handled by the platform's own quality rules.`, autoAttempted: true });
   if (orderCopies.length) issues.push({ location: "row order", type: "unsupported", severity: "medium", message: `${orderCopies.length} question${orderCopies.length === 1 ? "" : "s"} show their rows in the order another question was shown in (${orderCopies.slice(0, 10).join(", ")}). That link is not reproduced: each question orders its own rows.`, suggestion: "If the shared order matters, turn randomisation off on both, or use the same fixed order.", autoAttempted: false });
   if (qualityDropped.size) issues.push({ location: "quality checks", type: "dropped", severity: "low", message: `The source's own speeding and straight-lining checks (${[...qualityDropped].join(", ")}) were not carried: they are Python that walks every question and reads the quota sheet. The platform's quality rules cover speeding and straight-lining.`, suggestion: "Set the thresholds in Quality rules.", autoAttempted: true });
@@ -324,7 +453,7 @@ export function readDecipher(textIn: string, fileName: string, fp: string): Cano
 
   return {
     source: { ...base, title: root.attrs.alt || root.attrs.name || undefined, language: root.attrs.language || undefined },
-    questions: [...questions.values()], flow, embedded, quotas: [], custom, issues, ...(vendors.length ? { vendors } : {}), ...(Object.keys(options).length ? { options } : {}),
+    questions: [...questions.values()], flow, embedded, quotas: [], custom, issues, ...(required.size ? { requiredFiles: [...required.values()] } : {}), ...(vendors.length ? { vendors } : {}), ...(Object.keys(options).length ? { options } : {}),
   };
 
   /* ------------------------------------------------------------ helpers */
@@ -491,7 +620,7 @@ export function decipherPiping(s: string): string {
  */
 export function rewriteIdioms(src: string): string {
   return src
-    .replace(/(\w+)\.check\(\s*['"]([\d\s,-]+)['"]\s*\)/g, (_m, q: string, spec: string) => `(${spec.split(",").map((part) => { const [a, b] = part.trim().split("-").map((x) => x.trim()); return b === undefined ? `${q}.val == ${a}` : `(${q}.val ge ${a} and ${q}.val le ${b})`; }).join(" or ")})`)
+    .replace(/(\w+)\.check\(\s*['"]([\d\s,<>=-]+)['"]\s*\)/g, (_m, q: string, spec: string) => `(${spec.split(",").map((part) => { const cmp = /^\s*(>=|<=|>|<)\s*(\d+)\s*$/.exec(part); if (cmp) return `${q}.val ${({ ">=": "ge", "<=": "le", ">": "gt", "<": "lt" } as Record<string, string>)[cmp[1]]} ${cmp[2]}`; const [a, b] = part.trim().split("-").map((x) => x.trim()); return b === undefined ? `${q}.val == ${a}` : `(${q}.val ge ${a} and ${q}.val le ${b})`; }).join(" or ")})`)
     .replace(/\(\s*(\w+\.i?val)\s*([+-])\s*(\d+)\s*\)\s+in\s+\[([\d\s,]+)\]/g, (_m, ref: string, sign: string, k: string, list: string) => `${ref} in [${list.split(",").map((x) => Number(x.trim()) + (sign === "+" ? -Number(k) : Number(k))).join(", ")}]`);
 }
 
@@ -563,6 +692,8 @@ export function readPython(src: string, location: string, questions: Map<string,
   const refOf = (id: string): { kind: "sel"; ref: CRef } | { kind: "val"; ref: CRef } | { kind: "any"; ref: CRef } | { kind: "count"; ref: CRef } | { kind: "shown"; ref: CRef } | { kind: "option"; code: string | number } | { kind: "none" } => {
     const parts = id.split(".");
     const q = questions.get(parts[0]);
+    /* timeSpent(): seconds since the interview started — a native behaviour source */
+    if (id === "__elapsed__") return { kind: "val", ref: { kind: "behavior", id: "elapsed" } };
     /* a URL / sample variable (`s == '2'`, `sid == '15'`) */
     if (!q && parts.length === 1 && vars.has(id)) return { kind: "val", ref: { kind: "embedded", id } };
     if (!q) { const opt = /^r(\d+)$/.exec(id); return opt ? { kind: "option", code: Number(opt[1]) } : { kind: "none" }; }

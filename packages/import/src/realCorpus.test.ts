@@ -23,7 +23,7 @@ const q = (def: SurveyDefinition, code: string): Question => { const x = def.que
 const ends = (ns: FlowNode[], out: Extract<FlowNode, { type: "end" }>[] = []) => { for (const n of ns) { if (n.type === "end") out.push(n); const k = n as { children?: FlowNode[]; branches?: { children: FlowNode[] }[]; otherwise?: FlowNode[] }; if (k.children) ends(k.children, out); for (const b of k.branches ?? []) ends(b.children, out); if (k.otherwise) ends(k.otherwise, out); } return out; };
 
 /* what each Decipher project may still report as high — every one of these is named in the migration report */
-const DECIPHER_HIGH_CEILING: Record<number, number> = { 1: 16, 2: 3, 3: 8, 4: 7, 5: 7 };
+const DECIPHER_HIGH_CEILING: Record<number, number> = { 1: 5, 2: 1, 3: 4, 4: 2, 5: 2 };
 
 for (const n of [1, 2, 3, 4, 5]) {
   test(`Decipher corpus ${n}: imports, passes the publish check, and stays under its ceiling of unconverted logic`, async () => {
@@ -192,7 +192,9 @@ test("Qualtrics corpus 2: every hidden-question script is native — the chain c
   assert.deepEqual([ans[by("WORKFLOW_1").id], ans[by("WORKFLOW_2").id], ans[by("WORKFLOW_3").id]], ["21", "17", "19"], "the items ranked first, second, third");
   /* a count over a grid whose rows are carried, and the device-flag branches */
   assert.ok(!a.result!.issues.some((i) => /SelectedAnswerCount|count of rows with one answer/.test(i.message)));
-  assert.ok(a.result!.issues.filter((i) => i.type === "dropped" && /when the device is/.test(i.message)).length === 2, "a device flag is not set for everyone");
+  /* "device type is mobile" reads the native device class — the branch keeps its condition instead of applying to everyone */
+  assert.match(JSON.stringify(def.flow), /"source":\{"kind":"behavior","ref":"device"\},"operator":"eq","value":"mobile"/);
+  assert.match(JSON.stringify(def.flow), /"source":\{"kind":"behavior","ref":"device"\},"operator":"ne","value":"mobile"/);
 });
 
 test("Qualtrics corpus 3: a field set inside a branch is set; a cross quota's cells are read one by one; the only choice shown is chosen", async () => {
@@ -215,4 +217,56 @@ test("Qualtrics corpus 5: a script that does nothing here is not a risk", async 
   const a = await load("qualtrics/qualtrics_5.qsf");
   assert.equal(a.report!.risks.high.length, 0);
   assert.equal(a.result!.issues.filter((i) => i.type === "dropped" && /this question has no text box/.test(i.message)).length, 2);
+});
+
+/* ------------------------------------------------------------ companion files, counters, time (2026-11-11) */
+
+test("Decipher corpus: the import asks for the files it needs — one line per file, with what waits on it", async () => {
+  const want: Record<number, string[]> = { 1: ["quota sheet", "QB1_MaxdiffNEW.dat", "QB1_Maxdiff.dat"], 2: ["quota sheet"], 3: ["zipstate.dat", "quota sheet"], 4: ["quota sheet", "ZipFile_New.dat"], 5: ["zipstate.dat", "quota sheet"] };
+  for (const n of [1, 2, 3, 4, 5]) {
+    const a = await load(`decipher/decipher_${n}.xml`);
+    const files = a.report!.requiredFiles;
+    assert.deepEqual(files.map((f) => f.name).sort(), [...want[n]].sort(), `project ${n}`);
+    for (const f of files) {
+      assert.ok(f.neededFor.length > 0 && f.why.length > 10, `${f.name} says what it is for`);
+      assert.equal(a.report!.risks.high.filter((i) => i.location === (f.kind === "quota_sheet" ? "quota sheet" : `data file ${f.name}`)).length, 1, `${f.name}: asked for once`);
+    }
+    /* nothing that waits on a file is ALSO reported as unconvertible code */
+    assert.ok(!a.report!.risks.high.some((i) => /quota sheet \(a picker/.test(i.message)));
+    assert.ok(a.report!.summary.some((line) => /^Needs a file: /.test(line)), "the summary Intelligent mode reads out names the files");
+  }
+  const d3 = await load("decipher/decipher_3.xml");
+  const zip = d3.report!.requiredFiles.find((f) => f.name === "zipstate.dat")!;
+  assert.equal(zip.key, "id");
+  assert.ok(zip.neededFor.some((x) => /zipTerm/.test(x)), "the invalid-zip termination waits on the zip file");
+  assert.ok(!JSON.stringify(d3.result!.def!.flow).includes("zipTerm"), "…and ends nobody until it is rebuilt (it was “terminate everyone”)");
+});
+
+test("Decipher corpus 1: a Python row counter is a hidden helper's count; timeSpent() is the elapsed time", async () => {
+  const a = await load("decipher/decipher_1.xml");
+  const def = a.result!.def!;
+  const helper = q(def, "hTermS12_cnt");
+  assert.equal(helper.settings.hidden, true);
+  assert.equal(helper.punches.length, 11, "one rule per row the source counts");
+  const flag = q(def, "hTermS12");
+  assert.match(JSON.stringify(flag.punches), /"kind":"expr","ref":"COUNT\(hTermS12_cnt\)"\},"operator":"gte","value":4/);
+  /* four rows of S12 answered in the top three columns → "Don't term" (r2); three → "Term" (r1) */
+  const run = (rows: Record<string, number>) => (walkSurvey(def, "deepest", 2, { force: { [q(def, "S12").id]: rows }, keepState: true }).state!.answers as Record<string, unknown>);
+  const hi = run({ r1: 8, r2: 9, r3: 10, r4: 8, r5: 1 });
+  assert.deepEqual(hi[helper.id], ["1", "2", "3", "4"]);
+  assert.equal(hi[flag.id], "2");
+  const lo = run({ r1: 8, r2: 9, r3: 10, r4: 1, r5: 1 });
+  assert.deepEqual(lo[helper.id], ["1", "2", "3"]);
+  assert.equal(lo[flag.id], "1");
+  /* the speeder termination: "under 600 seconds since the start", carried as that, with status terminated */
+  assert.match(JSON.stringify(def.flow), /"source":\{"kind":"behavior","ref":"elapsed"\},"operator":"lt","value":600/);
+});
+
+test("Decipher corpus 2: rows joined by an attribute, and ranges kept on the rows", async () => {
+  const def = (await load("decipher/decipher_2.xml")).result!.def!;
+  /* hidSupplierQTA takes the row whose cs:panel is that of hidSupplier's answer */
+  assert.ok(q(def, "hidSupplierQTA").punches.length >= 2);
+  /* hAge: each row's alt="18-24" … ">=65" is its range of S5 */
+  const run = (age: number) => (walkSurvey(def, "deepest", 2, { force: { [q(def, "S5").id]: age }, keepState: true }).state!.answers as Record<string, unknown>)[q(def, "hAge").id];
+  assert.deepEqual([run(19), run(40), run(70)], ["1", "3", "6"]);
 });

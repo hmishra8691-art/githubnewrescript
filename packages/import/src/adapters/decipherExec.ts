@@ -63,6 +63,10 @@ function unroll(ls: Line[], rowsOf: (q: string) => ExecRow[] | null): Line[] {
       for (const b of body) {
         if (/^break$/.test(b.text)) continue;
         const text = b.text
+          /* a row that is not displayed has no answer, so "if row.displayed" adds nothing to a test on its answer */
+          .replace(new RegExp(`\\b${v}\\.displayed\\b`, "g"), "True")
+          .replace(new RegExp(`\\b${v}\\.label\\s*(==|!=)\\s*["']([^"']*)["']`, "g"), (_m, op: string, lit: string) => ((row.label === lit) === (op === "==") ? "True" : "False"))
+          .replace(new RegExp(`(\\w+)\\.attr\\(\\s*${v}\\.label\\.replace\\(\\s*["']([^"']*)["']\\s*,\\s*["']([^"']*)["']\\s*\\)\\s*\\)`, "g"), (_m, t: string, a: string, bb: string) => `${t}.${row.label.replace(a, bb)}`)
           .replace(new RegExp(`(\\w+)\\.attr\\(\\s*${v}\\.label\\s*\\)`, "g"), `$1.${row.label}`)
           .replace(new RegExp(`(\\w+)\\[\\s*${v}\\s*\\]`, "g"), `$1.${row.label}`)
           .replace(new RegExp(`str\\(\\s*${v}\\.value\\s*\\)`, "g"), `'${row.value}'`)
@@ -167,7 +171,7 @@ export function readExecAssignments(code: string, rowsOf: (q: string) => ExecRow
         leaves.push({ target: m[1], option: m[3], guard: and(path), single: true, at: [...at, ++stmt] }); earlier = []; i++;
       } else if ((m = /^(\w+)\.val\s*=\s*(\d+)$/.exec(l.text))) {
         leaves.push({ target: m[1], option: "", index: Number(m[2]), guard: and(path), single: true, at: [...at, ++stmt] }); earlier = []; i++;
-      } else if ((m = /^(\w+)\.(r\w+|ch\w+|c\w+)\.val\s*=\s*(?:1|True)$/.exec(l.text))) {
+      } else if ((m = /^(\w+)\.(\w+)\.val\s*=\s*(?:1|True)$/.exec(l.text))) {
         leaves.push({ target: m[1], option: m[2], guard: and(path), single: false, at: [...at, ++stmt] }); earlier = []; i++;
       } else if ((m = /^(\w+)\s*=\s*(\[[\d\s,'"\w-]*\])$/.exec(l.text)) && indent === ls[0].indent) {
         names.set(m[1], m[2]); earlier = []; i++;
