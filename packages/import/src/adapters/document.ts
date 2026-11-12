@@ -60,6 +60,8 @@ const EXCLUSIVE_ANSWER = /^(?:none(?: of (?:these|the above|them))?\b|nothing\b|
 const SPECIAL_ANSWER = /\b(?:other|none|nothing|don'?t know|do not know|not sure|unsure|prefer not|rather not|refused|no answer|not applicable|n\/?a|does not apply|no preference|no opinion|can(?:'?t|not) (?:say|choose)|all of (?:these|the above))\b/i;
 /** programming, not wording, in a bracket at the end of a question's line (see startQuestion) */
 const INLINE_PROGRAMMING = /^(?:(?:ASK|SHOW|DISPLAY)\s+(?:(?:Q\w+)\s+)?(?:ONLY\s+)?(?:IF|WHEN)\b|(?:BASE|FILTER)\s*:|SKIP\s+TO\b|GO\s*TO\b|RANDOMI[SZ]E\b|ROTATE\b|TERMINATE\b|SCREEN\s*OUT\b|(?:PROGRAMMER(?:'S)?\s+NOTE|PROG(?:RAMMER)?\s*[:.]|PN\s*:)|(?:SHOW|INSERT|DISPLAY|ADD)\s+(?:THE\s+)?(?:IMAGE|PICTURE|PHOTO|VIDEO|AUDIO|LOGO|STIMULUS|CONCEPT(?:\s+BOARD)?|PACK\s*SHOT)\b|(?:IMAGE|PICTURE|PHOTO|VIDEO|STIMULUS)\s*(?:HERE|:))/i;
+/** 2026-11-13: a line in capitals that carries a logic word ("QUOTA: STOP IF 200 COMPLETES") is an instruction, not a section heading */
+const CAPS_LOGIC = /\b(?:IF|ONLY|UNLESS|SKIP|GO\s+TO|TERMINATE|STOP|QUOTA|SCREEN\s*OUT)\b/;
 /** an instruction that says a picture, video or stimulus belongs with the question */
 const ASSET_INSTRUCTION = /^(?:(?:SHOW|INSERT|DISPLAY|ADD)\s+(?:THE\s+)?)?(IMAGE|PICTURE|PHOTO|VIDEO|AUDIO|LOGO|STIMULUS|CONCEPT(?:\s+BOARD)?|PACK\s*SHOT)\b\s*(?:HERE)?\s*[:\-–]?\s*(.*)$/i;
 const INSTRUCTION = /^\s*(?:\[[^\]]+\]|\([^)]+\)|<[^>]+>)\s*$|^\s*(?:PROGRAMMER(?:'S)?\s+NOTE|PROG(?:RAMMER)?\s*[:.]|PN\s*:|INTERVIEWER|INSTRUCTION|NOTE\s*:|ASK\s+(?:ALL|IF|ONLY|THOSE|Q\w+)|SHOW\s+(?:IF|ONLY)|DISPLAY\s+(?:IF|ONLY)|BASE\s*:|FILTER\s*:|IF\s+.+(?:SKIP|GO|CONTINUE|TERMINATE|ASK)|SKIP\s+TO|GO\s+TO|TERMINATE|RANDOMI[SZ]E|ROTATE|SINGLE\s+(?:CODE|ANSWER|RESPONSE|SELECT)|MULTI(?:PLE)?\s+(?:CODE|ANSWER|RESPONSE|SELECT)|SELECT\s+(?:ONE|ALL)|HIDDEN|CARRY\s*(?:FORWARD|OVER|FWD)|MASK|PIPE\s+IN|LOOP|REPEAT\s+(?:THIS|FOR|THE)|SAME\s+LIST)\b/i;
@@ -104,7 +106,9 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
     const inline: string[] = [];
     for (;;) {
       const m = /\s*(?:\[([^\]]+)\]|\(([^)]+)\))\s*$/.exec(text);
-      if (!m || m.index === 0 || !INLINE_PROGRAMMING.test((m[1] ?? m[2]).trim())) break;
+      /* 2026-11-13: a type directive in capitals in square brackets — [SINGLE ANSWER], [MULTI], [OPEN END] — is programming too; "(Select all that apply)" in the respondent's own case stays */
+      const typeDirective = !!m && m[1] !== undefined && /^(?:SINGLE|MULTI(?:PLE)?|OPEN|NUMERIC|CODE)\b/.test(m[1].trim()) && m[1] === m[1].toUpperCase();
+      if (!m || m.index === 0 || !(INLINE_PROGRAMMING.test((m[1] ?? m[2]).trim()) || typeDirective)) break;
       inline.unshift((m[1] ?? m[2]).trim());
       text = text.slice(0, m.index);
     }
@@ -160,7 +164,8 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
     }
   };
   let inferredTable = false;
-  for (const b of blocks) {
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const b = blocks[bi];
     if (b.kind === "para" && b.images?.length) { if (cur) attachImages(cur as Draft, b.images); else pendingImages.push(...b.images); }
     if (b.kind === "table") {
       flushFree();
@@ -175,7 +180,7 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
     if (PAGE_BREAK.test(line)) { flushFree(); pendingBreak = true; explicitPages = true; continue; }
     if (!title && !drafts.length && (b.style?.startsWith("title") || b.style === "heading 1") && !Q_START.test(line)) { title = line; continue; }
 
-    const heading = (b.style?.startsWith("heading") || HEADING.test(line) || (/^[A-Z0-9 &/,'’:–—-]{6,60}$/.test(line) && /[A-Z]{4}/.test(line) && !INSTRUCTION.test(line))) && !/\?\s*$/.test(line) && !Q_START_NOPUNCT.test(line);
+    const heading = (b.style?.startsWith("heading") || HEADING.test(line) || (/^[A-Z0-9 &/,'’:–—-]{6,60}$/.test(line) && /[A-Z]{4}/.test(line) && !INSTRUCTION.test(line) && !CAPS_LOGIC.test(line))) && !/\?\s*$/.test(line) && !Q_START_NOPUNCT.test(line);
     const qm = Q_START.exec(line) ?? Q_START_NOPUNCT.exec(line);
     const isPureNumber = !!qm && /^\d+$/.test(qm[1]);
     const inOptions = !!cur && (cur as Draft).q.options.length > 0;
@@ -192,9 +197,16 @@ export function readDocument(blocks: DocBlock[], meta: { fileName: string; forma
       continue;
     }
     if (looksQuestion && !(listItem && listItem.level > 0)) { startQuestion(qCode(qm![1]), qm![2]); continue; }
-    if (INSTRUCTION.test(line) && !(inOptions && OPT_NUM.test(line))) {
+    if ((INSTRUCTION.test(line) || (line === line.toUpperCase() && CAPS_LOGIC.test(line) && !Q_START.test(line))) && !(inOptions && OPT_NUM.test(line))) {
       flushFree();
-      if (cur && !/^\s*ASK\s+(?:IF|ONLY)|^\s*(?:SHOW|DISPLAY)\s+(?:IF|ONLY)|^\s*BASE\s*:/i.test(line)) (cur as Draft).instructions.push(line);
+      /*
+       * WHOSE CONDITION IS IT? "ASK IF …" on a line of its own normally stands ABOVE the question it governs. But
+       * written between a question's wording and its answers (2026-11-13) it is that question's — the answers that
+       * follow belong to the question above, so the condition does too. It used to be given to the next question.
+       */
+      const nextLine = (() => { for (let k = bi + 1; k < blocks.length; k++) { const n = blocks[k]; if (n.kind === "para" && n.text.trim() && !INSTRUCTION.test(n.text.trim())) return n.text.trim(); if (n.kind === "table") return ""; } return ""; })();
+      const insideQuestion = !!cur && (cur as Draft).q.options.length === 0 && !!(cur as Draft).q.text && !Q_START.test(nextLine) && (OPT_NUM.test(nextLine) || OPT_BULLET.test(nextLine) || (OPT_LETTER.test(nextLine) && /^\s*[aA][.)]/.test(nextLine)));
+      if (cur && (insideQuestion || !/^\s*ASK\s+(?:IF|ONLY)|^\s*(?:SHOW|DISPLAY)\s+(?:IF|ONLY)|^\s*BASE\s*:/i.test(line))) (cur as Draft).instructions.push(line);
       else pending.push(line);
       continue;
     }
@@ -387,7 +399,9 @@ function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode:
       continue;
     }
     // display: ASK IF / SHOW IF / BASE: / ASK Qx ONLY IF / ask only for respondents who …
-    if ((m = /^(?:ASK|SHOW|DISPLAY)\s+(?:(?:Q\w+)\s+)?(?:ONLY\s+)?(?:IF|WHEN|TO|FOR)\s+(.+)$/i.exec(text)) || (m = /^(?:BASE|FILTER)\s*:\s*(.+)$/i.exec(text)) || (m = /^IF\s+(.+?)\s*,?\s*(?:THEN\s+)?(?:ASK|SHOW)\b.*$/i.exec(text))) {
+    if ((m = /^(?:ASK|SHOW|DISPLAY)\s+(?:(?:Q\w+)\s+)?(?:ONLY\s+)?(?:IF|WHEN|TO|FOR)\s+(.+)$/i.exec(text)) || (m = /^(?:BASE|FILTER)\s*:\s*(.+)$/i.exec(text)) || (m = /^IF\s+(.+?)\s*,?\s*(?:THEN\s+)?(?:ASK|SHOW)\b.*$/i.exec(text))
+      /* 2026-11-13: "ASK ONLY EXISTING CUSTOMERS" / "SHOW ONLY TO OWNERS" — who, with no IF: the same condition, to be resolved or asked about (it used to be reported as not understood) */
+      || (m = /^(?:ASK|SHOW|DISPLAY)\s+(?:(?:Q\w+)\s+)?ONLY\s+(?!IF\b|WHEN\b|TO\b|FOR\b)(.+)$/i.exec(text))) {
       const body = m[1].replace(/^(?:all\s+)?(?:respondents?|those|people|participants|anyone)\s+(?:who|that|with)\s+/i, "");
       if (/^all\b/i.test(body.trim())) continue;
       const n0 = issues.length;
@@ -462,6 +476,13 @@ function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode:
      */
     if (/\b(?:IF|ONLY|UNLESS|SKIP|GO\s+TO|JUMP|TERMINATE|SCREEN\s*OUT|DISQUALIFY)\b/i.test(text) && !/^(?:RANDOMI[SZ]E|ROTATE|SELECT|SINGLE|MULTI)/i.test(text)) {
       issues.push({ location: `${q.sourceId} · “${text}”`, type: "dropped", severity: "medium", message: `${q.sourceId}: the instruction “${text}” was not turned into logic — its wording is not one this reader understands.`, suggestion: "Add the rule in Studio's Logic panel, or reword it (e.g. “ASK IF S1 = 1”, “IF S2 = 2 SKIP TO Q4”).", autoAttempted: true, refs: [q.sourceId] });
+    } else if (text.trim().length > 3 && !/^(?:RANDOMI[SZ]E|ROTATE|SELECT|SINGLE|MULTI|OPEN|NUMERIC|REQUIRED|MANDATORY|OPTIONAL)\b/i.test(text)) {
+      /*
+       * 2026-11-13: a note that is not logic ("CBC conjoint: 4 attributes, 10 tasks", "Show the logo above") used to
+       * vanish. It is kept with the question, as the person wrote it — the methodology reader and the programmer
+       * both need it.
+       */
+      (q.sourceNotes ??= []).push(text.trim());
     }
   }
   if (conds.length) q.displayLogic = conds.length === 1 ? conds[0] : { t: "group", op: "and", children: conds };

@@ -202,6 +202,8 @@ export interface CanonicalQuestion {
   confidence: Confidence;
   /** why the confidence is what it is */
   notes: string[];
+  /** 2026-11-13: what a person wrote ABOUT this question that is neither respondent text nor an instruction the reader turned into logic — kept verbatim */
+  sourceNotes?: string[];
 }
 
 export interface CanonicalEmbeddedField {

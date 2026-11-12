@@ -2685,3 +2685,36 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .theme-chip-line { display: block; height: 3px; width: 70%; border-radius: 2px; opacity: .85; }
 .theme-chip-btn { display: block; height: 5px; width: 55%; border-radius: 2px; align-self: flex-end; }
 @media (max-width: 720px) { .theme-grid { grid-template-columns: 1fr; } }
+
+/* THE INTELLIGENT IMPORT (2026-11-13, components/intelligent/ImportIntelligence.tsx): stages, questions, final report */
+.iqx { margin: 10px 0; display: grid; gap: 10px; }
+.iqx-stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.iqx-stage { border: 1px solid var(--c-border); border-left: 3px solid var(--c-border); border-radius: 8px; padding: 8px 10px; background: var(--c-surface); min-width: 0; }
+.iqx-stage.is-done { border-left-color: var(--c-success); }
+.iqx-stage.is-attention { border-left-color: var(--c-warning); }
+.iqx-stage.is-waiting { border-left-color: var(--c-primary); }
+.iqx-stage.is-failed { border-left-color: var(--c-error); }
+.iqx-stage-head { all: unset; cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; font-weight: 600; font-size: 13px; }
+.iqx-stage-head:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 2px; border-radius: 4px; }
+.iqx-stage-n { width: 20px; height: 20px; border-radius: 999px; display: inline-grid; place-items: center; font-size: 11px; background: var(--c-border); flex: none; }
+.iqx-stage-title { flex: 1; min-width: 0; }
+.iqx-stage-state { font-weight: 500; font-size: 11.5px; opacity: .75; white-space: nowrap; }
+.iqx-stage-sum { margin: 4px 0 0; font-size: 12.5px; line-height: 1.45; }
+.iqx-stage-more { margin-top: 6px; font-size: 12.5px; }
+.iqx-stage-more ul, .iqx-panel ul, .iqx-answered ul { margin: 4px 0 8px; padding-left: 18px; }
+.iqx-stage-more li, .iqx-panel li { margin: 2px 0; overflow-wrap: anywhere; }
+.iqx-asks { border: 1px solid var(--c-info-bd); border-radius: 10px; padding: 12px 14px; background: var(--c-info-bg); }
+.iqx-asks ol { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 14px; }
+.iqx-h { margin: 0; }
+.iqx-ask-found { margin: 0; font-weight: 600; }
+.iqx-ask-why, .iqx-ask-quote { margin: 3px 0 0; font-size: 12.5px; }
+.iqx-ask-quote q { font-style: italic; }
+.iqx-ask-opts { display: grid; gap: 4px; margin-top: 6px; }
+.iqx-ask-opt { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.iqx-ask-own { display: grid; gap: 3px; font-size: 12.5px; margin-top: 4px; }
+.iqx-rec { color: var(--c-success-fg); font-style: normal; font-weight: 600; }
+.iqx-actions, .iqx-tabs { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.iqx-tabs { margin-top: 0; }
+.iqx-panel { border: 1px solid var(--c-border); border-radius: 8px; padding: 10px 14px; background: var(--c-surface); font-size: 13px; }
+.iqx-panel p { margin: 8px 0 2px; }
+.iqx-answered { font-size: 12.5px; }

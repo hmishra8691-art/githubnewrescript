@@ -1,4 +1,5 @@
 "use client";
+import { ImportIntelligence } from "./ImportIntelligence";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { Icon } from "../ui/Icon";
@@ -118,6 +119,8 @@ export interface ImportJob {
   reviewOpen?: boolean;
   features?: { review: boolean };
   suggested?: { suggested: number; asked: number } | null;
+  /** 2026-11-13: the orchestrated import — stages, understanding, plain questions, final report (when the server ran it) */
+  intelligence?: import("@rescript/import").IntelligenceView | null;
   /** the last round's outcome: how many answers were applied, and the ones refused with why */
   decided?: { applied: number; rejected: { id: string; reason: string }[] };
 }
@@ -133,11 +136,13 @@ const SCOPES: { id: ImportScope; label: string; about: string }[] = [
 ];
 const CONF: [string, string][] = [["confirmed", "Confirmed"], ["high", "High confidence"], ["review", "Needs review"], ["ambiguous", "Ambiguous"], ["unsupported", "Unsupported"]];
 
-export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, onDecide, onSuggest, onRerun, readOnly, sandbox }: {
+export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, onReviewAfter, onRollback, onDecide, onAnswer, onSuggest, onRerun, readOnly, sandbox }: {
   job: ImportJob;
   onPatch(p: Partial<ImportJob>): void;
   onRun(): void; onCreate(): void; onMerge(): void; onCancel(): void; onReviewAfter(): void; onRollback?(): void;
   onDecide?(decisions: ImportDecision[]): void;
+  /** 2026-11-13: answer the orchestrated import's questions in place */
+  onAnswer?(answers: import("@rescript/import").ClarificationAnswer[]): void;
   onSuggest?(): void;
   onRerun?(blocks: string[] | undefined): void;
   readOnly: boolean; sandbox: boolean;
@@ -198,7 +203,10 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
 
         {r && (job.stage === "ready" || job.stage === "creating" || done || job.stage === "cancelled") && (
           <>
-            {r.summary.map((line, i) => <p key={i} className={i === 0 ? "iq-summary" : "iqi-line"} data-testid="iqi-summary">{line}</p>)}
+            {/* 2026-11-13: with the orchestrated import, its stages and questions come first — right under the headline; the detail tables follow */}
+            {r.summary.slice(0, job.intelligence ? 2 : r.summary.length).map((line, i) => <p key={i} className={i === 0 ? "iq-summary" : "iqi-line"} data-testid="iqi-summary">{line}</p>)}
+            {job.stage === "ready" && job.intelligence && <ImportIntelligence data={job.intelligence} busy={job.deciding} canAnswer={!!job.sessionId && !!onAnswer} onAnswer={(a) => onAnswer?.(a)} />}
+            {job.stage !== "ready" && job.intelligence?.final && <p className="iqi-line" data-testid="iqx-final-line">{job.intelligence.final.headline}</p>}
             <table className="iqi-table" data-testid="iqi-preview">
               <thead><tr><th /><th>Detected</th><th>Created</th></tr></thead>
               <tbody>
@@ -217,7 +225,8 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
 
             {job.sessionId && <p className="iqi-dim" data-testid="iqi-session">Recorded in the import history{job.sessionExpiresAt ? ` · the file is kept until ${new Date(job.sessionExpiresAt).toLocaleDateString()}` : ""}{job.sessionNote ? ` · ${job.sessionNote}` : ""}</p>}
             {!job.sessionId && job.sessionNote && <p className="iqi-dim" data-testid="iqi-session">{job.sessionNote}</p>}
-            {job.stage === "ready" && !!r.clarifications?.length && <Clarifications job={job} items={r.clarifications} onPatch={onPatch} onDecide={onDecide} onSuggest={onSuggest} />}
+            {/* 2026-11-13: the orchestrated import shows its own stages and questions; the earlier question list stays for a merge, which has no orchestrated run */}
+            {job.stage === "ready" && !job.intelligence && !!r.clarifications?.length && <Clarifications job={job} items={r.clarifications} onPatch={onPatch} onDecide={onDecide} onSuggest={onSuggest} />}
             {job.stage === "ready" && job.decided && <p className="iqi-dim" data-testid="iqi-decided">{job.decided.applied} answer{job.decided.applied === 1 ? "" : "s"} applied; the preview was re-analysed{job.decided.rejected.length ? ` · refused: ${job.decided.rejected.map((x) => x.reason).join("; ")}` : ""}.</p>}
             {job.reviewOpen && <ImportReview job={job} onClose={() => onPatch({ reviewOpen: false })} onRerun={(b) => onRerun?.(b)} renderQuestions={() => <Clarifications job={job} items={r.clarifications ?? []} onPatch={onPatch} onDecide={onDecide} onSuggest={onSuggest} />} />}
             {job.blocks?.length ? <p className="iqi-dim" data-testid="iqi-blocks-note">Only {job.blocks.length} selected block{job.blocks.length === 1 ? "" : "s"} are in this preview.</p> : null}

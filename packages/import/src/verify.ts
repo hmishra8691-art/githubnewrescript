@@ -265,7 +265,8 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
         for (const q of qs) {
           if (!["single_select", "dropdown", "multi_select", "multi_dropdown"].includes(q.type)) continue;
           if (opts.force && q.id in opts.force) continue;
-          if (readBy && !readBy.has(q.id)) continue;
+          /* 2026-11-13: a question's OWN skip rule (S2 = Under 18 → end) reads it too — it used to be left out of the look-ahead, so the walker took the first answer and screened itself out */
+          if (readBy && !readBy.has(q.id) && !(q.skipLogic?.length)) continue;
           const cands = (shownAs(def, q, state, step.loop).options ?? []).filter((o) => !o.flags?.includes("other_specify") && o.logic?.visibility !== "always_hide").slice(0, 12);
           if (cands.length < 2) continue;
           let best: { value: unknown; ahead: number } | null = null;

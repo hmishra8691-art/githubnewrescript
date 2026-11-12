@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SurveyDefinition } from "@rescript/schema";
 import { aiProviderName, aiConfigured } from "@rescript/ai";
-import { detectFormat, readSource, mapCanonical, buildReport, workload, verifyImport, type ImportScope, type VerificationReport } from "@rescript/import";
+import { detectFormat, readSource, mapCanonical, buildReport, workload, verifyImport, advanceIntelligentImport, intelligenceView, type IntelligenceView, type ImportScope, type VerificationReport } from "@rescript/import";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, estimateAi, recordUsage } from "@/lib/metering";
 import { aiReadyFor } from "@/lib/byok/connect";
@@ -113,11 +113,26 @@ export async function POST(req: NextRequest) {
     existing = parsed.data;
   }
   const started = Date.now();
-  const result = mapCanonical(canonical, { surveyId: into === "merge" ? existing!.meta.id : "import_preview", existing, scope });
-  const report = buildReport(detection, canonical, result, scope);
+  /*
+   * A NEW SURVEY GOES THROUGH THE ORCHESTRATED IMPORT (2026-11-13, packages/import intelligence/pipeline.ts): the
+   * same reading, programming and verification as before, run as named stages — with what was understood, the
+   * methods recognised (exercises become placeholders), the wording points, the questions for the person in plain
+   * words and the final report. A merge into an open survey keeps the direct path (it has no test run of its own).
+   * If the orchestrated run cannot produce a survey, the direct path below still answers.
+   */
+  let intelligence: IntelligenceView | null = null;
+  let orchestrated: { result: ReturnType<typeof mapCanonical>; report: ReturnType<typeof buildReport>; verification: VerificationReport | null } | null = null;
+  if (into === "new" && (process.env.IMPORT_INTELLIGENCE ?? "on").toLowerCase() !== "off") {
+    try {
+      const run = advanceIntelligentImport({ version: 1, detection, canonical, answers: [], scope, surveyId: "import_preview" });
+      if (run.result && run.report) { intelligence = intelligenceView(run); orchestrated = { result: run.result, report: run.report, verification: run.verification }; }
+    } catch { /* the direct path below answers */ }
+  }
+  const result = orchestrated?.result ?? mapCanonical(canonical, { surveyId: into === "merge" ? existing!.meta.id : "import_preview", existing, scope });
+  const report = orchestrated?.report ?? buildReport(detection, canonical, result, scope);
   /* verification: facts about the result, bounded so a huge survey cannot hold the request */
-  let verification: VerificationReport | { error: string } | null = null;
-  if (result.def && into === "new") {
+  let verification: VerificationReport | { error: string } | null = orchestrated?.verification ?? null;
+  if (!orchestrated && result.def && into === "new") {
     try { verification = verifyImport(canonical, result); }
     catch (e) { verification = { error: `Verification could not run: ${(e as Error).message}` }; }
   }
@@ -155,6 +170,7 @@ export async function POST(req: NextRequest) {
     session, ...(sessionNote ? { sessionNote } : {}),
     /* I7: the full review screen — on unless the installation switches it off (IMPORT_REVIEW=off) */
     features: { review: (process.env.IMPORT_REVIEW ?? "on").toLowerCase() !== "off" },
+    ...(intelligence ? { intelligence } : {}),
     ok: report.ok, phase, detection, workload: work, estimate, actual,
     title: canonical.source.title ?? null,
     definition: result.def, report, mapping: result.mapping, confidence: result.confidence, verification,

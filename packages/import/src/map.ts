@@ -351,6 +351,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     const notes = [...cq.notes];
     // custom code is preserved, never run: a DISABLED script on the question (see `scripts` below)
     for (const cu of cq.custom) { notes.push(`custom ${cu.language} (${cu.role}) kept, disabled, in Scripts`); scripts.push(scriptFor(cu, id)); }
+    /* 2026-11-13: a note the source wrote about the question travels with it, verbatim, as the programmer's note */
+    for (const sn of cq.sourceNotes ?? []) notes.push(`Note in the source: “${sn}”`);
     if (notes.length) q.notes = `Imported from ${c.source.platform} ${cq.sourceId} (${cq.sourceType}).\n${notes.join("\n")}`;
     if (cq.kind === "hidden" && cq.settings?.sourceKind) q.notes = `${q.notes ?? ""}\nThe source question was a ${String(cq.settings.sourceKind)}; it is hidden from respondents.`.trim();
     if ((cq.kind === "conjoint" || cq.kind === "maxdiff" || cq.kind === "acbc") && cq.options.length === 0 && cq.rows.length) q.options = cq.rows.map((r) => ({ code: r.code, label: r.label, flags: [] }));

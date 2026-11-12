@@ -50,3 +50,8 @@ export async function analyzeImport(bytes: Uint8Array, fileName: string, opts: M
   return { detection: read.detection, canonical: read.canonical, result, report: buildReport(read.detection, read.canonical, result, opts.scope ?? "full"), workload: workload(read.canonical), issues: read.issues };
 }
 export * from "./research.js";
+/* Intelligent Mode upgrade (2026-11-13): the orchestrated import and its engines */
+export * from "./intelligence/methodology.js";
+export * from "./intelligence/understand.js";
+export * from "./intelligence/content.js";
+export * from "./intelligence/pipeline.js";

@@ -708,7 +708,7 @@ export function IntelligentView() {
     try {
       const { d } = await postImport(id, { phase: "run", scope: job.scope, into: job.into, ...(job.into === "merge" ? { existing: JSON.stringify(basedOn) } : {}) });
       if (!d.report) { patchJob(id, { stage: "failed", error: String(d.error ?? "The import could not be completed.") }); return; }
-      patchJob(id, { stage: "ready", report: d.report, definition: d.definition, mapping: d.mapping, verification: d.verification ?? null, actual: d.actual, basedOn, sessionId: d.session?.id, sessionExpiresAt: d.session?.expiresAt, sessionNote: d.sessionNote, features: d.features, allBlocks: (d.report as { blocks?: ImportJob["allBlocks"] }).blocks, blocks: undefined, ...(d.report.ok ? {} : { error: "The file was read, but it did not produce a valid survey — see the issues." }) });
+      patchJob(id, { stage: "ready", intelligence: d.intelligence ?? null, report: d.report, definition: d.definition, mapping: d.mapping, verification: d.verification ?? null, actual: d.actual, basedOn, sessionId: d.session?.id, sessionExpiresAt: d.session?.expiresAt, sessionNote: d.sessionNote, features: d.features, allBlocks: (d.report as { blocks?: ImportJob["allBlocks"] }).blocks, blocks: undefined, ...(d.report.ok ? {} : { error: "The file was read, but it did not produce a valid survey — see the issues." }) });
     } catch (e) {
       patchJob(id, { stage: "estimated", error: (e as Error).message });
     }
@@ -768,6 +768,25 @@ export function IntelligentView() {
       const d = await r.json().catch(() => null) as { report?: ImportJob["report"]; definition?: SurveyDefinition | null; mapping?: ImportJob["mapping"]; verification?: ImportJob["verification"]; applied?: string[]; rejected?: { id: string; reason: string }[]; error?: string } | null;
       if (!r.ok || !d?.report) { patchJob(id, { deciding: false, error: d?.error ?? `The answers could not be applied (${r.status}).` }); return; }
       patchJob(id, { deciding: false, report: d.report, definition: d.definition ?? null, mapping: d.mapping, verification: d.verification ?? null, answers: {}, suggested: null, decided: { applied: d.applied?.length ?? 0, rejected: d.rejected ?? [] }, ...(blocks !== undefined ? { blocks: blocks ?? undefined } : {}) });
+    } catch (e) {
+      patchJob(id, { deciding: false, error: (e as Error).message });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns, patchJob]);
+
+  /*
+   * 2026-11-13: answer the orchestrated import's questions in place. The server re-runs every stage from the stored
+   * model with all the answers so far and returns the updated survey, report, tests and what is still open.
+   */
+  const answerImport = React.useCallback(async (id: string, answers: { id: string; choice?: number; own?: string }[]) => {
+    const job = jobOf(id);
+    if (!job?.sessionId || !answers.length) return;
+    patchJob(id, { deciding: true, error: undefined });
+    try {
+      const r = await fetch(`/api/import/sessions/${encodeURIComponent(job.sessionId)}/intelligent`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answers }) });
+      const d = await r.json().catch(() => null) as { intelligence?: ImportJob["intelligence"]; report?: ImportJob["report"]; definition?: SurveyDefinition | null; mapping?: ImportJob["mapping"]; verification?: ImportJob["verification"]; error?: string } | null;
+      if (!r.ok || !d?.report || !d.intelligence) { patchJob(id, { deciding: false, error: d?.error ?? `The answers could not be applied (${r.status}).` }); return; }
+      patchJob(id, { deciding: false, intelligence: d.intelligence, report: d.report, definition: d.definition ?? null, mapping: d.mapping, verification: d.verification ?? null });
     } catch (e) {
       patchJob(id, { deciding: false, error: (e as Error).message });
     }
@@ -1055,7 +1074,7 @@ export function IntelligentView() {
               if (turn.kind === "import") return (
                 <ImportCard key={turn.id} job={turn.job} readOnly={s.readOnly} sandbox={sandbox}
                   onPatch={(p) => patchJob(turn.id, p)} onRun={() => void runImport(turn.id)} onCreate={() => void createFromImport(turn.id)}
-                  onMerge={() => mergeImport(turn.id)} onCancel={() => cancelImport(turn.id)} onReviewAfter={() => showReview("What needs review after the import?")} onRollback={() => void rollbackImport(turn.id)} onDecide={(ds) => void decideImport(turn.id, ds)} onSuggest={() => void suggestImport(turn.id)} onRerun={(b) => void decideImport(turn.id, [], b ?? null)} />
+                  onAnswer={(a) => void answerImport(turn.id, a)} onMerge={() => mergeImport(turn.id)} onCancel={() => cancelImport(turn.id)} onReviewAfter={() => showReview("What needs review after the import?")} onRollback={() => void rollbackImport(turn.id)} onDecide={(ds) => void decideImport(turn.id, ds)} onSuggest={() => void suggestImport(turn.id)} onRerun={(b) => void decideImport(turn.id, [], b ?? null)} />
               );
               if (turn.kind === "copilot") {
                 const open = turn.proposal === "open" && copilot.state;

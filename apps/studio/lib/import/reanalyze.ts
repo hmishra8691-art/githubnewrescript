@@ -30,7 +30,8 @@ export function reanalyze(s: ImportSession, newDecisions: Decision[], opts: { bl
   if (!s.canonical) return { error: "This import's reconstructed model was not kept, so it cannot be re-analysed — import the file again.", status: 410 };
   if (s.status !== "analyzed") return { error: `This import is already ${s.status.replace("_", " ")}; answer its questions on a new import.`, status: 409 };
   const decisions = mergeDecisions((s.decisions as Decision[]) ?? [], newDecisions);
-  const decided = applyDecisions(s.canonical as CanonicalSurvey, decisions);
+  /* 2026-11-13: the session also keeps the plain answers of the intelligent import ({ type: "answer" }, see intelligent.ts) — they are not decisions */
+  const decided = applyDecisions(s.canonical as CanonicalSurvey, decisions.filter((d) => (d as { type: string }).type !== "answer"));
   const { applied, rejected } = decided;
   /* I7: Import selected blocks — the decisions first (they may name questions in any block), then the selection */
   const canonical = opts.blocks?.length ? selectBlocks(decided.canonical, opts.blocks) : decided.canonical;

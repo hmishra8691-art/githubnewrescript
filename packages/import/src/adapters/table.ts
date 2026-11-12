@@ -129,6 +129,8 @@ export function readTable(sheets: { name: string; rows: string[][] }[], meta: { 
     q.displayLogic = r.displayLogic;
     q.skips = r.skips;
     if (r.confidence === "ambiguous") q.confidence = "ambiguous";
+    /* 2026-11-13: a note that is not logic stays with its question, verbatim */
+    if (r.sourceNotes?.length) q.sourceNotes = [...(q.sourceNotes ?? []), ...r.sourceNotes];
     // the document reader's options may carry annotations it understood (exclusive, specify)
     /* 2026-11-10: a picture the sheet refers to but cannot carry — the reader's placeholder goes into this question too */
     for (const m of missingAssetsIn(r.text)) { const mark = missingAssetPlaceholder(m.kind, m.name); if (!q.text.includes(mark)) q.text = `${q.text}\n<p><em>${mark}</em></p>`; }
