@@ -20,12 +20,13 @@ import {
 import type { SurveyDefinition } from "@rescript/schema";
 import { buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey, buildBrandFunnelSurvey, buildAdTestSurvey } from "./methods.js";
 import { ADVANCED_TEMPLATES } from "./advancedGuide.js";
+export { buildAdvAcbcSurvey, buildAdvMenuSurvey, buildAdvDiarySurvey, buildAdvHealthSurvey, buildAdvAdConceptSurvey, buildAdvProductTestSurvey, buildAdvPoliticalSurvey, buildAdvMultiCountrySurvey, buildAdvHybridSurvey } from "./advanced2.js";
 export { buildAdvCbcSurvey, buildAdvMaxDiffSurvey, buildAdvPricingSurvey, buildAdvSegmentationSurvey, buildAdvB2bSurvey, buildAdvJourneySurvey } from "./advanced.js";
 export { buildMethodSurvey, buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey, buildBrandFunnelSurvey, buildAdTestSurvey } from "./methods.js";
 
 /** What the Advanced Research library shows for a template, and what a researcher needs to know before fielding it. */
 export interface TemplateGuide {
-  category: "Conjoint and Choice Modelling" | "Pricing Research" | "Segmentation and Consumer Research" | "B2B and Political Research";
+  category: "Conjoint and Choice Modelling" | "Pricing Research" | "Segmentation and Consumer Research" | "Healthcare and Specialized Research" | "Advertising and Product Testing" | "B2B and Political Research" | "Longitudinal and International Research" | "Hybrid Experimental Research";
   complexity: "Intermediate" | "Advanced" | "Expert";
   methods: string[];
   /** median minutes for a respondent */
@@ -140,6 +141,8 @@ export function findSurveyTemplate(key: string): SurveyTemplate | undefined {
 }
 
 export { buildScaleSurvey } from "./scale.js";
+export { buildDemoDataset, conjointAnalysis, demoChoiceAnswers, demoPartWorth, frequency, maxdiffScores } from "./demo.js";
+export type { ConjointLevel, ConjointResult, DemoDataset, Frequency, MaxDiffScore } from "./demo.js";
 export { simulateRespondent, defaultAnswer } from "./simulate.js";
 export type { SimulationOptions, SimulationResult, VisitedPage, AnswerContext, AnswerFn } from "./simulate.js";
 export { generatePopulation, sampleAnswer, targetedAnswers } from "./generate.js";

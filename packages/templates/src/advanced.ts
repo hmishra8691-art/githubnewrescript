@@ -15,25 +15,25 @@ import { AGREE_5, LIKELY_5, SAT_5, and, not, opts, or, page, rule, type OptSpec 
 import { screenOut, survey } from "./starters.js";
 
 type Q = Record<string, unknown>;
-const rows = (labels: string[]) => labels.map((label, i) => ({ code: i + 1, label }));
-const NONE = (label = "None of these"): OptSpec => ({ code: 98, label, flags: ["exclusive", "anchor_bottom"] });
-const OTHER: OptSpec = { code: 97, label: "Other (please specify)", flags: ["other_specify", "anchor_bottom"] };
-const shuffle = { enabled: true, scope: "options", method: "shuffle" };
+export const rows = (labels: string[]) => labels.map((label, i) => ({ code: i + 1, label }));
+export const NONE = (label = "None of these"): OptSpec => ({ code: 98, label, flags: ["exclusive", "anchor_bottom"] });
+export const OTHER: OptSpec = { code: 97, label: "Other (please specify)", flags: ["other_specify", "anchor_bottom"] };
+export const shuffle = { enabled: true, scope: "options", method: "shuffle" };
 /** a hidden single-choice variable coded by auto-punch rules — the derived variable the analysis reads */
-const derived = (id: string, variableName: string, text: string, options: OptSpec[], rules: [number, unknown?][]): Q => ({
+export const derived = (id: string, variableName: string, text: string, options: OptSpec[], rules: [number, unknown?][]): Q => ({
   id, code: variableName, variableName, type: "single_select", text, options, required: false, settings: { hidden: true },
   punches: rules.map(([code, when], i) => ({ id: `${id}_p${i + 1}`, source: { kind: "codes", codes: [String(code)] }, action: "select", recompute: "always", mode: i === 0 ? "if" : when ? "else_if" : "else", ...(when ? { when } : {}) })),
 });
-const design = (id: string, kind: "conjoint" | "maxdiff", name: string, config: Record<string, unknown>, seed: number) => {
+export const design = (id: string, kind: "conjoint" | "maxdiff" | "acbc", name: string, config: Record<string, unknown>, seed: number) => {
   const g = designGeneratorRegistry.get(kind)!.generate(config as never, seed);
   return { id, kind, name, version: 1, seed, config, file: { format: "json", columns: g.columns, rows: g.rows, generatedAt: "2026-11-12T00:00:00.000Z" } };
 };
-const ageQuota = (ref: string) => ({
+export const ageQuota = (ref: string) => ({
   id: "quota_age", name: "Age band", mode: "hard", targetTotal: 600, countStatus: ["complete"], onFull: { kind: "terminate" },
   cells: [["cell_1834", "18–34", 1], ["cell_3554", "35–54", 2], ["cell_55p", "55+", 3]].map(([id, label, v]) => ({ id, label, limit: 200, limitType: "count", when: rule(ref, "selected", v) })),
 });
-const AGE: Q = { id: "q_age", code: "S1", variableName: "AGE", type: "numeric", required: true, text: "How old are you?", settings: { minValue: 16, maxValue: 99 }, skipLogic: [screenOut("sk_age", rule("q_age", "lt", 18))] };
-const AGE_BAND = derived("h_age", "AGE_BAND", "Age band (derived)", opts(["18–34", "35–54", "55+"]), [[1, rule("q_age", "lt", 35)], [2, rule("q_age", "lt", 55)], [3]]);
+export const AGE: Q = { id: "q_age", code: "S1", variableName: "AGE", type: "numeric", required: true, text: "How old are you?", settings: { minValue: 16, maxValue: 99 }, skipLogic: [screenOut("sk_age", rule("q_age", "lt", 18))] };
+export const AGE_BAND = derived("h_age", "AGE_BAND", "Age band (derived)", opts(["18–34", "35–54", "55+"]), [[1, rule("q_age", "lt", 35)], [2, rule("q_age", "lt", 55)], [3]]);
 
 /* ================================================================ 1. Choice-based conjoint */
 

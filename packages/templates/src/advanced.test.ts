@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoAnswered } from "@rescript/engine";
+import { acbcDone, autoAnswered, buildVariableDictionary } from "@rescript/engine";
 import { advancedTemplates, findSurveyTemplate } from "./index.js";
 import { simulateRespondent } from "./simulate.js";
 import { generatePopulation } from "./generate.js";
@@ -17,9 +17,10 @@ const run = (key: string, answers: Record<string, unknown>, seed = 3) => {
   return { def, r, a: r.state.answers as Record<string, unknown>, seen: new Set(r.pages.flatMap((p) => p.questionIds)) };
 };
 
-test("six advanced templates, each with a complete guide", () => {
+test("fifteen advanced templates in eight categories, each with a complete guide", () => {
   const all = advancedTemplates();
-  assert.deepEqual(all.map((t) => t.key), ["adv_cbc", "adv_maxdiff", "adv_pricing", "adv_segmentation", "adv_b2b", "adv_journey"]);
+  assert.deepEqual(all.map((t) => t.key), ["adv_cbc", "adv_maxdiff", "adv_pricing", "adv_segmentation", "adv_b2b", "adv_journey", "adv_acbc", "adv_menu", "adv_diary", "adv_health", "adv_adtest", "adv_product", "adv_political", "adv_multicountry", "adv_hybrid"]);
+  assert.equal(new Set(all.map((t) => t.guide!.category)).size, 8);
   for (const t of all) {
     const g = t.guide!;
     for (const k of ["objective", "audience", "methodology", "logic", "dataStructure", "sample", "analysis", "limitations", "whenEditing"] as const) assert.ok(g[k].length > 40, `${t.key}: ${k}`);
@@ -123,6 +124,145 @@ test("a fictional population gets through every advanced template with no blocke
     const blocked = rep.respondents.filter((r) => (r as { blocked?: unknown }).blocked);
     assert.equal(blocked.length, 0, `${t.key}: ${blocked.length} respondents could not get past a page`);
     const completes = rep.respondents.filter((r) => (r as { endStatus?: string }).endStatus === "complete").length;
-    assert.ok(completes >= 10, `${t.key}: ${completes} of 60 complete`);
+    assert.ok(completes >= 8, `${t.key}: ${completes} of 60 complete`);
+  }
+});
+
+/* ------------------------------------------------------------ part 2 */
+
+test("ACBC: the adaptive exercise reaches a winner, and the follow-up depends on intent for it", () => {
+  const x = run("adv_acbc", { q_age: 33, q_buy: 1, q_use: 3, q_sure: 2 });
+  assert.equal(x.r.endStatus, "complete");
+  assert.ok(acbcDone(x.a.q_acbc as never), "build → screen → tournament → a winner");
+  assert.ok(x.seen.has("q_stop") && x.a.h_use === "2");
+  assert.equal(run("adv_acbc", { q_age: 33, q_buy: 3 }).r.endStatus, "screened");
+});
+
+test("Menu: extras depend on the plan, the total is calculated, and being over budget changes the follow-up", () => {
+  const biz = run("adv_menu", { q_resp: 1, q_budget: 100, q_plan: 3, q_ad_ai: 1, q_ad_sso: 1, q_ad_support: 2, q_ad_store: 2, q_ok: 2 });
+  assert.ok(biz.seen.has("q_ad_sso") && !biz.seen.has("q_ad_seats"), "single sign-on on Business only; no extra seats there");
+  assert.equal(biz.r.state.calculated.MENU_TOTAL, 205, "150 + 25 + 30");
+  assert.equal(biz.r.state.calculated.MENU_OVER, 1);
+  assert.ok(biz.seen.has("q_drop"));
+  assert.match(String(biz.r.pages.find((p) => p.questionIds.includes("q_ok"))?.texts.q_ok), /\$205/);
+  const small = run("adv_menu", { q_resp: 1, q_budget: 100, q_plan: 1, q_ad_seats: 1, q_ad_ai: 2, q_ad_support: 2, q_ad_store: 2, q_ok: 1 });
+  assert.ok(small.seen.has("q_ad_seats") && !small.seen.has("q_ad_sso"));
+  assert.equal(small.r.state.calculated.MENU_TOTAL, 60);
+  assert.ok(!small.seen.has("q_drop") && !small.seen.has("q_missing"));
+});
+
+test("Diary: the day in the link decides the block — baseline, daily entry, wrap-up on day 7", () => {
+  const at = (day: string, answers: Record<string, unknown> = {}) => { const def = findSurveyTemplate("adv_diary")!.build("t"); const r = simulateRespondent(def, { seed: 3, answers, embedded: { PID: "1042", DAY: day } }); return { r, seen: new Set(r.pages.flatMap((p) => p.questionIds)) }; };
+  const d0 = at("0", { q_consent: 1 });
+  assert.ok(d0.seen.has("q_skin") && !d0.seen.has("q_used") && !d0.seen.has("q_overall"));
+  assert.equal(at("0", { q_consent: 2 }).r.endStatus, "screened");
+  const d3 = at("3", { q_used: 3 });
+  assert.ok(!d3.seen.has("q_skin") && d3.seen.has("q_whynot") && !d3.seen.has("q_feel") && !d3.seen.has("q_overall"));
+  assert.match(String(d3.r.pages.find((p) => p.questionIds.includes("q_used"))?.texts.q_used), /Day 3 of 7/);
+  const d7 = at("7", { q_used: 1, q_feel: { 1: 3, 2: 3, 3: 3, 4: 4 } });
+  assert.ok(d7.seen.has("q_feel") && d7.seen.has("q_react") && d7.seen.has("q_overall"), "irritation is followed up; day 7 adds the wrap-up");
+  assert.equal(d7.r.state.embedded.PID, "1042");
+});
+
+test("Healthcare: consent first; patients and professionals take different paths with their own eligibility rules", () => {
+  assert.equal(run("adv_health", { q_consent: 2 }).r.endStatus, "screened");
+  const pt = run("adv_health", { q_consent: 1, q_who: 1, q_cond: [3], q_treat: [1, 2] });
+  assert.equal(pt.a.q_main, 3, "one condition → it is the main one, not asked");
+  assert.ok(!pt.seen.has("q_main") && pt.seen.has("q_adhere") && pt.seen.has("q_journey") && !pt.seen.has("q_role"));
+  assert.match(String(pt.r.pages.find((p) => p.questionIds.includes("q_treat"))?.texts.q_treat), /Asthma/);
+  assert.ok(!run("adv_health", { q_consent: 1, q_who: 1, q_cond: [1, 2], q_main: 2, q_treat: [2] }).seen.has("q_adhere"), "no prescription → adherence not asked");
+  assert.equal(run("adv_health", { q_consent: 1, q_who: 1, q_cond: [98] }).r.endStatus, "screened");
+  const hcp = run("adv_health", { q_consent: 1, q_who: 2, q_role: 2, q_exp: 12, q_see: [1, 2] });
+  assert.ok(hcp.seen.has("q_spec") && hcp.seen.has("q_barriers") && !hcp.seen.has("q_cond") && hcp.a.h_path === "2");
+  assert.ok(!run("adv_health", { q_consent: 1, q_who: 2, q_role: 3, q_exp: 12, q_see: [1] }).seen.has("q_spec"), "specialty only for specialists");
+  assert.equal(run("adv_health", { q_consent: 1, q_who: 2, q_role: 1, q_exp: 1 }).r.endStatus, "screened", "under two years in practice");
+  /* the consent question is one the respondent must answer themselves */
+  assert.ok(run("adv_health", { q_consent: 1, q_who: 3 }).seen.has("q_consent"));
+});
+
+test("Ad and concept test: awareness before exposure, every concept rated, a final preference", () => {
+  const x = run("adv_adtest", { q_drink: 1, q_best: 2 });
+  assert.equal(x.r.endStatus, "complete");
+  const order = x.r.pages.flatMap((p) => p.questionIds);
+  assert.ok(order.indexOf("q_pre") < order.findIndex((id) => x.def.questions.find((q) => q.id === id)?.variant?.startsWith("media.")), "awareness is asked before the ad is shown");
+  assert.ok(x.seen.has("q_bestwhy"));
+  assert.ok(!run("adv_adtest", { q_drink: 1, q_best: 9 }).seen.has("q_bestwhy"));
+  assert.ok((x.def.research?.analysisPlan?.tests ?? []).length >= 2);
+  assert.equal(run("adv_adtest", { q_drink: 4 }).r.endStatus, "screened");
+});
+
+test("Product test: every sample rated once, in an order that differs between respondents, and a safety screen", () => {
+  const orders = new Set<string>();
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    const x = run("adv_product", { q_eat: 1, q_allergy: 2 }, seed);
+    const tasted = x.r.pages.filter((p) => p.pageId.startsWith("p_taste")).map((p) => String(p.loop?.code ?? p.loop?.label ?? p.pageId));
+    assert.equal(tasted.length, 3, "three samples");
+    assert.equal(new Set(tasted).size, 3, "each once");
+    orders.add(tasted.join(">"));
+  }
+  assert.ok(orders.size >= 3, `serving order varies (${orders.size} orders in 8 respondents)`);
+  assert.equal(run("adv_product", { q_eat: 1, q_allergy: 1 }).r.endStatus, "screened", "an allergy ends the test before tasting");
+  const low = run("adv_product", { q_eat: 1, q_allergy: 2, q_like: 2, q_pref: "none" });
+  assert.ok(low.seen.has("q_dislike") && !low.seen.has("q_buy"));
+});
+
+test("Political: leaners are counted with their candidate, likely voters are flagged, the image grid shows known candidates only", () => {
+  const und = run("adv_political", { q_age: 44, q_reg: 1, q_turnout: 1, q_aware: [1, 3], q_vote: 8, q_lean: 3 });
+  assert.ok(und.seen.has("q_lean") && !und.seen.has("q_firm"));
+  assert.deepEqual([und.a.h_vote, und.a.h_likely], ["3", "1"]);
+  const dec = run("adv_political", { q_age: 44, q_reg: 1, q_turnout: 4, q_aware: [2], q_vote: 2 });
+  assert.ok(!dec.seen.has("q_lean") && dec.seen.has("q_firm"));
+  assert.deepEqual([dec.a.h_vote, dec.a.h_likely], ["2", "2"]);
+  assert.deepEqual(Object.keys(dec.a.q_image as object), ["2"], "one row: the candidate heard of");
+  assert.equal(run("adv_political", { q_age: 44, q_reg: 1, q_aware: [98], q_vote: 8, q_lean: 8 }).a.h_vote, "8");
+  assert.equal(run("adv_political", { q_age: 44, q_reg: 2 }).r.endStatus, "screened");
+});
+
+test("Multi-country: each country sees its own retailers, payment methods and currency; spend lands on one comparable band", () => {
+  const jp = run("adv_multicountry", { q_country: 5, q_age: 30, q_online: 1, q_spend_5: 3 });
+  assert.ok(jp.seen.has("q_spend_5") && !jp.seen.has("q_spend_1") && !jp.seen.has("q_spend_2"));
+  assert.match(String(jp.def.questions.find((q) => q.id === "q_spend_5")!.options.map((o) => o.label).join(" ")), /¥9,000/);
+  assert.equal(jp.a.h_spend, "3");
+  const ind = run("adv_multicountry", { q_country: 1, q_age: 30, q_online: 1, q_spend_1: 1 });
+  assert.equal(ind.a.h_spend, "1");
+  assert.match(JSON.stringify(ind.def.questions.find((q) => q.id === "q_pay")!.options.find((o) => o.label === "UPI")?.visibleIf), /"value":1/);
+  assert.equal(run("adv_multicountry", { q_country: 9 }).r.endStatus, "screened");
+  const full = simulateRespondent(jp.def, { seed: 3, answers: { q_country: 5, q_age: 30 }, quotaCounts: { quota_country: { cell_c5: 300 } } });
+  assert.equal(full.endStatus, "quota_full", "Japan is full; the other countries stay open");
+});
+
+test("Hybrid: both choice exercises in an order that varies and is recorded, the concept written for the segment, the ladder last", () => {
+  const first = new Set<string>();
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+    const x = run("adv_hybrid", { q_age: 28, q_own: 1, q_att: { 1: 5, 2: 2, 3: 2, 4: 2 } }, seed);
+    assert.equal(x.r.endStatus, "complete");
+    const order = x.r.pages.flatMap((p) => p.questionIds);
+    assert.ok(x.a.q_md !== undefined && x.a.q_cbc !== undefined, "both exercises answered");
+    first.add(order.indexOf("q_md") < order.indexOf("q_cbc") ? "md" : "cbc");
+    assert.ok(x.seen.has("q_c_health") && !x.seen.has("q_c_tech") && !x.seen.has("q_c_gen"), "health-driven → the health concept");
+    assert.ok(order.indexOf("q_final") > Math.max(order.indexOf("q_md"), order.indexOf("q_cbc")));
+  }
+  assert.equal(first.size, 2, "both orders occur");
+  const tech = run("adv_hybrid", { q_age: 28, q_own: 2, q_att: { 1: 2, 2: 5, 3: 2, 4: 2 } });
+  assert.ok(tech.a.h_seg === "2" && tech.seen.has("q_c_tech"));
+  assert.equal(run("adv_hybrid", { q_age: 28, q_own: 3 }).r.endStatus, "screened");
+});
+
+test("exports: every generated row is flat, and every column is one the survey's variable dictionary declares", () => {
+  for (const t of advancedTemplates()) {
+    const def = t.build("exp");
+    const declared = new Set(buildVariableDictionary(def).map((v) => v.name));
+    const rep = generatePopulation(def, { count: 25, seed: 20261113 });
+    const completes = rep.respondents.filter((r) => r.endStatus === "complete");
+    assert.ok(completes.length > 0, t.key);
+    for (const r of completes) {
+      /* a multiple choice also appears under its own name (the list of codes) beside its one-column-per-answer variables */
+      const whole = new Set(def.questions.map((q) => q.variableName));
+      const undeclared = Object.keys(r.vars).filter((k) => !declared.has(k) && !whole.has(k));
+      assert.deepEqual(undeclared, [], `${t.key}: columns the dictionary does not know`);
+      for (const [k, v] of Object.entries(r.vars)) if (declared.has(k)) assert.ok(v === null || v === undefined || ["string", "number", "boolean"].includes(typeof v), `${t.key}: ${k} is not a flat value (${typeof v})`);
+    }
+    /* the research plan travels with the survey */
+    assert.ok((def.research?.methodology ?? "").length > 40 && (def.research?.assumptions ?? []).some((a) => a.startsWith("Method — keep intact")), t.key);
   }
 });

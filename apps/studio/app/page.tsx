@@ -121,6 +121,11 @@ export default function Dashboard() {
   const [code, setCode] = React.useState("");
   const [theme, setTheme] = React.useState<string>("");
   const [template, setTemplate] = React.useState<string>("");
+  /* arriving from the templates library (/templates → "Use template"): the New survey dialog opens with it chosen */
+  React.useEffect(() => {
+    const key = new URLSearchParams(window.location.search).get("template");
+    if (key && findSurveyTemplate(key)) { setTemplate(key); setCreating(true); window.history.replaceState(null, "", window.location.pathname); }
+  }, []);
   const [error, setError] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<SurveyRow | null>(null);
   const [confirmText, setConfirmText] = React.useState("");
@@ -793,6 +798,7 @@ export default function Dashboard() {
                 </div>
               );
             })()}
+            <div style={{ fontSize: 13 }}><a href="/templates" data-testid="open-template-library">Browse the advanced research templates</a> — methods, guides and demonstration data.</div>
             <label className="f"><span>Theme</span>
               <select className="select" value={theme} onChange={(e) => setTheme(e.target.value)}>
                 <option value="">Default</option>
