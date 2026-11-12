@@ -1,7 +1,7 @@
 /**
  * THE ONLY ANSWER THERE IS (2026-11-12).
  *
- * A required multiple-choice or ranking question that, for THIS respondent, shows exactly one ordinary answer has
+ * A required single-choice, multiple-choice or ranking question that, for THIS respondent, shows exactly one ordinary answer has
  * nothing to ask: ticking the one box, or ranking the one item first, is the only response the page would accept.
  * The engine gives that answer itself, records that it did, and does not show the question. Display logic, masks,
  * carry-forward and list fills are all "how the list got short" — the rule reads the list the respondent would
@@ -11,6 +11,7 @@
  *   - more than one answer is shown — including "one brand + None of these" or "one brand + Other";
  *   - the one answer shown is itself special (exclusive, other-specify): leaving it and taking it are different;
  *   - the question is optional — not answering is a valid response, and the engine does not answer for anyone;
+ *   - the question was WRITTEN with a single answer (a consent box, an acknowledgement): ticking it is the point;
  *   - the programmer already codes it (auto-punch rules, a default value) or made it read-only / hidden;
  *   - a ranking or selection rule asks for more than one (min selections > 1): one answer would not be valid.
  *
@@ -45,12 +46,17 @@ function eligible(q: Question): boolean {
   if (dv !== undefined && dv !== null && dv !== "") return false;
   if ((q.rows?.length ?? 0) > 0 || q.carryForward?.into === "rows") return false;
   const model = effectiveResponseModel(q);
-  if (model !== "multiple_choice" && model !== "rank_order") return false;
+  if (model !== "multiple_choice" && model !== "rank_order" && model !== "single_choice") return false;
   if ((q.validation ?? []).some((v) => v.kind === "min_selections" && Number((v as { value?: unknown }).value) > 1)) return false;
   if (Number((q.settings as { minSelections?: unknown } | undefined)?.minSelections) > 1) return false;
-  /* a fixed list of two or more that nothing can shorten is never a single */
-  const dynamic = !!q.carryForward || !!(q as { mask?: unknown }).mask || (q.listLogic?.length ?? 0) > 0 || (q.optionPipeline?.length ?? 0) > 0 || (q.options ?? []).some((o) => !!o.visibleIf || !!(o as { logic?: unknown }).logic);
-  return dynamic || (q.options?.length ?? 0) === 1;
+  /*
+   * Only a list that something SHORTENED. A question written with one answer ("I agree", "I have read this") is a
+   * deliberate act the respondent must perform — the engine never performs it for them — and a fixed list of two or
+   * more that nothing can shorten is never a single.
+   */
+  const carried = !!q.carryForward;
+  const narrowable = !!(q as { mask?: unknown }).mask || (q.listLogic?.length ?? 0) > 0 || (q.optionPipeline?.length ?? 0) > 0 || (q.options ?? []).some((o) => !!o.visibleIf || !!(o as { logic?: unknown }).logic);
+  return carried || (narrowable && (q.options?.length ?? 0) >= 2);
 }
 
 /**
@@ -64,7 +70,8 @@ export function forcedSingleAnswer(q: Question, ctx: EvalContext): AnswerValue |
   if (shown.length !== 1) return undefined;
   const only = shown[0];
   if ((only.flags ?? []).some((f) => SPECIAL.has(f))) return undefined;
-  return [only.code] as AnswerValue;
+  /* a single choice holds the code itself; a multiple choice and a ranking hold a list */
+  return (effectiveResponseModel(q) === "single_choice" ? only.code : [only.code]) as AnswerValue;
 }
 
 /**

@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
 import { createResponseState, type ResponseState } from "./state.js";
-import { start, advance, goBack, setAnswer, visibleQuestions, type NavigationResult } from "./flow.js";
+import { start, advance, goBack, recomputePunchesAfterChange, setAnswer, visibleQuestions, type NavigationResult } from "./flow.js";
 import { autoAnswered } from "./singleOption.js";
 import { validatePage } from "./validate.js";
 
@@ -75,7 +75,6 @@ test("not the engine's to answer: optional, already coded by punches, a minimum 
   const cases: [string, Record<string, unknown>, string][] = [
     ["optional — not answering is a valid response", { required: false }, "multi_select"],
     ["min selections 2 — one answer would not be valid", { validation: [{ kind: "min_selections", value: 2, message: "two" }] }, "multi_select"],
-    ["a single-select is outside the rule", {}, "single_select"],
   ];
   for (const [name, extra, type] of cases) {
     const def = survey([q("Q1", "multi_select", BRANDS), q("Q2", type, narrowed(), extra), q("Q4", "open_text", [], { required: false })], [["Q1"], ["Q2"], ["Q4"]]);
@@ -135,10 +134,57 @@ test("the list grows again: the engine's answer is withdrawn and the question is
   assert.notEqual(pageOf(again), "p2");
 });
 
-test("a survey of nothing but single answers ends; a skip rule that points back cannot loop", () => {
-  const def = survey([q("Q1", "multi_select", [opt(1, "Only")]), q("Q2", "ranking", [opt(1, "Only")], { skipLogic: [{ id: "back", when: sel("Q2", 1), target: { kind: "question", ref: "Q1" } }] })], [["Q1"], ["Q2"]]);
-  const state = createResponseState(def, { seed: 1 });
-  const r = start(def, state, {});
-  assert.equal(r.done, true);
-  assert.deepEqual([state.answers.Q1, state.answers.Q2], [[1], [1]]);
+test("a question WRITTEN with one answer (a consent box) is never answered for the respondent; a skip rule that points back cannot loop", () => {
+  const consent = survey([q("Q1", "multi_select", [opt(1, "I agree to take part")]), q("Q4", "open_text", [], { required: false })], [["Q1"], ["Q4"]]);
+  const cs = createResponseState(consent, { seed: 1 });
+  const cr = start(consent, cs, {});
+  assert.equal(pageOf(cr), "p1", "the consent page is shown");
+  assert.equal(cs.answers.Q1, undefined);
+  /* Q2 narrows to one answer and carries a skip rule pointing BACK at Q1: it is answered, left, and the walk goes on forward */
+  const def = survey([q("Q1", "multi_select", BRANDS), q("Q2", "ranking", narrowed(), { skipLogic: [{ id: "back", when: sel("Q2", 2), target: { kind: "question", ref: "Q1" } }] }), q("Q4", "open_text", [], { required: false })], [["Q1"], ["Q2"], ["Q4"]]);
+  const { state, r } = begin(def, [2]);
+  assert.deepEqual(state.answers.Q2, [2]);
+  assert.equal(pageOf(r), "p3");
+});
+
+test("a single-select (radio, dropdown) with one ordinary answer left is answered too — the code itself, not a list", () => {
+  for (const type of ["single_select", "dropdown"]) {
+    const def = survey([q("Q1", "multi_select", BRANDS), q("Q2", type, narrowed()), q("Q4", "open_text", [], { required: false })], [["Q1"], ["Q2"], ["Q4"]]);
+    const { state, r } = begin(def, [3]);
+    assert.equal(pageOf(r), "p3", type);
+    assert.equal(state.answers.Q2, 3, type);
+    assert.deepEqual(autoAnswered(state), ["Q2"]);
+    const two = begin(def, [1, 3]);
+    assert.equal(pageOf(two.r), "p2", `${type}: two answers left is a choice`);
+  }
+  /* one brand + "None of these" stays a question */
+  const def = survey([q("Q1", "multi_select", BRANDS), q("Q2", "single_select", narrowed([opt(99, "None of these", { flags: ["exclusive"] })])), q("Q4", "open_text", [], { required: false })], [["Q1"], ["Q2"], ["Q4"]]);
+  assert.equal(pageOf(begin(def, [2]).r), "p2");
+});
+
+test("a chain on one page: each engine answer reveals the next question — answered if it too has one answer, asked if it has a choice", () => {
+  /* Q2 and Q3 appear only once the question before is answered; Q3 offers what was chosen at Q1 plus, for Gamma, a second answer */
+  const ans = (ref: string) => ({ type: "rule", source: { kind: "question", ref }, operator: "answered" });
+  const def = survey([
+    q("Q1", "multi_select", BRANDS),
+    q("Q2", "multi_select", narrowed(), { displayLogic: ans("Q1") }),
+    q("Q3", "single_select", [...narrowed(), { ...opt(4, "Delta"), visibleIf: sel("Q1", 3) }], { displayLogic: ans("Q2") }),
+    q("Q4", "open_text", [], { required: false }),
+  ], [["Q1", "Q2", "Q3"], ["Q4"]]);
+  const go = (first: number[]) => {
+    const state = createResponseState(def, { seed: 1 });
+    const r = start(def, state, {});
+    const step = r.steps[r.stepIndex];
+    setAnswer(def, state, "Q1", first);
+    /* what the Runner calls after every answer */
+    recomputePunchesAfterChange(def, state, "Q1", step.kind === "page" ? visibleQuestions(def, step, state) : [], { def, state, loop: null });
+    return { state, shown: shownOn(def, r, state) };
+  };
+  const beta = go([2]);
+  assert.deepEqual([beta.state.answers.Q2, beta.state.answers.Q3], [[2], 2], "both follow from the one brand, at once");
+  assert.deepEqual(beta.shown, ["Q1"]);
+  const gamma = go([3]);
+  assert.deepEqual(gamma.state.answers.Q2, [3]);
+  assert.equal(gamma.state.answers.Q3, undefined, "Gamma or Delta: a choice");
+  assert.deepEqual(gamma.shown, ["Q1", "Q3"], "…so Q3 is on the page for the respondent, not skipped");
 });

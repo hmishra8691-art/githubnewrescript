@@ -26,7 +26,7 @@ import { AGREE_5, SAT_5, YES_NO, opts, page, rule } from "./builders.js";
 type Q = Record<string, unknown>;
 
 /** The shell every starter shares: ends, branding, deployment. */
-function survey(
+export function survey(
   surveyId: string,
   meta: { code: string; title: string },
   questions: Q[],
@@ -63,7 +63,7 @@ function survey(
   });
 }
 
-const screenOut = (id: string, when: unknown) =>
+export const screenOut = (id: string, when: unknown) =>
   ({ id, when, target: { kind: "terminate", status: "screened" } });
 
 /* ==================================================================== NPS */

@@ -606,7 +606,7 @@ export function advance(
   const leavingPageId = opts.fromPageId ?? (leaving?.kind === "page" ? leaving.pageId : null);
   /* a question on this page whose list became one answer long while the respondent was on it (singleOption.ts) */
   { const page = leavingPageId ? compileFlow(def, state, quotaCounts).find((x) => x.kind === "page" && x.pageId === leavingPageId) : leaving;
-    if (page?.kind === "page") applyForcedAnswers(def, visibleQuestions(def, page, state, quotaCounts, { keepForced: true }), { def, state, loop: page.loop, quotaCounts }); }
+    if (page?.kind === "page") settleForcedAnswers(def, state, page, quotaCounts); }
   runCalculations(def, state, "on_page_submit");
   let steps = compileFlow(def, state, quotaCounts);
   const relocated = leavingPageId ? steps.findIndex((s) => s.kind === "page" && s.pageId === leavingPageId) : -1;
@@ -751,6 +751,24 @@ function vendorExitOf(def: SurveyDefinition, state: ResponseState, r: Navigation
  * submitted page — page calculations, then the first skip rule that fires — without a visit being recorded, so
  * Back passes over it.
  */
+/**
+ * Give the engine's answers on a page until nothing more changes: one answer can reveal the next question, whose
+ * list may again be one answer long (aware of one brand → considers it → has used it → it is the main brand).
+ * Called wherever an answer on the page may have changed — arriving, leaving, and after each answer while the
+ * respondent is on it — so the browser, the simulator and the server replay all hold the same answers.
+ * Returns whether anything changed.
+ */
+export function settleForcedAnswers(def: SurveyDefinition, state: ResponseState, page: Extract<RuntimeStep, { kind: "page" }>, quotaCounts: QuotaCounts = {}): boolean {
+  let changed = false;
+  for (let pass = 0; pass <= page.questionIds.length; pass++) {
+    const before = JSON.stringify(page.questionIds.map((id) => state.answers[answerKey(id, page.loop ?? null)] ?? null));
+    applyForcedAnswers(def, visibleQuestions(def, page, state, quotaCounts, { keepForced: true }), { def, state, loop: page.loop, quotaCounts });
+    if (JSON.stringify(page.questionIds.map((id) => state.answers[answerKey(id, page.loop ?? null)] ?? null)) === before) break;
+    changed = true;
+  }
+  return changed;
+}
+
 function leaveAnsweredPage(
   def: SurveyDefinition, state: ResponseState, quotaCounts: QuotaCounts, steps: RuntimeStep[], idx: number,
   triggeredSkips: NavigationResult["triggeredSkips"],
@@ -797,7 +815,8 @@ function walkForward(
        * answer may decide a display condition on this same page, and a page left with nothing to show is
        * left the way a submitted page is — its skip logic and page calculations run (leaveAnsweredPage).
        */
-      const auto = applyForcedAnswers(def, visibleQuestions(def, s, state, quotaCounts, { keepForced: true }), { def, state, loop: s.loop, quotaCounts });
+      settleForcedAnswers(def, state, s, quotaCounts);
+      const auto = visibleQuestions(def, s, state, quotaCounts, { keepForced: true }).filter((x) => forcedSingleAnswer(x, { def, state, loop: s.loop, quotaCounts }) !== undefined);
       const visible = visibleQuestions(def, s, state, quotaCounts);
       if (auto.length && visible.length === 0 && !view.revealHidden) {
         const left = leaveAnsweredPage(def, state, quotaCounts, steps, idx, triggeredSkips);
@@ -1194,6 +1213,26 @@ const isDerivedQuestion = (q: Question) => q.type === "hidden" || q.type === "ca
  * Returns the questions whose answer it changed.
  */
 export function recomputePunchesAfterChange(
+  def: SurveyDefinition,
+  state: ResponseState,
+  changedId: string,
+  pageQuestions: Question[],
+  ctx: EvalContext,
+  pageLoop: LoopContext | null = null,
+): string[] {
+  const touched = repunchAfterChange(def, state, changedId, pageQuestions, ctx, pageLoop);
+  /* the answer just given may have left another question on this page with one answer to give (singleOption.ts) */
+  const page = compileFlow(def, state, ctx.quotaCounts ?? {})[state.stepIndex];
+  if (page?.kind === "page" && page.questionIds.includes(changedId)) {
+    const before = new Map(page.questionIds.map((id) => [id, JSON.stringify(state.answers[answerKey(id, pageLoop)] ?? null)]));
+    if (settleForcedAnswers(def, state, page, ctx.quotaCounts ?? {})) {
+      for (const id of page.questionIds) if (id !== changedId && JSON.stringify(state.answers[answerKey(id, pageLoop)] ?? null) !== before.get(id)) { touched.push(id); touched.push(...repunchAfterChange(def, state, id, pageQuestions, ctx, pageLoop)); }
+    }
+  }
+  return [...new Set(touched)];
+}
+
+function repunchAfterChange(
   def: SurveyDefinition,
   state: ResponseState,
   changedId: string,

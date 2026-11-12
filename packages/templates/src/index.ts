@@ -19,13 +19,41 @@ import {
 } from "./starters.js";
 import type { SurveyDefinition } from "@rescript/schema";
 import { buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey, buildBrandFunnelSurvey, buildAdTestSurvey } from "./methods.js";
+import { ADVANCED_TEMPLATES } from "./advancedGuide.js";
+export { buildAdvCbcSurvey, buildAdvMaxDiffSurvey, buildAdvPricingSurvey, buildAdvSegmentationSurvey, buildAdvB2bSurvey, buildAdvJourneySurvey } from "./advanced.js";
 export { buildMethodSurvey, buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey, buildBrandFunnelSurvey, buildAdTestSurvey } from "./methods.js";
+
+/** What the Advanced Research library shows for a template, and what a researcher needs to know before fielding it. */
+export interface TemplateGuide {
+  category: "Conjoint and Choice Modelling" | "Pricing Research" | "Segmentation and Consumer Research" | "B2B and Political Research";
+  complexity: "Intermediate" | "Advanced" | "Expert";
+  methods: string[];
+  /** median minutes for a respondent */
+  minutes: number;
+  /** native features the programming uses */
+  features: string[];
+  objective: string;
+  useCases: string[];
+  audience: string;
+  methodology: string;
+  logic: string;
+  /** the experimental design, where there is one */
+  design?: string;
+  dataStructure: string;
+  sample: string;
+  analysis: string;
+  limitations: string;
+  /** what to keep intact when the content is changed — read by people and by Intelligent mode */
+  whenEditing: string;
+}
 
 export interface SurveyTemplate {
   key: string;
   name: string;
   description: string;
   build(surveyId: string): SurveyDefinition;
+  /** present on the advanced research templates */
+  guide?: TemplateGuide;
 }
 
 /**
@@ -95,6 +123,7 @@ export const SURVEY_TEMPLATES: SurveyTemplate[] = [
     description: "The ad must play to the end, then likeability, unaided (AI-coded) and aided recall, a diagnostics grid and purchase intent — analyses planned",
     build: buildAdTestSurvey,
   },
+  ...ADVANCED_TEMPLATES,
   {
     key: "master_demo_2026",
     name: "Master Demo — capability showcase",
@@ -102,6 +131,9 @@ export const SURVEY_TEMPLATES: SurveyTemplate[] = [
     build: buildMasterDemoSurvey,
   },
 ];
+
+/** the advanced research library: the templates that carry a guide */
+export const advancedTemplates = (): SurveyTemplate[] => SURVEY_TEMPLATES.filter((t) => !!t.guide);
 
 export function findSurveyTemplate(key: string): SurveyTemplate | undefined {
   return SURVEY_TEMPLATES.find((t) => t.key === key);

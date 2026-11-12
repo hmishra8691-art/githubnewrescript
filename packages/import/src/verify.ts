@@ -1,5 +1,5 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
-import { createResponseState, start, advance, setAnswer, visibleQuestions, effectiveQuestion, validatePage, runQualityCheck, constantCondition, type ResponseState, type RuntimeStep } from "@rescript/engine";
+import { createResponseState, start, advance, setAnswer, settleForcedAnswers, visibleQuestions, effectiveQuestion, validatePage, runQualityCheck, constantCondition, type ResponseState, type RuntimeStep } from "@rescript/engine";
 import type { CanonicalSurvey } from "./canonical.js";
 import type { MapResult } from "./map.js";
 import { runScenarios, type BehaviourReport } from "./equivalence.js";
@@ -251,6 +251,7 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
           const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(shownAs(def, q, state, step.loop), strategy, rnd);
           if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null);
         }
+        settleForcedAnswers(def, state, step, {});
         qs = visibleQuestions(def, step, state, {});
       }
       /*
@@ -291,6 +292,7 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
       }
       if (strategy === "deepest") {
         /* the chosen answers may have shown a same-page question: answer it too (the page must still validate) */
+        settleForcedAnswers(def, state, step, {});
         qs = visibleQuestions(def, step, state, {});
         for (const q of qs.filter((x) => !answered.has(x.id))) { answered.add(q.id); walk.questions++; const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(shownAs(def, q, state, step.loop), strategy, rnd); if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null); }
       }

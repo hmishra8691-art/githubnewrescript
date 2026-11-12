@@ -763,8 +763,36 @@ export default function Dashboard() {
             <label className="f"><span>Start from</span>
               <select className="select" data-testid="new-survey-template" value={template} onChange={(e) => setTemplate(e.target.value)}>
                 <option value="">Blank survey</option>
-                {SURVEY_TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.name} — {t.description}</option>)}
+                <optgroup label="Starters">
+                  {SURVEY_TEMPLATES.filter((t) => !t.guide).map((t) => <option key={t.key} value={t.key}>{t.name} — {t.description}</option>)}
+                </optgroup>
+                <optgroup label="Advanced research templates">
+                  {SURVEY_TEMPLATES.filter((t) => !!t.guide).map((t) => <option key={t.key} value={t.key}>{t.name}</option>)}
+                </optgroup>
               </select></label>
+            {(() => {
+              /* the advanced research templates carry a guide: what the method is for, how it works, how to analyse it and what to keep intact */
+              const picked = findSurveyTemplate(template);
+              const g = picked?.guide;
+              if (!picked || !g) return null;
+              return (
+                <div data-testid="template-guide" style={{ border: "1px solid var(--c-border)", borderRadius: 8, padding: 12, fontSize: 13, lineHeight: 1.5, maxHeight: 320, overflowY: "auto", background: "var(--c-surface-2, transparent)" }}>
+                  <div style={{ fontWeight: 600 }}>{g.category} · {g.complexity} · about {g.minutes} minutes</div>
+                  <div style={{ color: "var(--c-text-subtle)", marginBottom: 6 }}>{g.methods.join(" · ")}</div>
+                  <p style={{ margin: "0 0 6px" }}>{picked.description}.</p>
+                  <p style={{ margin: "0 0 6px" }}><b>Objective.</b> {g.objective}</p>
+                  <p style={{ margin: "0 0 6px" }}><b>How it works.</b> {g.methodology}</p>
+                  <p style={{ margin: "0 0 6px" }}><b>Logic.</b> {g.logic}</p>
+                  {g.design ? <p style={{ margin: "0 0 6px" }}><b>Design.</b> {g.design}</p> : null}
+                  <p style={{ margin: "0 0 6px" }}><b>Data.</b> {g.dataStructure}</p>
+                  <p style={{ margin: "0 0 6px" }}><b>Sample.</b> {g.sample}</p>
+                  <p style={{ margin: "0 0 6px" }}><b>Analysis.</b> {g.analysis}</p>
+                  <p style={{ margin: "0 0 6px" }}><b>Limitations.</b> {g.limitations}</p>
+                  <p style={{ margin: 0 }}><b>When you change it.</b> {g.whenEditing}</p>
+                  <div style={{ color: "var(--c-text-subtle)", marginTop: 6 }}>Programming used: {g.features.join(", ")}. All brands and figures in the template are fictional examples.</div>
+                </div>
+              );
+            })()}
             <label className="f"><span>Theme</span>
               <select className="select" value={theme} onChange={(e) => setTheme(e.target.value)}>
                 <option value="">Default</option>

@@ -14,7 +14,7 @@
 import type { LoopContext, QuotaCounts, ListFillCounts, ValidationError } from "@rescript/engine";
 import {
   advance, answerKey, applyListFillDestinations, createResponseState, decideListFill, effectiveQuestion, listFillVariables,
-  pendingListFills, resolvePiping, questionTextTemplate, runScripts, setAnswer, start, validatePage, visibleQuestions, designRowsFor,
+  pendingListFills, resolvePiping, questionTextTemplate, runScripts, setAnswer, settleForcedAnswers, start, validatePage, visibleQuestions, designRowsFor,
   normalizeAcbc, emptyAcbcAnswer, submitByo, submitScreen, answerRule, chooseInTournament, recordDisplayOrders,
 } from "@rescript/engine";
 import type { AcbcConfig, AcbcAnswer } from "@rescript/engine";
@@ -287,6 +287,8 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
         out.logs.push(...r.logs);
       }
     }
+    /* as the Runner does after every answer: questions left with one answer to give are answered by the engine */
+    settleForcedAnswers(def, state, step, quotaCounts);
     const now = visibleQuestions(def, step, state, quotaCounts);
     if (now.every((q) => answeredHere.has(q.id))) { visible = now; break; }
     visible = now;
