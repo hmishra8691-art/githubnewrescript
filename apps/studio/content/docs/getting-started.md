@@ -55,6 +55,8 @@ Text pasted into the Studio is cleaned for the field it is pasted into, so a que
 | An answer option, or a list of them | the same; one option per line | numbers that are content (`18-24`, `1,000`, `Option 1`, `1.5 litres`) |
 | Any other text box, including code and logic editors | invisible characters only | everything else, numbering included |
 
+**The look of the source is not pasted.** Fonts, colours, sizes, highlighting and the source's own HTML (styles, classes, `span` and `font` tags) are left behind; bold, italic, underline, links, line breaks, lists and tables are kept. A Text / HTML block is the exception: what is pasted there is kept as markup.
+
 Piping and placeholders are never altered: `{{Q1}}`, `${Q1}`, `${q://QID1/…}`, `${e://Field/…}`, `[pipe: q1]`, `[% Q1 %]`, `[BRAND]`, HTML entities.
 
 **Notes to the programmer** — `[PROGRAMMER: RANDOMIZE OPTIONS]`, `[DO NOT RANDOMIZE]`, `[ASK ONLY IF Q1 = 1]`, `Other (SPECIFY)`, `None [EXCLUSIVE]`, `[MANDATORY]` — never stay in what a respondent reads. The ones that can be read with confidence are applied to the question (randomization, the option's flag, required, a display condition on a question and codes that exist); the others are written to the question's **Notes** for you to review. A notice lists both.

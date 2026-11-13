@@ -226,3 +226,27 @@ test("several questions pasted into one question: the first fills it, the rest f
   assert.deepEqual(r.questionIds, ["q1", "n2", "n3"]);
   SurveyDefinition.parse(def);
 });
+
+test("the source's colours, fonts and sizes are left behind; emphasis, links and structure are kept", async () => {
+  const { stripPresentation } = await import("./pasteClean.js");
+  const word = `<html><head><meta charset=utf-8><style>p.MsoNormal{font-family:Calibri}</style></head><body><!--StartFragment--><p class=MsoNormal style='margin:0cm;line-height:107%'><span lang=EN-US style='font-size:14.0pt;font-family:"Calibri",sans-serif;color:#1F3864;background:yellow'>How <b>satisfied</b> are you with <span style='color:red;font-weight:700'>our</span> <i>service</i>?</span><o:p></o:p></p><!--EndFragment--></body></html>`;
+  const w = cleanPastedHtml(word, "question").html;
+  assert.equal(w, "How <b>satisfied</b> are you with <b>our</b> <i>service</i>?", "one paragraph joins the line it is pasted into");
+  assert.equal(cleanPastedHtml("<p style='color:red'>First.</p><p style='color:red'>Second.</p>", "question").html, "<p>First.</p><p>Second.</p>", "several paragraphs stay paragraphs");
+  assert.doesNotMatch(w, /style=|class=|lang=|font|color|Calibri|span/i);
+  /* Google Docs: the whole fragment sits in a <b> that says it is NOT bold; bold is a span style */
+  const gdoc = `<meta charset='utf-8'><b style="font-weight:normal;" id="docs-internal-guid-1a2b"><p dir="ltr" style="line-height:1.38;margin-top:0pt"><span style="font-size:11pt;font-family:Arial,sans-serif;color:#000000;font-weight:400;font-style:normal">Which </span><span style="font-size:11pt;font-family:Arial;color:#ff0000;font-weight:700;font-style:italic;text-decoration:underline">brand</span><span style="font-size:11pt;font-weight:400"> do you use? {{Q1}}</span></p></b>`;
+  assert.equal(cleanPastedHtml(gdoc, "question").html, "Which <b><i><u>brand</u></i></b> do you use? {{Q1}}");
+  /* a web page: font tags, a heading, a link with tracking attributes, an image */
+  const web = `<h2 class="title" style="font-size:28px;color:#333">Our <font face="Georgia" color="#c00">new</font> plan</h2><div data-id="7"><a href="https://example.com/x?y=1" target="_blank" class="btn" style="color:blue">Read more</a> <img src="https://example.com/a.png" alt="Logo" width="400" style="border:1px solid"></div>`;
+  assert.equal(stripPresentation(web), `<p><b>Our new plan</b></p><div><a href="https://example.com/x?y=1">Read more</a> <img src="https://example.com/a.png" alt="Logo"></div>`);
+  /* Excel: cells with fonts and fills */
+  assert.equal(cleanPastedHtml(`<table border=0 cellpadding=0 style='border-collapse:collapse;width:96pt'><tr height=20 style='height:15.0pt'><td height=20 class=xl65 width=128 style='font-family:Arial;background:#FFFF00;color:#9C0006'>1. Apple</td></tr></table>`, "option").html, "<table><tr><td>Apple</td></tr></table>");
+  /* text that only LOOKS like markup stays text; plain text is untouched */
+  assert.equal(stripPresentation("Price &lt; $5 &amp; rating &gt; 4"), "Price &lt; $5 &amp; rating &gt; 4");
+  assert.equal(stripPresentation("No tags here"), "No tags here");
+  assert.equal(stripPresentation("<span style='font-weight:bold'>Bold</span> and <span style='color:red'>red</span>"), "<b>Bold</b> and red");
+  assert.equal(stripPresentation("<p><span style='color:red'>unclosed"), "<p>unclosed</p>");
+  /* a Text / HTML block and a code field keep the markup the author pasted */
+  assert.match(cleanPastedHtml(`<p style="color:red">kept</p>`, "open").html, /style="color:red"/);
+});

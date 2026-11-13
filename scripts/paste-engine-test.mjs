@@ -73,6 +73,7 @@ let d = await readDef();
 let q2 = d.questions.find((q) => q.id === "q2");
 assert.equal(plain(q2.text), "Which of these brands have you bought since {{Q1}}?", `the stored text: ${q2.text}`);
 assert.match(q2.text, /<(b|strong)>bought<\/(b|strong)>/, "bold survives");
+assert.doesNotMatch(q2.text, /style=|class=|<span|<font|mso-|Times New Roman/i, `no styling from the source document: ${q2.text}`);
 ok("Word HTML: the list number, the non-breaking spaces and the three notes are gone from the text; bold and {{Q1}} are kept");
 assert.deepEqual(q2.displayLogic, { type: "rule", source: { kind: "question", ref: "q1" }, operator: "selected", value: 1 });
 assert.match(q2.notes ?? "", /\[from paste — review\] INSERT LOGO/);
@@ -81,6 +82,19 @@ assert.match(await page.innerText('[data-testid="paste-notice-applied"]'), /Show
 assert.match(await page.innerText('[data-testid="paste-notice-review"]'), /INSERT LOGO/);
 ok("[ASK ONLY IF Q1 = 1] became the display logic; [INSERT LOGO] is in Notes for review; the notice says which is which");
 await closeNotice();
+
+/* colours, fonts and sizes of the source are not pasted (Google Docs / Outlook / web markup) */
+await select("q9");
+const q9text = page.locator(`${card("q9")} .rte-surface`).first();
+await q9text.click(); await page.keyboard.press("Control+a"); await page.keyboard.press("Delete");
+await paste(q9text, { "text/html": `<meta charset='utf-8'><b style="font-weight:normal;" id="docs-internal-guid-1"><p dir="ltr" style="line-height:1.38"><span style="font-size:14pt;font-family:Georgia,serif;color:#c00000;background-color:#ffff00;font-weight:400">Anything </span><span style="font-size:14pt;font-family:Georgia;color:#1f3864;font-weight:700">else</span><span style="font-size:14pt;color:#c00000;font-weight:400"> to add?</span></p></b>`, "text/plain": "Anything else to add?" }, { click: false });
+await blur("q9");
+d = await readDef();
+const q9 = d.questions.find((q) => q.id === "q9");
+assert.equal(plain(q9.text), "Anything else to add?");
+assert.match(q9.text, /<(b|strong)>else<\/(b|strong)>/, "the bold word is still bold");
+assert.doesNotMatch(q9.text, /style=|<span|<font|color|Georgia|font-size|docs-internal|dir=/i, `no fonts or colours: ${q9.text}`);
+ok("styled text (fonts, colours, sizes, highlight) pastes as clean text: only the bold word keeps its emphasis, no HTML clutter");
 
 console.log("\nOPTIONS");
 await select("q2");

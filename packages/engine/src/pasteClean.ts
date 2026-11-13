@@ -305,6 +305,85 @@ const MSO_LIST_SPAN = /<span\b[^>]*mso-list\s*:\s*Ignore[^>]*>[\s\S]*?<\/span>(?
 const OFFICE_TAGS = /<\/?o:p\b[^>]*>/gi;
 const BLOCK_START = /(<(?:p|li|div|h[1-6]|td|th|blockquote)\b[^>]*>(?:\s*<(?!\/)(?:span|b|strong|i|em|u|font|a)\b[^>]*>)*)([^<]*)/gi;
 
+/* ---- the look of the source document is not content ---- */
+
+const DROP_BLOCKS = /<(head|style|script|xml|title|noscript|svg|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+const COMMENTS = /<!--[\s\S]*?-->|<!\[[^\]]*\]>|<!DOCTYPE[^>]*>/gi;
+/** tags that carry meaning: kept, without the attributes that only carry appearance */
+const KEEP_TAGS = new Set(["b", "strong", "i", "em", "u", "s", "strike", "sub", "sup", "br", "p", "div", "ul", "ol", "li", "a", "table", "thead", "tbody", "tr", "td", "th", "blockquote", "img"]);
+const VOID_TAGS = new Set(["br", "img", "hr", "meta", "link", "input", "col", "wbr"]);
+const KEEP_ATTRS: Record<string, string[]> = { a: ["href"], img: ["src", "alt"], td: ["colspan", "rowspan"], th: ["colspan", "rowspan"] };
+const attr = (attrs: string, name: string): string | null => {
+  const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(attrs);
+  return m ? (m[1] ?? m[2] ?? m[3] ?? "") : null;
+};
+
+/**
+ * COLOURS, FONTS AND SIZES STAY BEHIND (2026-11-18). A paste from Word, Google Docs, Outlook or a web page arrives
+ * as HTML that describes how the SOURCE looked: `<span style="color:#1F3864;font-family:Calibri;font-size:11pt">`,
+ * `<font face=…>`, classes, ids, headings. Pasted as it came, the question carried that markup — another font and
+ * colour in the survey, and a wall of tags in the HTML view. Only what carries MEANING is kept:
+ *
+ *   kept      bold, italic, underline, strike-through, sub / superscript, links (their address), line breaks,
+ *             paragraphs, lists, tables, images (their source and alt text)
+ *   converted emphasis written as a style (`font-weight:700`, `font-style:italic`, `text-decoration:underline`) becomes
+ *             <b> / <i> / <u>; a heading becomes a bold paragraph; Google Docs' `<b style="font-weight:normal">`
+ *             wrapper is NOT bold and is dropped
+ *   dropped   every style, class, id, lang, dir and data attribute; <span>, <font> and Office's own tags (their text
+ *             stays); <style>, <head>, comments and conditional blocks
+ */
+export function stripPresentation(html: string): string {
+  if (!html || !html.includes("<")) return html;
+  const src = html.replace(DROP_BLOCKS, "").replace(COMMENTS, "");
+  let out = "";
+  let last = 0;
+  /* per open source tag: what was written for it, so its close writes the matching closers */
+  const stack: { name: string; close: string }[] = [];
+  const re = /<(\/?)([a-zA-Z][\w:-]*)\b([^>]*)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    out += src.slice(last, m.index);
+    last = m.index + m[0].length;
+    const closing = m[1] === "/", name = m[2].toLowerCase(), attrs = m[3] ?? "";
+    if (closing) {
+      const at = stack.map((x) => x.name).lastIndexOf(name);
+      if (at < 0) continue;
+      /* a close that skips open tags closes them too, innermost first */
+      while (stack.length > at) out += stack.pop()!.close;
+      continue;
+    }
+    const style = (attr(attrs, "style") ?? "").toLowerCase();
+    const weight = /font-weight\s*:\s*([a-z0-9]+)/.exec(style)?.[1];
+    const styledBold = weight ? weight === "bold" || weight === "bolder" || Number(weight) >= 600 : false;
+    const notBold = weight ? weight === "normal" || Number(weight) <= 500 : false;
+    const styledItalic = /font-style\s*:\s*(italic|oblique)/.test(style);
+    const styledUnder = /text-decoration[a-z-]*\s*:[^;]*underline/.test(style);
+    const styledStrike = /text-decoration[a-z-]*\s*:[^;]*line-through/.test(style);
+    const isBoldTag = name === "b" || name === "strong";
+    const heading = /^h[1-6]$/.test(name);
+    let open = "", close = "";
+    const wrap = (t: string) => { open += `<${t}>`; close = `</${t}>${close}`; };
+    if (heading) { wrap("p"); wrap("b"); }
+    else if (isBoldTag && notBold) { /* Google Docs' wrapper: a <b> that says it is not bold */ }
+    else if (KEEP_TAGS.has(name)) {
+      const kept = (KEEP_ATTRS[name] ?? []).map((k) => { const v = attr(attrs, k); return v == null ? "" : ` ${k}="${v.replace(/"/g, "&quot;")}"`; }).join("");
+      if (VOID_TAGS.has(name)) { out += `<${name}${kept}>`; continue; }
+      open += `<${name}${kept}>`; close = `</${name}>`;
+    } else if (VOID_TAGS.has(name) || /\/\s*$/.test(attrs)) continue;
+    /* emphasis that was written as a style, on a tag that does not already say it */
+    if (styledBold && !isBoldTag && !heading) wrap("b");
+    if (styledItalic && name !== "i" && name !== "em") wrap("i");
+    if (styledUnder && name !== "u" && name !== "a") wrap("u");
+    if (styledStrike && name !== "s" && name !== "strike") wrap("s");
+    out += open;
+    stack.push({ name, close });
+  }
+  out += src.slice(last);
+  while (stack.length) out += stack.pop()!.close;
+  /* wrappers left with nothing in them, and a document that was one paragraph */
+  return out.replace(/<(b|i|u|s|p|div)>\s*<\/\1>/gi, "").replace(/(?:&nbsp;|\s)+$/g, "").trim();
+}
+
 /**
  * Clean pasted HTML before it is sanitised and inserted: Word's own list numbers (which are text in the clipboard,
  * not list items), the markers at the start of each paragraph, invisible characters and non-breaking spaces. Tags
@@ -318,6 +397,12 @@ export function cleanPastedHtml(html: string, field: PasteField): { html: string
   const noWord = out.replace(WORD_LIST_IGNORE, "").replace(MSO_LIST_SPAN, "").replace(OFFICE_TAGS, "");
   if (noWord !== out) { out = noWord; note("numbering and bullets"); }
   if (field === "code" || field === "open") return { html: out, instructions: [], removed };
+  /* the source's colours, fonts and sizes are not content (stripPresentation) */
+  let plainLook = stripPresentation(out);
+  /* one paragraph pasted into a line of text joins that line: its <p> wrapper would start a new paragraph in the middle */
+  const lone = /^<p>([\s\S]*)<\/p>$/.exec(plainLook);
+  if (lone && !/<\/?(?:p|div|ul|ol|li|table|blockquote)\b/i.test(lone[1])) plainLook = lone[1];
+  if (plainLook !== out) { out = plainLook; note("fonts, colours and styling"); }
   const instructions: PasteInstruction[] = [];
   const takeNotes = field === "question" || field === "option" || field === "instruction";
   /* text between tags: characters and notes; never inside a tag */
