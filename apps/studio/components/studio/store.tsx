@@ -96,6 +96,13 @@ export interface StudioState {
    */
   dataProtectNotice: { items: ProtectedItem[]; at: number } | null;
   dismissDataProtectNotice(): void;
+  /**
+   * THE PASTE ENGINE'S REPORT (2026-11-17, engine pasteClean.ts): what a paste's programmer notes were turned into,
+   * and the ones that could not be read with confidence (kept in the question's Notes) — shown once by the Studio.
+   */
+  pasteNotice: { applied: string[]; review: string[]; questions?: number; undoDepth?: number; at: number } | null;
+  notePaste(n: { applied: string[]; review: string[]; questions?: number; /** the undo depth before the paste: "Undo the paste" goes back to it */ undoDepth?: number }): void;
+  dismissPasteNotice(): void;
   /** a control that hid something itself instead of deleting it reports it here, for the same notice */
   noteDataProtected(items: ProtectedItem[]): void;
   /** ask the server again whether live responses exist (after publishing, when the window regains focus) */
@@ -270,6 +277,7 @@ export function StudioProvider({
   const codesFrozenRef = React.useRef(false);
   codesFrozenRef.current = codesFrozen;
   const [dataProtectNotice, setDataProtectNotice] = React.useState<{ items: ProtectedItem[]; at: number } | null>(null);
+  const [pasteNotice, setPasteNotice] = React.useState<{ applied: string[]; review: string[]; questions?: number; undoDepth?: number; at: number } | null>(null);
   /** hide instead of delete once live data exists; never loses the edit if the check itself fails */
   const keepCollectedData = (prev: SurveyDefinition, next: SurveyDefinition): SurveyDefinition => {
     if (!codesFrozenRef.current) return next;
@@ -728,6 +736,9 @@ export function StudioProvider({
     dataProtectNotice,
     dismissDataProtectNotice: () => setDataProtectNotice(null),
     noteDataProtected: (items) => setDataProtectNotice({ items, at: Date.now() }),
+    pasteNotice,
+    notePaste: (n) => { if (n.applied.length || n.review.length || n.questions) setPasteNotice({ ...n, at: Date.now() }); },
+    dismissPasteNotice: () => setPasteNotice(null),
     refreshDataLock: probeDataLock,
     goToTab: (tab) => goToTabRef.current?.(tab),
     setGoToTab(fn) { goToTabRef.current = fn; },

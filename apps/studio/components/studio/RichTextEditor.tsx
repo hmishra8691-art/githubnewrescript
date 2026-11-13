@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import { sanitizeHtml, stripHtmlText, mediaGroupFromAttrs, type SanitizeOptions, type MediaGroup } from "@rescript/engine";
+import { sanitizeHtml, stripHtmlText, mediaGroupFromAttrs, cleanPastedHtml, cleanPastedText, parsePastedQuestions, type SanitizeOptions, type MediaGroup, type PasteField, type PasteInstruction, type PastedQuestion } from "@rescript/engine";
+import { applyPasteNotes } from "./pasteNotes";
 import { surfaceHtml, restoreSurfaceHtml, RTE_SCOPE_ATTR } from "@/lib/rteStyles";
 import { InsertPipingButton, tokensToChips, chipsToTokens } from "./PipingPicker";
 import { MediaInsertDialog, mediaValueFromElement, type MediaApply, type MediaInsertValue } from "./MediaInsertDialog";
@@ -187,6 +188,20 @@ function useRichSurface(value: string, onChange: (html: string) => void, mode: "
     }
   }, [value, mode, codeFor, show]);
 
+  /*
+   * A paste of several lines into ONE label rewrites that label from outside while it still has the focus, and the
+   * sync above deliberately leaves a focused surface alone — so the surface kept its old text and wrote it back on
+   * blur, blanking the first pasted option. The paste handler asks for this once the new value has arrived.
+   */
+  const valueRef = React.useRef(value);
+  valueRef.current = value;
+  const resync = React.useCallback(() => {
+    const el = surface.current;
+    if (!el) return;
+    el.innerHTML = show(valueRef.current || "", codeFor);
+    lastCommitted.current = valueRef.current;
+  }, [show, codeFor]);
+
   const commit = React.useCallback((html: string, immediate = false) => {
     const clean = sanitizeHtml(read(html), cleanOpts);
     lastCommitted.current = clean;
@@ -263,7 +278,7 @@ function useRichSurface(value: string, onChange: (html: string) => void, mode: "
     media && <MediaInsertDialog open initial={media.initial} group={media.group} onClose={() => setMedia(null)} onInsert={applyMedia} placement={placement} />
   );
 
-  return { surface, commit, exec, insertHtml, onStyle, addLink, onSurfaceClick, openMedia, mediaDialog, codeFor, mediaOpen: !!media, show, read, scopeId, cleanOpts };
+  return { surface, commit, exec, insertHtml, onStyle, addLink, onSurfaceClick, openMedia, mediaDialog, codeFor, mediaOpen: !!media, show, read, scopeId, cleanOpts, resync };
 }
 
 /** media placed above or below the question text sits on its own line */
@@ -289,8 +304,12 @@ function removeMediaElement(el: HTMLElement, root: HTMLElement) {
 
 /* ================================================================ block editor */
 
-export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId, mediaPlacement, keepStyles, allowFrames, markup }: {
+export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId, mediaPlacement, keepStyles, allowFrames, markup, pasteField = "question", onPasteQuestions }: {
   value: string;
+  /** where pasted text is going, for the paste engine (engine pasteClean.ts): a question's text, its instruction … */
+  pasteField?: PasteField;
+  /** a paste that is plainly SEVERAL questions, into an empty question: return true when it was taken */
+  onPasteQuestions?(blocks: PastedQuestion[]): boolean;
   /**
    * A Text / HTML block (07-10 review, Oweas #2): opens on the HTML tab, so
    * markup typed is markup, and offers to turn HTML that was typed into the
@@ -319,6 +338,8 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
   const [mode, setMode] = React.useState<"visual" | "html">(markup ? "html" : "visual");
   const [htmlDraft, setHtmlDraft] = React.useState(value);
   const r = useRichSurface(value, onChange, mode, !!mediaPlacement, { keepStyles, allowFrames });
+  const studio = useStudio();
+  const pastedOver = React.useRef(false);
   /* the HTML tab shows what is stored — kept in step when the value changes from outside (undo, a restore) */
   React.useEffect(() => {
     if (mode !== "html") return;
@@ -372,16 +393,41 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
         data-placeholder={placeholder ?? "Question text — formatting and piping like {{Q1}} allowed"}
         style={{ display: mode === "visual" ? undefined : "none" }}
         onInput={() => surface.current && commit(surface.current.innerHTML)}
-        onBlur={() => surface.current && commit(surface.current.innerHTML, true)}
+        onBlur={() => { if (pastedOver.current) { pastedOver.current = false; r.resync(); return; } if (surface.current) commit(surface.current.innerHTML, true); }}
         onClick={r.onSurfaceClick}
         onPaste={(e) => {
-          // paste as sanitized HTML, never as live markup with handlers
+          /*
+           * THROUGH THE PASTE ENGINE (2026-11-17). Word, Excel, a PDF or a web page hand over numbering, bullets,
+           * invisible characters and notes to the programmer along with the wording; they are removed here for
+           * this field, survey syntax is kept, and the notes go to the question instead of into its text. A Text /
+           * HTML block is pasted as it is: its content is markup the author wrote.
+           */
           const html = e.clipboardData.getData("text/html");
-          if (html) {
-            e.preventDefault();
-            document.execCommand("insertHTML", false, sanitizeHtml(html));
-            if (surface.current) commit(surface.current.innerHTML);
+          const plain = e.clipboardData.getData("text/plain");
+          if (!html && !plain) return;
+          const field: PasteField = markup ? "open" : pasteField;
+          const empty = !(surface.current?.textContent ?? "").trim();
+          if (onPasteQuestions && empty && plain && !markup) {
+            const blocks = parsePastedQuestions(plain);
+            if (blocks && blocks.length >= 2) {
+              e.preventDefault();
+              /* this question's text was set from outside while it has the focus: show it, and keep a later blur from writing the empty surface back */
+              if (onPasteQuestions(blocks)) { pastedOver.current = true; setTimeout(() => { if (pastedOver.current) { pastedOver.current = false; r.resync(); } }, 0); return; }
+            }
           }
+          e.preventDefault();
+          let notes: PasteInstruction[] = [];
+          if (html) {
+            const c = cleanPastedHtml(html, field);
+            notes = c.instructions;
+            document.execCommand("insertHTML", false, sanitizeHtml(c.html));
+          } else {
+            const c = cleanPastedText(plain, field);
+            notes = c.instructions;
+            document.execCommand("insertHTML", false, c.text.split("\n").map((l) => l.replace(/[<>&]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[ch] as string))).join("<br>"));
+          }
+          if (surface.current) commit(surface.current.innerHTML);
+          applyPasteNotes(studio, questionId, notes);
         }}
       />
 
@@ -435,7 +481,9 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
  * `data-oidx` is kept on the editable element so the existing focus logic
  * (`[data-oidx="3"]`) finds it exactly as it found the input.
  */
-export function InlineRichText({ value, onChange, placeholder, questionId, testId, index, onEnter, onBackspaceEmpty, onArrow, onPasteLines, className, disabled, style, multiline }: {
+export function InlineRichText({ value, onChange, placeholder, questionId, testId, index, onEnter, onBackspaceEmpty, onArrow, onPasteLines, className, disabled, style, multiline, pasteField }: {
+  /** where pasted text is going (engine pasteClean.ts); a one-line label is an "option" unless told otherwise */
+  pasteField?: PasteField;
   value: string;
   onChange(html: string): void;
   placeholder?: string;
@@ -467,7 +515,9 @@ export function InlineRichText({ value, onChange, placeholder, questionId, testI
   const [htmlDraft, setHtmlDraft] = React.useState(value);
   const wrap = React.useRef<HTMLDivElement>(null);
   const r = useRichSurface(value, onChange, mode);
+  const studio = useStudio();
   const { surface, commit, exec, codeFor } = r;
+  const pastedLines = React.useRef(false);
   const blurTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // the popover stays while focus is anywhere inside this editor or its dialog
@@ -529,7 +579,7 @@ export function InlineRichText({ value, onChange, placeholder, questionId, testI
           data-testid={testId}
           data-placeholder={placeholder ?? ""}
           onInput={() => surface.current && commit(surface.current.innerHTML)}
-          onBlur={() => surface.current && commit(surface.current.innerHTML, true)}
+          onBlur={() => { if (pastedLines.current) { pastedLines.current = false; r.resync(); return; } if (surface.current) commit(surface.current.innerHTML, true); }}
           onClick={r.onSurfaceClick}
           onKeyDown={(e) => {
             if (!multiline && e.key === "Enter" && !e.shiftKey) {
@@ -555,23 +605,28 @@ export function InlineRichText({ value, onChange, placeholder, questionId, testI
             if (!multiline && plain.includes("\n") && onPasteLines) {
               e.preventDefault();
               if (surface.current) commit(surface.current.innerHTML, true);
-              if (onPasteLines(plain)) return;
+              /* the label was rewritten from outside: show it, and do not let the blur that follows (focus moves
+                 to the last pasted row) write the old text back */
+              if (onPasteLines(plain)) { pastedLines.current = true; setTimeout(() => { if (pastedLines.current) { pastedLines.current = false; r.resync(); } }, 0); return; }
             }
             const html = e.clipboardData.getData("text/html");
             e.preventDefault();
+            /* through the paste engine (2026-11-17): numbering, bullets, invisible characters and programmer notes
+               come out for this field; survey syntax stays; the notes go to the question */
+            const field: PasteField = pasteField ?? (multiline ? "instruction" : "option");
+            const escText = (t: string) => t.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string));
+            const cleaned = html ? cleanPastedHtml(html, field) : null;
+            const text = html ? null : cleanPastedText(plain, field);
             const clean = multiline
               // a message keeps the paragraph/line breaks a paste carries
-              ? (html
-                  ? sanitizeHtml(html)
-                  : plain.split(/\r\n|\r|\n/).map((line) =>
-                      line.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string)),
-                    ).join("<br>"))
+              ? (cleaned ? sanitizeHtml(cleaned.html) : text!.text.split("\n").map(escText).join("<br>"))
               // one line: block wrappers a word processor pastes become the text they hold
-              : (html
-                  ? sanitizeHtml(html).replace(/<\/?(p|div|br|h[1-6])\b[^>]*>/gi, " ")
-                  : plain.replace(/\s+/g, " ").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string)));
+              : (cleaned
+                  ? sanitizeHtml(cleaned.html).replace(/<\/?(p|div|br|h[1-6]|ul|ol|li)\b[^>]*>/gi, " ").replace(/\s{2,}/g, " ").trim()
+                  : escText(text!.text.replace(/\s+/g, " ")));
             document.execCommand("insertHTML", false, clean);
             if (surface.current) commit(surface.current.innerHTML);
+            applyPasteNotes(studio, questionId, (cleaned ?? text!).instructions, field === "option" ? index : undefined);
           }}
         />
       ) : (

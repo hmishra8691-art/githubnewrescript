@@ -1,6 +1,7 @@
 import type { Option } from "@rescript/schema";
 import { nextCode } from "./renumber.js";
 import { stripHtmlText } from "./html.js";
+import { cleanPastedText, type PasteInstruction } from "./pasteClean.js";
 
 /**
  * Pasting an option list into a question that already has options.
@@ -42,22 +43,46 @@ export interface PastePlan {
   removedCodes: (string | number)[];
 }
 
-/** Parse pasted option lists: strips numbering (1. / 1) ), bullets (- * •) and supports "code<TAB>label" lines. */
+/**
+ * Parse a pasted option list. Every line goes through the paste engine (pasteClean.ts): numbering, bullets,
+ * invisible characters and spreadsheet quotes are removed, survey syntax is kept, and a programmer note written on
+ * an option's line is taken out of its label — "(SPECIFY)" and "[ANCHOR]" set that option's flag here; the rest
+ * (`pastedOptionNotes`) are for the question. `code<TAB>label` lines keep their code.
+ */
 export function parsePastedOptions(text: string, startCode: number): Option[] {
   let n = startCode;
-  return text
-    .split(/\r?\n/)
-    .map((l) => l.replace(/\s+$/, ""))
-    .filter((l) => l.trim())
-    .map((line) => {
-      const tab = line.split("\t");
-      if (tab.length >= 2 && tab[0].trim()) {
-        const code = tab[0].trim();
-        return { code, label: tab.slice(1).join(" ").trim(), flags: [] as any[] } as Option;
-      }
-      const cleaned = line.trim().replace(/^\s*(\d{1,4}[.)]|[-*•‣▪])\s+/, "").trim();
-      return { code: String(n++), label: cleaned || line.trim(), flags: [] as any[] } as Option;
-    });
+  const out: Option[] = [];
+  for (const raw of text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim()) continue;
+    const tab = line.split("\t");
+    const coded = tab.length >= 2 && tab[0].trim() && !/^\s*(?:[\u2022\u25E6\u25AA\u00B7\uF000-\uF8FF]|\(?\d{1,3}[.)]|[a-zA-Z][.)])\s*$/.test(tab[0]);
+    const body = coded ? tab.slice(1).join(" ") : line;
+    const c = cleanPastedText(body, "option");
+    const label = c.text.replace(/\n+/g, " ").trim();
+    /* a line that was only a note ("[RANDOMIZE]") is not an option */
+    if (!label && c.instructions.length) continue;
+    const flags: string[] = [];
+    for (const ins of c.instructions) { if (ins.kind === "other_specify") flags.push("other_specify"); if (ins.kind === "anchor") flags.push("anchor_bottom"); }
+    out.push({ code: coded ? tab[0].trim() : String(n++), label: label || line.trim(), flags } as unknown as Option);
+  }
+  return out;
+}
+
+/** the notes of a pasted option list that are about the QUESTION or need its type: randomize, exclusive, a condition … (`line` = the option's place in the parsed list) */
+export function pastedOptionNotes(text: string): PasteInstruction[] {
+  const notes: PasteInstruction[] = [];
+  let k = -1;
+  for (const raw of text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n")) {
+    if (!raw.trim()) continue;
+    const tab = raw.split("\t");
+    const coded = tab.length >= 2 && tab[0].trim() && !/^\s*(?:[\u2022\u25E6\u25AA\u00B7\uF000-\uF8FF]|\(?\d{1,3}[.)]|[a-zA-Z][.)])\s*$/.test(tab[0]);
+    const c = cleanPastedText(coded ? tab.slice(1).join(" ") : raw, "option");
+    const isOption = !!c.text.trim() || !c.instructions.length;
+    if (isOption) k++;
+    for (const ins of c.instructions) if (ins.kind !== "other_specify" && ins.kind !== "anchor") notes.push({ ...ins, line: isOption ? k : -1 });
+  }
+  return notes;
 }
 
 /** Did this pasted line carry its own code (`code<TAB>label`)? */
@@ -65,7 +90,8 @@ function explicitCodes(text: string): Set<string> {
   const out = new Set<string>();
   for (const raw of text.split(/\r?\n/)) {
     const tab = raw.split("\t");
-    if (tab.length >= 2 && tab[0].trim()) out.add(tab[0].trim());
+    /* "1.<TAB>Apple" is Word's numbering followed by a tab, not a code the person chose */
+    if (tab.length >= 2 && tab[0].trim() && !/^\s*(?:[\u2022\u25E6\u25AA\u00B7\uF000-\uF8FF]|\(?\d{1,3}[.)]|[a-zA-Z][.)])\s*$/.test(tab[0])) out.add(tab[0].trim());
   }
   return out;
 }

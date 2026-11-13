@@ -192,7 +192,7 @@ function RowProps({ q, code, ann, patch, onSelect }: {
       )}
 
       <label className="f"><span>Label</span>
-        <InlineRichText testId="row-label" value={r.label} questionId={q.id}
+        <InlineRichText testId="row-label" pasteField="title" value={r.label} questionId={q.id}
           onChange={(label) => patch(code, { label })} /></label>
 
       <label className="f"><span>Code</span>
@@ -297,7 +297,7 @@ function ColumnProps({ q, id, patch, patchOption }: {
   return (
     <>
       <label className="f"><span>Label</span>
-        <InlineRichText testId="col-label" value={col.label} questionId={q.id}
+        <InlineRichText testId="col-label" pasteField="title" value={col.label} questionId={q.id}
           onChange={(label) => patch(id, { label })} /></label>
       <label className="f"><span>Variable stem</span>
         <input className="input mono" value={col.variableStem}

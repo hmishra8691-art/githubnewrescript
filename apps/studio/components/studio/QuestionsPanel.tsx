@@ -8,6 +8,7 @@ import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript
 import { BalanceSettings } from "./FlowNodeEditors";
 import { honoursColumns, drawsOptionImages, honoursOrientation, readsCellColumns, offersOptionSearch } from "@rescript/renderer";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
+import { applyPasteNotes } from "./pasteNotes";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { DefaultValueBox } from "./DefaultValueBox";
 import { autoNextKind, isConsentQuestion, holdsData, DATA_PROTECTION_NOTICE } from "@rescript/engine";
@@ -84,7 +85,7 @@ const MEDIA_OWNING = new Set(["beforeafter", "videorecording", "videorating", "v
 import { InsertPipingButton } from "./PipingPicker";
 import {
   FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes, recodeOptionCode, recodeRowCode, renameQuestionCode,
-  parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
+  parsePastedOptions, pastedOptionNotes, insertPastedQuestions, planPaste, optionsToPaste, type PasteMode,
   stripHtmlText, referencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
   resolveMediaUrl,
@@ -302,7 +303,8 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
    * surface froze them from the start; this panel — the one programmers
    * actually use — never did, so the guard existed and was unreachable.
    */
-  const frozen = useStudio().codesFrozen;
+  const optStudio = useStudio();
+  const frozen = optStudio.codesFrozen;
   const [filter, setFilter] = React.useState("");
   const [showAll, setShowAll] = React.useState(false);
   const [pasteOpen, setPasteOpen] = React.useState(false);
@@ -413,6 +415,8 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
     pendingFocus.current = i + parsed.length - 1;
     setShowAll(true); // the pasted rows must be mounted for focus to land
     onChange(next);
+    /* notes written in the list ("[RANDOMIZE]", "None [EXCLUSIVE]") go to the question, not into a label */
+    applyPasteNotes(optStudio, questionId, pastedOptionNotes(text), i);
     return true;
   };
 
@@ -440,6 +444,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
      */
     if (frozen && pasteMode === "replace") return;
     onChange(pastePlan.options.map((o) => (o.id ? o : withOther({ ...o, id: uid("opt") }))));
+    applyPasteNotes(optStudio, questionId, pastedOptionNotes(pasteText), pasteMode === "append" ? options.length : 0);
     if (pastePlan.removed > 0) onAfterDelete?.();
     setFilter("");
     setShowAll(true);
@@ -779,7 +784,7 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
             {c.logic?.visibility === "always_hide" ? " · always hidden" : c.logic?.visibility === "show_when" ? " · shown when…" : c.logic?.visibility === "hide_when" ? " · hidden when…" : c.visibleIf ? " · shown when…" : ""}
           </div>
           <div className="row" style={{ marginBottom: 6 }}>
-            <InlineRichText className="grow" value={c.label} placeholder="Column label" testId="column-label"
+            <InlineRichText className="grow" value={c.label} placeholder="Column label" testId="column-label" pasteField="title"
               onChange={(label) => set(i, { label })} />
             {/* one allowed type is not a choice — say what it is instead of
                 offering a dropdown that can only be re-picked */}
@@ -1099,7 +1104,7 @@ function FieldRowsEditor({ q, patch, patchSettings, onCodeCommit }: {
                 onFocus={(e) => { codeAtFocus.current = e.currentTarget.value; }}
                 onBlur={commitCode}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }} />
-              <InlineRichText className="grow" placeholder="Field label, e.g. Email Address" testId="field-label"
+              <InlineRichText className="grow" placeholder="Field label, e.g. Email Address" testId="field-label" pasteField="title"
                 value={r.label} onChange={(label) => setRow(i, { label })} />
               {fieldSpec?.range ? (
                 /* a Date/Time Range: its ends take the Range type set once, below */
@@ -1708,6 +1713,23 @@ export function QuestionEditor({ q }: { q: Question }) {
         * offered back as markup (`typedMarkup`).
         */}
       <RichTextEditor key={`qtext_${q.id}_${q.type === "html" ? "h" : "t"}`} value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id} mediaPlacement
+        onPasteQuestions={(blocks) => {
+          /*
+           * SEVERAL QUESTIONS PASTED INTO ONE (2026-11-17, engine insertPastedQuestions). The first fills this
+           * question, the others are added after it in order, each with its options and its notes — one undo step.
+           */
+          let res: ReturnType<typeof insertPastedQuestions> | null = null;
+          const undoDepth = s.undoDepth;
+          s.labelNextEdit(`paste ${blocks.length} questions`);
+          s.update((d) => {
+            res = insertPastedQuestions(d, q.id, blocks, (kind, cur) =>
+              createFromVariant(variantRegistry.get(kind === "open" ? "text.single_line" : kind === "multi" ? "multi_select.checkbox" : "single_select.radio")!, nextQuestionNaming(cur)));
+          });
+          const done = res as ReturnType<typeof insertPastedQuestions> | null;
+          if (!done || !done.questionIds.length) return false;
+          s.notePaste({ applied: done.applied, review: done.review.map((x) => x.raw), questions: done.questionIds.length, undoDepth });
+          return true;
+        }}
         keepStyles allowFrames={q.type === "html"} markup={q.type === "html"}
         onChange={(html) => patch({ text: html })}
         placeholder="e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?" />
@@ -1730,7 +1752,7 @@ export function QuestionEditor({ q }: { q: Question }) {
       <div className="row" style={{ alignItems: "flex-start" }}>
         <div className="f grow">
           <span>Instruction — formatting and piping supported</span>
-          <RichTextEditor value={q.instruction ?? ""} questionId={q.id} keepStyles
+          <RichTextEditor value={q.instruction ?? ""} questionId={q.id} keepStyles pasteField="instruction"
             onChange={(html) => patch({ instruction: html || undefined })}
             placeholder="e.g. Select all that apply." />
         </div>

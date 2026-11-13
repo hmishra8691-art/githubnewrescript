@@ -40,7 +40,7 @@ import { STUDIO_NAV } from "@/lib/studioNav";
 import { HelpAssistant } from "@/components/help/HelpAssistant";
 import type { HelpContext } from "@/lib/help/compose";
 import { setPendingIntelligentInput } from "@/lib/intelligent/pendingInput";
-import { conditionSummary, stripHtmlText, DATA_PROTECTION_NOTICE, DATA_PROTECTION_DONE, describeProtected } from "@rescript/engine";
+import { conditionSummary, stripHtmlText, DATA_PROTECTION_NOTICE, DATA_PROTECTION_DONE, describeProtected, cleanPastedText } from "@rescript/engine";
 import { LocalizationPanel } from "./localization/LocalizationPanel";
 import { UsagePanel, useMeterView } from "./UsagePanel";
 import { WalletMenu } from "../billing/WalletMenu";
@@ -369,6 +369,28 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
   // ?tab=data lets the dashboard link straight to a survey's responses
   const [exportOpen, setExportOpen] = React.useState(false);
   const [publishOpen, setPublishOpen] = React.useState(false);
+  /*
+   * EVERY OTHER TEXT BOX (2026-11-17, engine pasteClean.ts). The rich editors clean a paste for their own field.
+   * A plain input or textarea — a name, a label, a code box, a logic expression — gets the part that is safe for
+   * any of them: invisible characters, non-breaking spaces and symbol-font glyphs are removed, nothing else is
+   * touched (numbering in a logic editor or an open text is content). Only when something would actually change.
+   */
+  React.useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || e.defaultPrevented) return;
+      const isInput = t instanceof HTMLTextAreaElement || (t instanceof HTMLInputElement && ["text", "search", "url", "email", ""].includes(t.type));
+      if (!isInput || t.closest("[data-paste-raw]")) return;
+      const plain = e.clipboardData?.getData("text/plain") ?? "";
+      if (!plain) return;
+      const cleaned = cleanPastedText(plain, "code").text;
+      if (cleaned === plain.replace(/\r\n?/g, "\n")) return;
+      e.preventDefault();
+      document.execCommand("insertText", false, t instanceof HTMLInputElement ? cleaned.replace(/\n+/g, " ") : cleaned);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, []);
   const [tab, setTab] = React.useState<Tab>(() => {
     if (typeof window === "undefined") return "questions";
     const t = new URLSearchParams(window.location.search).get("tab");
@@ -992,6 +1014,33 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
                 onClick={() => { setBlocker(null); void save(); }}>Try again</button>
             )}
           </div>
+        </div>
+      )}
+      {s.pasteNotice && (
+        <div className="save-blocker paste-notice" role="status" data-testid="paste-notice">
+          <div className="save-blocker-head">
+            <strong>{s.pasteNotice.questions ? `${s.pasteNotice.questions} questions pasted` : "Programmer notes found in the paste"}</strong>
+            <button className="btn small" data-testid="paste-notice-close" onClick={() => s.dismissPasteNotice()}>OK</button>
+          </div>
+          {s.pasteNotice.questions ? (
+            <p className="save-blocker-msg">
+              The first filled this question; the others were added after it. Check each one's type.{" "}
+              <button className="btn small" data-testid="paste-notice-undo" disabled={!s.canUndo} onClick={() => {
+                /* back to where the survey stood before the paste, past any edit made since (a blur re-commits a field) */
+                const steps = Math.max(1, s.undoDepth - (s.pasteNotice?.undoDepth ?? s.undoDepth - 1));
+                for (let i = 0; i < steps; i++) s.undo();
+                s.dismissPasteNotice();
+              }}>Undo the paste</button>
+            </p>
+          ) : null}
+          {s.pasteNotice.applied.length > 0 && (<>
+            <p className="save-blocker-msg">Taken out of the text and applied:</p>
+            <ul className="save-blocker-list" data-testid="paste-notice-applied">{s.pasteNotice.applied.map((a, i) => <li key={i}>{a}</li>)}</ul>
+          </>)}
+          {s.pasteNotice.review.length > 0 && (<>
+            <p className="save-blocker-msg">Not applied — kept in the question's <strong>Notes</strong> for you to review (respondents do not see them):</p>
+            <ul className="save-blocker-list" data-testid="paste-notice-review">{s.pasteNotice.review.map((a, i) => <li key={i}>{a}</li>)}</ul>
+          </>)}
         </div>
       )}
       {s.dataProtectNotice && (

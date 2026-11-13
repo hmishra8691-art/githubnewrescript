@@ -45,6 +45,22 @@ A ResLens.ai survey is one JSON document — the *survey definition* — that th
 
 What this does: Q1 screens out anyone under 18; Q3's brands are shuffled with *None of these* exclusive; Q4 shows the brands chosen at Q3 (carry-forward) and only when something other than *None* was chosen; Q5 pipes the preferred brand into its text and is an NPS scale. The two conditions are stored as JSON `Condition` trees; in the editor and in Intelligent mode you write them in the text logic language — `AGE < 18` and `Q3 answered AND NOT Q3.99` — and the engine compiles them to exactly these trees. See [Logic and expressions](logic).
 
+## Pasting from Word, Excel, PDFs and other platforms
+
+Text pasted into the Studio is cleaned for the field it is pasted into, so a questionnaire does not have to be tidied by hand first.
+
+| Pasted into | What is removed | What is kept |
+|---|---|---|
+| Question text, instruction | list numbering and bullets (`1.` `2)` `a)` `Q3.` `•` `▪` `-`), invisible characters, non-breaking and repeated spaces, line breaks a PDF put inside a sentence, notes to the programmer | wording, punctuation, formatting such as bold, piping and placeholders |
+| An answer option, or a list of them | the same; one option per line | numbers that are content (`18-24`, `1,000`, `Option 1`, `1.5 litres`) |
+| Any other text box, including code and logic editors | invisible characters only | everything else, numbering included |
+
+Piping and placeholders are never altered: `{{Q1}}`, `${Q1}`, `${q://QID1/…}`, `${e://Field/…}`, `[pipe: q1]`, `[% Q1 %]`, `[BRAND]`, HTML entities.
+
+**Notes to the programmer** — `[PROGRAMMER: RANDOMIZE OPTIONS]`, `[DO NOT RANDOMIZE]`, `[ASK ONLY IF Q1 = 1]`, `Other (SPECIFY)`, `None [EXCLUSIVE]`, `[MANDATORY]` — never stay in what a respondent reads. The ones that can be read with confidence are applied to the question (randomization, the option's flag, required, a display condition on a question and codes that exist); the others are written to the question's **Notes** for you to review. A notice lists both.
+
+**Several questions at once.** Pasting a list of questions (each ending in a question mark or labelled `Q1.`), with their options underneath, into an empty question's text fills that question and adds the others after it, in order. Check each new question's type; the notice offers to undo the whole paste.
+
 ## Codes, variables and ids
 
 Every question has three names. The **id** (`q_age`) is stable and internal — logic, constructs and translations refer to it, and the Studio never shows it. The **code** (`Q1`) is what the researcher sees and what sentences and logic use. The **variable name** (`AGE`) is the column in the data. Logic accepts either the code or the variable name; the data uses the variable name and derives the rest (`AWARE_1`, `AWARE_2`… for a multi-select; see [Data and exports](data-and-exports)).

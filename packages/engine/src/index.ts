@@ -54,6 +54,7 @@ export * from "./sampleSource.js";
 export * from "./logicSummary.js";
 export * from "./listRules.js";
 export * from "./dataProtection.js";
+export * from "./pasteClean.js";
 export * from "./logicGraph.js";
 export * from "./flow.js";
 export * from "./flowTree.js";

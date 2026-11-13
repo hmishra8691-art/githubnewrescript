@@ -2765,3 +2765,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .ax-quick-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ax-quick-row .select { max-width: 100%; }
 .ax-quick-note { font-size: 12.5px; }
+
+/* PASTE ENGINE notice (2026-11-17): what a paste's programmer notes became */
+.save-blocker.paste-notice { border-color: var(--c-border-strong); }
+.save-blocker.paste-notice .save-blocker-head { color: var(--c-text); }

@@ -146,7 +146,7 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
           return (
             <li key={i} className="rd-row" data-testid="rd-hypothesis" data-status={c?.status ?? ""}>
               <span className="mono rd-label">{hypothesisLabel(i)}</span>
-              <InlineRichText className="grow" value={h} testId="rd-hypothesis-text" placeholder="State the hypothesis" questionId={undefined}
+              <InlineRichText className="grow" value={h} testId="rd-hypothesis-text" pasteField="title" placeholder="State the hypothesis" questionId={undefined}
                 onChange={(text) => patch(`edit ${hypothesisLabel(i)}`, (d) => { d.hypotheses[i] = text; })} />
               {c && <span className={`chip${c.status === "testable" ? " on" : c.status === "partly" ? " warn" : ""}`} title={c.status === "testable" ? "measured, and a table or test is planned" : c.status === "partly" ? "measured, nothing planned yet" : c.status === "unmeasured" ? "a construct it names has no question" : "no construct or question is linked to it"}>{c.status === "testable" ? "testable" : c.status === "partly" ? "unplanned" : c.status === "unmeasured" ? "unmeasured" : "unlinked"}</span>}
               <button type="button" className={`btn small${openReading === i ? " on" : ""}`} data-testid="rd-hypothesis-reading" title="The reading of this hypothesis: type, direction, the construct on each side, the effect expected" onClick={() => setOpenReading(openReading === i ? null : i)}>{readings[i] ? describeHypothesis(readings[i]) || "reading" : "reading"}</button>
