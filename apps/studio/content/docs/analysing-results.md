@@ -22,6 +22,20 @@ Every result has two layers: the **statistics** (the test, statistic, degrees of
 
 ::: catalog analyses
 
+## Cross-tabs: whole tables in one step
+
+In the cross-tab builder, **Quick tables** fills Rows and sets the table's shape for you:
+
+- **All questions → Rows** puts every question that can be tabulated down the side of **one** banner table (a section per question). Put the banner in Columns before or after. A survey with sections also offers one section at a time.
+- **One table for a loop or grid…** shows a looped question (the same question asked for each brand) or a grid as one table with **a row per brand or statement**, instead of one table per variable. A loop is read by item: each answer is counted under the brand it was about, whichever pass of the loop it came in.
+  - With no banner, each row shows that item's base, its answers and its summary figures.
+  - With a banner, each cell is one figure — NPS, the mean or a box score — for that banner column; choose it in Options.
+- **Transpose** puts the items across the top. For an ordinary cross-tab, **Swap rows and columns (transpose)** exchanges the row questions and the banner.
+
+**NPS.** A question programmed as NPS carries **Promoters (9–10)**, **Passives (7–8)**, **Detractors (0–6)** and **NPS (promoters − detractors)** in its cross-tab without being asked, for every banner column; any other 0–10 scale gets them from Options → summary rows. Item tables of a 0–10 scale lead with NPS.
+
+The same tables can be asked for in words in **Ask**: "all questions by gender and region", "satisfaction grid in one table by region", "item table of the brand ratings, transposed". Item tables carry no significance letters: their rows are answered by overlapping respondents, so the column tests of a cross-tab do not apply.
+
 ## When to use it
 
 - Reporting a tracker's KPIs (NPS, CSAT) with their confidence intervals.

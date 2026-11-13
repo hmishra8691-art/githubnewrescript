@@ -2758,3 +2758,10 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 /* DELETION PROTECTION notice (2026-11-15): same place as the save panel, but it reports something done, not refused */
 .save-blocker.data-protect { border-color: var(--c-warning-bd); }
 .save-blocker.data-protect .save-blocker-head { color: var(--c-warning-fg); }
+
+/* CROSS-TAB QUICK TABLES (2026-11-16): fill Rows and set the table's shape in one step */
+.ax-quick { display: grid; gap: 6px; padding: 10px 12px; border: 1px dashed var(--c-border-strong); border-radius: 10px; background: var(--c-surface-2); }
+.ax-quick-head { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-3); }
+.ax-quick-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ax-quick-row .select { max-width: 100%; }
+.ax-quick-note { font-size: 12.5px; }

@@ -3,7 +3,7 @@ import { stableStringify } from "@/lib/stableJson";
 import React from "react";
 import type { Condition } from "@rescript/schema";
 import type { AnalysisDefinition, AnalysisKind, ChartSpec, DatasetSpec, ReportTheme, SegmentDef, VariableMeta, VariableRole } from "@rescript/analytics";
-import { ANALYSIS_KINDS, analysisReadiness } from "@rescript/analytics";
+import { ANALYSIS_KINDS, analysisReadiness, allQuestionsTable, applyTablePreset, itemTableFor, tabulableVariables, variableGroups } from "@rescript/analytics";
 import { AxApi, type Row, type RunResult } from "./api";
 import { FilterBuilder, conditionText, emptyCondition, isEmptyCondition } from "./FilterBuilder";
 import { ResultView, downloadPng, downloadSvg } from "./ResultView";
@@ -152,6 +152,51 @@ function NetsEditor({ rows, colsOf, variables, nets, onChange }: { rows: string[
 type Sel = (k: string, label: string, opts: [string, string][], dflt?: string) => React.ReactNode;
 type Num = (k: string, label: string, ph?: string) => React.ReactNode;
 
+/**
+ * WHOLE TABLES IN ONE CLICK (2026-11-16, analytics tablePresets.ts). Ticking sixty questions into Rows one at a time
+ * was the only way to build a banner run, and a looped or grid question came out as one table per variable. These
+ * fill Rows and set the table's shape in one step; everything they set stays editable in the zones and in Options.
+ */
+function QuickTables({ def, variables, onApply }: { def: AnalysisDefinition; variables: VariableMeta[]; onApply: (d: AnalysisDefinition) => void }) {
+  const cols = def.columns ?? [];
+  const all = React.useMemo(() => allQuestionsTable(variables, cols, { exclude: def.layers ?? [] }), [variables, cols, def.layers]);
+  const groups = React.useMemo(() => variableGroups(variables), [variables]);
+  const sections = React.useMemo(() => { const m = new Map<string, number>(); for (const v of tabulableVariables(variables)) if (v.sectionId) m.set(v.sectionId, (m.get(v.sectionId) ?? 0) + 1); return [...m.entries()]; }, [variables]);
+  const isItems = def.options?.layout === "items";
+  const setOpt = (patch: Record<string, unknown>) => onApply({ ...def, options: { ...(def.options ?? {}), ...patch } });
+  return (
+    <div className="ax-quick" data-testid="ax-xt-quick">
+      <div className="ax-quick-head">Quick tables</div>
+      <div className="ax-quick-row">
+        <button type="button" className="btn small" data-testid="ax-xt-all-rows" disabled={!all.rows.length}
+          title="Put every question that can be tabulated in Rows, stacked in one banner table. Pick the banner in Columns first, or after."
+          onClick={() => onApply(applyTablePreset(def, all))}>All questions → Rows ({all.rows.length})</button>
+        {sections.length > 1 && (
+          <select className="select small" data-testid="ax-xt-section-rows" value="" title="Every question of one section in Rows"
+            onChange={(e) => { if (e.target.value) onApply(applyTablePreset(def, allQuestionsTable(variables, cols, { sectionId: e.target.value, exclude: def.layers ?? [] }))); }}>
+            <option value="">A section → Rows…</option>
+            {sections.map(([id, n]) => <option key={id} value={id}>{id} ({n})</option>)}
+          </select>
+        )}
+        <button type="button" className="btn small ghost" data-testid="ax-xt-clear-rows" disabled={!(def.rows?.length)} onClick={() => onApply({ ...def, rows: [] })}>Clear rows</button>
+      </div>
+      {groups.length > 0 && (
+        <div className="ax-quick-row">
+          <select className="select small" data-testid="ax-xt-group" value="" title="A looped question or a grid as ONE table: a row per brand / statement instead of a table per variable"
+            onChange={(e) => { const g = groups.find((x) => x.key === e.target.value); if (g) onApply(applyTablePreset(def, itemTableFor(g, cols))); }}>
+            <option value="">One table for a loop or grid…</option>
+            {groups.map((g) => <option key={g.key} value={g.key}>{g.label} — {g.size} {g.kind === "loop" ? "loop passes" : "statements"}{g.nps ? " · NPS" : ""}</option>)}
+          </select>
+          {isItems && (
+            <label className="ax-toggle" title="Exchange the rows and columns of the finished table"><input type="checkbox" data-testid="ax-xt-transpose" checked={!!def.options?.transpose} onChange={(e) => setOpt({ transpose: e.target.checked || undefined })} /> Transpose</label>
+          )}
+        </div>
+      )}
+      {isItems && <div className="muted ax-quick-note" data-testid="ax-xt-items-note">One row per item. {cols.length ? "Each cell is one figure (NPS, mean or a box score) for that banner column — choose it in Options." : "Add a banner in Columns to compare the items across segments."}</div>}
+    </div>
+  );
+}
+
 /** the crosstab's controls, grouped the way a researcher thinks about a table */
 function CrosstabOptions({ def, set, o, alpha, sel, num, variables }: { def: AnalysisDefinition; set: (o: Record<string, unknown>) => void; o: Record<string, unknown>; alpha: React.ReactNode; sel: Sel; num: Num; variables: VariableMeta[] }) {
   const summary = (o.summaryRows as string[] | undefined) ?? [];
@@ -166,7 +211,12 @@ function CrosstabOptions({ def, set, o, alpha, sel, num, variables }: { def: Ana
         {num("decimals", "Decimals", "1")}
       </fieldset>
       <fieldset className="ax-optgroup"><legend>Layout</legend>
-        {sel("layout", "Column variables", [["banner", nCols > 1 ? "Banner — side by side in one table" : "Banner (one table)"], ["separate", "Separate tables per pair"]], "banner")}
+        {sel("layout", "Table shape", [["banner", nCols > 1 ? "Banner — side by side in one table" : "Banner (one table)"], ["separate", "Separate tables per pair"], ["items", "One row per item (a loop's brands, a grid's statements)"]], "banner")}
+        {o.layout === "items" ? <>
+          {nCols > 0 && sel("itemStat", "Figure in each cell", [["", "Chosen from the scale"], ["nps", "NPS"], ["mean", "Mean"], ["top2", "Top 2 box %"], ["bottom2", "Bottom 2 box %"]], "")}
+          {nCols === 0 && <div className="ax-field"><span>Columns to show</span><div className="ax-chips" data-testid="ax-xt-itemstats">{([["pct", "Each answer %"], ["nps", "NPS"], ["mean", "Mean"], ["top2", "Top 2 box"], ["bottom2", "Bottom 2 box"]] as [string, string][]).map(([k, l]) => { const cur = (o.itemStats as string[] | undefined) ?? []; return <button key={k} type="button" className={`ax-chip ${cur.includes(k) ? "on" : ""}`} onClick={() => { const next = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]; set({ itemStats: next.length ? next : undefined }); }}>{l}</button>; })}</div><span className="muted" style={{ fontSize: 12 }}>None picked: chosen from the scale (a 0–10 scale gets NPS and the mean).</span></div>}
+          {check("transpose", "Transpose — items across the top", false, "Exchange the rows and columns of the finished table")}
+        </> : null}
         {check("stackRows", "Stack row variables in one table", false, "Banner only: every row question under a section heading in the same table")}
         {check("nestRows", `Nest the second row variable inside the first${nRows < 2 ? " (needs two row variables)" : ""}`, false)}
       </fieldset>
@@ -180,7 +230,8 @@ function CrosstabOptions({ def, set, o, alpha, sel, num, variables }: { def: Ana
         {sel("sortRows", "Sort categories", [["none", "Questionnaire order"], ["desc", "Total, highest first"], ["asc", "Total, lowest first"]], "none")}
         {check("hideEmptyRows", "Hide rows that are empty everywhere")}
         {check("totalRow", "Total row (100% check)")}
-        <div className="ax-field"><span>Summary rows for scales</span><div className="ax-chips">{([["mean", "Mean"], ["top1", "Top box"], ["top2", "Top 2 box"], ["bottom1", "Bottom box"], ["bottom2", "Bottom 2 box"], ["net", "Net (T2B − B2B)"]] as [string, string][]).map(([k, l]) => <button key={k} type="button" className={`ax-chip ${summary.includes(k) ? "on" : ""}`} onClick={() => toggleSummary(k)} data-testid={`ax-summary-${k}`}>{l}</button>)}</div></div>
+        {check("autoNps", "Add Promoters / Passives / Detractors / NPS to NPS questions", true, "A question programmed as NPS gets its score in the table without being asked")}
+        <div className="ax-field"><span>Summary rows for scales</span><div className="ax-chips">{([["mean", "Mean"], ["top1", "Top box"], ["top2", "Top 2 box"], ["bottom1", "Bottom box"], ["bottom2", "Bottom 2 box"], ["net", "Net (T2B − B2B)"], ["nps", "NPS (0–10 scales)"]] as [string, string][]).map(([k, l]) => <button key={k} type="button" className={`ax-chip ${summary.includes(k) ? "on" : ""}`} onClick={() => toggleSummary(k)} data-testid={`ax-summary-${k}`}>{l}</button>)}</div></div>
       </fieldset>
       <NetsEditor colsOf={def.columns ?? []} rows={[...(def.rows ?? []), ...(def.columns ?? [])]} variables={variables} nets={(o.nets as NetDef[] | undefined) ?? []} onChange={(nets) => set({ nets: nets.length ? nets : undefined })} />
       <fieldset className="ax-optgroup"><legend>Suppression</legend>
@@ -480,7 +531,8 @@ export function AnalysisBuilder(p: BuilderProps) {
                     <div className="ax-xt-zones">
                       <DropZone label="Rows" items={def.rows ?? []} onChange={(v) => update({ rows: v })} variables={p.variables} hint="The questions down the side" onMoveIn={(n) => update({ rows: [...(def.rows ?? []), n], columns: (def.columns ?? []).filter((x) => x !== n) })} />
                       <DropZone label="Columns" items={def.columns ?? []} onChange={(v) => update({ columns: v })} variables={p.variables} hint="The banner across the top" onMoveIn={(n) => update({ columns: [...(def.columns ?? []), n], rows: (def.rows ?? []).filter((x) => x !== n) })} />
-                      <button type="button" className="btn small ghost ax-swap" disabled={!(def.rows?.length || def.columns?.length)} onClick={() => update({ rows: def.columns ?? [], columns: def.rows ?? [] })} data-testid="ax-xt-swap" title="Swap rows and columns">⇅ Swap rows and columns</button>
+                      <button type="button" className="btn small ghost ax-swap" disabled={!(def.rows?.length || def.columns?.length)} onClick={() => update({ rows: def.columns ?? [], columns: def.rows ?? [] })} data-testid="ax-xt-swap" title="Transpose the table: the row questions become the banner and the banner becomes the rows">⇅ Swap rows and columns (transpose)</button>
+                      <QuickTables def={def} variables={p.variables} onApply={(next) => setDef(next)} />
                       <DropZone label="Layers" items={def.layers ?? []} onChange={(v) => update({ layers: v.slice(0, 1) })} variables={p.variables} hint="Optional: one table per category" />
                       <div className="ax-xt-target" role="radiogroup" aria-label="Ticked variables go to" data-testid="ax-xt-target">
                         <span className="muted" style={{ fontSize: 12.5 }}>Ticked variables go to</span>
@@ -488,7 +540,7 @@ export function AnalysisBuilder(p: BuilderProps) {
                       </div>
                       <div className="ax-xt-summary">
                         <span>{MEASURE_LABEL[def.measure ?? "pct_col"]}</span>
-                        <span>·</span><span>{def.options?.layout === "banner" ? "Banner" : "Separate tables"}</span>
+                        <span>·</span><span>{def.options?.layout === "items" ? `One row per item${def.options?.transpose ? ", transposed" : ""}` : def.options?.layout === "banner" ? (def.options?.stackRows ? "Banner, rows stacked" : "Banner") : "Separate tables"}</span>
                         {def.options?.nestRows && (def.rows?.length ?? 0) >= 2 ? <><span>·</span><span>Nested rows</span></> : null}
                         <span>·</span><span>{def.options?.significance === false ? "No letters" : `Letters at ${Math.round((1 - ((def.options?.alpha as number | undefined) ?? 0.05)) * 100)}%`}</span>
                         <button type="button" className="ax-linkbtn" onClick={() => setSection(4)}>Options ›</button>

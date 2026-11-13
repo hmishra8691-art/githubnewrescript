@@ -46,6 +46,7 @@ export * from "./planCheck.js";
 export * from "./planGate.js";
 export * from "./reportBuilder.js";
 export * from "./analyticsIntent.js";
+export * from "./tablePresets.js";
 export * from "./storyHtml.js";
 export * from "./baseCaption.js";
 export * from "./models/index.js";

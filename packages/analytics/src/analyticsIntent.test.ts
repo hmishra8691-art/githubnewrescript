@@ -247,3 +247,43 @@ test("Phase 5: 'this' with nothing open is not guessed — it asks for an open a
   assert.equal(op(same, "add_crosstab").length, 2);
   assert.ok(!same.notes.some((n) => /“this” was read as/.test(n)));
 });
+
+/* ------------------------------------------------------------ 2026-11-16: whole tables in one request */
+test("“all questions by gender” is ONE banner table with every question stacked down the side", () => {
+  const p = proposeFromText("all questions by gender and region", ctx());
+  const xs = op(p, "add_crosstab");
+  assert.equal(xs.length, 1, "one table, not one per question");
+  assert.equal(xs[0].layout, "banner");
+  assert.deepEqual(xs[0].columns, ["GENDER", "REGION"]);
+  assert.ok(xs[0].rows.length > 12, `every tabulable question (${xs[0].rows.length})`);
+  assert.ok(xs[0].rows.includes("SAT") && xs[0].rows.includes("NPS") && !xs[0].rows.includes("GENDER") && !xs[0].rows.includes("TEXT"));
+  assert.deepEqual(p.items[0].blocked, []);
+  assert.deepEqual(p.unread, []);
+  /* the saved definition, and the server's second reading of the operation, keep every row */
+  const again = parseAskOps([xs[0]]).ops[0] as Extract<AskOp, { op: "add_crosstab" }>;
+  assert.equal(again.rows.length, xs[0].rows.length);
+  assert.equal(again.layout, "banner");
+  const r = runAnalysis({ name: "x", kind: "crosstab", dataset: spec, variables: [], rows: again.rows, columns: again.columns, options: { layout: "banner", stackRows: true } }, ds);
+  assert.equal(r.tables.length, 1);
+  assert.ok(r.tables[0].rows.filter((x) => x.__kind === "section").length >= 10, "a section per question");
+  assert.match(proposeFromText("every question by", ctx()).unread.join(" "), /name the banner/);
+});
+
+test("a grid asked for “in one table” is an item table: a row per statement, a banner if one is named, transposed if asked", () => {
+  const p = proposeFromText("rate in one table by region", ctx());
+  const xs = op(p, "add_crosstab");
+  assert.equal(xs.length, 1);
+  assert.equal(xs[0].layout, "items");
+  assert.deepEqual(xs[0].rows, ["ITEMS_a", "ITEMS_b", "ITEMS_c"]);
+  assert.deepEqual(xs[0].columns, ["REGION"]);
+  assert.deepEqual(p.items[0].blocked, []);
+  const flipped = op(proposeFromText("item table of rate, transposed", ctx()), "add_crosstab")[0];
+  assert.equal(flipped.transpose, true); assert.deepEqual(flipped.columns, []);
+  assert.deepEqual(validateAskOp(flipped, ctx()).blocked, [], "an item table needs no banner");
+  const kept = parseAskOps([flipped]).ops[0] as Extract<AskOp, { op: "add_crosstab" }>;
+  assert.equal(kept.layout, "items"); assert.equal(kept.transpose, true);
+  /* NPS asked of a survey whose only set is not an NPS loop: say what can be put in one table, do not guess */
+  const none = proposeFromText("nps for each brand in one table", ctx());
+  assert.equal(op(none, "add_crosstab").length, 0);
+  assert.match(none.unread.join(" "), /name the looped or grid question/);
+});

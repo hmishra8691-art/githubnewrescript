@@ -5,6 +5,7 @@ import { analysisSignature, crosstabCarriesChiSquare, findExistingDuplicate, val
 import { reportAnalysisIds } from "./blockRefs.js";
 import { CHART_CATALOG } from "./recommend.js";
 import { reportBriefFromText, tokens, wordsMatch, type ReportBrief } from "./reportBuilder.js";
+import { allQuestionsTable, itemTableFor, variableGroups } from "./tablePresets.js";
 
 /**
  * INTELLIGENT MODE FOR ANALYTICS (Data Analytics audit, Phase 5).
@@ -26,7 +27,9 @@ import { reportBriefFromText, tokens, wordsMatch, type ReportBrief } from "./rep
  * numbers in an operation.
  */
 export type AskOp =
-  | { op: "add_crosstab"; name: string; rows: string[]; columns: string[] }
+  | { op: "add_crosstab"; name: string; rows: string[]; columns: string[];
+      /** "banner": every row question stacked in one table; "items": one row per item of a loop or grid (2026-11-16) */
+      layout?: "banner" | "items"; itemStat?: "nps" | "mean" | "top2" | "bottom2"; transpose?: boolean }
   | { op: "add_test"; name: string; outcome: string; groupBy: string }
   | { op: "add_descriptive"; name: string; variables: string[] }
   | { op: "remove_analysis"; name: string; analysisId: string; keptId?: string }
@@ -135,6 +138,10 @@ const CHART_WORDS: [RegExp, ChartType][] = [
   [/\bdiverging|\blikert\b/, "diverging_likert"], [/\b(?:donut|doughnut)\b/, "donut"], [/\bpie\b/, "pie"], [/\bline\b/, "line"], [/\bhistogram\b/, "histogram"], [/\bbox\s?plot\b/, "box_plot"],
   [/\bheat\s?map\b/, "heatmap"], [/\b(?:column|vertical\s+bars?|bars?)\b/, "bar_vertical"], [/\btable\b/, "table"],
 ];
+/** the phrases that ask for a set of like questions as one table */
+const ITEM_TABLE = /\b(?:one|a single|single|same|combined)\s+table\b|\bitem\s+table\b|\b(?:each|every|all|per|across)\s+(?:the\s+)?(?:brands?|items?|statements?|products?|loops?|iterations?)\b|\bby\s+(?:brand|item|statement|product)s?\b/;
+/** …and the words of those phrases, taken out before the question and the banner are looked for */
+const ITEM_WORDS = /\b(?:in|as|into)?\s*(?:one|a single|single|same|combined)\s+table\b|\bitem\s+table\b|\b(?:for|of|by|per|across)?\s*(?:each|every|all)?\s*(?:the\s+)?(?:brands?|items?|statements?|products?|loops?|iterations?)\b|\btranspos\w*|\bflip(?:ped)?\b|\bnps\b|\bnet promoter(?: score)?\b/g;
 const NOISE = /\b(please|can you|could you|i want to|i would like to|i need to|i'd like to|let's|we need to|we want to|go ahead and)\b/g;
 const VERBS = "create|add|remove|delete|drop|choose|use|show|build|make|generate|run|test|pick|prepare|write|draft|do";
 const CLAUSE_SPLIT = new RegExp(`\\s*(?:[.;\\n]|,?\\s+and\\s+then\\s+|,?\\s+then\\s+|,?\\s+and\\s+also\\s+|,?\\s+and\\s+(?=(?:${VERBS})\\b)|,\\s+(?=(?:${VERBS})\\b))\\s*`, "i");
@@ -314,6 +321,45 @@ export function proposeFromText(request: string, ctx: AskContext): AskProposal {
       read.push(orig); handled = true;
     }
 
+    /* ---- every question against a banner, in one table: "all questions by gender and region" (2026-11-16) */
+    else if ((/\b(all|every|each)\s+(?:of\s+)?(?:the\s+)?(?:survey\s+)?(questions?|variables?)\b/.test(c) || /\bfull\s+(banner|tables?|tabs?|crosstabs?)\b/.test(c)) && /\b(by|against|across|vs\.?|versus)\b/.test(c)) {
+      const m = /\b(?:by|against|across|vs\.?|versus)\b(.*)$/.exec(c);
+      const R = findVariables(m?.[1] ?? "", ctx.variables);
+      for (const a of R.ambiguous) unread.push(`“${a.phrase}” could mean ${joinWords(a.options.map((o) => `“${labelOf(o)}” (${o.name})`))} — name one.`);
+      if (!R.found.length) { if (!R.ambiguous.length) unread.push(`${orig} — name the banner: the question(s) to put across the top, for example “all questions by gender”.`); }
+      else {
+        const columns = R.found.map((v) => v.name);
+        const preset = allQuestionsTable([...ctx.variables], columns);
+        if (!preset.rows.length) unread.push(`${orig} — there are no other questions to tabulate against ${joinWords(R.found.map(labelOf))}.`);
+        else items.push(item({ op: "add_crosstab", name: `All questions by ${R.found.map(labelOf).join(", ")}`, rows: preset.rows, columns, layout: "banner" }, ctx, `One banner table: all ${preset.rows.length} questions by ${joinWords(R.found.map(labelOf))}`, `Every question that can be tabulated is stacked down the side of one table, with ${joinWords(R.found.map(labelOf))} across the top — column percentages and significance letters.`, "creates an analysis"));
+      }
+      read.push(orig); handled = true;
+    }
+
+    /* ---- a loop or a grid as ONE table, a row per item: "NPS for each brand in one table", "recommend by brand by segment, transposed" */
+    else if (ITEM_TABLE.test(c)) {
+      const groups = variableGroups([...ctx.variables]);
+      const transpose = /\b(transpos\w*|flip(?:ped)?|brands?\s+(?:across|as columns)|items?\s+(?:across|as columns))\b/.test(c);
+      const stat = /\bnps\b|net promoter/.test(c) ? "nps" : /\b(mean|average)s?\b/.test(c) ? "mean" : /\btop\s*-?\s*2\b|\bt2b\b/.test(c) ? "top2" : /\bbottom\s*-?\s*2\b|\bb2b\b/.test(c) ? "bottom2" : undefined;
+      const bare = c.replace(ITEM_WORDS, " ");
+      const m = /^(.*?)\b(?:by|against|across|vs\.?|versus)\b(.*)$/.exec(bare);
+      const L = findVariables(m ? m[1] : bare, ctx.variables), R = m ? findVariables(m[2], ctx.variables) : { found: [], ambiguous: [] };
+      const named = groups.filter((g) => L.found.some((v) => g.variables.includes(v.name) || (!!v.questionId && v.questionId === g.questionId)));
+      const picked = named.length ? named : stat === "nps" ? groups.filter((g) => g.nps) : groups.length === 1 ? groups : [];
+      if (!groups.length) unread.push(`${orig} — this survey has no looped question or grid to put in one table.`);
+      else if (!picked.length) unread.push(`${orig} — name the looped or grid question to put in one table: ${joinWords(groups.slice(0, 6).map((g) => `“${g.label}”`))}.`);
+      else for (const g of picked) {
+        const columns = R.found.map((v) => v.name).filter((n) => !g.variables.includes(n));
+        const preset = itemTableFor(g, columns, { ...(stat ? { stat } : {}), transpose });
+        const usable = stat === "nps" && !g.nps ? undefined : stat;
+        if (stat === "nps" && !g.nps) notes.push(`“${g.label}” is not a 0–10 recommendation question, so its table shows its own scale instead of NPS.`);
+        items.push(item({ op: "add_crosstab", name: `${g.label} — by item${columns.length ? ` by ${R.found.map(labelOf).join(", ")}` : ""}`, rows: preset.rows, columns, layout: "items", ...(usable ? { itemStat: usable as "nps" } : g.nps && columns.length ? { itemStat: "nps" as const } : {}), ...(transpose ? { transpose: true } : {}) }, ctx,
+          `One table for “${g.label}”: a row per ${g.kind === "loop" ? "item of the loop" : "statement"}${columns.length ? `, ${joinWords(R.found.map(labelOf))} across the top` : ""}${transpose ? ", transposed" : ""}`,
+          `${g.size} variables ask the same thing, so they are shown as one table instead of ${g.size}${g.kind === "loop" ? "; each answer is counted under the item it was about" : ""}.${g.nps ? " NPS (promoters − detractors) is calculated in the table." : ""}`, "creates an analysis"));
+      }
+      read.push(orig); handled = true;
+    }
+
     /* ---- a significance test: "test whether satisfaction differs by gender" */
     else if (/\b(significan\w*|test|differ\w*|different|difference|compare|comparison|associat\w*)\b/.test(c) && /\b(by|across|between|among|per|and)\b/.test(c) && !/\bcrosstab\b/.test(c)) {
       const m = /^(.*?)\b(?:by|across|between|among|per)\b(.*)$/.exec(c) ?? /^(.*?)\band\b(.*)$/.exec(c);
@@ -418,7 +464,7 @@ export function itemsFromModel(raw: unknown, ctx: AskContext): { items: AskItem[
 
 const idOk = (s: unknown): s is string => typeof s === "string" && /^[0-9a-f-]{36}$/i.test(s);
 const nm = (s: unknown, n: number) => (typeof s === "string" ? s.trim().slice(0, n) : "");
-const codes = (x: unknown): string[] => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string" && v.length > 0 && v.length <= 120).slice(0, 12) : []);
+const codes = (x: unknown, max = 12): string[] => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string" && v.length > 0 && v.length <= 120).slice(0, max) : []);
 
 /**
  * An operation from a request body, rebuilt field by field. The browser sends back
@@ -432,7 +478,15 @@ export function parseAskOps(raw: unknown): { ops: AskOp[]; rejected: string[] } 
   for (const o of list as Record<string, unknown>[]) {
     const name = nm(o?.name, 160);
     switch (o?.op) {
-      case "add_crosstab": { const rows = codes(o.rows), columns = codes(o.columns); if (!rows.length || !columns.length) { rejected.push("A cross-tab needs rows and columns."); break; } ops.push({ op: "add_crosstab", name: name || `${rows.join(", ")} by ${columns.join(", ")}`, rows, columns }); break; }
+      case "add_crosstab": {
+        /* a banner run lists every question and an item table every pass of a loop: far more than a dozen rows */
+        const layout = o.layout === "banner" || o.layout === "items" ? o.layout : undefined;
+        const rows = layout ? codes(o.rows, 600) : codes(o.rows), columns = codes(o.columns);
+        if (!rows.length || (!columns.length && layout !== "items")) { rejected.push("A cross-tab needs rows and columns."); break; }
+        const itemStat = layout === "items" && (o.itemStat === "nps" || o.itemStat === "mean" || o.itemStat === "top2" || o.itemStat === "bottom2") ? o.itemStat : undefined;
+        ops.push({ op: "add_crosstab", name: name || `${rows.slice(0, 3).join(", ")}${rows.length > 3 ? "…" : ""}${columns.length ? ` by ${columns.join(", ")}` : ""}`, rows, columns, ...(layout ? { layout } : {}), ...(itemStat ? { itemStat } : {}), ...(layout === "items" && o.transpose === true ? { transpose: true } : {}) });
+        break;
+      }
       case "add_test": { const outcome = nm(o.outcome, 120), groupBy = nm(o.groupBy, 120); if (!outcome || !groupBy) { rejected.push("A test needs an outcome and a grouping."); break; } ops.push({ op: "add_test", name: name || `${outcome} across ${groupBy}`, outcome, groupBy }); break; }
       case "add_descriptive": { const variables = codes(o.variables); if (!variables.length) { rejected.push("A distribution needs a variable."); break; } ops.push({ op: "add_descriptive", name: name || variables.join(", "), variables }); break; }
       case "remove_analysis": { if (!idOk(o.analysisId)) { rejected.push("An analysis to remove must be named by its id."); break; } ops.push({ op: "remove_analysis", name, analysisId: o.analysisId, ...(idOk(o.keptId) ? { keptId: o.keptId } : {}) }); break; }
@@ -457,6 +511,8 @@ export function parseAskOps(raw: unknown): { ops: AskOp[]; rejected: string[] } 
 /** The analysis a creating operation stands for — one place, so the proposal's validation and the saved row cannot disagree. */
 export function definitionFor(op: AskOp, dataset: DatasetSpec, request: string): AnalysisDefinition | null {
   const requested = request.slice(0, 300);
+  if (op.op === "add_crosstab" && op.layout === "items") return { name: op.name, kind: "crosstab", dataset, variables: [...op.rows, ...op.columns], rows: op.rows, columns: op.columns, measure: "pct_col", options: { layout: "items", ...(op.itemStat ? { itemStat: op.itemStat } : {}), ...(op.transpose ? { transpose: true } : {}), requested } } as AnalysisDefinition;
+  if (op.op === "add_crosstab" && op.layout === "banner") return { name: op.name, kind: "crosstab", dataset, variables: [...op.rows, ...op.columns], rows: op.rows, columns: op.columns, measure: "pct_col", options: { layout: "banner", stackRows: true, significance: true, requested } } as AnalysisDefinition;
   if (op.op === "add_crosstab") return { name: op.name, kind: "crosstab", dataset, variables: [...op.rows, ...op.columns], rows: op.rows, columns: op.columns, measure: "pct_col", options: { layout: "separate", significance: true, requested } } as AnalysisDefinition;
   if (op.op === "add_test") return { name: op.name, kind: "test", dataset, variables: [op.outcome, op.groupBy], options: { test: "auto", requested } } as AnalysisDefinition;
   if (op.op === "add_descriptive") return { name: op.name, kind: "descriptive", dataset, variables: op.variables, options: { requested } } as AnalysisDefinition;

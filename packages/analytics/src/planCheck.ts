@@ -206,7 +206,9 @@ export function validateAnalysis(def: AnalysisDefinition, variables: readonly Va
   const dead = unknownVariables(def, known);
   if (dead.length) out.push({ code: "unknown_variable", severity: "error", variables: dead, message: `${dead.join(", ")} ${dead.length === 1 ? "is" : "are"} not in this survey's data.` });
   if (def.kind === "crosstab") {
-    if (!(def.rows?.length) || !(def.columns?.length)) out.push({ code: "missing_axis", severity: "error", message: "A crosstab needs at least one row variable and one column variable." });
+    /* an item table (layout "items": one row per item) may stand without a banner — its columns are the statistics */
+    const itemLayout = def.options?.layout === "items";
+    if (!(def.rows?.length) || (!(def.columns?.length) && !itemLayout)) out.push({ code: "missing_axis", severity: "error", message: itemLayout ? "An item table needs the questions to list: add them to Rows." : "A crosstab needs at least one row variable and one column variable." });
     const same = (def.rows ?? []).filter((r) => (def.columns ?? []).includes(r));
     if (same.length) out.push({ code: "same_variable", severity: "error", variables: same, message: `${same.join(", ")} is tabulated against itself.` });
   } else if (!kindNeedsNoVariables(def) && !(def.variables?.filter(Boolean).length)) {
@@ -264,7 +266,7 @@ export function analysisSignature(def: AnalysisDefinition): string {
   /* presentation and bookkeeping — they change how the table looks or where it came from, not a number in it */
   for (const k of ["planned", "plannedHash", "plannedReads", "requested", "hypotheses", "formatting", "title", "subtitle", "layout", "significance", "decimals", "sigLevel", "alpha"]) delete o[k];
   const scope = `${canon(o)}:${canon(def.filter ?? null)}:${sorted(def.filterIds)}:${canon(def.weighting ?? null)}:${sorted(def.layers)}:${canon(def.segments ?? null)}:${canon(def.dataset ?? null)}`;
-  if (def.kind === "crosstab") return `crosstab:${sorted(def.rows)}>${sorted(def.columns)}:${def.measure ?? "pct_col"}:${scope}`;
+  if (def.kind === "crosstab") return `crosstab:${sorted(def.rows)}>${sorted(def.columns)}:${def.measure ?? "pct_col"}:${scope}${def.options?.layout === "items" ? `:items:${String(def.options?.itemStat ?? "")}` : ""}`;
   return `${def.kind}:${symmetric(def) ? sorted(def.variables) : (def.variables ?? []).join("|")}:${scope}`;
 }
 

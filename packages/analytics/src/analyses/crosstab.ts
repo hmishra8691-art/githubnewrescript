@@ -4,6 +4,7 @@ import { chiSquare, oneWayAnova, type TestResult } from "../stats/tests.js";
 import { normalCdf, tTestP } from "../stats/distributions.js";
 import { fmtNum, fmtPct, isOrdered, makeResult, MIN_BASE, opt, pct, refused, round } from "./common.js";
 import { adjustP, CORRECTION_WORDS, type CorrectionMethod } from "../posthoc.js";
+import { itemTable, npsCapable, NPS_GROUPS } from "./itemTable.js";
 
 /**
  * THE CROSSTAB — the table a research studio lives in.
@@ -27,7 +28,10 @@ import { adjustP, CORRECTION_WORDS, type CorrectionMethod } from "../posthoc.js"
  *   minBase       number                  — suppress cells of columns with fewer respondents than this
  *   sortRows      "none" | "desc" | "asc" — order category rows by their Total
  *   hideEmptyRows boolean                 — drop category rows that are 0 in every column
- *   summaryRows   ("mean"|"top1"|"top2"|"bottom1"|"bottom2"|"net")[] — for scale rows
+ *   summaryRows   ("mean"|"top1"|"top2"|"bottom1"|"bottom2"|"net"|"nps")[] — for scale rows ("nps": 0–10 scales)
+ *   autoNps       boolean (default true)  — a question programmed as NPS gets the NPS rows without being asked
+ *   layout "items"                        — one ROW PER ITEM (see itemTable.ts): a loop's brands, a grid's statements
+ *   transpose     boolean                 — item tables only: rows and columns exchanged (items across the top)
  *   totalRow      boolean                 — a row summing column percentages (single-response rows)
  *   decimals      number                  — decimals for the % / mean cells
  *   significance  boolean, alpha number   — letters, and their level
@@ -139,6 +143,8 @@ function cleanNets(raw: unknown, ds: Dataset, warnings: string[]): CrosstabNet[]
 }
 
 export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
+  /* one row per item (a loop's brands, a grid's statements) instead of one block per variable — itemTable.ts */
+  if ((opt(def, "layout", "separate") as string) === "items") return itemTable(def, ds, totalCases);
   const rowVars = def.rows?.length ? def.rows : def.variables.slice(0, 1);
   const colVars = def.columns?.length ? def.columns : def.variables.slice(1, 2);
   const layerVar = def.layers?.[0];
@@ -174,6 +180,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const sortRows = opt(def, "sortRows", "none") as "none" | "desc" | "asc";
   const hideEmpty = opt(def, "hideEmptyRows", false) as boolean;
   const summaryRows = (opt(def, "summaryRows", []) as string[]).filter(Boolean);
+  const autoNps = opt(def, "autoNps", true) as boolean;
   const totalRow = opt(def, "totalRow", false) as boolean;
   const decimals = Math.min(4, Math.max(0, Number(opt(def, "decimals", 1)) || 0));
   const warnings: string[] = [];
@@ -410,10 +417,24 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     }
     // summary rows for a numerically coded frame — mean, boxes, net
     const numericCodes = rCats.map((c) => Number(c.code));
-    if (summaryRows.length && !isOrdered(ds, b.rv) && ds.byName.get(b.rv)?.role !== "multi") {
-      const w = `Summary rows (${summaryRows.join(", ")}) are not shown for “${labelOf(ds, b.rv)}”: its categories are not ordered, so a mean or a top box would mean nothing.`;
+    /*
+     * NPS (2026-11-16). A 0–10 recommendation scale is read as three groups and one score: Promoters (9–10),
+     * Passives (7–8), Detractors (0–6) and NPS = % promoters − % detractors, per column. The rows are added when
+     * the researcher asks for them (`summaryRows` has "nps") and, unless `autoNps` is false, automatically for a
+     * question programmed as NPS — so the score is in the table without being calculated by hand afterwards.
+     */
+    const npsFrame = npsCapable(ds.byName.get(b.rv), rCats.map((c) => c.code));
+    const npsAsked = summaryRows.includes("nps");
+    const wantNps = npsFrame && (npsAsked || (autoNps && ds.byName.get(b.rv)?.nps === true));
+    if (npsAsked && !npsFrame) {
+      const w = `NPS rows are not shown for “${labelOf(ds, b.rv)}”: NPS needs a 0–10 scale.`;
       if (!warnings.includes(w)) warnings.push(w);
-    } else if (summaryRows.length && rCats.length >= 2 && numericCodes.every((n) => Number.isFinite(n))) {
+    }
+    const blockSummary = [...summaryRows.filter((x) => x !== "nps"), ...(wantNps ? ["nps"] : [])];
+    if (blockSummary.length && !isOrdered(ds, b.rv) && ds.byName.get(b.rv)?.role !== "multi") {
+      const w = `Summary rows (${blockSummary.join(", ")}) are not shown for “${labelOf(ds, b.rv)}”: its categories are not ordered, so a mean or a top box would mean nothing.`;
+      if (!warnings.includes(w)) warnings.push(w);
+    } else if (blockSummary.length && rCats.length >= 2 && numericCodes.every((n) => Number.isFinite(n))) {
       const ordered = [...rCats].map((c) => Number(c.code)).sort((a, b2) => a - b2);
       const topK = (k: number) => new Set(ordered.slice(-k).map(String)), botK = (k: number) => new Set(ordered.slice(0, k).map(String));
       const boxProp = (codes: Set<string>) => (ck: string) => { const base = b.colBase.get(ck); if (!base || !base.w) return null; let w = 0; for (const code of codes) w += b.grid.get(code)?.get(ck)?.w ?? 0; return { p: w / base.w, n: effN(base) }; };
@@ -427,8 +448,17 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       };
       const labelFor = (codes: Set<string>) => rCats.filter((c) => codes.has(c.code)).map((c) => c.label).join(" + ");
       const boxes: Record<string, Record<string, unknown>> = {};
-      for (const s of summaryRows) {
-        if (s === "top1") out.push(boxes.top1 = boxRow(`Top box (${labelFor(topK(1))})`, topK(1)));
+      for (const s of blockSummary) {
+        if (s === "nps") {
+          const g = NPS_GROUPS;
+          const pro = boxRow("Promoters (9–10)", new Set(g.promoters)), pas = boxRow("Passives (7–8)", new Set(g.passives)), det = boxRow("Detractors (0–6)", new Set(g.detractors));
+          out.push(pro, pas, det);
+          const row = mark({ row: "NPS (promoters − detractors)", __format: "number", __nps: true }, "summary");
+          /* from the unrounded shares, so the score is not off by a rounding step from the two rows above it */
+          const pp = boxProp(new Set(g.promoters)), dp = boxProp(new Set(g.detractors));
+          for (const c of cols) { const p = pp(c.key), d = dp(c.key); row[c.key] = suppressed.has(c.key) || !p || !d ? null : round((p.p - d.p) * 100, decimals); row[`${c.key}__n`] = b.colBase.get(c.key)?.count ?? 0; }
+          out.push(row);
+        } else if (s === "top1") out.push(boxes.top1 = boxRow(`Top box (${labelFor(topK(1))})`, topK(1)));
         else if (s === "top2") out.push(boxes.top2 = boxRow(`Top 2 box (${labelFor(topK(2))})`, topK(2)));
         else if (s === "bottom1") out.push(boxes.bottom1 = boxRow(`Bottom box (${labelFor(botK(1))})`, botK(1)));
         else if (s === "bottom2") out.push(boxes.bottom2 = boxRow(`Bottom 2 box (${labelFor(botK(2))})`, botK(2)));
@@ -582,7 +612,9 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       ...cols.map((c) => ({ key: c.key, label: `${c.label}${showSig && c.variable ? ` (${c.letter})` : ""}${suppressed.has(c.key) ? " *" : ""}`, type: cellType, decimals: cellType === "number" ? Math.max(decimals, 2) : decimals, ...(c.group && cvs.length > 1 ? { group: c.group } : {}), ...(c.letter ? { letter: c.letter } : {}), ...(suppressed.has(c.key) ? { suppressed: true } : {}) })),
     ];
     const colBases: Record<string, number> = {}; for (const c of cols) colBases[c.key] = top.colBase.get(c.key)?.count ?? 0;
-    const title = `${rvs.map((rv) => labelOf(ds, rv)).join(nestRows ? " › " : ", ")} × ${cvs.map((cv) => labelOf(ds, cv)).join(", ")}${layer.label ? ` — ${layer.label}` : ""}`;
+    /* a banner run of many questions is named by their number, not by a paragraph of labels */
+    const rowsTitle = !nestRows && rvs.length > 4 ? `${rvs.length} questions` : rvs.map((rv) => labelOf(ds, rv)).join(nestRows ? " › " : ", ");
+    const title = `${rowsTitle} × ${cvs.map((cv) => labelOf(ds, cv)).join(", ")}${layer.label ? ` — ${layer.label}` : ""}`;
     const notes = [
       measure === "pct_col" ? "Column percentages." : measure === "pct_row" ? "Row percentages." : measure === "pct_total" ? "Percent of total." : measure === "mean" ? "Column means." : ds.weighted ? "Weighted counts." : "Counts.",
       ...(baseMode === "all" ? ["Based on everyone in the column; “No answer” counts the respondents who did not answer the row question."] : []),

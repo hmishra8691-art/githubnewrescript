@@ -53,6 +53,12 @@ export interface VariableMeta {
   derived: boolean;
   hidden: boolean;
   sectionId?: string;
+  /** a question programmed as NPS (type `nps`, or an NPS variant of a single choice) */
+  nps?: boolean;
+  /** inside a loop: the loop, and which pass of it this column holds (Q7_3 → 3) */
+  loopId?: string;
+  loopVar?: string;
+  iteration?: number;
 }
 
 export interface Case {
@@ -195,6 +201,8 @@ export function variableMetadata(def: SurveyDefinition): VariableMeta[] {
     out.push({
       name: v.name, label: v.label || v.name, itemLabel: itemLabel ? strip(itemLabel) : undefined, role, questionId: v.questionId, questionCode: v.questionCode, questionType: q?.type ?? v.responseType,
       categories, rowCode: v.rowCode, optionCode: v.optionCode, derived: v.derived, hidden: v.hidden, sectionId: v.sectionId,
+      ...(q && (q.type === "nps" || /(^|\.)nps$/.test(String((q as { variant?: string }).variant ?? ""))) ? { nps: true } : {}),
+      ...(v.loopId ? { loopId: v.loopId, loopVar: v.loopVar, ...(typeof v.iteration === "number" ? { iteration: v.iteration } : {}) } : {}),
     });
   }
   /*
