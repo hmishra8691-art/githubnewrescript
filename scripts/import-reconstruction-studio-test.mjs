@@ -66,19 +66,23 @@ await edit.click();
 await page.waitForSelector('[data-testid="iqr-questions"]');
 ok("B: “Change this reading…” opens the Questions tab");
 await page.click('[data-testid="iqr-close"]');
-const items = await page.$$('[data-testid="iqi-clarify-item"]');
-let answered = 0;
+/* 2026-11-14: a new survey's questions are asked in the Intelligent import panel (iqx) since the orchestrated import;
+   the answers are the same two — Q7's list is what was selected at Q4, and Q2's inferred carry-forward is confirmed */
+await page.waitForSelector('[data-testid="iqx-ask"]');
+const items = await page.$$('[data-testid="iqx-ask"]');
+let answered = 0, q7 = false;
 for (const it of items) {
-  const kind = await it.getAttribute("data-kind");
   const labels = await it.$$eval("label", (ls) => ls.map((l) => l.textContent));
-  const radios = await it.$$('input[type="radio"]');
-  if (kind === "dynamic_list") { const i = labels.findIndex((l) => /selected at Q4/.test(l)); assert.ok(i >= 0, labels.join(" | ")); await radios[i].check(); answered++; }
-  if (kind === "confirm_dynamic") { await radios[0].check(); answered++; }
+  const radios = await it.$$('[data-testid="iqx-ask-option"]');
+  const i = labels.findIndex((l) => /selected at Q4/.test(l));
+  if (i >= 0) { await radios[i].check(); q7 = true; } else await radios[0].check();
+  answered++;
 }
-assert.equal(answered, 2);
-await (await (await lastImport()).$('[data-testid="iqi-clarify-apply"]')).click();
-await page.waitForSelector('[data-testid="iqi-decided"]', { timeout: 60000 });
-assert.match(await page.textContent('[data-testid="iqi-decided"]'), /2 answers applied/);
+assert.ok(q7, "one of the questions offers “selected at Q4” for Q7's list");
+assert.ok(answered >= 2, `at least the two questions about Q7 and Q2 are asked (${answered})`);
+await page.click('[data-testid="iqx-answer"]');
+await page.waitForFunction(() => document.querySelectorAll('[data-testid="iqx-ask"]').length === 0, null, { timeout: 90000 });
+assert.match(await page.innerText('[data-testid="iqx-answered"]'), new RegExp(`${answered} answers? on record`));
 await (await (await lastImport()).$('[data-testid="iqi-review-open"]')).click();
 await page.waitForSelector('[data-testid="iqr"]');
 await page.click('[data-testid="iqr-tab-recon"]');

@@ -1536,3 +1536,81 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-taskpager-nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; }
 .rs-taskpager-notice { margin-top: 2px; }
 @media (prefers-reduced-motion: reduce) { .rs-taskpager-seg { transition: none; } }
+
+/*
+ * THE RESPONDENT'S CHOICE TASKS, REDESIGNED (2026-11-14).
+ *
+ * CONJOINT (CBC): each alternative is a CARD, side by side, with the attribute rows aligned across cards so two
+ * concepts are compared by reading across — the way a shelf or a comparison table is read. It was a grid with one
+ * alternative per ROW, which made every comparison a zig-zag. The markup is unchanged (the same table, the same
+ * radios, the same test ids); the layout is CSS: the body is a grid, each row a card on a subgrid. On a phone the
+ * cards stack (the rules above, at 480px, still apply). "None of these" is a full-width card under the concepts.
+ * A page that holds a conjoint may use more of the screen than a page of ordinary questions.
+ *
+ * MAXDIFF: roomier rows, larger targets, the Most / Least columns named above them, and the two picks marked on
+ * their rows so the set can be checked at a glance.
+ */
+@media (min-width: 900px) {
+  .rs-shell:has(.rs-design-tasks[data-kind="cbc"]), .rs-shell:has(.rs-cva-tasks[data-mode="paired"]) { max-width: min(100%, 1120px); }
+}
+@media (min-width: 481px) {
+  table.rs-cbc { display: block; border: 0; width: 100%; }
+  .rs-cbc thead { display: none; }
+  .rs-cbc tbody { display: grid; grid-template-columns: repeat(var(--cbc-cols, 3), minmax(0, 1fr)); grid-auto-rows: auto; gap: 14px; align-items: stretch; }
+  .rs-cbc tr { display: grid; grid-template-rows: subgrid; grid-row: span var(--cbc-rows, 6); gap: 0; padding: 16px 16px 14px; border: 1.5px solid var(--rs-border); border-radius: calc(var(--rs-radius, 12px) + 2px); background: var(--rs-surface); cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+  .rs-cbc tr:hover { border-color: color-mix(in srgb, var(--rs-primary) 55%, var(--rs-border)); box-shadow: 0 6px 18px color-mix(in srgb, var(--rs-primary) 12%, transparent); }
+  .rs-cbc tr.rs-cbc-chosen { border-color: var(--rs-primary); box-shadow: 0 0 0 1.5px var(--rs-primary), 0 8px 22px color-mix(in srgb, var(--rs-primary) 16%, transparent); background: color-mix(in srgb, var(--rs-primary) 5%, var(--rs-surface)); }
+  .rs-cbc tr.rs-cbc-chosen > td { background: transparent; }
+  .rs-cbc td { display: block; border: 0; padding: 9px 0; text-align: left; min-width: 0; overflow-wrap: anywhere; }
+  .rs-cbc td + td { border-top: 1px solid color-mix(in srgb, var(--rs-border) 70%, transparent); }
+  .rs-cbc td.rowlabel { font-weight: 700; font-size: 1.06em; padding: 0 0 10px; min-width: 0; }
+  .rs-cbc td[data-label] { font-weight: 600; }
+  .rs-cbc td[data-label]::before { content: attr(data-label); display: block; font-size: .74em; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--rs-subtle); margin-bottom: 2px; }
+  .rs-cbc td.rs-cbc-choose { padding: 12px 0 0; align-self: end; }
+  .rs-cbc .rs-cbc-pick { display: flex; justify-content: center; gap: 8px; width: 100%; min-height: 42px; padding: 0 12px; border: 1.5px solid var(--rs-primary); border-radius: 999px; color: var(--rs-primary); font-weight: 600; }
+  .rs-cbc .rs-cbc-pick .rs-mcap { display: inline; }
+  .rs-cbc tr.rs-cbc-chosen .rs-cbc-pick { background: var(--rs-primary); color: var(--rs-button-text, #fff); }
+  .rs-cbc tr.rs-cbc-chosen .rs-cbc-pick .rs-mcap::after { content: " ✓"; }
+  .rs-cbc .rs-cbc-pick:has(:focus-visible) { outline: 3px solid var(--rs-primary); outline-offset: 2px; }
+  /* "None of these": one wide card under the concepts — a way out, not a fourth concept */
+  .rs-cbc tr[data-none] { grid-column: 1 / -1; grid-row: auto; grid-template-rows: none; grid-template-columns: 1fr auto; align-items: center; padding: 12px 16px; }
+  .rs-cbc tr[data-none] td[data-label] { display: none; }
+  .rs-cbc tr[data-none] td.rowlabel { padding: 0; font-weight: 600; }
+  .rs-cbc tr[data-none] td.rs-cbc-choose { padding: 0; border-top: 0; }
+  .rs-cbc tr[data-none] .rs-cbc-pick { min-width: 140px; }
+}
+/* four or more concepts do not fit side by side on a tablet: two per row there (each row of cards still aligned) */
+@media (min-width: 481px) and (max-width: 860px) { .rs-cbc[data-many] tbody { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* the phone: stacked cards, the chosen one tinted as a whole, the Choose control a full-width button */
+@media (max-width: 480px) {
+  .rs-cbc tr { cursor: pointer; }
+  .rs-cbc tr.rs-cbc-chosen { background: color-mix(in srgb, var(--rs-primary) 6%, var(--rs-surface)); }
+  .rs-cbc tr.rs-cbc-chosen > td { background: transparent; }
+  .rs-cbc .rs-cbc-pick { justify-content: center; min-height: 44px; border: 1.5px solid var(--rs-primary); border-radius: 999px; color: var(--rs-primary); font-weight: 600; }
+  .rs-cbc tr.rs-cbc-chosen .rs-cbc-pick { background: var(--rs-primary); color: var(--rs-button-text, #fff); }
+}
+.rs-viewport.mobile .rs-cbc tr.rs-cbc-chosen { background: color-mix(in srgb, var(--rs-primary) 6%, var(--rs-surface)); }
+.rs-viewport.mobile .rs-cbc tr.rs-cbc-chosen > td { background: transparent; }
+/* the device preview's phone frame stacks the cards whatever the window's own width */
+.rs-viewport.mobile .rs-cbc tbody { display: block; }
+.rs-viewport.mobile .rs-cbc tr, .rs-viewport.mobile .rs-cbc tr[data-none] { display: block; cursor: pointer; }
+.rs-viewport.mobile .rs-cbc td[data-label]::before { display: inline; text-transform: none; letter-spacing: 0; font-size: 1em; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .rs-cbc tr { transition: none; } }
+
+.rs-design-tasks[data-kind="maxdiff"] > .rs-card { padding-top: 18px; }
+table.rs-md { width: 100%; border-collapse: separate; border-spacing: 0 6px; }
+table.rs-md thead th { border: 0; background: transparent; font-size: .8em; letter-spacing: .05em; text-transform: uppercase; color: var(--rs-subtle); padding-bottom: 2px; }
+table.rs-md thead th.rowlabel { visibility: hidden; }
+table.rs-md tbody td { border: 0; border-top: 1.5px solid var(--rs-border); border-bottom: 1.5px solid var(--rs-border); background: var(--rs-surface); transition: background-color .15s ease, border-color .15s ease; }
+table.rs-md tbody td:first-child { border-left: 1.5px solid var(--rs-border); border-radius: 12px 0 0 12px; }
+table.rs-md tbody td:last-child { border-right: 1.5px solid var(--rs-border); border-radius: 0 12px 12px 0; }
+table.rs-md td.rowlabel { padding: 14px 12px; font-size: 1.02em; text-align: center; }
+table.rs-md th:not(.rowlabel), table.rs-md td:not(.rowlabel) { width: clamp(56px, 16%, 104px); padding: 4px; }
+table.rs-md .rs-md-pick { min-height: 48px; min-width: 48px; border-radius: 10px; }
+table.rs-md .rs-md-pick:hover { background: color-mix(in srgb, var(--rs-primary) 8%, transparent); }
+table.rs-md input[type="radio"] { width: 22px; height: 22px; accent-color: var(--rs-primary); }
+table.rs-md tbody tr:hover td { border-color: color-mix(in srgb, var(--rs-primary) 40%, var(--rs-border)); }
+table.rs-md tbody tr:has(input:checked) td { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 6%, var(--rs-surface)); }
+table.rs-md tbody tr:has(input:checked) td.rowlabel { font-weight: 600; }
+@media (max-width: 480px) { table.rs-md td.rowlabel { padding: 12px 8px; text-align: left; } tabletable.rs-md { border-spacing: 0 5px; } }
+@media (prefers-reduced-motion: reduce) { table.rs-md tbody td { transition: none; } }

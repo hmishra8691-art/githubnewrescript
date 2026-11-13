@@ -118,7 +118,10 @@ ok("there is no separate Live Canvas tab, page or navigation item");
  * is the price of a new tab, and the assertion is worth keeping precisely
  * because it makes that price visible.
  */
-const SINCE_LIVE_VIEW = ["Data Analytics", "Fieldwork", "Project", "Distribution", "Tests", "Translation", "Usage & Wallet", "Assets"];
+/* 2026-11-14: fallen behind again — Study design, All code, Wave tracker and Recruitment are tools added since; the
+   Theme menu's entries are themes, not tools. */
+const SINCE_LIVE_VIEW = ["Data Analytics", "Fieldwork", "Project", "Distribution", "Tests", "Translation", "Usage & Wallet", "Assets", "Study design", "All code", "Wave tracker", "Recruitment",
+  "ResLens", "Classic", "Light", "Soft Neutral", "Ocean", "Modern Contrast", "Dark", "Midnight"];
 assert.deepEqual(
   navLabelList.filter((t) => !SINCE_LIVE_VIEW.includes(t)),
   ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill",

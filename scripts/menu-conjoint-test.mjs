@@ -58,7 +58,7 @@ const def = {
   meta: { id: "sandbox", code: "MBC", title: "Menu", version: "1.0" },
   designs: [{ id: "menu1", kind: "menu", name: "Plans", version: 1, seed: 11, config, file: { format: "json", columns: gen.columns, rows: gen.rows } }],
   questions: [
-    { id: "m", code: "M1", variableName: "PLAN", type: "conjoint_task", variant: "conjoint.menu", text: "Which of these would you buy at these prices?", required: true, settings: { designRef: "menu1" } },
+    { id: "m", code: "M1", variableName: "PLAN", type: "conjoint_task", variant: "conjoint.menu", text: "Which of these would you buy at these prices?", required: true, settings: { designRef: "menu1", taskPaging: "all" } },
     { id: "q2", code: "Q2", variableName: "Q2", type: "single_select", text: "Done?", options: [{ code: 1, label: "Yes" }] },
   ],
   flow: [{ type: "page", id: "p1", questionIds: ["m"] }, { type: "page", id: "p2", questionIds: ["q2"] }, { type: "end", id: "e1", status: "complete" }],

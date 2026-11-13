@@ -2100,7 +2100,7 @@ function ChoiceTasks(p: QRProps & { design: SurveyDefinition["designs"][number] 
   };
 
   return (
-    <div className="rs-design-tasks" data-paging={pager.paged ? "one" : "all"} style={{ display: "flex", flexDirection: "column", gap: pager.paged ? 12 : 24 }}>
+    <div className="rs-design-tasks" data-kind={isMaxdiff ? "maxdiff" : "cbc"} data-paging={pager.paged ? "one" : "all"} style={{ display: "flex", flexDirection: "column", gap: pager.paged ? 12 : 24 }}>
       {mdInstructions && <div className="rs-md-instructions" data-testid="md-instructions">{mdInstructions}</div>}
       {pager.header}
       {pager.shown.map((t) => {
@@ -2124,7 +2124,10 @@ function ChoiceTasks(p: QRProps & { design: SurveyDefinition["designs"][number] 
                 : isMaxdiff ? `Task ${realTasks.indexOf(t) + 1} of ${realTasks.length}` : `Task ${tasks.indexOf(t) + 1} of ${tasks.length}`}
             </div>
             <div className="rs-table-wrap">
-              <table className={isMaxdiff ? "rs-matrix rs-md" : "rs-matrix rs-matrix-stack rs-cbc"} data-testid={isMaxdiff ? `md-table-${t}` : `cbc-task-${t}`}>
+              {/* 2026-11-14: the concept cards' rows line up across cards — the label, one row per attribute shown, the Choose control */}
+              <table className={isMaxdiff ? "rs-matrix rs-md" : "rs-matrix rs-matrix-stack rs-cbc"} data-testid={isMaxdiff ? `md-table-${t}` : `cbc-task-${t}`}
+                data-many={!isMaxdiff && alts.filter((x) => Number(x.none_option) !== 1).length > 3 ? "1" : undefined}
+                style={isMaxdiff ? undefined : ({ ["--cbc-rows" as string]: taskAttrCols.length + 2, ["--cbc-cols" as string]: Math.max(1, alts.filter((x) => Number(x.none_option) !== 1).length) } as React.CSSProperties)}>
                 <thead>
                   <tr>
                     {isMaxdiff ? (
@@ -2211,7 +2214,9 @@ function ChoiceTasks(p: QRProps & { design: SurveyDefinition["designs"][number] 
                     const isChosen = vals[t] != null && String(vals[t]) === altKey;
                     return (
                       <tr key={altKey} className={isChosen ? "rs-cbc-chosen" : undefined} data-testid="cbc-alt"
-                        data-task={t} data-alt={altKey} data-position={i + 1} data-none={isNone ? "1" : undefined} data-fixed={fixedAlt ? String(fixedAlt.index) : undefined}>
+                        data-task={t} data-alt={altKey} data-position={i + 1} data-none={isNone ? "1" : undefined} data-fixed={fixedAlt ? String(fixedAlt.index) : undefined}
+                        /* the whole concept card chooses it (the radio inside stays the keyboard and screen-reader control) */
+                        onClick={(e) => { if (p.q.settings.readOnly || (e.target as HTMLElement).closest("input, a, button, textarea, select")) return; const next: Record<string, unknown> = { ...vals, [t]: altKey }; if (!fixedAlt?.specify) delete next[fixedOtherKey(t)]; change(next, t); }}>
                         <td className="rowlabel">{optLabel}</td>
                         {taskAttrCols.map((a) => <td key={a} data-label={a}>{isNone || alt[a] === "" ? "—" : String(alt[a] ?? "")}</td>)}
                         <td className="rs-cbc-choose">

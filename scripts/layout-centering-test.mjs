@@ -320,8 +320,8 @@ if (SECTIONS.has("studio")) {
     await openTab(page, "Branding");
     await page.waitForSelector('[data-testid="theme-preview-shell"]');
     await checkPreview(page, `${w}px, survey's own theme`);
-    const preset = await page.$('select.select:has(option:text("Apply preset theme…"))');
-    await preset.selectOption("Gen-Z");
+    /* 2026-11-14: the presets are buttons now (Branding → presets), no longer a dropdown */
+    await page.click('[data-testid="branding-preset-gen-z"]');
     await page.waitForTimeout(250);
     await checkPreview(page, `${w}px, Gen-Z preset applied`);
     await askTheme(page, "make it compact and teal, text on the right", { kind: "proposal", reply: "A compact teal theme.", actions: [{ op: "set_theme", colors: { primary: "#0f766e" }, layout: { widthMode: "contained", maxWidth: "300px", contentAlign: "right" } }] });
@@ -343,7 +343,7 @@ if (SECTIONS.has("studio")) {
     const long = await column(page);
     checkColumn(long, `${w}px, 25k prompt + long plan`);
     near(long.col.cx, before.col.cx, `${w}px: a long turn moved the column`);
-    if (long.main.w >= 1120 + 48) {
+    if (long.main.w >= 860 + 48) {
       near(long.inputX, long.col.x, `${w}px: the ask bar's left edge vs the column's`, 2);
       if (long.sendRight != null) near(long.sendRight, long.col.right, `${w}px: the ask bar's right edge vs the column's`, 2);
     }
