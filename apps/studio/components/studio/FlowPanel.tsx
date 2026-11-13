@@ -21,7 +21,7 @@ import {
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { InsertPipedText } from "./InsertPipedText";
 import { gridMove, insertAt } from "@/lib/flow/flowEd";
-import { lintEmbeddedPiping, branchBlockChoices, moveBlockIntoBranch, loopInsertChoices, moveIntoLoop } from "@rescript/engine";
+import { lintEmbeddedPiping, branchBlockChoices, moveBlockIntoBranch, loopInsertChoices, moveIntoLoop, suggestLoopSourceInFlow, flowNodeChecks } from "@rescript/engine";
 
 /* ==========================================================================
  * Survey Flow — one recursive tree over the canonical definition.
@@ -703,6 +703,8 @@ function ElementCard({ node }: { node: FlowNode }) {
   const ops = useOps();
   const [open, setOpen] = React.useState(false);
   const summary = summarizeFlowNode(node);
+  const def = useStudio().def;
+  const needsFix = flowNodeChecks(def, node).filter((c) => c.level === "problem").length;
   return (
     <div className="flow-card element-card" data-testid="flow-element" data-node-id={node.id}>
       <div className="fc-head">
@@ -710,6 +712,10 @@ function ElementCard({ node }: { node: FlowNode }) {
         <button className="block-toggle" onClick={() => setOpen((v) => !v)}>{open ? "▾" : "▸"}</button>
         <span className={`fn-type ${node.type}`}>{ELEMENT_LABELS[node.type] ?? node.type}</span>
         <span className="grow fc-summary">{summary.detail}</span>
+        {/* an unfinished element says so without being opened (engine flowGuide.ts) */}
+        {needsFix > 0 && !open && (
+          <button type="button" className="flow-needs-fix" data-testid="flow-needs-fix" title="Open to see what is missing" onClick={() => setOpen(true)}>Needs attention</button>
+        )}
         <NodeMenu nodeId={node.id}
           onDelete={() => ops.remove(node.id)}
           onDuplicate={() => ops.duplicate(node.id)}
@@ -763,7 +769,18 @@ export function FlowPanel() {
       applyFlow(`move ${label} into the loop`, () => moveIntoLoop(s.def, ref, loopId));
     },
     insert(type, target) {
-      applyFlow(`add ${ELEMENT_LABELS[type] ?? type}`, (f) => insertFlowNode(f, makeNode(type), target));
+      applyFlow(`add ${ELEMENT_LABELS[type] ?? type}`, (f) => {
+        const node = makeNode(type);
+        const result = insertFlowNode(f, node, target);
+        // a new loop starts from the nearest multi-select asked before it —
+        // the common case — instead of an empty list the researcher must wire
+        if (node.type === "loop" && result.moved !== false) {
+          const source = suggestLoopSourceInFlow(s.def, result.flow, node.id);
+          const placed = findNode(result.flow, node.id);
+          if (source && placed) (placed as { source: unknown }).source = source;
+        }
+        return result;
+      });
     },
     remove(id) {
       // "ungroup" arrives as a pseudo-id so one code path owns flow writes

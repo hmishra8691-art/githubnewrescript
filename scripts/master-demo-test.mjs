@@ -26,6 +26,10 @@ const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
 
 const def = buildMasterDemoSurvey("sandbox");
 const h = await openHarness();
+/* the loop card keeps item details, totals and naming under "More options",
+   closed until used (scripts/loop-simple-test.mjs proves that); this suite
+   works inside that section, so it opens with it */
+await h.page.evaluate(() => { try { sessionStorage.setItem("rescript.loop.more", "1"); } catch { /* ignore */ } });
 const page = h.page;
 
 /* ============================================================ studio */

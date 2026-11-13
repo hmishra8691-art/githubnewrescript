@@ -509,7 +509,7 @@ export function summarizeFlowNode(node: FlowNode): FlowNodeSummary {
       detail = `${node.branches.length} condition${node.branches.length === 1 ? "" : "s"}`;
       break;
     case "loop":
-      detail = `over ${node.loopVar}`;
+      detail = `once per ${node.loopVar}`;
       break;
     case "embedded_data":
       detail = `${node.fields.length} field${node.fields.length === 1 ? "" : "s"}`;

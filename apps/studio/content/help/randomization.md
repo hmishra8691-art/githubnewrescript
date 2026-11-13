@@ -15,7 +15,7 @@ Options or rows of one question:
 
 Blocks or elements of the flow:
 1. In **Programming** → **Survey Flow**, click **+ Add element** and choose **Randomizer**.
-2. Put the blocks to randomize inside it. Choose how many to show (all, or N of M) and the balancing (**Exact balance**, **Latin square (each child in each position equally)**, or **Williams (also balances which child follows which)**).
+2. Put the blocks to randomize inside it. Choose how many to show (all, or N of M) and the balancing (**Exact balance**, **balanced positions — each part in each position equally (Latin square)**, or **balanced positions and sequence — also which part follows which (Williams)**).
 
 ## Common mistakes
 - Randomizing an ordered scale (Strongly disagree → Strongly agree) — keep scales in order.

@@ -10,7 +10,7 @@ Piping inserts a value into a question's text, instruction or options when the r
 
 ## How to set it up
 1. Select the question and edit its text.
-2. Click **Insert piped text**. Under **Insert from** choose **Previous question**, **Calculated value**, **Embedded data / URL parameter**, **Loop item** or **Expression (calc DSL)**.
+2. Click **Insert piped text**. Under **Insert from** choose **Previous question**, **Calculated value**, **Embedded data / URL parameter**, **Loop item** or **Typed calculation**.
 3. Pick the question (and, for a grid, the row or column; for an “Other” box, which one) and click **Insert**. A token like `{{Q3}}` is placed in the text.
 4. Test with **Test Survey** — the token shows the respondent's own answer.
 

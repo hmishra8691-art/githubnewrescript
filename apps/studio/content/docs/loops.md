@@ -18,8 +18,11 @@ A loop **repeats a set of questions once per item**: once for each brand the res
 1. **Ask the source question first** — Q1, a multi-select of brands.
 2. **Write the repeated question(s) with a pipe** — "How satisfied are you with {{loop.label}}?". Put them on their own page.
 3. **Add the loop** — in **Programming → Survey Flow**, use **+ Add element** → **Loop**, and move the repeated page inside it (or ask Intelligent Mode: "create a loop around Q2 for each brand selected in Q1").
-4. **Choose the source** — Q1's selected options.
-5. **Limit or order the items (optional)** — a maximum number of iterations, random order, eligibility and skip / break conditions.
+4. **Read the sentence at the top of the loop card** — it says what the loop will do ("Repeats 1 question once for each answer the respondent chose at Q1") and lists anything still to fix in plain words. A loop added after a multi-select starts from that question automatically.
+5. **Repeat for** — what the loop goes through: each answer of a question (the ones they chose, did not choose, were shown, or all of them), a list you type, or a fixed number of times.
+6. **How many** and **Order** (optional) — every item or a limit; as listed, random, or sorted.
+7. **More options** (optional) — rules for which items are asked, extra facts about each item ("Item details"), totals across the rounds, and the loop's name. It stays closed until you use it.
+8. **Try it** — pick a respondent's answers and see exactly which rounds they would get.
 :::
 
 ::: example loops
@@ -42,7 +45,7 @@ Q2 once per selected brand, each time with the brand's name. Answers are stored 
 ## Common mistakes
 
 - **The source is asked after the loop** — the engine refuses it: the items must be known before the loop starts.
-- **Long loops** — 10 items × 5 questions is 50 questions; limit the iterations (count max) or use a List Fill.
+- **Long loops** — 10 items × 5 questions is 50 questions; limit them under **How many** or use a List Fill.
 
 ## Troubleshooting
 

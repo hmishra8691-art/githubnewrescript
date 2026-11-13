@@ -373,7 +373,7 @@ export function ListFillPanel() {
                       <select className="select" style={{ width: 170 }} value={lf.selection.leastFilled?.tieBreak ?? "random"}
                         data-testid={`lf-least-tie-${lf.id}`}
                         onChange={(e) => setLf(i, (x) => { x.selection.leastFilled = { basis: "auto", ...(x.selection.leastFilled ?? {}), tieBreak: e.target.value }; })}>
-                        <option value="random">random (seeded)</option>
+                        <option value="random">random (stays the same for a respondent)</option>
                         <option value="sequential">source order</option>
                         <option value="priority">priority, then random</option>
                       </select>

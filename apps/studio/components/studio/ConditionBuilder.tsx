@@ -478,9 +478,9 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
           <option value="loop:label">current item — label</option>
           <option value="loop:code">current item — code</option>
           <option value="loop:index">current item — position (LOOP_INDEX)</option>
-          <option value="loop:count">loop — number of iterations (LOOP_COUNT)</option>
-          <option value="loop:first">this is the first iteration (LOOP_FIRST)</option>
-          <option value="loop:last">this is the last iteration (LOOP_LAST)</option>
+          <option value="loop:count">loop — number of rounds (LOOP_COUNT)</option>
+          <option value="loop:first">this is the first round (LOOP_FIRST)</option>
+          <option value="loop:last">this is the last round (LOOP_LAST)</option>
           {(loopScope[0]?.references?.columns ?? []).map((c) => (
             <option key={c.name} value={`loop:${c.name}`} title={c.description}>
               current item — {c.name}{c.dataType && c.dataType !== "text" ? ` (${c.dataType})` : ""}

@@ -9,6 +9,7 @@ import {
   validateRedirectUrl, urlVariableCatalog, embeddedCatalog, stripHtmlText,
   lintEmbeddedPiping, describeDetectedType, type EmbeddedField,
   nameBranch, newPathLabel, nextBranchTitle, splitBranchByQuestion, uniqueName, isGenericBranchTitle,
+  flowNodePlainSummary, flowNodeChecks,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { Icon } from "@/components/ui/Icon";
@@ -484,10 +485,10 @@ function RandomizerDesignSettings({ node, onChange }: { node: Extract<FlowNode, 
             const v = e.target.value as NonNullable<typeof node.order>;
             onChange({ ...node, order: v === "random" || v === "rotation" ? undefined : v, evenPresentation: v === "rotation" ? true : v === "random" ? undefined : node.evenPresentation });
           }}>
-          <option value="random">random (seeded shuffle)</option>
-          <option value="rotation">rotation (even presentation)</option>
-          <option value="latin_square">Latin square (each child in each position equally)</option>
-          <option value="williams">Williams (also balances which child follows which)</option>
+          <option value="random">random — a different order for each respondent</option>
+          <option value="rotation">rotation — each part comes first equally often</option>
+          <option value="latin_square">balanced positions — each part in each position equally (Latin square)</option>
+          <option value="williams">balanced positions and sequence — also which part follows which (Williams)</option>
         </select>
       </label>
       {design && <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }} data-testid="randomizer-order-note">
@@ -675,7 +676,29 @@ function BranchEditor({ node, onChange }: { node: BranchNode; onChange(n: FlowNo
 
 /** A flow card is a NARROW surface: its conditions are summaries with "Edit logic ⤢" by default (LogicDialog.tsx). */
 export function NodeEditor(props: { node: FlowNode; onChange(n: FlowNode): void }) {
-  return <CompactLogicScope><NodeEditorBody {...props} /></CompactLogicScope>;
+  return <CompactLogicScope><FlowNodeGuide node={props.node} /><NodeEditorBody {...props} /></CompactLogicScope>;
+}
+
+/**
+ * What this element does, said first (2026-11-13, engine flowGuide.ts) — the loop card's opening sentence, for the
+ * randomizer, quota check, end point, redirect, saved values and branch: one plain sentence, then anything
+ * unfinished or wrong with what to do about it. It reads the node and writes nothing.
+ */
+function FlowNodeGuide({ node }: { node: FlowNode }) {
+  const s = useStudio();
+  const summary = flowNodePlainSummary(s.def, node);
+  if (!summary) return null;
+  const checks = flowNodeChecks(s.def, node);
+  return (
+    <div className="loop-summary" data-testid="flow-guide" data-node-type={node.type}>
+      <p className="loop-summary-main">{summary}</p>
+      {checks.map((c, i) => (
+        <div key={i} className={`loop-check ${c.level}`} data-testid="flow-guide-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
+          <span className="loop-check-tag">{c.level === "problem" ? "Fix" : c.level === "warning" ? "Check" : "Tip"}</span>{c.message}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function NodeEditorBody({ node, onChange }: { node: FlowNode; onChange(n: FlowNode): void }) {
@@ -820,13 +843,13 @@ function NodeEditorBody({ node, onChange }: { node: FlowNode; onChange(n: FlowNo
             onChange={(e) => onChange({ ...node, quotaIds: Array.from(e.target.selectedOptions).map((o) => o.value) })}>
             {s.def.quotas.map((qt) => <option key={qt.id} value={qt.id}>{qt.name}</option>)}
           </select>
-          <span className="flabel" style={{ margin: 0 }}>when full →</span>
+          <span className="flabel" style={{ margin: 0 }}>when full</span>
           <select className="select" value={node.onFull.kind}
             onChange={(e) => onChange({ ...node, onFull: { ...node.onFull, kind: e.target.value as any } })}>
-            <option value="terminate">terminate</option>
-            <option value="redirect">redirect</option>
-            <option value="flag">flag &amp; continue</option>
-            <option value="continue">continue</option>
+            <option value="terminate">end the survey (quota full)</option>
+            <option value="redirect">send them to a link</option>
+            <option value="flag">let them continue, marked over quota</option>
+            <option value="continue">let them continue</option>
           </select>
           {node.onFull.kind === "redirect" && (<>
             <input ref={urlRef} className="input grow mono" placeholder="https://…?rid={{response.id}}" value={node.onFull.url ?? ""}
@@ -850,19 +873,19 @@ function NodeEditorBody({ node, onChange }: { node: FlowNode; onChange(n: FlowNo
           <div className="row" style={{ flexWrap: "wrap" }}>
             <select className="select" value={node.status}
               onChange={(e) => onChange({ ...node, status: e.target.value as any })}>
-              <option value="complete">complete</option>
-              <option value="screened">screened</option>
-              <option value="quota_full">quota full</option>
-              <option value="terminated">terminated</option>
+              <option value="complete">Completed</option>
+              <option value="screened">Screened out (not eligible)</option>
+              <option value="quota_full">Quota full</option>
+              <option value="terminated">Terminated</option>
             </select>
-            <input ref={msgRef} className="input grow" placeholder="end message (piping allowed)" value={node.message ?? ""}
+            <input ref={msgRef} className="input grow" placeholder="Closing message (optional)" value={node.message ?? ""}
               data-testid="end-message"
               onChange={(e) => onChange({ ...node, message: e.target.value || undefined })} />
             <InsertPipedText def={s.def} testId="end-message-pipe" context={{ flowPosition: node.id }}
               onInsert={(t) => insertInto(msgRef.current, node.message ?? "", t, (message) => onChange({ ...node, message: message || undefined }))} />
           </div>
           <label className="f" style={{ marginTop: 8 }}>
-            <span>Redirect on finish (optional — variables allowed)</span>
+            <span>Then send the respondent to this link (optional)</span>
             <div className="row">
               <input ref={urlRef} className="input mono grow" placeholder="https://panel.com/done?id={{ed.PANEL_ID}}"
                 data-testid="end-redirect-url"

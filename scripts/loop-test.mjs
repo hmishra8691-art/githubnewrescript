@@ -24,6 +24,10 @@ import { openPreview } from "./lib/preview.mjs";
 import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const h = await openHarness();
+/* the loop card keeps item details, totals and naming under "More options",
+   closed until used (scripts/loop-simple-test.mjs proves that); this suite
+   works inside that section, so it opens with it */
+await h.page.evaluate(() => { try { sessionStorage.setItem("rescript.loop.more", "1"); } catch { /* ignore */ } });
 const { page } = h;
 let pass = 0;
 const ok = (name) => { pass++; console.log(`  ok   ${name}`); };

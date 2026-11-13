@@ -3,6 +3,7 @@ import React from "react";
 import type { Condition, LoopCountValue, LoopOrder, LoopReferenceColumn, LoopReferenceSource, LoopReferences, LoopSource } from "@rescript/schema";
 import {
   LOOP_BUILTIN_REFS, createResponseState, describeLoop, loopVariablePrefix, parseDelimited, possibleLoopItems, simulateLoop,
+  loopPlainSummary, loopChecks, loopExtras,
   type LoopFlowNode, type LoopSimulation,
 } from "@rescript/engine";
 import { useStudio } from "./store";
@@ -35,22 +36,22 @@ import { SetExprField } from "./MaskingBuilder";
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const FILTERS: { value: NonNullable<Extract<LoopSource, { kind: "question" }>["filter"]>; label: string; hint: string }[] = [
-  { value: "selected", label: "Selected", hint: "the options the respondent chose" },
-  { value: "notSelected", label: "Not selected", hint: "the options shown and not chosen" },
-  { value: "displayed", label: "Displayed", hint: "every option the question actually showed" },
-  { value: "all", label: "All", hint: "every option, answered or not" },
-  { value: "eligible", label: "Eligible", hint: "every option that passes the eligibility rule below" },
-  { value: "invalid", label: "Invalid", hint: "codes that match no option, plus options that match the invalid rule below" },
+  { value: "selected", label: "the ones they chose", hint: "each answer the respondent chose" },
+  { value: "notSelected", label: "the ones they did not choose", hint: "each answer the respondent was shown and did not choose" },
+  { value: "displayed", label: "the ones they were shown", hint: "each answer the question actually showed this respondent" },
+  { value: "all", label: "every answer listed", hint: "every answer of the question, chosen or not" },
+  { value: "eligible", label: "the ones that pass this loop’s rule", hint: "each answer that passes “Only repeat for items where…” under More options" },
+  { value: "invalid", label: "answers that are not valid", hint: "codes that match no answer, plus answers that match the rule under More options" },
 ];
 
 const ORDERS: { value: LoopOrder["kind"]; label: string; needsColumn?: boolean }[] = [
-  { value: "source", label: "Source order" },
-  { value: "selection", label: "Selection order" },
-  { value: "listFill", label: "List Fill order" },
-  { value: "priority", label: "By a reference column", needsColumn: true },
-  { value: "random", label: "Random" },
-  { value: "weightedRandom", label: "Weighted random (by a column)", needsColumn: true },
-  { value: "custom", label: "Custom order" },
+  { value: "source", label: "as listed" },
+  { value: "selection", label: "in the order they chose them" },
+  { value: "random", label: "random, different for each respondent" },
+  { value: "listFill", label: "as the List Fill ordered them" },
+  { value: "priority", label: "sorted by an item detail", needsColumn: true },
+  { value: "weightedRandom", label: "random, weighted by an item detail", needsColumn: true },
+  { value: "custom", label: "an order I type" },
 ];
 
 export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n: LoopFlowNode): void }) {
@@ -213,20 +214,45 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
   const sourceQuestion = src.kind === "question" ? def.questions.find((q) => q.id === src.questionId) : undefined;
   const prefix = loopVariablePrefix(node);
   const scope = loopsAroundLoop(def, node.id);
+  const summary = React.useMemo(() => loopPlainSummary(def, node), [def, node]);
+  const checks = React.useMemo(() => loopChecks(def, node), [def, node]);
+  const extras = loopExtras(node);
+  /* open when something in it is in use, or when the person opened it (remembered while the Studio is open) */
+  const [moreOpen, setMoreOpen] = React.useState(() => extras.total > 0 || (typeof window !== "undefined" && window.sessionStorage?.getItem("rescript.loop.more") === "1"));
+  /* a setting that comes into use from elsewhere (an import, the assistant, undo) is never left folded away */
+  const extrasInUse = extras.total > 0;
+  React.useEffect(() => { if (extrasInUse) setMoreOpen(true); }, [extrasInUse]);
 
   return (
     <div className="loop-editor" data-testid="loop-editor">
+      {/*
+        * WHAT THIS LOOP DOES, FIRST (2026-11-13, engine loopGuide.ts). The editor opened on a dozen settings under
+        * their programming names and never said what the loop would do. It now opens on that sentence, with anything
+        * unfinished or wrong in plain words, then the two things every loop needs — what to repeat for, how many and
+        * in what order. Everything else is under "More options", open when in use. No setting was removed and the
+        * loop node is stored exactly as before.
+        */}
+      <div className="loop-summary" data-testid="loop-summary">
+        {summary.map((line, i) => <p key={i} className={i === 0 ? "loop-summary-main" : "loop-summary-more"}>{line}</p>)}
+        {checks.map((c, i) => (
+          <div key={i} className={`loop-check ${c.level}`} data-testid="loop-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
+            <span className="loop-check-tag">{c.level === "problem" ? "Fix" : c.level === "warning" ? "Check" : "Tip"}</span>{c.message}
+          </div>
+        ))}
+      </div>
       {/* ------------------------------------------------ source & filter */}
       <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <span className="flabel" style={{ margin: 0 }}>Source</span>
+        <span className="flabel" style={{ margin: 0 }}>Repeat for</span>
         <select className="select" data-testid="loop-source-kind" value={src.kind} onChange={(e) => changeSourceKind(e.target.value as LoopSource["kind"])}>
-          <option value="question">a question’s options</option>
-          <option value="listFill">a List Fill result</option>
-          <option value="static">a static list</option>
-          <option value="count">a number of iterations</option>
-          <option value="variable">a list in a variable</option>
-          <option value="setExpression">a set expression</option>
-          <option value="design">design tasks</option>
+          <option value="question">each answer of a question</option>
+          <option value="static">each item of a list I type</option>
+          <option value="count">a fixed number of times</option>
+          <optgroup label="Less common">
+            <option value="listFill">each item a List Fill gave this respondent</option>
+            <option value="setExpression">answers combined from several questions</option>
+            <option value="variable">a list held in a variable</option>
+            <option value="design">the tasks of a design</option>
+          </optgroup>
         </select>
         {src.kind === "question" && (
           <>
@@ -245,7 +271,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
               <select className="select" data-testid="loop-dimension" value={src.dimension ?? "options"}
                 title="Which of this question's lists the loop walks"
                 onChange={(e) => set({ source: { ...src, dimension: e.target.value as never } })}>
-                <option value="options">its options</option>
+                <option value="options">its answers</option>
                 <option value="rows">its rows</option>
                 <option value="columns">its columns</option>
               </select>
@@ -264,7 +290,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
           </select>
         )}
         {src.kind === "count" && (
-          <CountValueField value={src.count} onChange={(count) => set({ source: { ...src, count } })} label="iterations" />
+          <CountValueField value={src.count} onChange={(count) => set({ source: { ...src, count } })} label="times" />
         )}
         {src.kind === "variable" && (
           <>
@@ -274,19 +300,14 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
               onChange={(e) => set({ source: { ...src, separator: e.target.value || undefined } })} />
           </>
         )}
-        <span className="grow" />
-        <label className="row" style={{ gap: 4 }}>name
-          <input className="input mono" data-testid="loop-var" style={{ width: 110 }} value={node.loopVar}
-            onChange={(e) => set({ loopVar: e.target.value.replace(/[^A-Za-z0-9_]/g, "") })} />
-        </label>
       </div>
       <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 10px" }}>
-        {src.kind === "question" && (FILTERS.find((f) => f.value === (src.filter ?? "selected"))?.hint ?? "")}
+        {src.kind === "question" && `One round for ${FILTERS.find((f) => f.value === (src.filter ?? "selected"))?.hint ?? ""}.`}
+        {src.kind === "static" && "One round per item, for every respondent. Inside the loop, {{loop.label}} shows the item’s name."}
         {src.kind === "listFill" && "one iteration per item the List Fill allocated to this respondent; the reference table below is this loop’s own, keyed by the allocated codes."}
         {src.kind === "count" && "items 1…N — a plain numeric iteration."}
         {src.kind === "variable" && "a JSON array (codes, or {code,label} objects) or a delimited string left in a calculated variable, embedded field or answer — how a script or an API result feeds a loop."}
         {src.kind === "setExpression" && "the codes a set expression yields — “the brands in both screeners”, “aware minus considered” — with the same builder and grammar masks use; labels come from the first source question that has the code."}
-        {" "}Variables: <code>{prefix}_COUNT</code>, <code>{prefix}_ITEM_1</code>, <code>{prefix}_ITEM_1_CODE</code>{columns.length ? <>, <code>{prefix}_ITEM_1_{columns[0].name.toUpperCase()}</code>…</> : null}.
       </p>
 
       {src.kind === "setExpression" && (
@@ -310,78 +331,24 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
         </div>
       )}
 
-      {/* ------------------------------------------------ eligibility / invalid */}
-      <LoopScopeProvider loops={scope}>
-        <OptionalCondition
-          label="Eligibility rule (narrows the items; can read this loop’s reference columns)"
-          workspace={{ title: "Loop — eligibility rule", subject: node.loopVar, description: "An item produces an iteration only when the following condition is met (evaluated once per candidate item):" }}
-          value={node.eligibleIf}
-          onChange={(c: Condition | undefined) => set({ eligibleIf: c })}
-          hint='e.g. loop.Category = "Smartphone" — evaluated once per candidate item'
-        />
-        {src.kind === "question" && (src.filter === "invalid") && (
-          <OptionalCondition
-            label="What makes an item invalid"
-            workspace={{ title: "Loop — invalid items", subject: node.loopVar, description: "An item is treated as invalid when the following condition is met:" }}
-            value={node.invalidIf}
-            onChange={(c: Condition | undefined) => set({ invalidIf: c })}
-            hint="codes that match no option are always invalid; this rule adds more"
-          />
-        )}
-        {/*
-          * Control flow, in the order it runs: skip filters items out before
-          * the loop starts; break stops the loop part-way through. Both sit
-          * with eligibility because all three decide which iterations exist.
-          */}
-        <OptionalCondition
-          label="Skip an item (CONTINUE — the item produces no iteration)"
-          workspace={{ title: "Loop — skip an item (CONTINUE)", subject: node.loopVar, description: "Skip the item (no iteration) when the following condition is met:" }}
-          value={node.skipIf}
-          onChange={(c: Condition | undefined) => set({ skipIf: c })}
-          hint='e.g. loop.code = "other" — the opposite polarity of the eligibility rule'
-        />
-        <OptionalCondition
-          label="Stop the loop (BREAK / UNTIL — this iteration runs, later ones do not)"
-          workspace={{ title: "Loop — stop the loop (BREAK / UNTIL)", subject: node.loopVar, description: "Stop after this iteration when the following condition is met:" }}
-          value={node.breakIf}
-          onChange={(c: Condition | undefined) => set({ breakIf: c })}
-          hint="reads the answers this iteration gave, e.g. Q7 >= 5. For WHILE, write the condition that ends it."
-        />
-      </LoopScopeProvider>
-
-      {/* ------------------------------------------------ source re-evaluation */}
-      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-        <span className="flabel" style={{ margin: 0 }}>Resolve the item list</span>
-        <select className="select" data-testid="loop-resolve-source"
-          value={node.resolveSource ?? "reevaluate"}
-          onChange={(e) => set({ resolveSource: e.target.value as "reevaluate" | "once" })}>
-          <option value="reevaluate">every time (changes to the source apply immediately)</option>
-          <option value="once">once, when the loop is first reached</option>
-        </select>
-        <span className="muted" style={{ fontSize: 12.5 }}>
-          {node.resolveSource === "once"
-            ? "Editing the source later will not renumber iterations already answered."
-            : "Editing the source adds or removes iterations, even mid-loop."}
-        </span>
-      </div>
-
       {/* ------------------------------------------------ count & order */}
-      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-        <span className="flabel" style={{ margin: 0 }}>Iterations</span>
+      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+        <span className="flabel" style={{ margin: 0 }}>How many</span>
         <select className="select" data-testid="loop-count-mode" value={node.count?.mode ?? (node.maxIterations != null ? "max" : "all")}
           onChange={(e) => {
             const mode = e.target.value as NonNullable<LoopFlowNode["count"]>["mode"];
             set({ count: mode === "all" ? { mode } : { mode, value: node.count?.value ?? node.maxIterations ?? 3 }, maxIterations: undefined });
           }}>
-          <option value="all">all qualifying items</option>
-          <option value="exact">exactly</option>
-          <option value="max">at most</option>
-          <option value="min">only if at least</option>
+          <option value="all">every item</option>
+          <option value="exact">exactly this many</option>
+          <option value="max">no more than</option>
+          <option value="min">only if there are at least</option>
         </select>
         {(node.count?.mode ?? (node.maxIterations != null ? "max" : "all")) !== "all" && (
           <CountValueField value={node.count?.value ?? node.maxIterations ?? 3} onChange={(value) => set({ count: { mode: node.count?.mode ?? "max", value }, maxIterations: undefined })} />
         )}
-        <span className="grow" />
+      </div>
+      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
         <span className="flabel" style={{ margin: 0 }}>Order</span>
         <select className="select" data-testid="loop-order" value={node.order?.kind ?? (node.randomizeIterations ? "random" : src.kind === "listFill" ? "listFill" : "source")}
           onChange={(e) => {
@@ -389,7 +356,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
             set({ order: { kind, column: node.order?.column, direction: node.order?.direction, custom: node.order?.custom }, randomizeIterations: undefined });
           }}>
           {ORDERS.filter((o) => o.value !== "listFill" || src.kind === "listFill").map((o) => (
-            <option key={o.value} value={o.value} disabled={o.needsColumn && columns.length === 0}>{o.label}{o.needsColumn && columns.length === 0 ? " — add a column first" : ""}</option>
+            <option key={o.value} value={o.value} disabled={o.needsColumn && columns.length === 0}>{o.label}{o.needsColumn && columns.length === 0 ? " — add an item detail first" : ""}</option>
           ))}
         </select>
         {ORDERS.find((o) => o.value === node.order?.kind)?.needsColumn && (
@@ -415,82 +382,81 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
         </div>
       )}
 
-      {/* ------------------------------------------------ as one statement */}
-      <details className="qs-details" data-testid="loop-statement" style={{ marginBottom: 12 }}>
-        <summary>This loop as a statement</summary>
-        <pre className="mono" style={{ fontSize: 12.5, margin: "6px 0 0", whiteSpace: "pre-wrap" }} data-testid="loop-statement-text">{describeLoop(def, node)}</pre>
-        <div className="muted" style={{ fontSize: 12 }}>Read from the configuration above, in the same grammar the condition and mask expression tabs use. Edit the loop with the controls; the statement follows.</div>
-      </details>
-
-      {/* ------------------------------------------------ aggregates */}
-      <div className="loop-refs" data-testid="loop-aggregates" style={{ marginBottom: 12 }}>
-        <div className="row" style={{ alignItems: "baseline" }}>
-          <strong style={{ fontSize: 14 }}>Loop results</strong>
-          <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
-            values computed across every iteration, usable anywhere after the loop
+      {/* ------------------------------------------------ more options */}
+      <details className="loop-more" data-testid="loop-more" open={moreOpen}
+        onToggle={(e) => { const o = (e.currentTarget as HTMLDetailsElement).open; setMoreOpen(o); try { window.sessionStorage?.setItem("rescript.loop.more", o ? "1" : "0"); } catch { /* private mode */ } }}>
+        <summary data-testid="loop-more-toggle">
+          More options
+          <span className="muted loop-more-hint">
+            {extras.total > 0
+              ? ` — in use: ${[extras.rules ? `${extras.rules} rule${extras.rules === 1 ? "" : "s"}` : "", extras.details ? `${extras.details} item detail${extras.details === 1 ? "" : "s"}` : "", extras.totals ? `${extras.totals} total${extras.totals === 1 ? "" : "s"}` : "", extras.fixedList ? "a fixed list" : ""].filter(Boolean).join(", ")}`
+              : " — rules for which items are asked, extra facts about each item, totals across the rounds"}
           </span>
-          <span className="grow" />
-          <button className="btn small" data-testid="loop-add-aggregate"
-            onClick={() => set({
-              aggregates: [...(node.aggregates ?? []),
-                { name: `RESULT_${(node.aggregates?.length ?? 0) + 1}`, questionRef: "", op: "avg" as const }],
-            })}>+ result</button>
-        </div>
-        {(node.aggregates ?? []).length === 0 && (
-          <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
-            None. Add one to get e.g. <span className="mono">{loopVariablePrefix(node, null)}_AVG_SCORE</span> after
-            the loop, without writing out one term per iteration.
-          </div>
+        </summary>
+        <div className="loop-more-body">
+        <h4 className="loop-more-h">Which items are asked</h4>
+      {/* ------------------------------------------------ eligibility / invalid */}
+      <LoopScopeProvider loops={scope}>
+        <OptionalCondition
+          label="Only repeat for items where…"
+          workspace={{ title: "Loop — only repeat for items where…", subject: node.loopVar, description: "An item produces an iteration only when the following condition is met (evaluated once per candidate item):" }}
+          value={node.eligibleIf}
+          onChange={(c: Condition | undefined) => set({ eligibleIf: c })}
+          hint="Checked for each item before the loop starts. Example: only items whose Category detail is Smartphone."
+        />
+        {src.kind === "question" && (src.filter === "invalid") && (
+          <OptionalCondition
+            label="What makes an item invalid"
+            workspace={{ title: "Loop — invalid items", subject: node.loopVar, description: "An item is treated as invalid when the following condition is met:" }}
+            value={node.invalidIf}
+            onChange={(c: Condition | undefined) => set({ invalidIf: c })}
+            hint="codes that match no option are always invalid; this rule adds more"
+          />
         )}
-        {(node.aggregates ?? []).map((agg, i) => {
-          const patch = (p: Partial<typeof agg>) => set({
-            aggregates: (node.aggregates ?? []).map((a, j) => (j === i ? { ...a, ...p } : a)),
-          });
-          return (
-            <div className="row" key={i} style={{ flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
-              <span className="mono muted" style={{ fontSize: 12 }}>{loopVariablePrefix(node, null)}_</span>
-              <input className="input mono" style={{ width: 130 }} data-testid="loop-agg-name"
-                value={agg.name} onChange={(e) => patch({ name: e.target.value.toUpperCase() })} />
-              <select className="select" data-testid="loop-agg-op" value={agg.op}
-                onChange={(e) => patch({ op: e.target.value as typeof agg.op })}>
-                <option value="avg">average of</option>
-                <option value="sum">sum of</option>
-                <option value="min">smallest</option>
-                <option value="max">largest</option>
-                <option value="count">how many answered</option>
-                <option value="countIf">how many match a rule</option>
-              </select>
-              <select className="select" data-testid="loop-agg-question" value={agg.questionRef}
-                onChange={(e) => patch({ questionRef: e.target.value })}>
-                <option value="">— question —</option>
-                {def.questions.map((x) => <option key={x.id} value={x.code}>{x.code}</option>)}
-              </select>
-              <button className="btn small danger" title="Remove this result"
-                onClick={() => set({ aggregates: (node.aggregates ?? []).filter((_, j) => j !== i) })}>×</button>
-              {agg.op === "countIf" && (
-                <div style={{ flexBasis: "100%" }}>
-                  <LoopScopeProvider loops={scope}>
-                    <OptionalCondition
-                      label="count an iteration when"
-                      workspace={{ title: "Loop aggregate — count an iteration when", subject: node.loopVar, description: "Count an iteration toward this aggregate when the following condition is met:" }}
-                      value={agg.where}
-                      onChange={(c: Condition | undefined) => patch({ where: c })}
-                      hint="evaluated once per iteration, in that iteration's context"
-                    />
-                  </LoopScopeProvider>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {/*
+          * Control flow, in the order it runs: skip filters items out before
+          * the loop starts; break stops the loop part-way through. Both sit
+          * with eligibility because all three decide which iterations exist.
+          */}
+        <OptionalCondition
+          label="Leave an item out when…"
+          workspace={{ title: "Loop — leave an item out when…", subject: node.loopVar, description: "Skip the item (no iteration) when the following condition is met:" }}
+          value={node.skipIf}
+          onChange={(c: Condition | undefined) => set({ skipIf: c })}
+          hint="The item is not asked about at all. Example: leave out “Other”."
+        />
+        <OptionalCondition
+          label="Stop repeating once…"
+          workspace={{ title: "Loop — stop repeating once…", subject: node.loopVar, description: "Stop after this iteration when the following condition is met:" }}
+          value={node.breakIf}
+          onChange={(c: Condition | undefined) => set({ breakIf: c })}
+          hint="Checked after each round, on the answers just given: that round is kept, later ones are not asked. Example: stop once a rating is 5."
+        />
+      </LoopScopeProvider>
+
+      {/* ------------------------------------------------ source re-evaluation */}
+      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <span className="flabel" style={{ margin: 0 }}>If earlier answers change</span>
+        <select className="select" data-testid="loop-resolve-source"
+          value={node.resolveSource ?? "reevaluate"}
+          onChange={(e) => set({ resolveSource: e.target.value as "reevaluate" | "once" })}>
+          <option value="reevaluate">update the list (rounds are added or removed)</option>
+          <option value="once">keep the list as it was when they first got here</option>
+        </select>
+        <span className="muted" style={{ fontSize: 12.5 }}>
+          {node.resolveSource === "once"
+            ? "If the respondent goes back and changes the answers this list comes from, the rounds already answered stay as they are."
+            : "If the respondent goes back and changes the answers this list comes from, the loop follows."}
+        </span>
       </div>
 
+        <h4 className="loop-more-h">Extra facts and totals</h4>
       {/* ------------------------------------------------ references */}
       <div className="loop-refs" data-testid="loop-references">
         <div className="row" style={{ alignItems: "baseline" }}>
-          <strong style={{ fontSize: 14 }}>Loop references</strong>
+          <strong style={{ fontSize: 14 }}>Item details</strong>
           <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
-            columns this loop defines for its items — {sourceQuestion ? `${sourceQuestion.code} itself is not changed` : "scoped to this loop only"}
+            extra facts about each item (a price, a nickname, a category) to show in the questions or use in rules — {sourceQuestion ? `${sourceQuestion.code} itself is not changed` : "they belong to this loop only"}
           </span>
           <span className="grow" />
           <button className="btn small" data-testid="loop-import-toggle" onClick={() => setImportOpen((v) => !v)}>{importOpen ? "close import" : "Import…"}</button>
@@ -592,11 +558,94 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
         </p>
       </div>
 
+      {/* ------------------------------------------------ aggregates */}
+      <div className="loop-refs" data-testid="loop-aggregates" style={{ marginBottom: 12 }}>
+        <div className="row" style={{ alignItems: "baseline" }}>
+          <strong style={{ fontSize: 14 }}>Totals across the rounds</strong>
+          <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
+            one figure worked out from all the rounds — an average rating, a count — to use after the loop
+          </span>
+          <span className="grow" />
+          <button className="btn small" data-testid="loop-add-aggregate"
+            onClick={() => set({
+              aggregates: [...(node.aggregates ?? []),
+                { name: `RESULT_${(node.aggregates?.length ?? 0) + 1}`, questionRef: "", op: "avg" as const }],
+            })}>+ total</button>
+        </div>
+        {(node.aggregates ?? []).length === 0 && (
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
+            None yet. Example: the average of a rating asked in every round, ready to use in logic or piping after the loop
+            (stored as <span className="mono">{loopVariablePrefix(node, null)}_AVG_SCORE</span>).
+          </div>
+        )}
+        {(node.aggregates ?? []).map((agg, i) => {
+          const patch = (p: Partial<typeof agg>) => set({
+            aggregates: (node.aggregates ?? []).map((a, j) => (j === i ? { ...a, ...p } : a)),
+          });
+          return (
+            <div className="row" key={i} style={{ flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
+              <span className="mono muted" style={{ fontSize: 12 }}>{loopVariablePrefix(node, null)}_</span>
+              <input className="input mono" style={{ width: 130 }} data-testid="loop-agg-name"
+                value={agg.name} onChange={(e) => patch({ name: e.target.value.toUpperCase() })} />
+              <select className="select" data-testid="loop-agg-op" value={agg.op}
+                onChange={(e) => patch({ op: e.target.value as typeof agg.op })}>
+                <option value="avg">average of</option>
+                <option value="sum">sum of</option>
+                <option value="min">smallest</option>
+                <option value="max">largest</option>
+                <option value="count">how many answered</option>
+                <option value="countIf">how many match a rule</option>
+              </select>
+              <select className="select" data-testid="loop-agg-question" value={agg.questionRef}
+                onChange={(e) => patch({ questionRef: e.target.value })}>
+                <option value="">— question —</option>
+                {def.questions.map((x) => <option key={x.id} value={x.code}>{x.code}</option>)}
+              </select>
+              <button className="btn small danger" title="Remove this result"
+                onClick={() => set({ aggregates: (node.aggregates ?? []).filter((_, j) => j !== i) })}>×</button>
+              {agg.op === "countIf" && (
+                <div style={{ flexBasis: "100%" }}>
+                  <LoopScopeProvider loops={scope}>
+                    <OptionalCondition
+                      label="count a round when"
+                      workspace={{ title: "Loop aggregate — count an iteration when", subject: node.loopVar, description: "Count an iteration toward this aggregate when the following condition is met:" }}
+                      value={agg.where}
+                      onChange={(c: Condition | undefined) => patch({ where: c })}
+                      hint="evaluated once per iteration, in that iteration's context"
+                    />
+                  </LoopScopeProvider>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+        <h4 className="loop-more-h">Name and data</h4>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+          <label className="row" style={{ gap: 6 }}><span className="flabel" style={{ margin: 0 }}>Loop name</span>
+            <input className="input mono" data-testid="loop-var" style={{ width: 130 }} value={node.loopVar}
+              onChange={(e) => set({ loopVar: e.target.value.replace(/[^A-Za-z0-9_]/g, "") })} />
+          </label>
+          <span className="muted" style={{ fontSize: 12.5 }}>
+            Used when another loop sits inside this one (<code>{`{{${node.loopVar || "name"}.label}}`}</code>) and in the data: <code>{prefix}_COUNT</code>, <code>{prefix}_ITEM_1</code>, <code>{prefix}_ITEM_1_CODE</code>{columns.length ? <>, <code>{prefix}_ITEM_1_{columns[0].name.toUpperCase()}</code>…</> : null}.
+          </span>
+        </div>
+      {/* ------------------------------------------------ as one statement */}
+      <details className="qs-details" data-testid="loop-statement" style={{ marginBottom: 12 }}>
+        <summary>Technical summary (for programmers)</summary>
+        <pre className="mono" style={{ fontSize: 12.5, margin: "6px 0 0", whiteSpace: "pre-wrap" }} data-testid="loop-statement-text">{describeLoop(def, node)}</pre>
+        <div className="muted" style={{ fontSize: 12 }}>Read from the configuration above, in the same grammar the condition and mask expression tabs use. Edit the loop with the controls; the statement follows.</div>
+      </details>
+
+        </div>
+      </details>
+
       {/* ------------------------------------------------ simulator */}
       <div className="loop-sim" data-testid="loop-simulator" style={{ marginTop: 12 }}>
         <div className="row">
-          <button className="btn small" data-testid="loop-sim-toggle" onClick={() => setSimOpen((v) => !v)}>{simOpen ? "▾" : "▸"} Loop simulator</button>
-          <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>what this loop does for a respondent who answers as below — the runtime’s own resolution, not a mock</span>
+          <button className="btn small" data-testid="loop-sim-toggle" onClick={() => setSimOpen((v) => !v)}>{simOpen ? "▾" : "▸"} Try it</button>
+          <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>pick a respondent’s answers and see exactly which rounds they would get, in order</span>
         </div>
         {simOpen && (
           <div style={{ marginTop: 8 }}>

@@ -176,7 +176,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
           <option value="calc">Calculated value</option>
           <option value="embedded">Embedded data / URL parameter</option>
           <option value="loop">Loop item</option>
-          <option value="expr">Expression (calc DSL)</option>
+          <option value="expr">Typed calculation</option>
         </select>
       </label>
 
@@ -270,9 +270,9 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
               <option value="label">item label</option>
               <option value="code">item code</option>
               <option value="index">position (1, 2, …)</option>
-              <option value="count">number of iterations</option>
-              <option value="first">is first iteration (true/false)</option>
-              <option value="last">is last iteration (true/false)</option>
+              <option value="count">number of rounds</option>
+              <option value="first">is the first round (true/false)</option>
+              <option value="last">is the last round (true/false)</option>
               {(scopedLoop?.references?.columns ?? []).length > 0 && (
                 <optgroup label={`Reference columns of “${scopedLoop!.loopVar}”`}>
                   {scopedLoop!.references!.columns.map((c) => (
@@ -283,7 +283,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
             </select>
           </label>
           {loopScope.length === 0 && (
-            <p className="muted" style={{ fontSize: 12.5 }}>This question is not inside a loop, so a loop token here will render empty.</p>
+            <p className="muted" style={{ fontSize: 12.5 }}>This question is not inside a loop, so a loop value placed here will show nothing.</p>
           )}
         </>
       )}

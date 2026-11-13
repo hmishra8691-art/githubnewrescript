@@ -146,7 +146,7 @@ export function QuotasPanel({ focusQuotaId }: { focusQuotaId?: string } = {}) {
               onChange={(e) => s.update((d) => { d.quotas[qi].name = e.target.value; })} />
             <select className="select" value={qt.mode}
               onChange={(e) => s.update((d) => { d.quotas[qi].mode = e.target.value as any; })}>
-              <option value="hard">hard</option><option value="soft">soft</option>
+              <option value="hard">hard — stops respondents when full</option><option value="soft">soft — never stops anyone, only marks them</option>
             </select>
             <label className="row" style={{ gap: 4, whiteSpace: "nowrap", flex: "0 0 auto" }}>target total
               <CountInput value={qt.targetTotal} width={110} data-testid={`quota-target-total-${qi}`}
@@ -154,9 +154,9 @@ export function QuotasPanel({ focusQuotaId }: { focusQuotaId?: string } = {}) {
             </label>
             <select className="select" value={qt.onFull.kind}
               onChange={(e) => s.update((d) => { d.quotas[qi].onFull.kind = e.target.value as any; })}>
-              <option value="terminate">terminate</option>
-              <option value="redirect">redirect</option>
-              <option value="flag">flag</option>
+              <option value="terminate">when full: end the survey</option>
+              <option value="redirect">when full: send to a link</option>
+              <option value="flag">when full: continue, marked over quota</option>
               <option value="warn">warn</option>
             </select>
             <span className="grow" />
