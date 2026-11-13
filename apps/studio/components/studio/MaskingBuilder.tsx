@@ -811,14 +811,14 @@ function PunchRulesBody({ q, patch, draft }: {
 
   return (
     <div className="mb-punch">
-      <h3 className="sec" style={{ marginTop: 16 }}>Auto punch (option → option)</h3>
+      <h3 className="sec" style={{ marginTop: 16 }}>Select automatically, option by option (auto punch)</h3>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
         “If an option is selected elsewhere, select / deselect / show / hide an option here.”
         Also listed survey-wide in the Logic tab.
       </p>
       <AutoPunchRows q={q} draft={draft} onChange={inWorkspace ? (punches) => patch({ punches }) : undefined} />
 
-      <h3 className="sec" style={{ marginTop: 16 }}>Auto-select from a set (punching)</h3>
+      <h3 className="sec" style={{ marginTop: 16 }}>Select automatically from another question’s answers</h3>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
         Tick options in this question from another question&apos;s answers. Codes that match
         carry across; use a mapping when the two lists number things differently. A matrix or

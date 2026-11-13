@@ -2792,3 +2792,10 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
   border: 1px solid var(--c-error-bd); background: var(--c-error-bg); color: var(--c-error-fg);
   border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
 }
+/* the answer list's goal builder: "Show [only the answers they chose at] [Q1]" (listGoals.ts) */
+.alr-goal { margin: 4px 0 8px; padding: 8px 10px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface-2); }
+.alr-goal-word { font-weight: 600; font-size: 13px; }
+.alr-goal .select.small { width: auto; max-width: 100%; }
+.alr-goal-preview { margin: 6px 0 0; font-size: 12.5px; }
+.alr-goal-preview.warn { color: var(--c-warning-fg); }
+.alr-goal-note { color: var(--c-warning-fg); }

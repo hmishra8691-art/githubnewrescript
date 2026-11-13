@@ -124,6 +124,9 @@ console.log("\nANSWER LIST RULES — one group, in applied order, overlaps named
   await page.waitForSelector('[data-testid="alr-plain"]');
   assert.match(await page.innerText('[data-testid="answer-list-overview"]'), /shows its own options, as written/);
   assert.equal(await page.locator('[data-testid^="alr-tool-"]').count(), 4);
+  /* the four tools sit behind "Something else?" since 2026-11-13 — the goal builder comes first */
+  assert.ok(await page.isVisible('[data-testid="alr-goal"]'), "a plain question offers the goal builder first");
+  await page.click('[data-testid="alr-guide"] > summary');
   await page.click('[data-testid="alr-tool-list-logic"]');
   await page.waitForSelector('[data-testid="psec-body-list-logic"] [data-testid="list-logic-strip"]');
   ok("a question with no rules says so and offers “Which one do I need?” — each choice opens its section");

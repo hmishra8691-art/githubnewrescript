@@ -351,7 +351,7 @@ function AddRule({ defaultTarget, onAdd }: {
   return (
     <div className="ap-add" data-testid="ap-add">
       <div className="row" style={{ alignItems: "center" }}>
-        <button className="btn small" data-testid="ap-add-simple" disabled={qs.length === 0} onClick={addSimple}>+ auto punch rule</button>
+        <button className="btn small" data-testid="ap-add-simple" disabled={qs.length === 0} onClick={addSimple}>+ select automatically when…</button>
         <span className="muted" style={{ fontSize: 12.5 }}>or type one:</span>
         <input className="input mono grow" data-testid="ap-add-expression" placeholder={example} value={text}
           onChange={(e) => { setText(e.target.value); setErr(null); }}
@@ -380,7 +380,7 @@ export function AutoPunchPanel() {
         run when that question is reached — or immediately when both are on the same page. The
         condition is ordinary survey logic: AND / OR / NOT and brackets all work.
       </p>
-      {all.length === 0 && <div className="muted" style={{ fontSize: 13, margin: "6px 0" }} data-testid="ap-empty">No auto punch rules yet.</div>}
+      {all.length === 0 && <div className="muted" style={{ fontSize: 13, margin: "6px 0" }} data-testid="ap-empty">Nothing is selected automatically yet.</div>}
       {all.map(({ target, rule }) => (
         <SimpleRow key={rule.id} target={target} rule={rule}
           onChange={(next) => ops.replaceRule(target.id, next)}

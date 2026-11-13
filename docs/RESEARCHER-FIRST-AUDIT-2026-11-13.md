@@ -62,7 +62,29 @@ Option labels were reworded, values unchanged:
 Engine: `packages/engine/src/listFillGuide.ts` (`listFillPlainSummary`, `listFillChecks`, `LIST_FILL_METHOD_WORDS`,
 `LIST_FILL_COMMON_METHODS`). Stored values and `data-testid`s unchanged; the grid's input cells gained `data-col`.
 
-## 4. Assessed, not changed yet
+## 4. Answer list rules — goal first (third pass, patch 0155)
+
+A researcher thinks "only the brands they chose at Q1", not "carry-forward" or "list logic" — and which of the two is
+right depends on something they should not have to check: whether this question already has Q1's answer list.
+
+| Before | After |
+|---|---|
+| A question with no rules opened on "Which one do I need?" and four tools to read about | It opens on one line: **Show** [only the answers they chose at] [Q1] **Apply** — with the nearest earlier multi-select already chosen and only earlier questions offered |
+| The researcher chose the tool | The engine chooses: list logic (keep / remove / move to the top) when the question shares Q1's answers; carry-forward when it has none of its own; carry-forward with a note when its own answers differ |
+| Nothing said what a rule would do until it was stored | "This will: Keeps only the options selected at Q1. (list logic)" — the overview's own sentence, before anything is stored |
+| Rules could be added that duplicate one already there, or a second carry-forward | Refused, with the reason ("This question already does that.", "…already copies its list from Q1…") |
+| "+ carry forward from another question" started from the first question with options anywhere in the survey — possibly a later one | It starts from the nearest earlier multi-select |
+| "Auto punch" / "punching" headings | "Select answers automatically (auto punch)", "Select automatically, option by option (auto punch)", "Select automatically from another question’s answers"; the technical name stays in brackets so search and documentation still match |
+
+The four tools are still all there, under "Something else? All four tools" on a plain question and "Which one do I
+need?" once a rule exists; with a rule in place the goal line moves under "Add another rule". The rule the goal line
+adds is an ordinary rule of its tool. Engine: `packages/engine/src/listGoals.ts` (`applyListGoal`,
+`suggestListSource`, `listGoalSources`, `sharesAnswerList`, `LIST_GOALS`).
+
+Masking (calculated sets from several questions) and list operations are not reachable from the goal line: they
+answer questions that do not fit one sentence. They keep their own sections.
+
+## 5. Assessed, not changed yet
 
 Priority is by how much a non-programmer is likely to be stopped. Control counts are the form controls in the
 component's source, as a rough measure of what is on screen.
@@ -70,7 +92,6 @@ component's source, as a rough measure of what is on screen.
 | Module | Where | Finding | Priority | Proposed change |
 |---|---|---|---|---|
 | Display / skip logic | `ConditionBuilder.tsx` (20 controls), `LogicDialog.tsx` | Builder is sound and already summarises a condition in words. The "Expression" mode sits beside the builder as an equal choice; operators lists are long | Medium | Keep the builder as the default; move "Expression" under an "Advanced" link; show the plain-language reading above the builder, not only on the card |
-| Masking / list logic / carry-forward | `MaskingBuilder.tsx` (20 controls), `CarriedOptionsPanel.tsx`, `OptionLogicEditor.tsx` | Four related tools were given numbered plain titles in patch 0149, but "Auto punch", "punching" and "set expression" remain, and a researcher still has to know which of the four to open | High | One entry question — "Which answers should this question show?" — that routes to the right tool; rename "auto punch" to "select automatically" |
 | Quotas | `QuotasPanel.tsx` | Compact, but cell conditions are shown as generated text with no way to see which cells are unreachable | Medium | Sentence per quota ("Stops at 200 men aged 18–34"), checks for cells that can never fill. The "warn" when-full choice was left as is: its runtime meaning needs confirming before it is reworded |
 | Embedded data | `EmbeddedDataEditor` | Name, type, source, value, default and condition per field. "Embedded data" itself is platform jargon | Medium | Call it "Saved values" in the UI with "embedded data" kept as a searchable alias; hide type (Auto) and default under More |
 | Randomizer balance | `BalanceSettings`, `RandomizerDesignSettings` | Basis, claim order, per-quota-cell balance, abandonment timeout and weights are visible as soon as "even presentation" is ticked | Medium | Fold under More options; the defaults are already correct |
@@ -79,7 +100,7 @@ component's source, as a rough measure of what is on screen.
 | Piping | `PipingPicker.tsx`, `InsertPipedText.tsx` | Picker is clear; token syntax is shown raw in the text | Low | Already renders chips in the rich editor; no change proposed |
 | Custom scripts | `LegacyScripts.tsx`, code panels | Intended for programmers | None | Leave as is, keep out of the default path |
 
-## 5. What was and was not verified
+## 6. What was and was not verified
 
 Verified by automated tests in this pass:
 
@@ -99,6 +120,14 @@ List Fill pass:
   twelve, nothing written by opening panels, the empty-list check, and the rows added when a source is chosen.
 - `scripts/listfill-test.mjs` passes in full (23, Studio and respondent halves, both servers).
 - Studio half of `scripts/listfill-least-test.mjs` (3) passes; its respondent half was not run.
+
+Answer list pass:
+
+- Engine: `listGoals.test.ts` (4) — the suggested source, the tool chosen for each case, the sentences, the refusals,
+  and that asking stores nothing.
+- Browser, Studio only: `scripts/list-goal-test.mjs` (6); `scripts/platform-upgrade-nov15-test.mjs` (15, updated for
+  the tools moving behind “Something else?”); `scripts/properties-accordion-test.mjs` (search for "punch" still finds
+  the renamed section); the Studio half of `scripts/autopunch-media-test.mjs` (3).
 
 Not verified:
 

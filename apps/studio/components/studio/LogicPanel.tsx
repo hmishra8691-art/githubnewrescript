@@ -576,7 +576,7 @@ export function LogicPanel() {
       <h3 className="sec">Named expressions</h3>
       <NamedExpressionsPanel />
 
-      <h3 className="sec">Auto punch (option → option)</h3>
+      <h3 className="sec">Select automatically, option by option (auto punch)</h3>
       <AutoPunchPanel />
 
       <h3 className="sec">Display rules (show/hide anything)</h3>

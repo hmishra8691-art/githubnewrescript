@@ -15,6 +15,8 @@ ResLens.ai has three ways to build the list a question shows from what came befo
 
 In a question's properties these sit together under **Answer list rules**, numbered in the order they are applied: **1** copy the list from another question (carry-forward), **2** keep, remove or reorder by an earlier answer (list logic), **3** show a calculated set (masking), **4** extra list steps (list operations). The overview above them states, in plain words, what the question's list is doing right now, and flags rules that overlap or contradict each other — for example a "keep only" and a "remove" rule on the same answers, or a calculated set and a list step that both filter the list.
 
+The quickest way in is to say what the list should show. On a question with no rules yet, **Answer list rules** opens on one line — **Show** *only the answers they chose at* *Q1* — with the nearest earlier multi-select already chosen. It says what it will do before you press **Apply**, and picks the right tool for you: list logic when this question already has the same answers as Q1, carry-forward when it has none of its own. The rule it adds is an ordinary rule of that tool, changed in its own section afterwards. Once a question has a rule, the same line is under **Add another rule**.
+
 ## When to use it
 
 - **List logic** — "Which *other* supermarkets do you use?" without the main one.

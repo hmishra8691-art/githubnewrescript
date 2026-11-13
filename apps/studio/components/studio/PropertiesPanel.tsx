@@ -2,7 +2,7 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { LIST_RULE_TOOLS, headerRepeatApplies, gridAxes, displayedListCanVary, carryForwardDestinations, normalizeCarryForwardInto, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput, conditionSummary, stripHtmlText, codeGate } from "@rescript/engine";
+import { LIST_RULE_TOOLS, headerRepeatApplies, gridAxes, displayedListCanVary, carryForwardDestinations, normalizeCarryForwardInto, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput, conditionSummary, stripHtmlText, codeGate, suggestListSource } from "@rescript/engine";
 import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES, effectiveResponseModel } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { DefaultValueBox } from "./DefaultValueBox";
@@ -1867,7 +1867,8 @@ function PropertiesPanelBody() {
           onClick={() => patch({
             carryForward: {
               /* a source with a list to carry, when there is one (B47) */
-              sourceQuestionId: (s.def.questions.find((x) => x.id !== q.id && (shapeHasAxis(x, "options") || shapeHasAxis(x, "rows")))
+              /* the nearest earlier multi-select (listGoals.ts); else a source with a list to carry, when there is one (B47) */
+              sourceQuestionId: suggestListSource(s.def, q.id) ?? (s.def.questions.find((x) => x.id !== q.id && (shapeHasAxis(x, "options") || shapeHasAxis(x, "rows")))
                 ?? s.def.questions.find((x) => x.id !== q.id)!).id,
               filter: "selected", into: carryForwardDestinations(q)[0]?.value ?? "options", keepOwn: false,
             },
@@ -1942,8 +1943,8 @@ function PropertiesPanelBody() {
        * not just the choice-like types masking applies to), so it is not
        * gated behind masking's capability check.
        */}
-      {showSec("Auto punch") && (
-      <CollapsibleSection id="auto-punch" title="Auto punch" active={(q.punches?.length ?? 0) > 0}>
+      {showSec("Select answers automatically (auto punch)") && (
+      <CollapsibleSection id="auto-punch" title="Select answers automatically (auto punch)" active={(q.punches?.length ?? 0) > 0}>
       <PunchRules q={q} patch={patch} />
       </CollapsibleSection>
       )}
