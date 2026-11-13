@@ -2718,3 +2718,43 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .iqx-panel { border: 1px solid var(--c-border); border-radius: 8px; padding: 10px 14px; background: var(--c-surface); font-size: 13px; }
 .iqx-panel p { margin: 8px 0 2px; }
 .iqx-answered { font-size: 12.5px; }
+
+/* ANSWER LIST RULES (2026-11-15): the overview above carry-forward, list logic, masking and list operations */
+.alr { padding: 12px 14px; margin: 10px 0 8px; }
+.alr-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.alr-plain { font-size: 12.5px; margin: 6px 0 4px; }
+.alr-steps { margin: 4px 0 6px; padding: 0; list-style: none; display: grid; gap: 4px; }
+.alr-link { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 4px 6px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.alr-link:hover, .alr-link:focus-visible { background: var(--c-surface-2); }
+.alr-num { flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 600; background: var(--c-primary-100); color: var(--c-text-2); }
+.alr-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; padding: 7px 9px; border-radius: 8px; margin-top: 6px; border: 1px solid var(--c-border); }
+.alr-note.conflict { border-color: var(--c-error); }
+.alr-note.overlap { border-color: var(--c-warning); }
+.alr-note-tag { font-weight: 600; text-transform: uppercase; font-size: 10.5px; letter-spacing: .05em; }
+.alr-note.conflict .alr-note-tag { color: var(--c-error-fg); }
+.alr-note.overlap .alr-note-tag { color: var(--c-warning-fg); }
+.alr-guide { margin-top: 8px; font-size: 13px; }
+.alr-guide summary { cursor: pointer; color: var(--c-text-2); }
+.alr-guide ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.alr-use { font-size: 12.5px; padding-left: 32px; }
+
+/* PUBLISH DIALOG (2026-11-15) */
+.modal.pub { width: min(560px, calc(100vw - 32px)); }
+.pub h3 { margin: 0; }
+.pub-facts { margin: 14px 0 4px; display: grid; gap: 8px; }
+.pub-facts > div { display: grid; grid-template-columns: 150px 1fr; gap: 10px; font-size: 13.5px; }
+.pub-facts dt { color: var(--c-text-3); }
+.pub-facts dd { margin: 0; overflow-wrap: anywhere; }
+.pub-problems { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px; background: var(--c-error-bg); border: 1px solid var(--c-error-bd); color: var(--c-error-fg); display: grid; gap: 6px; }
+.pub-problems ul { margin: 0; padding-left: 18px; }
+.pub-ok { display: flex; gap: 12px; align-items: center; }
+.pub-ok-mark { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--c-success-bg); color: var(--c-success-fg); border: 1px solid var(--c-success-bd); font-size: 20px; font-weight: 700; }
+.pub-ok p { margin: 2px 0 0; }
+.pub-url { display: grid; gap: 6px; margin-top: 16px; font-size: 13px; color: var(--c-text-2); font-weight: 600; }
+.pub-note { margin: 14px 0; padding: 10px 12px; border-radius: 10px; font-size: 13.5px; background: var(--c-info-bg); color: var(--c-info-fg); }
+.pub-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+@media (max-width: 520px) { .pub-facts > div { grid-template-columns: 1fr; gap: 2px; } }
+
+/* DELETION PROTECTION notice (2026-11-15): same place as the save panel, but it reports something done, not refused */
+.save-blocker.data-protect { border-color: var(--c-warning-bd); }
+.save-blocker.data-protect .save-blocker-head { color: var(--c-warning-fg); }

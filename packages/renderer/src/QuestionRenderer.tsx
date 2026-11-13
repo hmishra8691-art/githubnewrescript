@@ -62,7 +62,7 @@ import { announceSelection } from "./optionPopup";
 import { CellMultiDropdown } from "./cellMultiDropdown";
 import { TimeSelects } from "./TimeSelects";
 import { enhanceMediaCarousels } from "./mediaCarousel";
-import { ZoomProvider, Zoomable, ZoomButton, useZoom, enhanceZoomableImages } from "./Lightbox";
+import { ZoomProvider, Zoomable, useZoom, enhanceZoomableImages } from "./Lightbox";
 import { CardFace, cardFrameClass } from "./CardFace";
 import { programmerCardClass, HiddenQuestionHead, ProgrammerFoot, type ProgrammerView } from "./programmerView";
 import { DefaultsNote } from "./defaultsNote";
@@ -1633,7 +1633,6 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
             role={p.multi || p.ranking ? "checkbox" : "radio"} aria-checked={sel} tabIndex={0}
             aria-label={`${o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")}${p.ranking && sel ? `, ranked ${idx + 1}` : ""}`}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); click(o); } }}>
-            <ZoomButton src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
@@ -2958,7 +2957,6 @@ export function CompareImages(p: QRProps) {
             role="radio" aria-checked={sel} tabIndex={0}
             onClick={() => p.onChange(sel ? null : o.code)}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onChange(sel ? null : o.code); } }}>
-            <ZoomButton src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} style={{ height: 220 }}/>
@@ -3088,7 +3086,7 @@ function TextZoom({ deps }: { deps: unknown[] }) {
   const z = useZoom();
   const ref = React.useRef<HTMLSpanElement>(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  React.useEffect(() => enhanceZoomableImages(ref.current?.closest<HTMLElement>(".rs-card") ?? null, z && z.mode !== "off" ? z.open : null), [z, ...deps]);
+  React.useEffect(() => enhanceZoomableImages(ref.current?.closest<HTMLElement>(".rs-card") ?? null, z && z.mode !== "off" ? z.open : null, z?.mode ?? "off"), [z, ...deps]);
   return <span ref={ref} hidden aria-hidden />;
 }
 

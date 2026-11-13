@@ -40,7 +40,7 @@ import { STUDIO_NAV } from "@/lib/studioNav";
 import { HelpAssistant } from "@/components/help/HelpAssistant";
 import type { HelpContext } from "@/lib/help/compose";
 import { setPendingIntelligentInput } from "@/lib/intelligent/pendingInput";
-import { conditionSummary, stripHtmlText } from "@rescript/engine";
+import { conditionSummary, stripHtmlText, DATA_PROTECTION_NOTICE, DATA_PROTECTION_DONE, describeProtected } from "@rescript/engine";
 import { LocalizationPanel } from "./localization/LocalizationPanel";
 import { UsagePanel, useMeterView } from "./UsagePanel";
 import { WalletMenu } from "../billing/WalletMenu";
@@ -49,6 +49,7 @@ import { fmtMoney } from "@/components/billing/shared";
 import { ModeProvider } from "./ModeContext";
 import { SelectionProvider } from "./SelectionContext";
 import { CommandProvider, useCommands, type LaunchResult, type ShellActions } from "./CommandContext";
+import { PublishDialog } from "./PublishDialog";
 import { CommandPalette } from "./CommandPalette";
 import { MenuBar } from "./MenuBar";
 import { useMode } from "./ModeContext";
@@ -367,6 +368,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
   const session = useSession();
   // ?tab=data lets the dashboard link straight to a survey's responses
   const [exportOpen, setExportOpen] = React.useState(false);
+  const [publishOpen, setPublishOpen] = React.useState(false);
   const [tab, setTab] = React.useState<Tab>(() => {
     if (typeof window === "undefined") return "questions";
     const t = new URLSearchParams(window.location.search).get("tab");
@@ -579,6 +581,11 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
       s.markSaved(d.id, typeof d.revision === "number" ? d.revision : null, { saved: posted, version: d.version });
       setPublishState(null); // the gap to live has changed
       s.toast(`Saved version ${d.version} (${d.variables} variables)`);
+      /* live responses exist and the server kept something this editor had removed: the saved version has it, hidden */
+      if (Array.isArray(d.dataProtected) && d.dataProtected.length) {
+        s.refreshDataLock();
+        s.toast("This survey has live responses, so the saved version keeps (hidden) the elements that were removed here. Reload to see them.", "err");
+      }
       return d.id as string;
     } finally {
       savingRef.current = false;
@@ -796,6 +803,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) return { ok: false, error: d.error ?? "The version was saved, but publishing it to the live link failed.", ...(Array.isArray(d.lint?.problems) ? { problems: d.lint.problems } : {}) };
       void loadPublishState();
+      s.refreshDataLock();
       s.toast(`Published v${defRef.current.meta.version} to the live link`);
       return { ok: true, url: `${surveyBaseUrl(dep.customDomain)}/s/${clientSlug}/${studySlug}`, version: defRef.current.meta.version };
     } catch (e) {
@@ -939,10 +947,15 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             </span>
           </a>
         )}
-        <button className="btn primary" disabled={saving || roWrite} onClick={() => save()}
+        <button className="btn" disabled={saving || roWrite} onClick={() => save()}
           {...(roWrite ? { title: "Enter edit mode to save a version" } : {})}
           title="Save an immutable snapshot; the next version number is assigned by the server">
           {saving ? "Saving…" : "Save version"}
+        </button>
+        {/* PUBLISH (2026-11-15): always here, published or not — the live link changes only through this */}
+        <button className="btn primary" data-testid="publish-open" disabled={saving} onClick={() => setPublishOpen(true)}
+          title={live ? `Live now: version ${live.version}. Publish to make the survey you are editing the live one.` : "Make this survey live and get the link to send to respondents"}>
+          <Icon name="export" size={15} /> Publish
         </button>
       </div>
       {/*
@@ -981,7 +994,27 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           </div>
         </div>
       )}
+      {s.dataProtectNotice && (
+        <div className="save-blocker data-protect" role="alert" data-testid="data-protect-notice">
+          <div className="save-blocker-head">
+            <strong>Hidden, not deleted</strong>
+            <button className="btn small" data-testid="data-protect-close" onClick={() => s.dismissDataProtectNotice()}>OK</button>
+          </div>
+          <p className="save-blocker-msg" data-testid="data-protect-why">{DATA_PROTECTION_NOTICE}</p>
+          <p className="save-blocker-msg" data-testid="data-protect-done">
+            <strong>{DATA_PROTECTION_DONE}</strong>
+          </p>
+          <p className="save-blocker-msg muted" data-testid="data-protect-what">Kept: {describeProtected(s.dataProtectNotice.items)}. You can still edit its wording, or show it again from its settings.</p>
+        </div>
+      )}
       {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
+      {publishOpen && (
+        <PublishDialog def={s.def}
+          live={live ? { version: live.version, url: `${surveyBaseUrl(s.def.deployment.customDomain)}/s/${live.client_slug}/${live.study_slug}` } : null}
+          publish={launch} onClose={() => setPublishOpen(false)}
+          onOpenChecks={() => { setPublishOpen(false); setTab("logic"); }}
+          disabledReason={roWrite ? "You are viewing this project read-only. Enter edit mode to publish." : null} />
+      )}
       {helpOpen && (
         <div className="hx-drawer" role="dialog" aria-label="Help" data-testid="studio-help-drawer">
           <div className="hx-drawer-head">

@@ -1466,6 +1466,23 @@ p.qs-help { margin: -2px 0 10px; }
   animation: pop-in var(--dur-3) var(--ease);
 }
 .auth-card.wide { max-width: 560px; }
+/* the sign-in page: what the product is beside the form (2026-11-15); the form alone under 900px, pitch above it */
+.auth-shell.split { grid-template-columns: minmax(0, 520px) minmax(0, 460px); justify-content: center; align-items: center; gap: 56px; }
+.auth-pitch { max-width: 520px; }
+.auth-pitch-eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; color: var(--c-primary-600); }
+.auth-pitch-title { font-size: 38px; line-height: 1.12; font-weight: 750; letter-spacing: -.025em; margin: 12px 0 14px; color: var(--c-text); }
+.auth-pitch-sub { font-size: 16px; line-height: 1.6; color: var(--c-text-2); margin: 0 0 24px; }
+.auth-pitch-stages { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; counter-reset: stage; }
+.auth-pitch-stages li { counter-increment: stage; display: grid; gap: 2px; padding: 12px 14px; border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-surface); }
+.auth-pitch-stages strong { font-size: 14px; color: var(--c-text); }
+.auth-pitch-stages strong::before { content: counter(stage) "  "; color: var(--c-text-4); font-variant-numeric: tabular-nums; font-weight: 600; }
+.auth-pitch-stages span { font-size: 13px; line-height: 1.45; color: var(--c-text-3); }
+@media (max-width: 1000px) {
+  .auth-shell.split { grid-template-columns: minmax(0, 460px); gap: 24px; align-content: center; }
+  .auth-pitch-title { font-size: 26px; }
+  .auth-pitch-sub { font-size: 14.5px; margin-bottom: 0; }
+  .auth-pitch-stages { display: none; }
+}
 .auth-brand { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--c-text-3); font-weight: 700; display: flex; align-items: center; gap: 10px; }
 .auth-brand::before { content: "R"; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--grad-brand); color: var(--c-on-primary); font-size: 15px; font-weight: 800; letter-spacing: 0; box-shadow: 0 4px 12px -4px rgba(23, 20, 63,.6); }
 .auth-title { font-size: 26px; font-weight: 750; letter-spacing: -.02em; margin: 16px 0 6px; }

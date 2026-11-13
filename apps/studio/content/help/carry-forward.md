@@ -13,7 +13,7 @@ Brand funnels (aware → used → preferred), rating only the products someone o
 
 ## How to set it up
 1. Select the later question (Q2 “Which have you used?”).
-2. Open **Carry-forward (dynamic options)** in the properties panel and click **+ carry forward from another question**.
+2. Open **1 · Copy the list from another question (carry-forward)** in the properties panel and click **+ carry forward from another question**.
 3. Choose the source question (Q1) and what to carry: **selected options**, **NOT selected options**, **displayed options** or **all options** (for a grid source: answered, unanswered, displayed or all rows).
 4. Choose where the items go in this question (its options, or a grid's rows/columns), and whether to keep this question's own options as well (useful for “None of these”).
 5. Test with **Test Survey** — select two brands at Q1 and check that Q2 shows exactly those.
@@ -26,6 +26,6 @@ Q1 (multi-select, aware of) → Q2 (multi-select, used): carry forward **selecte
 - Different codes in source and target: carried items keep the source's codes, which is what makes the data line up.
 
 ## Alternatives
-- **List logic (from previous questions)** keeps a question's own fixed list but includes or excludes options by what was selected earlier — choose it when the later question has its own options.
+- **2 · Keep, remove or reorder by an earlier answer (list logic)** keeps a question's own fixed list but includes or excludes options by what was selected earlier — choose it when the later question has its own options.
 - **Row masking (dynamic row sets)** for grids: show only some rows of a fixed grid.
 - **Piping** puts the answer into the question text instead of the options.

@@ -2,7 +2,7 @@
 import React from "react";
 import type { Question } from "@rescript/schema";
 import { SurveyDefinition } from "@rescript/schema";
-import { normaliseQuestionOrder, canonicalizeSurveyConditions, ensureElementIds, migrateLegacyCustomCode, autoCodeAfterEdit } from "@rescript/engine";
+import { normaliseQuestionOrder, canonicalizeSurveyConditions, ensureElementIds, migrateLegacyCustomCode, autoCodeAfterEdit, protectCollectedData, type ProtectedItem } from "@rescript/engine";
 import { serialRunner, isOwnWrite, rememberSent } from "@/lib/draftSave";
 import { codesFrozenBy } from "@/lib/responseSummary";
 
@@ -89,6 +89,17 @@ export interface StudioState {
    * their own pilot interviews.
    */
   codesFrozen: boolean;
+  /**
+   * DELETION PROTECTION (2026-11-15, engine dataProtection.ts). While the survey has live responses (`codesFrozen`),
+   * an edit that removes a question, option, row or column that holds data is turned into a hide — in `update` and
+   * `replace`, where every edit passes. This is what the last such edit kept, for the notice the Studio shows.
+   */
+  dataProtectNotice: { items: ProtectedItem[]; at: number } | null;
+  dismissDataProtectNotice(): void;
+  /** a control that hid something itself instead of deleting it reports it here, for the same notice */
+  noteDataProtected(items: ProtectedItem[]): void;
+  /** ask the server again whether live responses exist (after publishing, when the window regains focus) */
+  refreshDataLock(): void;
   /**
    * READ-ONLY MODE (§19).
    *
@@ -258,6 +269,20 @@ export function StudioProvider({
   const [codesFrozen, setCodesFrozen] = React.useState(false);
   const codesFrozenRef = React.useRef(false);
   codesFrozenRef.current = codesFrozen;
+  const [dataProtectNotice, setDataProtectNotice] = React.useState<{ items: ProtectedItem[]; at: number } | null>(null);
+  /** hide instead of delete once live data exists; never loses the edit if the check itself fails */
+  const keepCollectedData = (prev: SurveyDefinition, next: SurveyDefinition): SurveyDefinition => {
+    if (!codesFrozenRef.current) return next;
+    try {
+      const kept = protectCollectedData(prev, next);
+      if (!kept.changed && !kept.restored.length) return next;
+      setDataProtectNotice({ items: kept.restored, at: Date.now() });
+      return kept.def;
+    } catch (e) {
+      console.warn("[rescript:data-protection] check failed", e);
+      return next;
+    }
+  };
   const [revision, setRevision] = React.useState<number | null>(initialRevision ?? null);
   const [unguarded, setUnguarded] = React.useState(false);
   const [readOnly, setReadOnlyState] = React.useState(initialReadOnly ?? true);
@@ -537,6 +562,11 @@ export function StudioProvider({
           setRevision(d.revision);
         }
         if (d.unguarded) setUnguarded(true);
+        /* the server kept something this editor had removed (live responses exist): lock on, and say what */
+        if (Array.isArray(d.dataProtected) && d.dataProtected.length) {
+          setCodesFrozen(true);
+          setDataProtectNotice({ items: d.dataProtected as ProtectedItem[], at: Date.now() });
+        }
         /*
          * The server's schema did not recognise part of what we sent, so that
          * part was not stored — better said than silently dropped.
@@ -643,18 +673,31 @@ export function StudioProvider({
    * shape now has ONE reader, `codesFrozenBy`, and a suite that runs it over
    * the real endpoint's real answer.
    */
-  React.useEffect(() => {
-    let cancelled = false;
-    if (sandbox) return;
+  /*
+   * ASKED AGAIN, NOT ONCE (2026-11-15). The first live response can arrive while the editor is open — a survey is
+   * published and shared from this very tab — and from that moment a deletion must become a hide. So the probe runs
+   * on mount, when the window regains focus, every two minutes, and on request (after a publish). It only ever
+   * turns the lock ON here: live data does not un-arrive.
+   */
+  const probeDataLock = React.useCallback(() => {
+    if (sandbox) {
+      /* the /sandbox fixture has no responses table; a browser suite states that live data exists */
+      if (typeof window !== "undefined" && (window as unknown as { __rescriptSandboxLive?: boolean }).__rescriptSandboxLive === true) setCodesFrozen(true);
+      return;
+    }
     fetch(`/api/surveys/${surveyDbId}/responses?format=summary`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (cancelled || !d) return;
-        setCodesFrozen(codesFrozenBy(d));
-      })
-      .catch(() => { /* offline / not deployed yet — treat as no data */ });
-    return () => { cancelled = true; };
+      .then((d) => { if (d && codesFrozenBy(d)) setCodesFrozen(true); })
+      .catch(() => { /* offline / not deployed yet — the server refuses a destructive save on its own */ });
   }, [surveyDbId, sandbox]);
+  React.useEffect(() => {
+    setCodesFrozen(false);
+    probeDataLock();
+    const onFocus = () => probeDataLock();
+    window.addEventListener("focus", onFocus);
+    const t = window.setInterval(probeDataLock, 120_000);
+    return () => { window.removeEventListener("focus", onFocus); window.clearInterval(t); };
+  }, [probeDataLock]);
 
   const touched = () => {
     setDirty(true);
@@ -682,6 +725,10 @@ export function StudioProvider({
     saveState,
     selectedQuestionId,
     codesFrozen,
+    dataProtectNotice,
+    dismissDataProtectNotice: () => setDataProtectNotice(null),
+    noteDataProtected: (items) => setDataProtectNotice({ items, at: Date.now() }),
+    refreshDataLock: probeDataLock,
     goToTab: (tab) => goToTabRef.current?.(tab),
     setGoToTab(fn) { goToTabRef.current = fn; },
     setLeaveGuard(fn) { leaveGuardRef.current = fn; },
@@ -717,6 +764,8 @@ export function StudioProvider({
       let draft = structuredClone(prev);
       mutator(draft);
       draft = withOptionCodes(draft);
+      /* once live responses exist, removing something that holds data hides it instead (engine dataProtection.ts) */
+      draft = keepCollectedData(prev, draft);
       /*
        * ONE QUESTION ORDER, ENFORCED HERE.
        *
@@ -754,8 +803,10 @@ export function StudioProvider({
       const prev = latest.current;
       /* an imported or restored definition arrives in whatever order it was
          written in; it joins the survey in flow order like everything else */
-      normaliseQuestionOrder(next);
       next = withOptionCodes(next);
+      /* an import, a restored version, pasted JSON or an AI rewrite must not drop collected data either */
+      next = keepCollectedData(prev, next);
+      normaliseQuestionOrder(next);
       latest.current = next;
       pushHistory(prev, label);
       setDef(next);

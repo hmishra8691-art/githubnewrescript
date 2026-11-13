@@ -17,7 +17,7 @@ A mask decides **which options (or rows, or columns) of a question are shown**, 
 
 ::: steps Mask Q2 to the brands not chosen at Q1
 1. **Make sure the lists match** — the masked question should have the same option codes as the source.
-2. **Open Q2** and go to Properties → **Masking (dynamic option sets)** (rows and columns have their own masking sections on matrices).
+2. **Open Q2** and go to Properties → **3 · Show a calculated set (masking)** (rows and columns have their own masking sections on matrices).
 3. **Write or build the set** — e.g. `Q1.Unselected`.
 4. **Choose the action** — **display** (show only these), **preselect**, **display and preselect**, **disable** or **remove**.
 5. **Decide what happens when the set is empty** — e.g. hide the question.

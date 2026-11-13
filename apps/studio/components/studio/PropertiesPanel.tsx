@@ -2,7 +2,7 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { headerRepeatApplies, gridAxes, displayedListCanVary, carryForwardDestinations, normalizeCarryForwardInto, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput, conditionSummary, stripHtmlText, codeGate } from "@rescript/engine";
+import { LIST_RULE_TOOLS, headerRepeatApplies, gridAxes, displayedListCanVary, carryForwardDestinations, normalizeCarryForwardInto, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput, conditionSummary, stripHtmlText, codeGate } from "@rescript/engine";
 import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES, effectiveResponseModel } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { DefaultValueBox } from "./DefaultValueBox";
@@ -19,6 +19,7 @@ import { GamificationSettingsCard } from "./GamificationSettingsCard";
 import { ResearchDesignEditor } from "./ResearchDesignEditor";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { TimerEditor } from "./TimerEditor";
+import { AnswerListOverview } from "./AnswerListOverview";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { HeaderRepeatEditor } from "./HeaderRepeatEditor";
 import { QuestionAnalysisSection } from "./QuestionAnalysisSection";
@@ -1177,8 +1178,8 @@ function ListLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
       )}
       {open && (
         <LogicDialog<ListLogicRule[]>
-          title="List logic" subject={subjectOf(q)}
-          description={`Build ${q.code}'s option list from what earlier questions selected or displayed. Rules apply top to bottom, before sorting and randomization.`}
+          title="Keep, remove or reorder by an earlier answer (list logic)" subject={subjectOf(q)}
+          description={`Decide which of ${q.code}'s own options stay, go or come first, from what an earlier question selected or showed. Rules apply top to bottom, before sorting and randomization.`}
           value={rules}
           onSave={(listLogic) => { s.labelNextEdit?.("edit list logic"); patch({ listLogic }); }}
           onClose={() => setOpen(false)}>
@@ -1588,7 +1589,9 @@ function PropertiesPanelBody() {
               <option value="hover-magnifier">Hover magnifier (click still opens the lightbox)</option>
             </select></label>
           <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
-            Applies to the stimulus, images inserted in the text and option images. Each opening is counted in
+            Applies to every image of this question, uploaded or by URL: the stimulus, images in the question text and
+            instruction, option images and images inside option, row and column labels. Where a click already selects an
+            answer, the image keeps selecting and gets a small Enlarge button. Each opening is counted in
             <code> ZOOMED_{q.code}</code> (embedded data, exported). Zoom 1–5×, pan, Esc closes; keyboard and touch work too.
           </div>
         </div>
@@ -1725,24 +1728,6 @@ function PropertiesPanelBody() {
       {/* ASSESSMENT (K4 2026-10-25, ported 2026-10-29): the answer key, marks, topic and explanation — renders nothing unless the survey is a test/quiz and the question is a choice question */}
       {showSec("Assessment answer key") && <AssessmentQuestionSection q={q} patch={patch} />}
 
-      {hasCap("carry_forward") && showSec("Carry-forward") && (
-      <CollapsibleSection id="carry-forward" title="Carry-forward (dynamic options)" active={!!q.carryForward}>
-      {q.carryForward ? <CarryForwardEditor q={q} patch={patch} /> : (
-        <button className="btn small" disabled={s.def.questions.length < 2}
-          onClick={() => patch({
-            carryForward: {
-              /* a source with a list to carry, when there is one (B47) */
-              sourceQuestionId: (s.def.questions.find((x) => x.id !== q.id && (shapeHasAxis(x, "options") || shapeHasAxis(x, "rows")))
-                ?? s.def.questions.find((x) => x.id !== q.id)!).id,
-              filter: "selected", into: carryForwardDestinations(q)[0]?.value ?? "options", keepOwn: false,
-            },
-          })}>
-          + carry forward from another question
-        </button>
-      )}
-      </CollapsibleSection>
-      )}
-
       {/*
         * OPTION GROUPS (§13–30), directly above Randomization on purpose.
         *
@@ -1864,27 +1849,59 @@ function PropertiesPanelBody() {
       </CollapsibleSection>
       )}
 
-      {/* on a grid whose columns ARE its options (the answer scale) this is the
-          column masking — one section, named for what the respondent sees (29-09 #2) */}
-      {hasCap("list_logic") && showSec("Masking") && (
-      <CollapsibleSection id="masking" title={gridAxes(q).columnMeaning === "option_code" ? "Column masking (dynamic column sets)" : "Masking (dynamic option sets)"} active={!!q.mask}>
-      <MaskingBuilder q={q} patch={patch} field="mask" />
+      {/*
+        * THE ANSWER LIST, AS ONE GROUP (2026-11-15). Carry-forward, list logic, masking and list operations all decide
+        * which options a respondent sees; they sat apart under technical names, and nothing said in which order they
+        * act or when two of them collide. They are now adjacent, numbered in the order the engine applies them, named
+        * for what they do (the technical name kept in brackets), under one overview that states what is configured and
+        * flags overlaps and contradictions. Each editor, and everything it stores, is unchanged.
+        */}
+      {(hasCap("list_logic") || hasCap("carry_forward")) && (showSec("Answer list rules") || showSec("Masking") || showSec("List logic") || showSec("List operations") || showSec("Carry-forward")) && (
+        <AnswerListOverview q={q} />
+      )}
+
+      {hasCap("carry_forward") && showSec("Carry-forward") && (
+      <CollapsibleSection id="carry-forward" title="1 · Copy the list from another question (carry-forward)" active={!!q.carryForward}>
+      {q.carryForward ? <CarryForwardEditor q={q} patch={patch} /> : (
+        <button className="btn small" disabled={s.def.questions.length < 2}
+          onClick={() => patch({
+            carryForward: {
+              /* a source with a list to carry, when there is one (B47) */
+              sourceQuestionId: (s.def.questions.find((x) => x.id !== q.id && (shapeHasAxis(x, "options") || shapeHasAxis(x, "rows")))
+                ?? s.def.questions.find((x) => x.id !== q.id)!).id,
+              filter: "selected", into: carryForwardDestinations(q)[0]?.value ?? "options", keepOwn: false,
+            },
+          })}>
+          + carry forward from another question
+        </button>
+      )}
       </CollapsibleSection>
       )}
 
       {hasCap("list_logic") && showSec("List logic") && (
-      <CollapsibleSection id="list-logic" title="List logic (from previous questions)" active={(q.listLogic?.length ?? 0) > 0}>
+      <CollapsibleSection id="list-logic" title="2 · Keep, remove or reorder by an earlier answer (list logic)" active={(q.listLogic?.length ?? 0) > 0}>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>
-        Include / exclude / prioritize this question&apos;s options based on what an earlier
-        question selected or displayed. Rules apply in order, before sorting and randomization.
-        “Exclude + displayed” = show only items not yet seen.
+        {LIST_RULE_TOOLS["list-logic"].use} Rules apply in the order listed, before sorting and
+        randomization. “Remove + shown” = show only items the respondent has not seen yet.
       </p>
       <ListLogicEditor q={q} patch={patch} />
       </CollapsibleSection>
       )}
 
+      {/* on a grid whose columns ARE its options (the answer scale) this is the
+          column masking — one section, named for what the respondent sees (29-09 #2) */}
+      {hasCap("list_logic") && showSec("Masking") && (
+      <CollapsibleSection id="masking" title={gridAxes(q).columnMeaning === "option_code" ? "3 · Show a calculated set of columns (column masking)" : "3 · Show a calculated set (masking)"} active={!!q.mask}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }} data-testid="masking-use">{LIST_RULE_TOOLS.masking.use}</p>
+      <MaskingBuilder q={q} patch={patch} field="mask" />
+      </CollapsibleSection>
+      )}
+
       {hasCap("list_logic") && showSec("List operations") && (
-      <CollapsibleSection id="list-operations" title="List operations (intersection / union / difference)" active={(q.optionPipeline?.length ?? 0) > 0}>
+      <CollapsibleSection id="list-operations" title="4 · Extra list steps (list operations)" active={(q.optionPipeline?.length ?? 0) > 0}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }} data-testid="list-operations-use">
+        {LIST_RULE_TOOLS["list-operations"].use} For “in either / in both / in one but not the other”, a calculated set (step 3) is simpler.
+      </p>
       <ListOperationsEditor q={q} patch={patch} />
       </CollapsibleSection>
       )}

@@ -4,6 +4,7 @@ import { SurveyDefinition } from "@rescript/schema";
 import { buildVariableDictionary, nextVersion, normaliseQuestionOrder } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { publishGate, gateRefusal } from "@/lib/publishGate";
+import { guardLiveData } from "@/lib/liveDataGuard";
 import { decideCut, isVersionCollision } from "@/lib/versionCut";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +38,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       { status: 422 },
     );
   }
-  const def = parsed.data;
+  /* deletion protection (lib/liveDataGuard.ts): a version cut while live responses exist keeps every data-bearing
+     question and code of the live version — hidden if the editor had removed it */
+  const guarded = await guardLiveData(supabaseAdmin(), params.id, parsed.data).catch(() => null);
+  const def = guarded?.definition ?? parsed.data;
   /*
    * A version is what the runtime and every export read, so it is the last
    * place the two question orders can be allowed to disagree: `def.questions`
@@ -287,6 +291,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     entity: "survey_version", entityId: ver.id,
     detail: {
       version, label: body.label ?? null,
+      ...(guarded?.kept.length ? { dataProtected: guarded.kept.map((k) => `${k.kind}:${k.questionCode}${k.code ? `:${k.code}` : ""}`) } : {}),
       /*
        * An override that leaves no trace is the same as no gate at all. The
        * problems are recorded as they stood at the moment it was overridden,
@@ -301,6 +306,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   });
   return NextResponse.json({
     id: ver.id, version: ver.version, variables: def.variables.length, revision: newRevision,
+    ...(guarded?.kept.length ? { dataProtected: guarded.kept } : {}),
     /* the client shows these whether or not they blocked: a forced cut should still say what it forced past */
     lint: {
       status: gateVerdict.result.status,

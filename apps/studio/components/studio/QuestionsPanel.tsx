@@ -10,7 +10,7 @@ import { honoursColumns, drawsOptionImages, honoursOrientation, readsCellColumns
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { DefaultValueBox } from "./DefaultValueBox";
-import { autoNextKind, isConsentQuestion } from "@rescript/engine";
+import { autoNextKind, isConsentQuestion, holdsData, DATA_PROTECTION_NOTICE } from "@rescript/engine";
 
 /** Put the caret at the end of a label field — an input or a contentEditable line. */
 function focusLabel(el: HTMLElement | null | undefined) {
@@ -3174,6 +3174,14 @@ export function QuestionsPanel() {
     const id = pendingDelete.id;
     if (!id) return;
     setPendingDelete(null);
+    /* live responses exist: the question is hidden where it stands (store `update` would do the same to a removal) */
+    const target = s.def.questions.find((x) => x.id === id);
+    if (s.codesFrozen && target && holdsData(target)) {
+      s.labelNextEdit(`hide ${pendingDelete.code}`);
+      s.update((d) => { const q = d.questions.find((x) => x.id === id); if (q) q.settings = { ...q.settings, hidden: true }; });
+      s.noteDataProtected([{ kind: "question", questionId: id, questionCode: target.code, label: target.code }]);
+      return;
+    }
     s.labelNextEdit(`delete ${pendingDelete.code}`);
     s.update((d) => { removeQuestion(d, id); });
     if (s.selectedQuestionId === id) s.select(null);
@@ -3267,6 +3275,7 @@ export function QuestionsPanel() {
           refs={pendingDelete.refs}
           onCancel={() => setPendingDelete(null)}
           onConfirm={confirmDelete}
+          hideInstead={(() => { const q = pendingDelete.id ? s.def.questions.find((x) => x.id === pendingDelete.id) : null; return s.codesFrozen && q && !pendingDelete.blockId && holdsData(q) ? DATA_PROTECTION_NOTICE : null; })()}
         />
       )}
       <div className="row" style={{ marginBottom: 14 }}>

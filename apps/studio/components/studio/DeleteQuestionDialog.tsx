@@ -25,12 +25,37 @@ const GROUP: Record<QuestionReference["kind"], string> = {
   unplaced: "Pages",
 };
 
-export function DeleteQuestionDialog({ code, refs, onCancel, onConfirm }: {
+export function DeleteQuestionDialog({ code, refs, onCancel, onConfirm, hideInstead }: {
   code: string;
   refs: QuestionReference[];
   onCancel(): void;
   onConfirm(): void;
+  /** the survey has live responses and this question holds data: it will be hidden, not deleted (the notice to show) */
+  hideInstead?: string | null;
 }) {
+  /*
+   * LIVE RESPONSES EXIST (2026-11-15). Deleting would take the variable out of the dataset the answers are in, so
+   * the same button hides the question instead — nothing that refers to it has to be cleaned up, because it is
+   * still there.
+   */
+  if (hideInstead) {
+    return (
+      <div className="modal-back" onClick={onCancel}>
+        <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="delete-question-dialog" data-mode="hide" style={{ maxWidth: 560 }}>
+          <h3 style={{ marginTop: 0 }}>Hide {code} instead of deleting it</h3>
+          <p style={{ fontSize: 13.5, marginTop: 0 }} data-testid="delete-hide-notice">{hideInstead}</p>
+          <p className="muted" style={{ fontSize: 12.5 }}>
+            Hidden means respondents are no longer asked {code}. Its variable, codes and every answer already collected stay in
+            the data and the exports. You can show it again from its State settings.
+          </p>
+          <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+            <button className="btn" data-testid="delete-question-cancel" onClick={onCancel}>Cancel</button>
+            <button className="btn primary" data-testid="delete-question-confirm" onClick={onConfirm}>Hide {code}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
   const groups = (["cleared", "removed", "unplaced"] as const)
     .map((kind) => ({ kind, items: refs.filter((r) => r.kind === kind) }))
     .filter((g) => g.items.length > 0);

@@ -17,7 +17,7 @@ Carry-forward builds a question's **answer list from another question's answers*
 
 ::: steps Carry the selected brands forward
 1. **Ask the source question first** — a multi-select with the full list (Q1).
-2. **Open the target question** (Q2) and go to Properties → **Carry-forward (dynamic options)**.
+2. **Open the target question** (Q2) and go to Properties → **1 · Copy the list from another question (carry-forward)**.
 3. **Choose the source question and the filter** — *selected* (the usual), *not selected*, *displayed*, *answered rows* or *all*.
 4. **Choose the destination** — for a single- or multi-select it is the answer list; for a matrix it can be rows or columns.
 5. **Keep the target's own options (optional)** — e.g. keep its "None of these" beside the carried ones.

@@ -471,7 +471,7 @@ export default function Dashboard() {
 
       <section className="hero" data-testid="dash-hero">
         <div>
-          <div className="eyebrow">{session.state.kind === "signed_in" ? <>{greeting(session.state.user.name)} · <span className="mono">{session.state.user.userCode}</span></> : "Professional survey programming & runtime platform"}</div>
+          <div className="eyebrow">{session.state.kind === "signed_in" ? <>{greeting(session.state.user.name)} · <span className="mono">{session.state.user.userCode}</span></> : "AI-assisted research workspace"}</div>
           <h1>Your research workspace</h1>
           <p className="sub">Program surveys, collect and clean responses, analyse results and publish reports — in one place.</p>
         </div>

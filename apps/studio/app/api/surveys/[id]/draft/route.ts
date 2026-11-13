@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
+import { guardLiveData } from "@/lib/liveDataGuard";
 import { SurveyDefinition } from "@rescript/schema";
 import { droppedFieldPaths, ensureElementIds } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
@@ -96,9 +97,16 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
    * pays a walk and nothing else.
    */
   const withIds = ensureElementIds(parsed.data);
-  const definition = withIds.def;
 
   const db = supabaseAdmin();
+  /*
+   * DELETION PROTECTION, SERVER SIDE (2026-11-15, lib/liveDataGuard.ts). Once the survey has a live response, a
+   * question, option, row or column that holds data is never dropped by a save: it is stored hidden instead, and
+   * the reply says what was kept so the editor can show it. The editor applies the same rule before it sends —
+   * this is for the editor that did not (a tab older than the first response, a direct call).
+   */
+  const guarded = await guardLiveData(db, params.id, withIds.def).catch(() => null);
+  const definition = guarded?.definition ?? withIds.def;
   const baseRevision = Number.isFinite(body?.baseRevision) ? Number(body.baseRevision) : null;
 
   if (baseRevision !== null) {
@@ -217,6 +225,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
         savedAt: row.draft_updated_at ?? new Date().toISOString(),
         revision: row.revision,
         droppedFields,
+        ...(guarded?.kept.length ? { dataProtected: guarded.kept } : {}),
       });
     }
     // fall through: migration 0004 is not applied yet

@@ -117,7 +117,7 @@ export default function SignupPage() {
     return (
       <div className="auth-shell">
         <div className="auth-card wide">
-          <div className="auth-brand">SURVEY PROGRAMMING PLATFORM</div>
+          <div className="auth-brand">AI-ASSISTED RESEARCH WORKSPACE</div>
           <h1 className="auth-title">Account created</h1>
           <p className="auth-sub">
             Welcome, {done.user.name} — your account is set up for {done.user.email}.
@@ -166,7 +166,7 @@ export default function SignupPage() {
   return (
     <div className="auth-shell">
       <div className="auth-card wide">
-        <div className="auth-brand">SURVEY PROGRAMMING PLATFORM</div>
+        <div className="auth-brand">AI-ASSISTED RESEARCH WORKSPACE</div>
         <h1 className="auth-title">Create account</h1>
         <p className="auth-sub">You will be given a User ID that colleagues can share projects with.</p>
 

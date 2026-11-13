@@ -9,9 +9,11 @@ ResLens.ai has three ways to build the list a question shows from what came befo
 
 | Tool | What it does | Where |
 |---|---|---|
-| **List logic** | include, exclude, prioritise or deprioritise another question's selected / not selected / displayed options | Properties → **List logic (from previous questions)** |
-| **List operations** | union, intersection, difference, remaining, dedupe, filter, sort, randomize over one or more sources | Properties → **List operations (intersection / union / difference)** |
+| **List logic** | include, exclude, prioritise or deprioritise another question's selected / not selected / displayed options | Properties → **2 · Keep, remove or reorder by an earlier answer (list logic)** |
+| **List operations** | union, intersection, difference, remaining, dedupe, filter, sort, randomize over one or more sources | Properties → **4 · Extra list steps (list operations)** |
 | **List Fill** | decides, on the server, which items each respondent gets — e.g. the 3 least-filled concepts — with targets and priorities | **Programming → List Fill** |
+
+In a question's properties these sit together under **Answer list rules**, numbered in the order they are applied: **1** copy the list from another question (carry-forward), **2** keep, remove or reorder by an earlier answer (list logic), **3** show a calculated set (masking), **4** extra list steps (list operations). The overview above them states, in plain words, what the question's list is doing right now, and flags rules that overlap or contradict each other — for example a "keep only" and a "remove" rule on the same answers, or a calculated set and a list step that both filter the list.
 
 ## When to use it
 
@@ -23,7 +25,7 @@ ResLens.ai has three ways to build the list a question shows from what came befo
 
 ::: steps Exclude the main supermarket from the follow-up
 1. **Ask the source** — Q1, the main supermarket (single-select).
-2. **Open the follow-up** (Q2, same list) → Properties → **List logic (from previous questions)**.
+2. **Open the follow-up** (Q2, same list) → Properties → **2 · Keep, remove or reorder by an earlier answer (list logic)**.
 3. **Add a rule** — source Q1, action **exclude**, which **selected**.
 4. **Add a condition (optional)** — a rule can apply only when a condition holds.
 :::

@@ -179,9 +179,35 @@ export default function LoginForm() {
   const statusWord = conflict?.existing.status ? STATUS_WORDS[conflict.existing.status] : null;
 
   return (
-    <div className="auth-shell">
+    <div className="auth-shell split">
+      {/*
+        * WHAT THIS PRODUCT IS (2026-11-15). The sign-in page called it a "survey programming platform", which is one
+        * stage of what it does. It is a research workspace: the same study is designed, programmed, fielded, cleaned,
+        * analysed and reported here, with AI assisting at each stage.
+        */}
+      <aside className="auth-pitch" data-testid="login-positioning" aria-label="About this product">
+        <div className="auth-pitch-eyebrow">ResLens.ai · Rescript Studio</div>
+        <h2 className="auth-pitch-title">The AI-assisted research workspace</h2>
+        <p className="auth-pitch-sub">
+          Take a study from the first brief to the final report in one place. Design and program the questionnaire, manage
+          fieldwork, clean the data, analyse it and publish the findings, with AI assisting at every step and your team in
+          control of each decision.
+        </p>
+        <ol className="auth-pitch-stages" data-testid="login-stages">
+          {[
+            ["Design", "Turn a brief into a questionnaire and a study plan"],
+            ["Program", "Logic, quotas, conjoint, MaxDiff and translations"],
+            ["Collect", "Publish, distribute and monitor fieldwork live"],
+            ["Clean", "Quality checks for speeders, straight-liners and duplicates"],
+            ["Analyze", "Cross-tabs, significance testing and advanced models"],
+            ["Report", "Stories, reports and exports your client can read"],
+          ].map(([stage, what]) => (
+            <li key={stage}><strong>{stage}</strong><span>{what}</span></li>
+          ))}
+        </ol>
+      </aside>
       <div className="auth-card">
-        <div className="auth-brand">SURVEY PROGRAMMING PLATFORM</div>
+        <div className="auth-brand">AI-ASSISTED RESEARCH WORKSPACE</div>
         <h1 className="auth-title">Sign in</h1>
         <p className="auth-sub">Use your User ID or the email address on your account.</p>
 

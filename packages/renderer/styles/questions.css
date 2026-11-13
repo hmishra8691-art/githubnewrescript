@@ -1614,3 +1614,10 @@ table.rs-md tbody tr:has(input:checked) td { border-color: var(--rs-primary); ba
 table.rs-md tbody tr:has(input:checked) td.rowlabel { font-weight: 600; }
 @media (max-width: 480px) { table.rs-md td.rowlabel { padding: 12px 8px; text-align: left; } tabletable.rs-md { border-spacing: 0 5px; } }
 @media (prefers-reduced-motion: reduce) { table.rs-md tbody td { transition: none; } }
+
+/* IMAGE ZOOM ON EVERY IMAGE (2026-11-15, Lightbox.tsx): the Enlarge button the card-level pass places on an image
+   whose click already selects something, and the lens that follows the mouse over any zoomable image. */
+.rs-zoom-host { position: relative; }
+.rs-zoom-btn.rs-zoom-btn-auto { right: auto; min-width: 0; min-height: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; line-height: 1; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+.rs-magnifier.rs-magnifier-fixed { position: fixed; z-index: 10001; }
+img[data-rs-zoom="hover-magnifier"] { cursor: zoom-in; }

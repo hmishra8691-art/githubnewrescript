@@ -9,7 +9,7 @@ import { platformBadge } from "@/lib/platform";
 
 export const metadata: Metadata = {
   title: "Rescript Studio",
-  description: "Professional survey programming, data collection, analytics and reporting",
+  description: "The AI-assisted research workspace: design, program, collect, clean, analyze and report research in one place",
 };
 
 export const viewport: Viewport = { themeColor: "#17143f", width: "device-width", initialScale: 1 };

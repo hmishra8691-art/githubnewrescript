@@ -66,7 +66,7 @@ export default function ResetPage() {
     return (
       <div className="auth-shell">
         <div className="auth-card" data-testid="reset-done">
-          <div className="auth-brand">SURVEY PROGRAMMING PLATFORM</div>
+          <div className="auth-brand">AI-ASSISTED RESEARCH WORKSPACE</div>
           <h1 className="auth-title">Password changed</h1>
           <p className="auth-sub">{done}</p>
           <div className="auth-actions">
@@ -84,7 +84,7 @@ export default function ResetPage() {
     return (
       <div className="auth-shell">
         <div className="auth-card" data-testid="reset-no-token">
-          <div className="auth-brand">SURVEY PROGRAMMING PLATFORM</div>
+          <div className="auth-brand">AI-ASSISTED RESEARCH WORKSPACE</div>
           <h1 className="auth-title">Setting a new password</h1>
           <p className="auth-sub">
             This page needs the link from your reset email — open that link rather than this page. If the link has
@@ -107,7 +107,7 @@ export default function ResetPage() {
   return (
     <div className="auth-shell">
       <form className="auth-card" onSubmit={submit} data-testid="reset-form">
-        <div className="auth-brand">SURVEY PROGRAMMING PLATFORM</div>
+        <div className="auth-brand">AI-ASSISTED RESEARCH WORKSPACE</div>
         <h1 className="auth-title">Choose a new password</h1>
         <p className="auth-sub">
           At least 8 characters. A short phrase you will remember beats a short password you will not.

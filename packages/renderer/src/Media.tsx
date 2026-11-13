@@ -69,6 +69,8 @@ export function SafeImage({ src, imageOnly, onBroken, alt = "", className, style
       referrerPolicy="no-referrer"
       onError={() => { setBroken(true); onBroken?.(); }}
       data-media-provider={media.provider}
+      /* an image that is the answering surface (hotspot, regions, annotation) is never a zoom target */
+      {...(imageOnly ? { "data-zoom-skip": "" } : {})}
     />
   );
 }

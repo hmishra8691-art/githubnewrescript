@@ -35,7 +35,7 @@ export default function ForgotPage() {
   return (
     <div className="auth-shell">
       <div className="auth-card">
-        <div className="auth-brand">SURVEY PROGRAMMING PLATFORM</div>
+        <div className="auth-brand">AI-ASSISTED RESEARCH WORKSPACE</div>
         <h1 className="auth-title">Reset your password</h1>
         <p className="auth-sub">
           Tell us who you are and we will email a reset link to the address on the account.

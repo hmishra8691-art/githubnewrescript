@@ -10,7 +10,7 @@ Masking keeps a question's own list but shows each respondent only the items tha
 
 ## How to set it up
 For a question's options:
-1. Select the question and open **List logic (from previous questions)**.
+1. Select the question and open **2 · Keep, remove or reorder by an earlier answer (list logic)**.
 2. Click **Add logic**, then **+ list rule**, and say which options to keep: for example **KEEP OPTIONS WHERE** they were selected in Q1, or **NOT selected in** Q1.
 3. Save, then test with **Test Survey**.
 

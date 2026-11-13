@@ -10,7 +10,7 @@ Each question has a type that decides how it is answered and what it stores: sin
 
 ## How to set it up
 1. In **Programming** → **Questions**, click **+ Add question** and choose its type.
-2. Select the question. The properties panel on the right shows the settings for that type — answer options, **Required**, **Min selections** / **Max selections** for multiple choice, number format for numeric questions, and the logic sections (**Display logic**, **Skip logic**, **Validation rules**, **Randomization**, **Carry-forward (dynamic options)**).
+2. Select the question. The properties panel on the right shows the settings for that type — answer options, **Required**, **Min selections** / **Max selections** for multiple choice, number format for numeric questions, and the logic sections (**Display logic**, **Skip logic**, **Validation rules**, **Randomization**, **1 · Copy the list from another question (carry-forward)**).
 3. To change a question's type, use the type selector on the question; ResLens.ai shows what will change (options or rows a new type cannot use) before applying it.
 
 ## Common mistakes
