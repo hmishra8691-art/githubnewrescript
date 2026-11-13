@@ -61,6 +61,7 @@ Every environment variable the apps read, found by searching `process.env.*` (an
 | `AI_CREDENTIAL_KEY_PREVIOUS` | Studio | The previous vault key, during rotation | Optional | `<old key>` | Vercel Studio | Redeploy |
 | `AI_BYOK_ALLOW_PRIVATE_ENDPOINTS` | Studio | `1` lets users' own endpoints be private or LAN hosts | Optional, off | `1` | Vercel Studio | Redeploy |
 | `RUNTIME_SERVER_VALIDATION` | Runtime | Replays saved pages: `off`, `log` or `enforce` | Optional (`off`) | `log` | Vercel Runtime | Redeploy |
+| `RUNTIME_SERVER_VALIDATION_SAMPLE` | Runtime | Under `log`: the share of intermediate saves replayed (final saves always are; `enforce` and `RUNTIME_SERVER_RECOMPUTE=store` replay every save) — 2026-11-13 scalability audit | Optional | `0.05` | Vercel Runtime | Redeploy |
 
 ## 4. Language model (Intelligent Mode, copilot, probes, classification)
 

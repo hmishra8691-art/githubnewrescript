@@ -11,6 +11,7 @@ import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } fro
 import { surveyFieldworkEvents, responseEvents } from "@/lib/notifyEmit";
 import { sanitizeTelemetry } from "@/lib/telemetrySanitize";
 import { countComplete, observedFor, quotaProject, releaseSlot } from "@/lib/quota";
+import { sampleRate, shouldReplay } from "@/lib/replayScope";
 
 /** S5b: question id → type, for the server-side answer-history check */
 const questionTypes = (d: any): Record<string, string> => Object.fromEntries(((d?.questions ?? []) as { id: string; type: string }[]).map((q) => [q.id, q.type]));
@@ -98,7 +99,9 @@ export async function POST(req: NextRequest) {
   /* S1a: which values sandboxed scripts wrote — checked, and read by the replay (script_written, not a mismatch) */
   const scriptWrites = sanitizeScriptWrites(body?.scriptWrites);
   /* S4b (LO-07): the device class this save's telemetry carries (when the survey keeps it) replays `device` conditions */
-  const check = def ? await serverCheck(def, { ...existing, device: keepTelemetry?.device?.type ?? null }, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed, scriptWrites }, sessionId) : null;
+  /* scalability audit 2026-11-13: under `log`, intermediate saves are replayed only for a sample (lib/replayScope.ts) */
+  const replay = shouldReplay({ posture: validationPosture(), recompute: recomputePosture(), isFinal: !!completed && newStatus !== "in_progress", sample: sampleRate(process.env.RUNTIME_SERVER_VALIDATION_SAMPLE) });
+  const check = def && replay ? await serverCheck(def, { ...existing, device: keepTelemetry?.device?.type ?? null }, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed, scriptWrites }, sessionId) : null;
   if (check && !check.ok && validationPosture() === "enforce" && !existing.is_test) {
     const first = check.hard[0];
     return NextResponse.json({
@@ -418,7 +421,7 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
   }
   const posture = validationPosture();
   let sandboxStored: { answers: unknown; calculated: unknown } | null = null;
-  if (posture !== "off") {
+  if (shouldReplay({ posture, recompute: recomputePosture(), isFinal: !!body?.completed && newStatus !== "in_progress", sample: sampleRate(process.env.RUNTIME_SERVER_VALIDATION_SAMPLE) })) {
     const check = checkSubmission({
       def: survey.def,
       prior: { seed: row.seed, sessionId: row.session_id, startedAt: row.started_at, device: typeof body?.telemetry?.device?.type === "string" ? body.telemetry.device.type : null },

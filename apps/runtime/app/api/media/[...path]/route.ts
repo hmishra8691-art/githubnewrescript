@@ -8,6 +8,8 @@ export const runtime = "nodejs";
 
 /** What a researcher attached to the survey: shown to every respondent who has the survey. */
 const STIMULUS_KINDS = new Set(["question_video", "question_audio", "localization_audio", "survey_asset"]);
+/** how long the CDN may keep a stimulus redirect — well inside the signed URL's lifetime (PLAYBACK_URL_SECONDS) */
+const STIMULUS_CDN_SECONDS = Math.min(300, Math.floor(PLAYBACK_URL_SECONDS / 3));
 
 /**
  * THE STABLE URL, ON THE RESPONDENT'S SIDE.
@@ -53,9 +55,20 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
 
   try {
     const { url } = await freshUrl(handle.db, id, { seconds: PLAYBACK_URL_SECONDS });
+    /*
+     * SCALABILITY AUDIT 2026-11-13: a survey's own images and videos (STIMULUS) are the same for every respondent, so
+     * the redirect may be kept by the CDN for 5 minutes (`s-maxage`) — one function call and two database reads per
+     * image per 5 minutes, instead of per image per respondent (an image-heavy survey with 10,000 respondents was
+     * ~20 calls and ~40 reads per respondent). The signed URL lives 15 minutes, so a cached redirect always points at
+     * a URL with 10+ minutes left. A respondent's OWN recording stays `private`: it is matched to their session above.
+     */
+    const stimulus = STIMULUS_KINDS.has(row.kind as string);
     return NextResponse.redirect(url, {
       status: 302,
-      headers: { "cache-control": "private, max-age=300", "x-robots-tag": "noindex, nofollow" },
+      headers: {
+        "cache-control": stimulus ? `public, max-age=300, s-maxage=${STIMULUS_CDN_SECONDS}` : "private, max-age=300",
+        "x-robots-tag": "noindex, nofollow",
+      },
     });
   } catch (e) {
     const status = e instanceof MediaError ? e.status : 500;
