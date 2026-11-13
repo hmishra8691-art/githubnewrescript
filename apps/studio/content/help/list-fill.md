@@ -10,10 +10,11 @@ related: quotas, loops, randomization
 
 ## How to set it up
 1. Open **Programming** → **List Fill** and click **+ List Fill**.
-2. Choose the source and add items (**+ add every option from the source**).
-3. Set eligibility (**Eligible for allocation** or **Eligible only when a condition holds**) and how many to take.
-4. Use the result (a LISTFILL variable) in a loop source, a mask, or piping.
-5. **Simulate one respondent** to check the allocation.
+2. Choose the question it picks from. Every answer of that question is added as an item row straight away (**+ add every option from the source** adds any that are missing later).
+3. Read the sentences at the top of the card — they say what the list will do for a respondent ("Gives each respondent 1 item from the answers the respondent chose at Q1, lowest priority number first") and list anything still to fix.
+4. Set eligibility (**Eligible for allocation** or **Eligible only when a condition holds**) and how many to take.
+5. Use the result (a LISTFILL variable) in a loop source, a mask, or piping.
+6. Under **More options**, choose how to pick and where the result goes, then **Simulate one respondent** to check the allocation.
 
 ## Common mistakes
 Allocating before the questions that decide eligibility are answered.

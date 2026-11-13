@@ -48,7 +48,21 @@ Option labels were reworded, values unchanged:
 - Quotas tab: "hard / soft" now say what they do; the when-full choices match the quota check.
 - Conditions and piping: "iteration" → "round"; "Expression (calc DSL)" → "Typed calculation".
 
-## 3. Assessed, not changed in this pass
+## 3. List Fill — redesigned (second pass, patch 0154)
+
+| Before | After |
+|---|---|
+| Opened on a ten-column grid; never said what the list would do for a respondent | Sentences first: "Gives each respondent 1 item from the answers the respondent chose at Q1, lowest priority number first. Every item stops once it reaches its maximum. Writes the result into Q2." |
+| Unfinished setups only visible by simulating | Plain checks: nothing feeds the list; "Weighted random" with no weights; "Balanced to target" with no targets; a priority method with no priorities; 0 items; more items asked for than exist; a destination with no question; a custom script not chosen. The structural problems `lintListFills` already reported are not repeated |
+| Grid columns min, max, weight, allocated, left; status in engine codes | "at least", "at most", "weight", "given", "room left"; status "open / nearly full / target reached / full / not eligible / switched off". "At least" and "weight" are hidden unless in use, the strategy is weighted random, or "Show “at least” and weight" is pressed |
+| Strategy menu of 12 equal entries | The five usual ones first, the other seven under "Less common" |
+| Choosing a source left an empty grid; "+ add every option from the source" was a required second step | Choosing the source question adds one row per answer at once (only when the grid is empty). A row with no limits allocates exactly like no row, so behaviour is unchanged |
+| "configure", "selected / displayed / all options", "write the answer / piping only", "if unused", "variables this List Fill creates", "simulate" | "More options", "the answers they chose / were shown / every answer", "answer the question / only for piping", "if there is no item for it", "Data it creates (for analysis and piping)", "Try it" |
+
+Engine: `packages/engine/src/listFillGuide.ts` (`listFillPlainSummary`, `listFillChecks`, `LIST_FILL_METHOD_WORDS`,
+`LIST_FILL_COMMON_METHODS`). Stored values and `data-testid`s unchanged; the grid's input cells gained `data-col`.
+
+## 4. Assessed, not changed yet
 
 Priority is by how much a non-programmer is likely to be stopped. Control counts are the form controls in the
 component's source, as a rough measure of what is on screen.
@@ -57,7 +71,6 @@ component's source, as a rough measure of what is on screen.
 |---|---|---|---|---|
 | Display / skip logic | `ConditionBuilder.tsx` (20 controls), `LogicDialog.tsx` | Builder is sound and already summarises a condition in words. The "Expression" mode sits beside the builder as an equal choice; operators lists are long | Medium | Keep the builder as the default; move "Expression" under an "Advanced" link; show the plain-language reading above the builder, not only on the card |
 | Masking / list logic / carry-forward | `MaskingBuilder.tsx` (20 controls), `CarriedOptionsPanel.tsx`, `OptionLogicEditor.tsx` | Four related tools were given numbered plain titles in patch 0149, but "Auto punch", "punching" and "set expression" remain, and a researcher still has to know which of the four to open | High | One entry question — "Which answers should this question show?" — that routes to the right tool; rename "auto punch" to "select automatically" |
-| List Fill | `ListFillPanel.tsx` (21 controls, no disclosure) | The densest editor left: source, selection, least-filled basis, tie-break, tracking and quotas are all visible at once | High | Same treatment as the loop: sentence, "what to pick from / how many", More options for balance and tracking |
 | Quotas | `QuotasPanel.tsx` | Compact, but cell conditions are shown as generated text with no way to see which cells are unreachable | Medium | Sentence per quota ("Stops at 200 men aged 18–34"), checks for cells that can never fill. The "warn" when-full choice was left as is: its runtime meaning needs confirming before it is reworded |
 | Embedded data | `EmbeddedDataEditor` | Name, type, source, value, default and condition per field. "Embedded data" itself is platform jargon | Medium | Call it "Saved values" in the UI with "embedded data" kept as a searchable alias; hide type (Auto) and default under More |
 | Randomizer balance | `BalanceSettings`, `RandomizerDesignSettings` | Basis, claim order, per-quota-cell balance, abandonment timeout and weights are visible as soon as "even presentation" is ticked | Medium | Fold under More options; the defaults are already correct |
@@ -66,7 +79,7 @@ component's source, as a rough measure of what is on screen.
 | Piping | `PipingPicker.tsx`, `InsertPipedText.tsx` | Picker is clear; token syntax is shown raw in the text | Low | Already renders chips in the rich editor; no change proposed |
 | Custom scripts | `LegacyScripts.tsx`, code panels | Intended for programmers | None | Leave as is, keep out of the default path |
 
-## 4. What was and was not verified
+## 5. What was and was not verified
 
 Verified by automated tests in this pass:
 
@@ -78,10 +91,20 @@ Verified by automated tests in this pass:
 - The Studio halves of `scripts/loop-test.mjs` (15 checks) and `scripts/master-demo-test.mjs` (9 checks) pass against
   the new editor.
 
+List Fill pass:
+
+- Engine: `listFillGuide.test.ts` (3).
+- Browser, Studio only: `scripts/listfill-simple-test.mjs` (5) — summary sentences, plain grid headings and status,
+  hidden columns shown on request and when weighted random is chosen, the grouped strategy menu still offering all
+  twelve, nothing written by opening panels, the empty-list check, and the rows added when a source is chosen.
+- `scripts/listfill-test.mjs` passes in full (23, Studio and respondent halves, both servers).
+- Studio half of `scripts/listfill-least-test.mjs` (3) passes; its respondent half was not run.
+
 Not verified:
 
-- The respondent-side halves of `loop-test` and `master-demo-test` were not run in this pass (the two dev servers do
-  not fit in the test sandbox's memory together). No runtime code changed.
+- The respondent-side halves of `loop-test` and `master-demo-test` have not passed: a run with both servers crashed
+  the browser from memory pressure partway through the Studio half (at a step that passes with Studio alone). No
+  runtime code changed.
 - The reworded labels in the Quotas tab, List Fill, the condition builder and the piping picker have no browser test
   of their own; they are text-only changes covered by the type check and the unit suites.
 - No researcher has used the new loop card. The claim that it is easier is a design judgement, not a measured result.

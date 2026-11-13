@@ -8,6 +8,7 @@ import {
   decideListFill, simulateListFill, listFillStatus, listFillVariableNames, explainRejection,
   type ListFillCounts, type ListFillTrace, type ResponseState,
   stripHtmlText, listFillItemsAreRows, lintListFills, listFillCapBasis, listFillBalanceBasis, listFillOnChange,
+  listFillPlainSummary, listFillChecks, LIST_FILL_COMMON_METHODS,
 } from "@rescript/engine";
 
 type Env = "TEST" | "LIVE";
@@ -52,6 +53,11 @@ const METHODS: { value: ListFillMethod; label: string; hint: string }[] = [
 /** methods that order a priority band with the equal-priority rule — the only ones it changes */
 const USES_EQUAL_PRIORITY = new Set<ListFillMethod>(["highest_priority", "lowest_priority", "priority_random", "priority_quota", "custom"]);
 
+/** the status chip in the researcher's words; the row's data-status keeps the engine's value */
+const STATUS_WORDS: Record<string, string> = {
+  ACTIVE: "open", NEAR_CAP: "nearly full", TARGET_REACHED: "target reached", FULL: "full", INELIGIBLE: "not eligible", DISABLED: "switched off",
+};
+
 const STATUS_TONE: Record<string, string> = {
   ACTIVE: "on", NEAR_CAP: "warn", TARGET_REACHED: "warn", FULL: "warn", INELIGIBLE: "", DISABLED: "",
 };
@@ -66,6 +72,8 @@ export function ListFillPanel() {
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState<string | null>(null);
   const [condOpen, setCondOpen] = React.useState<string | null>(null);
+  /* "at least" and "weight" are rarely used: shown when in use, or when asked for */
+  const [allLimits, setAllLimits] = React.useState<Record<string, boolean>>({});
   const [simDraws, setSimDraws] = React.useState(100);
   const [sim, setSim] = React.useState<null | { listFillId: string; kind: "one"; trace: ListFillTrace } | { listFillId: string; kind: "many"; counts: Record<string, number>; empty: number; draws: number }>(null);
   const [simAnswers, setSimAnswers] = React.useState<Record<string, string[]>>({});
@@ -177,6 +185,8 @@ export function ListFillPanel() {
         const isOpen = open === lf.id;
         const srcOpts = sourceOptions(lf);
         const total = status.total;
+        const showAll = allLimits[lf.id] || lf.options.some((o) => o.minimum != null || (o.weight != null && o.weight !== 1)) || lf.selection.method === "weighted_random";
+        const cols = showAll ? 11 : 9;
         return (
           <div key={lf.id} className="card" data-testid={`lf-${lf.id}`}>
             <div className="row" style={{ marginBottom: 8, flexWrap: "wrap" }}>
@@ -186,7 +196,7 @@ export function ListFillPanel() {
               <label className="row" style={{ gap: 4 }}>
                 <input type="checkbox" checked={lf.enabled}
                   data-testid={`lf-enabled-${lf.id}`}
-                  onChange={(e) => setLf(i, (x) => { x.enabled = e.target.checked; })} /> enabled
+                  onChange={(e) => setLf(i, (x) => { x.enabled = e.target.checked; })} /> on
               </label>
               <select className="select" style={{ width: 160 }}
                 value={lf.source.kind === "question" ? lf.source.questionId : ""}
@@ -195,8 +205,14 @@ export function ListFillPanel() {
                   x.source = e.target.value
                     ? { kind: "question", questionId: e.target.value, take: "selected" }
                     : { kind: "static", items: [] };
+                  /* a list with no item settings yet gets one row per answer of the question just chosen — the step every
+                     setup needed next. An item row with no limits behaves exactly like no row (schema: absent = unlimited). */
+                  const q = e.target.value ? s.def.questions.find((qq) => qq.id === e.target.value) : null;
+                  if (q && !x.options.length) {
+                    for (const o of (listFillItemsAreRows(q) ? q.rows : q.options)) x.options.push({ code: String(o.code), label: o.label, eligible: true });
+                  }
                 })}>
-                <option value="">— source —</option>
+                <option value="">— picks from… —</option>
                 {s.def.questions.filter((q) => (q.options?.length ?? 0) > 0).map((q) => (
                   <option key={q.id} value={q.id}>{q.code} — {q.variableName}</option>
                 ))}
@@ -204,17 +220,17 @@ export function ListFillPanel() {
               {lf.source.kind === "question" && (
                 <select className="select" style={{ width: 120 }} value={lf.source.take}
                   onChange={(e) => setLf(i, (x) => { x.source.take = e.target.value; })}>
-                  <option value="selected">selected</option>
-                  <option value="displayed">displayed</option>
-                  <option value="all">all options</option>
+                  <option value="selected">the answers they chose</option>
+                  <option value="displayed">the answers they were shown</option>
+                  <option value="all">every answer</option>
                 </select>
               )}
-              <span className="mono muted" data-testid={`lf-total-${lf.id}`}>{total} allocated</span>
+              <span className="mono muted" data-testid={`lf-total-${lf.id}`}>{total} given so far</span>
               <span className="grow" />
               <button className="btn small" data-testid={`lf-open-${lf.id}`} onClick={() => setOpen(isOpen ? null : lf.id)}>
-                {isOpen ? "▾ hide" : "▸ configure"}
+                {isOpen ? "▾ Fewer options" : "▸ More options"}
               </button>
-              <button className="btn small danger" onClick={() => s.update((d) => { d.listFills.splice(i, 1); })}>× list fill</button>
+              <button className="btn small danger" title="Delete this List Fill" onClick={() => s.update((d) => { d.listFills.splice(i, 1); })}>Delete</button>
             </div>
 
             {lint.filter((x) => x.path.startsWith(`listFills[${i}].`)).map((x, k) => (
@@ -222,13 +238,25 @@ export function ListFillPanel() {
                 {x.message}
               </div>
             ))}
+            {/* what this list does, first — engine listFillGuide.ts; it reads the list and writes nothing */}
+            <div className="loop-summary" data-testid={`lf-summary-${lf.id}`}>
+              {listFillPlainSummary(s.def, lf as never).map((line, k) => <p key={k} className={k === 0 ? "loop-summary-main" : "loop-summary-more"}>{line}</p>)}
+              {listFillChecks(s.def, lf as never).map((c, k) => (
+                <div key={k} className={`loop-check ${c.level}`} data-testid="lf-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
+                  <span className="loop-check-tag">{c.level === "problem" ? "Fix" : c.level === "warning" ? "Check" : "Tip"}</span>{c.message}
+                </div>
+              ))}
+            </div>
             {/* the dashboard is always visible: it is what you check during fieldwork */}
             <div className="table-wrap">
             <table className="grid lf-grid" data-testid={`lf-grid-${lf.id}`}>
               <thead>
                 <tr>
-                  <th>option</th><th>priority</th><th>target</th><th>min</th><th>max</th><th>weight</th>
-                  <th>allocated</th><th>completed</th><th>left</th><th>status</th><th />
+                  <th>item</th><th title="Lower numbers are tried first">priority</th><th title="How many respondents you would like to get it">target</th>
+                  {showAll && <th title="Give it to at least this many before moving on">at least</th>}
+                  <th title="Never give it to more than this many">at most</th>
+                  {showAll && <th title="With weighted random: how much more often it comes up">weight</th>}
+                  <th>given</th><th>completed</th><th>room left</th><th>status</th><th />
                 </tr>
               </thead>
               <tbody>
@@ -243,16 +271,16 @@ export function ListFillPanel() {
                         {row.code}
                         <span className="muted" style={{ marginLeft: 6 }}>{row.label !== row.code ? stripHtmlText(row.label) : ""}</span>
                       </td>
-                      <td><CountInput width={62} value={opt?.priority} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].priority = v; })} /></td>
-                      <td><CountInput width={70} value={opt?.target} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].target = v; })} /></td>
-                      <td><CountInput width={62} value={opt?.minimum} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].minimum = v; })} /></td>
-                      <td><CountInput width={70} value={opt?.maximum} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].maximum = v; })} /></td>
-                      <td><CountInput width={58} value={opt?.weight} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].weight = v; })} /></td>
+                      <td data-col="priority"><CountInput width={62} value={opt?.priority} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].priority = v; })} /></td>
+                      <td data-col="target"><CountInput width={70} value={opt?.target} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].target = v; })} /></td>
+                      {showAll && <td data-col="minimum"><CountInput width={62} value={opt?.minimum} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].minimum = v; })} /></td>}
+                      <td data-col="maximum"><CountInput width={70} value={opt?.maximum} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].maximum = v; })} /></td>
+                      {showAll && <td data-col="weight"><CountInput width={58} value={opt?.weight} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].weight = v; })} /></td>}
                       <td className="mono">{row.current}</td>
                       <td className="mono">{done[row.code] ?? 0}</td>
                       <td className="mono">{row.remaining === null ? "∞" : row.remaining}</td>
                       <td>
-                        <span className={`chip ${STATUS_TONE[row.status] ?? ""}`} style={{ fontSize: 11.5 }}>{row.status.replace(/_/g, " ").toLowerCase()}</span>
+                        <span className={`chip ${STATUS_TONE[row.status] ?? ""}`} style={{ fontSize: 11.5 }}>{STATUS_WORDS[row.status] ?? row.status.replace(/_/g, " ").toLowerCase()}</span>
                         {row.maximum != null && <div className="qbar" style={{ marginTop: 4 }}><div className={pct >= 100 ? "full" : ""} style={{ width: `${Math.min(100, pct)}%` }} /></div>}
                       </td>
                       <td>
@@ -272,7 +300,7 @@ export function ListFillPanel() {
                     </tr>
                     {oi >= 0 && condOpen === `${lf.id}:${row.code}` && (
                       <tr data-testid={`lf-eligible-when-row-${lf.id}-${row.code}`}>
-                        <td colSpan={11}>
+                        <td colSpan={cols}>
                           <OptionalCondition label={`${row.code} is eligible only when`} value={opt?.eligibleWhen}
                             hint="Otherwise the checkbox alone decides."
                             workspace={{ title: "List Fill — item eligible when", subject: `${lf.name ?? lf.id} · ${row.code}`, description: `${row.code} can be allocated to a respondent only when the following condition is met:` }}
@@ -284,7 +312,7 @@ export function ListFillPanel() {
                   );
                 })}
                 {!status.rows.length && (
-                  <tr><td colSpan={11} className="muted" style={{ fontSize: 13 }}>
+                  <tr><td colSpan={cols} className="muted" style={{ fontSize: 13 }}>
                     No options configured. Use “add every option from the source” below, then set priorities and limits.
                   </td></tr>
                 )}
@@ -301,6 +329,12 @@ export function ListFillPanel() {
                 })}>
                 + add every option from the source
               </button>
+              {!(lf.options.some((o) => o.minimum != null || (o.weight != null && o.weight !== 1)) || lf.selection.method === "weighted_random") && (
+                <button className="btn small ghost" data-testid={`lf-all-limits-${lf.id}`} aria-pressed={!!allLimits[lf.id]}
+                  onClick={() => setAllLimits((m) => ({ ...m, [lf.id]: !m[lf.id] }))}>
+                  {allLimits[lf.id] ? "Hide “at least” and weight" : "Show “at least” and weight"}
+                </button>
+              )}
               <span className="muted" style={{ fontSize: 12.5 }}>
                 Priority is not a quota: a lower number is tried first, and target / maximum decide when to move on.
               </span>
@@ -309,14 +343,17 @@ export function ListFillPanel() {
             {isOpen && (
               <div style={{ marginTop: 14 }}>
                 {/* ---------------------------------------- strategy */}
-                <div className="flabel">how the engine chooses</div>
+                <div className="flabel">How to pick</div>
                 <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
                   <select className="select" style={{ width: 210 }} value={lf.selection.method}
                     data-testid={`lf-method-${lf.id}`}
                     onChange={(e) => setLf(i, (x) => { x.selection.method = e.target.value; })}>
-                    {METHODS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                    {METHODS.filter((m) => (LIST_FILL_COMMON_METHODS as readonly string[]).includes(m.value)).map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                    <optgroup label="Less common">
+                      {METHODS.filter((m) => !(LIST_FILL_COMMON_METHODS as readonly string[]).includes(m.value)).map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                    </optgroup>
                   </select>
-                  <label className="row" style={{ gap: 4 }}>items
+                  <label className="row" style={{ gap: 4 }}>items per respondent
                     <CountInput width={64} allowEmpty={false}
                       value={lf.selection.count.kind === "fixed" ? lf.selection.count.n : undefined}
                       onChange={(v) => setLf(i, (x) => { x.selection.count = { kind: "fixed", n: v ?? 1 }; })} />
@@ -324,7 +361,7 @@ export function ListFillPanel() {
                   <label className="row" style={{ gap: 4 }}>
                     <input type="checkbox" checked={lf.selection.count.kind === "all"}
                       onChange={(e) => setLf(i, (x) => { x.selection.count = e.target.checked ? { kind: "all" } : { kind: "fixed", n: 1 }; })} />
-                    all eligible
+                    every item that qualifies
                   </label>
                   {lf.selection.count.kind === "fixed" && (
                     <label className="row" style={{ gap: 4 }} title="If more than this many qualify, take the number above; otherwise take all of them">
@@ -420,7 +457,7 @@ export function ListFillPanel() {
                 </div>
 
                 {/* ---------------------------------------- tracking */}
-                <div className="flabel" style={{ marginTop: 12 }}>counting</div>
+                <div className="flabel" style={{ marginTop: 12 }}>Counting</div>
                 <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
                   <label className="row" style={{ gap: 4 }}>
                     <input type="checkbox" checked={lf.tracking.sampleLevel}
@@ -452,7 +489,7 @@ export function ListFillPanel() {
                 )}
 
                 {/* ---------------------------------------- destinations */}
-                <div className="flabel" style={{ marginTop: 12 }}>where the result goes</div>
+                <div className="flabel" style={{ marginTop: 12 }}>Where the result goes</div>
                 {lf.destinations.map((dest, di) => (
                   <div key={di} className="row" style={{ gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                     <select className="select" style={{ width: 170 }} value={dest.questionId}
@@ -462,13 +499,13 @@ export function ListFillPanel() {
                     </select>
                     <select className="select" style={{ width: 130 }} value={dest.write}
                       onChange={(e) => setLf(i, (x) => { x.destinations[di].write = e.target.value; })}>
-                      <option value="answer">write the answer</option>
-                      <option value="piping_only">piping only</option>
+                      <option value="answer">answer the question</option>
+                      <option value="piping_only">only for piping</option>
                     </select>
-                    <label className="row" style={{ gap: 4 }}>item
+                    <label className="row" style={{ gap: 4 }} title="Which of the respondent's items goes here: 1 = the first, 2 = the second…">item no.
                       <CountInput width={58} value={dest.position} onChange={(v) => setLf(i, (x) => { x.destinations[di].position = v; })} />
                     </label>
-                    <label className="row" style={{ gap: 4 }}>if unused
+                    <label className="row" style={{ gap: 4 }}>if there is no item for it
                       <select className="select" style={{ width: 140 }} value={dest.whenUnused ?? ""}
                         onChange={(e) => setLf(i, (x) => { x.destinations[di].whenUnused = e.target.value || undefined; })}>
                         <option value="">leave as is</option>
@@ -483,12 +520,12 @@ export function ListFillPanel() {
                   </div>
                 ))}
                 <button className="btn small" onClick={() => setLf(i, (x) => { x.destinations.push({ questionId: "", write: "answer" }); })}>
-                  + destination
+                  + where the result goes
                 </button>
 
                 {/* ---------------------------------------- run condition */}
                 <div className="flabel" style={{ marginTop: 12 }}>
-                  run this List Fill only when — {lf.runWhen ? conditionToText(lf.runWhen as never, s.def) : "always"}
+                  Run this List Fill only when — {lf.runWhen ? conditionToText(lf.runWhen as never, s.def) : "always"}
                 </div>
                 <ConditionEditor value={(lf.runWhen ?? { type: "group", op: "and", children: [] }) as never}
                   workspace={{ title: "List Fill — run only when", subject: lf.name ?? lf.id, description: "Run this List Fill for a respondent only when the following condition is met:" }}
@@ -498,7 +535,7 @@ export function ListFillPanel() {
                   })} />
 
                 {/* ---------------------------------------- variables */}
-                <div className="flabel" style={{ marginTop: 12 }}>variables this List Fill creates</div>
+                <div className="flabel" style={{ marginTop: 12 }}>Data it creates (for analysis and piping)</div>
                 <div className="qs-chips">
                   {listFillVariableNames(lf).slice(0, 24).map((v) => (
                     <span key={v.name} className="chip mono" style={{ fontSize: 11.5 }}>{v.name}</span>
@@ -506,7 +543,7 @@ export function ListFillPanel() {
                 </div>
 
                 {/* ---------------------------------------- simulator */}
-                <div className="flabel" style={{ marginTop: 14 }}>simulate</div>
+                <div className="flabel" style={{ marginTop: 14 }}>Try it</div>
                 <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
                   Runs the real allocation engine against the {env === "TEST" ? "test" : "live"} counters shown above.
                   Nothing is written and no slot is claimed.

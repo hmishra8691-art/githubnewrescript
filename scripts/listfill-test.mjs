@@ -223,7 +223,7 @@ const simulateWith = async (codes, counts) => {
 /* -------------------------------------------------- editing the grid */
 
 {
-  const input = await page.$('[data-testid="lf-grid-lf1"] tr[data-code="A"] td:nth-child(5) input');
+  const input = await page.$('[data-testid="lf-grid-lf1"] tr[data-code="A"] td[data-col="maximum"] input');
   await input.click({ clickCount: 3 });
   await input.fill("200");
   await input.press("Tab");
