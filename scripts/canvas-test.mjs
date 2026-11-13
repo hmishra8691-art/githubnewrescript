@@ -405,8 +405,8 @@ assert.ok(await page.$(".opt-row"), "the existing option editor is back");
 assert.ok(await page.$('[data-testid="close-question"]'), "Done still closes the question");
 ok("switching back restores the Standard editor exactly as it was (§23)");
 
-assert.ok(await page.$('[data-testid="add-question-top"]'), "questions can still be added");
-assert.ok(await page.$('[data-testid="add-block"]'), "blocks can still be added");
+assert.ok(await page.$('[data-testid="add-question-type"] >> nth=-1'), "questions can still be added");
+assert.ok(await page.$('[data-testid="add-block-footer"]'), "blocks can still be added");
 ok("blocks, pages and question creation are unchanged");
 
 assert.deepEqual(errors.filter((e) => !/ResizeObserver/.test(e)), [], `no page errors: ${errors.join(" | ")}`);

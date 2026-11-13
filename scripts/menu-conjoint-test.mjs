@@ -33,7 +33,7 @@ const menu = await h.createFromPicker("conjoint", "conjoint.menu");
 assert.equal(menu.type, "conjoint_task");
 assert.equal(menu.variant, "conjoint.menu");
 await h.goTab("Questions");
-await h.page.click('[data-testid="add-question-top"]');
+await h.page.click('[data-testid="add-question-type"] >> nth=-1');
 await h.page.waitForSelector('[data-testid="picker-family-conjoint"]');
 await h.page.click('[data-testid="picker-family-conjoint"]');
 await h.page.waitForSelector('[data-testid="picker-type-conjoint.menu"]');

@@ -13,7 +13,7 @@ import { useStudio } from "./store";
  */
 interface ProjectRow { surveyId: string; code: string; title: string }
 
-export function LibraryInsertDialog({ onClose }: { onClose(): void }) {
+export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /** 2026-11-14: the block the dialog was opened from — the copies arrive beside it, or in it while it is empty */ intoBlock?: string }) {
   const s = useStudio();
   const [projects, setProjects] = React.useState<ProjectRow[] | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
@@ -46,7 +46,7 @@ export function LibraryInsertDialog({ onClose }: { onClose(): void }) {
     })();
   }, [srcId]);
 
-  const preview = React.useMemo(() => (src && (pages.size || qs.size) ? importQuestions(s.def, src, { pageIds: [...pages], questionIds: [...qs] }) : null), [src, pages, qs, s.def]);
+  const preview = React.useMemo(() => (src && (pages.size || qs.size) ? importQuestions(s.def, src, { pageIds: [...pages], questionIds: [...qs], ...(intoBlock ? { intoBlock } : {}) }) : null), [src, pages, qs, s.def, intoBlock]);
   const toggle = (set: Set<string>, id: string, put: (x: Set<string>) => void) => { const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); put(n); };
   const f = filter.trim().toLowerCase();
   const strip = (t: string) => t.replace(/<[^>]*>/g, "");
@@ -63,7 +63,7 @@ export function LibraryInsertDialog({ onClose }: { onClose(): void }) {
     <div className="modal-back" onClick={onClose}>
       <div className="modal" style={{ width: 720, maxWidth: "calc(100vw - 32px)" }} onClick={(e) => e.stopPropagation()} data-testid="library-dialog" role="dialog" aria-label="Insert from another survey">
         <h3 style={{ marginTop: 0 }}>Insert from another survey</h3>
-        <p className="muted" style={{ marginTop: -6 }}>Any project you can open works as a library. Pick pages or single questions; they arrive as a new block with fresh codes where needed.</p>
+        <p className="muted" style={{ marginTop: -6 }}>Any project you can open works as a library. Pick pages or single questions; they arrive {intoBlock ? "next to the block you opened this from (in it, while it is still empty)" : "as a new block"}, with fresh codes where needed.</p>
         {err && <div className="callout err" role="alert">{err}</div>}
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
           <select className="input" value={srcId} onChange={(e) => setSrcId(e.target.value)} data-testid="library-source" style={{ flex: 1 }}>
@@ -99,7 +99,7 @@ export function LibraryInsertDialog({ onClose }: { onClose(): void }) {
         )}
         {preview && (
           <div style={{ marginTop: 10, fontSize: 13 }} data-testid="library-preview">
-            <b>{preview.count}</b> question{preview.count === 1 ? "" : "s"} will be added as a new block.
+            <b>{preview.count}</b> question{preview.count === 1 ? "" : "s"} will be added {intoBlock ? "here — right after this block, or in it if it has no questions yet" : "as a new block"}.
             {Object.keys(preview.renamed).length > 0 && <div>Renamed (code already used here): {Object.entries(preview.renamed).map(([a, b]) => `${a} → ${b}`).join(", ")}</div>}
             {preview.dropped.length > 0 && <div className="callout warn" style={{ marginTop: 6 }}>Rules that named questions you did not copy will be removed: {preview.dropped.slice(0, 6).join("; ")}{preview.dropped.length > 6 ? ` and ${preview.dropped.length - 6} more` : ""}</div>}
           </div>

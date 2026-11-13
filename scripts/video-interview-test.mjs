@@ -102,7 +102,7 @@ const watchThrough = async (pv) => {
 console.log("\nTHE PICKER OFFERS IT, IN BOTH PLACES SOMEBODY WOULD LOOK");
 {
   await h.goTab("Questions");
-  await page.click('[data-testid="add-question-top"]');
+  await page.click('[data-testid="add-question-type"] >> nth=-1');
   await page.waitForSelector('[data-testid="picker-family-qualitative"]');
   await page.click('[data-testid="picker-family-qualitative"]');
   const card = await page.waitForSelector('[data-testid="picker-variant-qualitative.video_interview"]');

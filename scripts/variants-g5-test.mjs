@@ -115,7 +115,7 @@ console.log("✔ base types and seeded defaults are right");
  * one text type rather than a second kind of question.
  */
 await h.goTab("Questions");
-await h.page.click('[data-testid="add-question-top"]');
+await h.page.click('[data-testid="add-question-type"] >> nth=-1');
 await h.page.click('[data-testid="picker-family-media"]');
 const stt = await h.page.waitForSelector('[data-testid="picker-variant-media.speech_to_text"]');
 assert.equal(await stt.getAttribute("data-status"), "stable", "Speech-to-Text Response ships");

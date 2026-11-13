@@ -343,7 +343,7 @@ if (SECTIONS.has("studio")) {
     const long = await column(page);
     checkColumn(long, `${w}px, 25k prompt + long plan`);
     near(long.col.cx, before.col.cx, `${w}px: a long turn moved the column`);
-    if (long.main.w >= 860 + 48) {
+    if (long.main.w >= 1120 + 48) {
       near(long.inputX, long.col.x, `${w}px: the ask bar's left edge vs the column's`, 2);
       if (long.sendRight != null) near(long.sendRight, long.col.right, `${w}px: the ask bar's right edge vs the column's`, 2);
     }

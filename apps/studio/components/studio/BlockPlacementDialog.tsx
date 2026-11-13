@@ -10,7 +10,7 @@
  */
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { blockPositionChoices, previewBlockMove, type BlockPosition } from "@rescript/engine";
+import { blockDestinations, previewBlockMove, type BlockPosition } from "@rescript/engine";
 
 export type BlockPlacementRequest = { mode: "add" } | { mode: "move"; blockId: string; title: string };
 
@@ -22,11 +22,32 @@ export function BlockPlacementDialog({ def, request, onCancel, onAdd, onMove }: 
   onMove(blockId: string, position: BlockPosition): void;
 }) {
   const moving = request.mode === "move" ? request.blockId : undefined;
-  const choices = React.useMemo(() => blockPositionChoices(def, moving), [def, moving]);
-  const [pick, setPick] = React.useState(choices.length - 1);
+  /*
+   * 2026-11-14: HOW, THEN WHICH. The picker used to list "Before X" and "After X" for every block in one long menu
+   * (two lines per block, unreadable in a large survey). Now: where — beginning, before a block, after a block, end —
+   * and, for before / after, which block, each listed ONCE with its number, name and size. A destination that would
+   * leave the block where it is is not offered, and the block itself is never one (engine `blockDestinations`).
+   */
+  const dest = React.useMemo(() => blockDestinations(def, moving), [def, moving]);
+  type How = "start" | "before" | "after" | "end";
+  const hows: { value: How; label: string; ok: boolean }[] = [
+    { value: "start", label: "At the beginning of the survey", ok: dest.start },
+    { value: "before", label: "Before a block…", ok: dest.blocks.some((b) => b.before) },
+    { value: "after", label: "After a block…", ok: dest.blocks.some((b) => b.after) },
+    { value: "end", label: "At the end of the survey", ok: dest.end },
+  ];
+  const [how, setHow] = React.useState<How>(() => (request.mode === "add" ? "end" : hows.find((h) => h.ok && (h.value === "before" || h.value === "after"))?.value ?? hows.find((h) => h.ok)?.value ?? "end"));
+  const candidates = dest.blocks.filter((b) => (how === "before" ? b.before : how === "after" ? b.after : false));
+  const [ref, setRef] = React.useState<string>("");
+  const [find, setFind] = React.useState("");
+  const refId = candidates.some((b) => b.id === ref) ? ref : candidates[0]?.id ?? "";
   const [title, setTitle] = React.useState("");
-  const position = choices[Math.min(pick, choices.length - 1)]?.position ?? { at: "end" as const };
-  const preview = React.useMemo(() => (moving ? previewBlockMove(def, moving, position) : null), [def, moving, position]);
+  const position: BlockPosition = how === "start" || how === "end" ? { at: how } : { at: how, block: refId };
+  const valid = how === "start" || how === "end" ? hows.find((h) => h.value === how)!.ok || request.mode === "add" : !!refId;
+  const preview = React.useMemo(() => (moving && valid ? previewBlockMove(def, moving, position) : null), [def, moving, how, refId, valid]); // eslint-disable-line react-hooks/exhaustive-deps
+  const name = (b: { number: number; title: string; questions: number }) => `Block ${b.number}${b.title ? ` — ${b.title}` : ""} · ${b.questions} question${b.questions === 1 ? "" : "s"}`;
+  const f = find.trim().toLowerCase();
+  const listed = f ? candidates.filter((b) => name(b).toLowerCase().includes(f)) : candidates;
 
   return (
     <div className="modal-back" onClick={onCancel}>
@@ -42,12 +63,26 @@ export function BlockPlacementDialog({ def, request, onCancel, onAdd, onMove }: 
           </label>
         )}
 
-        <label className="field" style={{ display: "block" }}>
-          <span className="flabel">{request.mode === "add" ? "Where should it go?" : "Move it to"}</span>
-          <select className="input" value={pick} data-testid="block-placement-position" onChange={(e) => setPick(Number(e.target.value))}>
-            {choices.map((c, i) => <option key={i} value={i}>{c.label}</option>)}
-          </select>
-        </label>
+        <div className="row" style={{ gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <label className="field" style={{ display: "block", flex: "1 1 220px" }}>
+            <span className="flabel">{request.mode === "add" ? "Where should it go?" : "Move it"}</span>
+            <select className="input" value={how} data-testid="block-placement-how" onChange={(e) => setHow(e.target.value as How)}>
+              {hows.filter((h) => h.ok || request.mode === "add").map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
+            </select>
+          </label>
+          {(how === "before" || how === "after") && (
+            <label className="field" style={{ display: "block", flex: "2 1 280px" }}>
+              <span className="flabel">Which block</span>
+              {candidates.length > 12 && (
+                <input className="input" style={{ marginBottom: 4 }} placeholder="Find a block by number or name…" value={find} data-testid="block-placement-find" onChange={(e) => setFind(e.target.value)} />
+              )}
+              <select className="input" value={listed.some((b) => b.id === refId) ? refId : listed[0]?.id ?? ""} data-testid="block-placement-block" onChange={(e) => setRef(e.target.value)}>
+                {listed.map((b) => <option key={b.id} value={b.id}>{name(b)}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        {request.mode === "move" && !hows.some((h) => h.ok) && <p className="muted" style={{ fontSize: 12.5 }} data-testid="block-move-nowhere">This is the only block — there is nowhere to move it.</p>}
 
         {preview && (
           <div style={{ marginTop: 14 }} data-testid="block-move-preview">
@@ -82,7 +117,7 @@ export function BlockPlacementDialog({ def, request, onCancel, onAdd, onMove }: 
         <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
           <button className="btn" data-testid="block-placement-cancel" onClick={onCancel}>Cancel</button>
           {request.mode === "add" ? (
-            <button className="btn primary" data-testid="block-placement-confirm" onClick={() => onAdd(title.trim(), position)}>Add block</button>
+            <button className="btn primary" data-testid="block-placement-confirm" disabled={!valid} onClick={() => onAdd(title.trim(), position)}>Add block</button>
           ) : (
             <button className={`btn ${preview?.conflicts.length ? "danger" : "primary"}`} data-testid="block-placement-confirm"
               disabled={!preview?.ok || !!preview.unchanged} onClick={() => onMove(request.blockId, position)}>

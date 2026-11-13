@@ -53,6 +53,8 @@ export interface AutoCodeOptions {
   adoptPrefix?: string;
   /** only this block (others keep their codes, which then count as taken) */
   only?: string;
+  /** only these blocks — the ones an edit actually touched; every other block keeps its codes */
+  onlyIds?: string[];
 }
 
 interface Member { questionId: string; code: string }
@@ -81,7 +83,7 @@ function membersOf(def: SurveyDefinition, blockId: string, adoptPrefix?: string)
  * screener in two blocks reads S1–S4, S5–S8), and a number something else already uses is passed over.
  */
 export function autoCodePlans(def: SurveyDefinition, opts: AutoCodeOptions = {}): AutoCodePlan[] {
-  const blocks = listBlocks(def.flow as unknown[]).filter((b) => (opts.only ? b.id === opts.only : true) && (opts.force || (b.node as { autoCode?: boolean }).autoCode === true));
+  const blocks = listBlocks(def.flow as unknown[]).filter((b) => (opts.only ? b.id === opts.only : true) && (!opts.onlyIds || opts.onlyIds.includes(b.id)) && (opts.force || (b.node as { autoCode?: boolean }).autoCode === true));
   const runs = blocks.map((b) => ({ id: b.id, run: membersOf(def, b.id, opts.only === b.id || !opts.only ? opts.adoptPrefix : undefined) })).filter((x): x is { id: string; run: NonNullable<ReturnType<typeof membersOf>> } => !!x.run);
   const inside = new Set(runs.flatMap((x) => x.run.members.map((m) => m.questionId)));
   const taken = namesOutside(def, inside);
@@ -191,7 +193,12 @@ export function codePrefix(code: string): string | null {
 export function autoCodeAfterEdit(prev: SurveyDefinition, next: SurveyDefinition): AutoCodeResult {
   const sig = (def: SurveyDefinition) => new Map(listBlocks(def.flow as unknown[]).map((b) => [b.id, `${(b.node as { autoCode?: boolean }).autoCode === true ? "A" : "M"}|${b.pages.flatMap((p) => p.node.questionIds as string[]).join(",")}`]));
   const before = sig(prev);
-  let changed = false;
-  for (const [id, s] of sig(next)) if (s.startsWith("A") && before.get(id) !== s) { changed = true; break; }
-  return changed ? applyAutoCodes(next) : { def: next, changes: [], problems: [] };
+  /*
+   * ONLY THE BLOCKS THE EDIT TOUCHED (2026-11-14). Moving a block changes no block's own questions, so it renumbers
+   * nothing; adding a question to one block renumbers that block and leaves every other block's codes as they are
+   * (a number another block holds is passed over). A code never changes because of an edit somewhere else.
+   */
+  const touched: string[] = [];
+  for (const [id, s] of sig(next)) if (s.startsWith("A") && before.get(id) !== s) touched.push(id);
+  return touched.length ? applyPlans(next, autoCodePlans(next, { onlyIds: touched })) : { def: next, changes: [], problems: [] };
 }

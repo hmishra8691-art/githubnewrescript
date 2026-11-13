@@ -14,8 +14,8 @@ const page = h.page;
 
 const openPicker = async (family) => {
   await h.goTab("Questions");
-  await page.waitForSelector('[data-testid="add-question-top"]');
-  await page.click('[data-testid="add-question-top"]');
+  await page.waitForSelector('[data-testid="add-question-type"] >> nth=-1');
+  await page.click('[data-testid="add-question-type"] >> nth=-1');
   await page.waitForSelector(`[data-testid="picker-family-${family}"]`);
   await page.click(`[data-testid="picker-family-${family}"]`);
   await page.waitForSelector(`[data-testid^="picker-variant-"]`);

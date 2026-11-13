@@ -50,7 +50,7 @@ const firstPage = def.flow.find((n) => n.type === "page");
 assert.equal(firstPage.title, "Introduction", "renaming a block writes its title");
 console.log("✔ a block can be named — stored on the page node");
 
-await page.click('[data-testid="add-block"]');
+await page.click('[data-testid="add-block-footer"]');
 await page.waitForTimeout(250);
 assert.equal(await blockCount(), 2, "a second block appears");
 console.log("✔ blocks can be added");
@@ -155,7 +155,7 @@ console.log("✔ a block can be deleted, with its questions");
 // "Other + Exclusive" is a MULTI-select requirement — a single-select is
 // exclusive by definition, and the editor correctly does not offer the flag
 // there. Add a multi-select, which is the brief's own example.
-await page.click('[data-testid="add-question-top"]');
+await page.click('[data-testid="add-question-type"] >> nth=-1');
 await page.waitForSelector(".card.selectable");
 await page.click("text=Multi Select");
 await page.waitForTimeout(200);

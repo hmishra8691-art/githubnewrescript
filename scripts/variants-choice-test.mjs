@@ -23,7 +23,7 @@ for (const k of MULTI) made[k] = await h.createFromPicker("multi_select", `multi
 {
   const { page } = h;
   await h.goTab("Questions");
-  await page.click('[data-testid="add-question-top"]');
+  await page.click('[data-testid="add-question-type"] >> nth=-1');
   await page.click('[data-testid="picker-family-single_select"]');
   await page.waitForSelector('[data-testid="picker-variant-single_select.pairwise_set"]');
   assert.equal(await page.$('[data-testid="picker-variant-single_select.pairwise_choice"]'), null, "the single comparison is not a second Pairwise Choice in the picker");

@@ -40,7 +40,7 @@ console.log(`✔ all ${PICK.length} variants are stable in the picker and create
  * and the promise is not.
  */
 await h.goTab("Questions");
-await h.page.click('[data-testid="add-question-top"]');
+await h.page.click('[data-testid="add-question-type"] >> nth=-1');
 await h.page.click('[data-testid="picker-family-dynamic"]');
 const rspec = await h.page.waitForSelector('[data-testid="picker-variant-dynamic.respondent_specific"]');
 assert.equal(await rspec.getAttribute("data-status"), "stable", "Respondent-Specific Options ships as a preset");

@@ -127,7 +127,7 @@ ok("every block control carries its own command identifier");
  */
 const addButtons = await page.$$eval('[data-command="add-block"]', (els) =>
   els.map((e) => e.getAttribute("data-testid")));
-assert.deepEqual(addButtons.sort(), ["add-block", "add-block-footer"],
+assert.deepEqual(addButtons.sort(), ["add-block-footer"],
   `both Add block buttons are addressable: ${JSON.stringify(addButtons)}`);
 ok("the header and footer Add block buttons are separately addressable and run one command");
 

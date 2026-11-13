@@ -51,7 +51,7 @@ test("the survey frame is centred by the stylesheet, not by a theme variable", (
 
 test("Intelligent Mode: one centred column, no sideways scroll, a toolbar that wraps, a menubar probe with no width", () => {
   const d = css("apps/studio/app/design-system.css");
-  assert.match(rule(d, ".iq"), /--iq-column:\s*860px/);
+  assert.match(rule(d, ".iq"), /--iq-column:\s*1120px/);
   for (const sel of [".iq-welcome", ".iq-turn"]) {
     const r = rule(d, sel);
     assert.match(r, /max-width:\s*var\(--iq-column\)/, `${sel} uses the column`);

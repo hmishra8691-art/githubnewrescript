@@ -1175,7 +1175,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
  * whatever the side panes take. It was 760px for the welcome, 860px for the
  * turns and the full pane for the ask bar — three left edges down one column.
  */
-.iq { --iq-column: 860px; flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); font-size: 13px; }
+.iq { --iq-column: 1120px; flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); font-size: 13px; }
 .iq-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--c-surface); }
 /* the toolbar WRAPS in a narrow pane: with the structure and the panel open at 1024px it was 787px of buttons in a 418px
    pane, and "Plan first" and the Panel toggle sat under the panel, unreachable. The hint takes only what is left (basis 0). */

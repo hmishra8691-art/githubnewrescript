@@ -47,7 +47,7 @@ await page.waitForSelector(".block-badge");
 for (const t of ["Age?", "Gender?", "Region?"]) await addQuestion(t);
 await page.fill('[data-testid="block-title"]', "Screener");
 await page.waitForTimeout(200);
-await page.click('[data-testid="add-block"]');
+await page.click('[data-testid="add-block-footer"]');
 await page.waitForTimeout(250);
 let titles = await page.$$('[data-testid="block-title"]');
 await titles[1].fill("Product usage");

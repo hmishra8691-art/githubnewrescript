@@ -120,6 +120,38 @@ export function previewBlockMove(input: SurveyDefinition, blockId: string, pos: 
   return { ok: true, unchanged, before, after, conflicts: [...new Set(conflicts)].slice(0, 30), def };
 }
 
+export interface BlockDestinations {
+  /** every OTHER block, once, numbered as the builder numbers them — with whether "before it" / "after it" would actually move the block */
+  blocks: { id: string; number: number; title: string; questions: number; before: boolean; after: boolean }[];
+  /** the beginning / the end of the survey are real moves (false when the block is already there) */
+  start: boolean; end: boolean;
+}
+
+/**
+ * WHERE A BLOCK CAN GO (2026-11-14) — for a compact picker: choose HOW (beginning, before, after, end), then WHICH
+ * block, each block listed once. A destination that would leave the block where it is (before the block that already
+ * follows it, after the one that already precedes it, the beginning when it is first) is marked, so the picker never
+ * offers a move that does nothing; the block itself and anything inside it are never destinations. One pass over the
+ * flow — no trial moves — so it stays instant on a survey of hundreds of blocks.
+ */
+export function blockDestinations(def: SurveyDefinition, movingId?: string): BlockDestinations {
+  const flow = def.flow as FlowNode[];
+  const me = movingId ? locate(flow, movingId) : null;
+  const all = listBlocks(flow as unknown[]);
+  const blocks: BlockDestinations["blocks"] = [];
+  all.forEach((b, i) => {
+    if (me && (b.id === movingId || contains(me.node, b.id))) return;
+    const at = locate(flow, b.id);
+    const sameList = !!me && !!at && at.list === me.list;
+    blocks.push({
+      id: b.id, number: i + 1, title: (b.title ?? "").trim(), questions: b.pages.reduce((t, p) => t + p.node.questionIds.length, 0),
+      before: !(sameList && at!.index === me!.index + 1), after: !(sameList && at!.index === me!.index - 1),
+    });
+  });
+  const top = !!me && me.list === flow;
+  return { blocks, start: !(top && me!.index === setupEnd(flow)), end: !(top && me!.index === endStart(flow) - 1) };
+}
+
 /** the positions a block can be given, for a picker: start, end, and before / after every other block */
 export function blockPositionChoices(def: SurveyDefinition, movingId?: string): { label: string; position: BlockPosition }[] {
   const out: { label: string; position: BlockPosition }[] = [{ label: "At the beginning of the survey", position: { at: "start" } }];

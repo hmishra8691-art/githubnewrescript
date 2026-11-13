@@ -84,3 +84,47 @@ test("after an edit: renumbers when an automatic block's questions changed, not 
   const switchedOn = make([q("a", "Q4"), q("c", "Q9")], [{ id: "b1", ids: ["a", "c"] }]);
   assert.deepEqual(codes(autoCodeAfterEdit(manual, switchedOn).def, ["a", "c"]), ["Q1", "Q2"], "switching a block to automatic numbers it at once");
 });
+
+test("2026-11-14: moving a block changes no code; an edit in one block never renumbers another", async () => {
+  const { autoCodeAfterEdit } = await import("./autoCode.js");
+  const { moveBlockTo, blockDestinations, previewBlockMove } = await import("./blockPlacement.js");
+  const prev = make([q("a", "S1"), q("b", "S2"), q("c", "Q1"), q("d", "Q2", { displayLogic: sel("a", 1) }), q("e", "S3"), q("f", "S4")],
+    [{ id: "b1", ids: ["a", "b"] }, { id: "b2", ids: ["c", "d"] }, { id: "b3", ids: ["e", "f"] }]);
+  const moved = structuredClone(prev);
+  assert.equal(moveBlockTo(moved, "b3", { at: "start" }), null);
+  const after = autoCodeAfterEdit(prev, moved);
+  assert.equal(after.def, moved, "nothing is renumbered by a move");
+  assert.deepEqual(after.def.questions.map((x) => [x.id, x.code]).sort(), prev.questions.map((x) => [x.id, x.code]).sort(), "every question keeps its code");
+  assert.equal(new Set(after.def.questions.map((x) => x.code)).size, 6, "no duplicate codes");
+  assert.equal(after.def.questions.length, 6, "no question duplicated or lost");
+  assert.deepEqual(after.def.questions.find((x) => x.id === "d")!.displayLogic, prev.questions.find((x) => x.id === "d")!.displayLogic, "logic untouched");
+  /* a question added to the first S block: that block is renumbered; the other S block (S3, S4) keeps its codes */
+  const added = make([q("a", "S1"), q("n", "S9"), q("b", "S2"), q("c", "Q1"), q("d", "Q2"), q("e", "S3"), q("f", "S4")],
+    [{ id: "b1", ids: ["a", "n", "b"] }, { id: "b2", ids: ["c", "d"] }, { id: "b3", ids: ["e", "f"] }]);
+  const r = autoCodeAfterEdit(prev, added);
+  assert.deepEqual(codes(r.def, ["a", "n", "b"]), ["S1", "S2", "S5"], "S3 and S4 belong to another block and are passed over");
+  assert.deepEqual(codes(r.def, ["e", "f", "c", "d"]), ["S3", "S4", "Q1", "Q2"]);
+
+  /* destinations: each other block once; never itself; a move that would change nothing is marked */
+  const d = blockDestinations(prev, "b2");
+  assert.deepEqual(d.blocks.map((b) => [b.id, b.number, b.before, b.after]), [["b1", 1, true, false], ["b3", 3, false, true]]);
+  assert.deepEqual([d.start, d.end], [true, true]);
+  assert.deepEqual([blockDestinations(prev, "b1").start, blockDestinations(prev, "b3").end], [false, false]);
+  assert.equal(previewBlockMove(prev, "b2", { at: "after", block: "b1" }).unchanged, true, "…which is exactly what the preview says");
+
+  /* a large survey: 300 blocks, 1,200 questions — listed at once, moved, nothing duplicated or recoded */
+  const qs: unknown[] = [], bl: { id: string; ids: string[]; auto: boolean }[] = [];
+  for (let i = 0; i < 300; i++) { const ids = [0, 1, 2, 3].map((k) => `q${i}_${k}`); ids.forEach((id, k) => qs.push(q(id, `B${i}X${k + 1}`, k ? { displayLogic: sel(`q${i}_0`, 1) } : {}))); bl.push({ id: `blk${i}`, ids, auto: false }); }
+  const big = make(qs, bl);
+  const t0 = Date.now();
+  const dest = blockDestinations(big, "blk150");
+  assert.equal(dest.blocks.length, 299);
+  assert.equal(new Set(dest.blocks.map((b) => b.id)).size, 299, "each block once");
+  assert.ok(Date.now() - t0 < 500, `listing destinations took ${Date.now() - t0} ms`);
+  const bigMoved = structuredClone(big);
+  assert.equal(moveBlockTo(bigMoved, "blk299", { at: "before", block: "blk1" }), null);
+  assert.equal(bigMoved.questions.length, 1200);
+  assert.deepEqual(bigMoved.questions.map((x) => x.code).sort(), big.questions.map((x) => x.code).sort());
+  assert.equal((bigMoved.flow as { id: string }[])[1].id, "blk299");
+  assert.equal(new Set((bigMoved.flow as { id: string }[]).map((n) => n.id)).size, 300, "no block duplicated");
+});

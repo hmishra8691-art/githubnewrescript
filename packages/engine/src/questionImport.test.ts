@@ -45,3 +45,23 @@ test("a rule naming a question that was not copied is removed and listed", () =>
   assert.equal(q3.displayLogic ?? null, null);
   assert.ok(r.dropped.length >= 1);
 });
+
+test("2026-11-14: started from a block — the copies land right after it; in it (keeping its name) while it is still empty", () => {
+  const three = SurveyDefinition.parse({
+    meta: { id: "t", code: "T", title: "Target" },
+    questions: [{ id: "t1", code: "A1", variableName: "A1", type: "numeric", text: "Age?" }, { id: "t2", code: "Z1", variableName: "Z1", type: "open_text", text: "Last" }],
+    flow: [{ type: "page", id: "b1", title: "First", questionIds: ["t1"] }, { type: "page", id: "b2", title: "Welcome", questionIds: [] }, { type: "page", id: "b3", title: "Last", questionIds: ["t2"] }, { type: "end", id: "e", status: "complete" }],
+  });
+  const after = importQuestions(three, source, { pageIds: ["lp1"], intoBlock: "b1" });
+  assert.deepEqual((after.def.flow as { id: string; title?: string }[]).map((n) => n.title ?? n.id), ["First", "Imported from Library", "Welcome", "Last", "e"]);
+  assert.equal(after.count, 2);
+  const into = importQuestions(three, source, { pageIds: ["lp1"], intoBlock: "b2" });
+  assert.deepEqual((into.def.flow as { id: string; title?: string }[]).map((n) => n.title ?? n.id), ["First", "Welcome", "Last", "e"], "the empty block is filled, not left empty above a new one");
+  assert.equal(listPages(into.def.flow as unknown[]).find((p) => (p.node as { questionIds: string[] }).questionIds.includes(into.idMap.a1))!.node.questionIds.length, 2);
+  assert.equal(into.def.questions.length, 4);
+  /* the existing questions and their codes are untouched; an unknown block falls back to the end */
+  assert.deepEqual(into.def.questions.slice(0, 2).map((q) => q.code), ["A1", "Z1"]);
+  const fallback = importQuestions(three, source, { pageIds: ["lp1"], intoBlock: "nope" });
+  assert.equal((fallback.def.flow as { type: string }[]).at(-2)!.type, "block");
+  assert.doesNotThrow(() => SurveyDefinition.parse(into.def));
+});

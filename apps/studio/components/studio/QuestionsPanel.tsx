@@ -2625,15 +2625,20 @@ export { parsePastedOptions };
  * NOT create a block. The block-level split lives on the block header.
  */
 function InsertBar({
-  onQuestion, onPick, onPageBreak,
-}: { onQuestion(): void; onPick(): void; onPageBreak?(): void }) {
+  onQuestion, onPick, onPageBreak, onLibrary,
+}: { onQuestion(): void; onPick(): void; onPageBreak?(): void; onLibrary?(): void }) {
   return (
     <div className="insert-bar">
       <span className="insert-line" />
-      <button className="btn small" onClick={onQuestion} title="Add a question here">
+      <button className="btn small" data-testid="add-question-here" onClick={onQuestion} title="Add a question here">
         + Question
       </button>
-      <button className="btn small" onClick={onPick} title="Pick a question type from the full library">▾ type…</button>
+      <button className="btn small" data-testid="add-question-type" onClick={onPick} title="Pick a question type from the full library">▾ type…</button>
+      {/* 2026-11-14: in the block it serves — the copied questions arrive beside this block (or in it while it is empty) */}
+      {onLibrary && (
+        <button className="btn small" data-testid="library-open" onClick={onLibrary}
+          title="Copy pages or questions from another of your surveys into this part of the survey — codes, rules and piping follow">⇣ From another survey</button>
+      )}
       {onPageBreak && (
         <button className="btn small ghost" data-testid="add-page-break" data-command={BLOCK_COMMANDS.ADD_PAGE_BREAK} onClick={onPageBreak}
           title="Start a new respondent page here — the block stays one block">
@@ -2680,7 +2685,8 @@ function remapRefs(node: any, map: Map<string, string>, skipKeys = new Set<strin
 export function QuestionsPanel() {
   const s = useStudio();
   const [pickerAt, setPickerAt] = React.useState<{ pageId: string; pos: number } | null>(null);
-  const [libraryOpen, setLibraryOpen] = React.useState(false);
+  /* the block From another survey was opened from (its id); null = closed */
+  const [libraryFor, setLibraryFor] = React.useState<string | null>(null);
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
   const [menuFor, setMenuFor] = React.useState<string | null>(null);
   const { previewBlock, modal: previewBlockModal } = usePreviewBlock();
@@ -3268,22 +3274,17 @@ export function QuestionsPanel() {
         <span className="chip">{s.def.questions.length} question{s.def.questions.length === 1 ? "" : "s"}</span>
         <span className="chip">{blocks.length} block{blocks.length === 1 ? "" : "s"}</span>
         <span className="grow" />
-        <button className="btn" onClick={addBlock}
-          data-testid="add-block" data-command={BLOCK_COMMANDS.ADD_BLOCK}>+ Add block</button>
-        <button className="btn" onClick={() => setPlacement({ mode: "add" })} data-testid="add-block-at"
-          title="Add a block at the beginning, before or after a block, or at the end">+ Add block at…</button>
+        {/*
+          * 2026-11-14: the four actions that stood here (+ Add block, + Add block at…, From another survey,
+          * + Add question) are gone — each lives where it is used: + Question / type… / From another survey inside
+          * every block, + Add block under the last block, and "add a block before / after" in a block's own menu.
+          */}
         {placement && (
           <BlockPlacementDialog def={s.def as never} request={placement} onCancel={() => setPlacement(null)}
             onAdd={(title, pos) => { setPlacement(null); addBlockAt(title, pos); }}
             onMove={(id, pos) => { setPlacement(null); moveBlockToPosition(id, pos); }} />
         )}
-        <button className="btn" onClick={() => setLibraryOpen(true)} data-testid="library-open"
-          title="Copy pages or questions from another of your surveys — codes, rules and piping follow">⇣ From another survey</button>
-        {libraryOpen && <LibraryInsertDialog onClose={() => setLibraryOpen(false)} />}
-        <button className="btn primary" data-testid="add-question-top" onClick={() => {
-          const last = blocks[blocks.length - 1]?.pages.slice(-1)[0];
-          setPickerAt(last ? { pageId: last.node.id, pos: last.node.questionIds.length } : { pageId: "", pos: 0 });
-        }}>+ Add question</button>
+        {libraryFor !== null && <LibraryInsertDialog intoBlock={libraryFor || undefined} onClose={() => setLibraryFor(null)} />}
         {pickerAt && (
           <VariantPickerModal
             onPick={(v) => { insertQuestion(pickerAt.pageId, pickerAt.pos, v); setPickerAt(null); }}
@@ -3343,9 +3344,9 @@ export function QuestionsPanel() {
                     <button className="menu-item" data-testid="block-auto-code" disabled={s.codesFrozen}
                       title={s.codesFrozen ? "Codes are frozen once responses exist" : "Codes follow the first question's code (S1 → S2, S3 …) and stay in sequence when questions are added, deleted or moved; logic, piping and calculations follow"}
                       onClick={() => { setMenuFor(null); s.update((d) => { const n = blockIn(d, b.id)?.node as any; if (n) { if (n.autoCode) delete n.autoCode; else n.autoCode = true; } }); }}>
-                      {(b.node as any).autoCode ? "✓ Automatic question codes (on)" : "Automatic question codes (off — manual)"}</button>
+                      {(b.node as any).autoCode ? "Question codes: automatic — switch to manual" : "Question codes: manual — switch to automatic"}</button>
                     <button className="menu-item" data-testid="move-block-to"
-                      onClick={() => { setMenuFor(null); setPlacement({ mode: "move", blockId: b.id, title: b.title || `Block ${pi + 1}` }); }}>⇅ Move block before / after…</button>
+                      onClick={() => { setMenuFor(null); setPlacement({ mode: "move", blockId: b.id, title: b.title || `Block ${pi + 1}` }); }}>⇅ Move block to…</button>
                     <button className="menu-item" data-testid="add-block-before"
                       onClick={() => { setMenuFor(null); addBlockAt("", { at: "before", block: b.id }); }}>＋ Add a block before this one</button>
                     <button className="menu-item" data-testid="add-block-after"
@@ -3406,7 +3407,8 @@ export function QuestionsPanel() {
                       one and adding the tenth look and behave identically */}
                   <InsertBar
                     onQuestion={() => insertQuestion(b.pages[0].node.id, 0)}
-                    onPick={() => setPickerAt({ pageId: b.pages[0].node.id, pos: 0 })} />
+                    onPick={() => setPickerAt({ pageId: b.pages[0].node.id, pos: 0 })}
+                    onLibrary={() => setLibraryFor(b.id)} />
                 </>
               )}
               {b.pages.map((pg, pgi) => {
@@ -3450,7 +3452,9 @@ export function QuestionsPanel() {
                         onPick={() => setPickerAt({ pageId: pg.node.id, pos: k + 1 })}
                         onPageBreak={k + 1 < ids.length
                           ? () => addPageBreak(pg.node.id, k + 1)
-                          : undefined} />
+                          : undefined}
+                        /* at the end of the block: one place per block, beside + Question and type… */
+                        onLibrary={pgi === b.pages.length - 1 && k === ids.length - 1 ? () => setLibraryFor(b.id) : undefined} />
                     </React.Fragment>
                   ))}
                 </React.Fragment>

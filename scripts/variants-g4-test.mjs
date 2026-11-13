@@ -32,7 +32,7 @@ console.log("✔ all 6 carousel / card / comparison variants are stable in the p
  * re-added duplicate fails here as well as in the registry test.
  */
 await h.goTab("Questions");
-await h.page.click('[data-testid="add-question-top"]');
+await h.page.click('[data-testid="add-question-type"] >> nth=-1');
 await h.page.waitForSelector('[data-testid="picker-family-comparison"]');
 await h.page.click('[data-testid="picker-family-comparison"]');
 await h.page.waitForSelector('[data-testid="picker-variant-comparison.attributes"]');

@@ -1,5 +1,5 @@
 import type { FlowNode, Question, SurveyDefinition } from "@rescript/schema";
-import { listPages } from "./blocks.js";
+import { listPages, listBlocks } from "./blocks.js";
 import { cloneQuestion, type IdMinter } from "./questionOps.js";
 import { usedNames } from "./variableUsage.js";
 import { mapConditionRoots } from "./conditionWalk.js";
@@ -35,7 +35,8 @@ const randomIds: IdMinter = (prefix) => `${prefix}_${Math.random().toString(36).
 export function importQuestions(
   target: SurveyDefinition,
   source: SurveyDefinition,
-  pick: { pageIds?: string[]; questionIds?: string[]; blockTitle?: string },
+  /* `intoBlock` (2026-11-14): the block the insert was started from — the copies land right after it, or IN it when it is still empty */
+  pick: { pageIds?: string[]; questionIds?: string[]; blockTitle?: string; intoBlock?: string },
   ids: IdMinter = randomIds,
 ): ImportResult {
   const def = structuredClone(target);
@@ -95,9 +96,29 @@ export function importQuestions(
   const blockId = ids("blk");
   const children: FlowNode[] = groups.map((g, i) => ({ type: "page", id: ids("p"), ...(g.title ? { title: g.title } : groups.length > 1 ? { title: `Page ${i + 1}` } : {}), questionIds: g.questionIds.map((x) => idMap[x]!) }) as unknown as FlowNode);
   const block = { type: "block", id: blockId, title: pick.blockTitle || `Imported from ${source.meta.title || source.meta.code}`, children } as unknown as FlowNode;
-  let at = def.flow.length;
-  while (at > 0 && (def.flow[at - 1] as { type: string }).type === "end") at--;
-  def.flow.splice(at, 0, block);
+  /*
+   * WHERE IT GOES. Started from a block (`intoBlock`): beside that block, in its own container — and when that block
+   * has no questions yet (a new survey's first block), the copies take its place and its name, so the survey is not
+   * left with an empty block above them. Otherwise, as before: before the survey's closing end nodes.
+   */
+  const anchor = pick.intoBlock ? listBlocks(def.flow as unknown[]).find((b) => b.id === pick.intoBlock) : undefined;
+  if (anchor) {
+    const empty = anchor.pages.every((p) => p.node.questionIds.length === 0) && !(anchor.node as { children?: unknown[] }).children?.some((k) => (k as { type?: string }).type !== "page");
+    const list = anchor.parent as FlowNode[];
+    const i = list.indexOf(anchor.node as FlowNode);
+    if (empty) {
+      const a = anchor.node as { title?: string; autoCode?: boolean; visibleIf?: unknown; showTitle?: boolean };
+      if (a.title) (block as { title?: string }).title = a.title;
+      if (a.autoCode !== undefined) (block as { autoCode?: boolean }).autoCode = a.autoCode;
+      if (a.visibleIf) (block as { visibleIf?: unknown }).visibleIf = a.visibleIf;
+      if (a.showTitle !== undefined) (block as { showTitle?: boolean }).showTitle = a.showTitle;
+      list.splice(i, 1, block);
+    } else list.splice(i + 1, 0, block);
+  } else {
+    let at = def.flow.length;
+    while (at > 0 && (def.flow[at - 1] as { type: string }).type === "end") at--;
+    def.flow.splice(at, 0, block);
+  }
 
   /* a rule that still names a source question nobody copied reads nothing here — remove it and say so */
   const external = new Set<string>();

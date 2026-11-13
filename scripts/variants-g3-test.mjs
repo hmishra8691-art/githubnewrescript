@@ -62,7 +62,7 @@ console.log("✔ all 9 variants are stable in the picker and create with their v
 // the sibling entries built in other batches are merged alongside — all stable,
 // and nothing in either family reads "coming soon" any more
 await h.goTab("Questions");
-await h.page.click('[data-testid="add-question-top"]');
+await h.page.click('[data-testid="add-question-type"] >> nth=-1');
 await h.page.click('[data-testid="picker-family-comparison"]');
 let other = await h.page.waitForSelector('[data-testid="picker-variant-comparison.attributes"]');
 assert.equal(await other.getAttribute("data-status"), "stable", "Multi-Item Comparison is stable too");
