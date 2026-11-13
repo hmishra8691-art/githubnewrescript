@@ -11,3 +11,7 @@
 -- A plain drop (migrations run in a transaction, where `concurrently` is refused). The live table is 2.7 MB, so the
 -- lock it takes is held for milliseconds; on a large table, run `drop index concurrently` by hand instead.
 drop index if exists public.responses_answers_gin;
+
+insert into public.schema_marks (migration, note) values
+  ('0097', 'dropped responses_answers_gin (never scanned; rewritten on every save) — scalability audit 2026-11-13')
+on conflict (migration) do update set applied_at = now(), note = excluded.note;

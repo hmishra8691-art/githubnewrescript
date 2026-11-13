@@ -1,6 +1,5 @@
 import "server-only";
-import { createClient } from "@supabase/supabase-js";
-import { supabaseFetch } from "./supabaseFetch";
+import { platformDb } from "./db";
 
 /**
  * Service-role client — SERVER ONLY. The service key never reaches the
@@ -12,11 +11,10 @@ import { supabaseFetch } from "./supabaseFetch";
  * full in `apps/studio/lib/supabaseFetch.ts`.
  */
 export function supabaseAdmin() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured");
-  return createClient(url, key, {
-    auth: { persistSession: false },
-    global: { fetch: supabaseFetch() },
-  });
+  /*
+   * TENANCY (2026-11-13): this is the PRIMARY database — today, every client's. New code says what its data is with
+   * `dbFor` / `platformDb` / `customerDb` (lib/db.ts), so it follows a client that is later given its own database;
+   * the existing call sites are migrated there step by step (scripts/tenancy-audit.mjs counts them).
+   */
+  return platformDb();
 }

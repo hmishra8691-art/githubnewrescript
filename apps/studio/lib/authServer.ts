@@ -1,6 +1,7 @@
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
 import { supabaseFetch } from "./supabaseFetch";
+import { platformDb } from "./db";
 import { createHash, randomBytes } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
 import {
@@ -73,13 +74,8 @@ const SESSION_COOKIE = "rescript_session";
  * honour that distinction is to make "cannot check" rare in the first place.
  */
 export function supabaseService() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured");
-  return createClient(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: { fetch: supabaseFetch() },
-  });
+  // sign-in, sessions and profiles are PLATFORM data: always the primary database (lib/db.ts, tenancy 2026-11-13)
+  return platformDb();
 }
 
 /**

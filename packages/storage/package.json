@@ -20,6 +20,10 @@
     "./completion": {
       "types": "./dist/completion.d.ts",
       "default": "./dist/completion.js"
+    },
+    "./tenancy": {
+      "types": "./dist/tenancy.d.ts",
+      "default": "./dist/tenancy.js"
     }
   },
   "scripts": {

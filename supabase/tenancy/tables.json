@@ -1,0 +1,705 @@
+{
+  "$comment": "TENANCY GROUNDWORK 2026-11-13 \u2014 where each table lives once a client can have its own database. platform = always the primary (people, sign-in, workspaces, money, the survey-link directory); customer = the client's database; shared = cross-client by design (a central store fed by every database); review = a decision is still needed. Every table in supabase/migrations must be listed here \u2014 scripts/tenancy-audit.mjs fails otherwise. Drafted from the live schema's columns (2026-11-13), corrected by hand; the 'review' rows are open questions.",
+  "tables": {
+    "access_settings": {
+      "class": "platform",
+      "why": "workspace security policy, read on every request"
+    },
+    "admission_decisions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "ai_eval_runs": {
+      "class": "platform",
+      "why": "platform AI evaluation"
+    },
+    "ai_interview_participants": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "ai_interview_quotas": {
+      "class": "customer",
+      "why": "child of ai_interview_studies"
+    },
+    "ai_interview_sessions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "ai_interview_studies": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "ai_interview_turns": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_analyses": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_analysis_versions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_charts": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_exports": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_model_jobs": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_plan_applies": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_report_templates": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "analytics_report_versions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_reports": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_result_cache": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_runs": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_segments": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_share_access": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_shares": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_story_renders": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_story_reports": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_story_segments": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_story_themes": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "analytics_story_versions": {
+      "class": "customer",
+      "why": "child of analytics_story_reports"
+    },
+    "analytics_themes": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "artifacts": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "assessment_results": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "audience_specifications": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "audit_logs": {
+      "class": "review",
+      "why": "security audit trail spans platform and client actions \u2014 decide: central, or one per database"
+    },
+    "auth_handoff_codes": {
+      "class": "platform",
+      "why": "sign-in hand-off between apps"
+    },
+    "balance_claims": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "balance_keys": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "billing_config": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "billing_events": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "billing_periods": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "billing_rates": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "commercial_margins": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "copilot_chunks": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "copilot_documents": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "copilot_research_context": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "credit_requests": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "credit_transfers": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "customers": {
+      "class": "platform",
+      "why": "the workspaces themselves \u2014 the directory"
+    },
+    "data_export_presets": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "deployments": {
+      "class": "platform",
+      "why": "the survey-link directory: /s/<client>/<study> \u2192 which survey (and later which database)"
+    },
+    "design_files": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "fraud_cases": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "fraud_network_clusters": {
+      "class": "shared",
+      "why": "cross-client fraud clusters"
+    },
+    "help_conversations": {
+      "class": "platform",
+      "why": "product help"
+    },
+    "help_messages": {
+      "class": "platform",
+      "why": "product help"
+    },
+    "identity_match_events": {
+      "class": "shared",
+      "why": "cross-client identity matching"
+    },
+    "identity_match_tokens": {
+      "class": "shared",
+      "why": "cross-client identity matching"
+    },
+    "import_sessions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "intelligent_operations": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "intelligent_steps": {
+      "class": "customer",
+      "why": "child of intelligent_tasks"
+    },
+    "intelligent_tasks": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_analysis": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_deletions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_evidence": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_exports": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_jobs": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_media": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_media_participants": {
+      "class": "customer",
+      "why": "child of interview_media"
+    },
+    "interview_people": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_pools": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_project_members": {
+      "class": "platform",
+      "why": "who may open an interview project"
+    },
+    "interview_projects": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "interview_questions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_requirements": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_responses": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_reviews": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_telemetry": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interview_transcripts": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "interviews": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "listfill_allocations": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "listfill_counts": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "live_room_invites": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "live_room_members": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "live_room_notes": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "live_room_signals": {
+      "class": "customer",
+      "why": "child of live_rooms"
+    },
+    "live_room_tracks": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "live_rooms": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "login_attempts": {
+      "class": "platform",
+      "why": "sign-in"
+    },
+    "mail_deliveries": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "margin_applications": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "media_deletions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "media_deliveries": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "media_objects": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "media_transcripts": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "model_evaluations": {
+      "class": "platform",
+      "why": "platform AI evaluation"
+    },
+    "network_reputation": {
+      "class": "shared",
+      "why": "fraud intelligence ACROSS clients \u2014 needs a central store fed by every database"
+    },
+    "notifications": {
+      "class": "review",
+      "why": "a person's notification feed about a client's surveys \u2014 decide where the feed lives"
+    },
+    "notify_channels": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "notify_deliveries": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "notify_events": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "notify_rules": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "panel_entries": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "panel_secrets": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "panel_vendors": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "participation_ledger": {
+      "class": "shared",
+      "why": "who took part where, across clients (over-surveying protection)"
+    },
+    "password_resets": {
+      "class": "platform",
+      "why": "sign-in"
+    },
+    "profiles": {
+      "class": "platform",
+      "why": "people and which workspace they belong to"
+    },
+    "project_comments": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "project_edit_locks": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "project_invitations": {
+      "class": "platform",
+      "why": "invitations to a project"
+    },
+    "project_members": {
+      "class": "platform",
+      "why": "who may open a project \u2014 checked before the client's data is read"
+    },
+    "project_presence": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "project_spending": {
+      "class": "platform",
+      "why": "wallets"
+    },
+    "project_wallets": {
+      "class": "platform",
+      "why": "wallets \u2014 money stays central"
+    },
+    "qual_assignment_codings": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_coding_assignments": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_codings": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_events": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_group_answers": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_group_participants": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_group_sessions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_group_votes": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_highlights": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_jobs": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_sessions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_syntheses": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_transcript_revisions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "qual_transcripts": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "quality_profiles": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "quota_counts": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "quota_holds": {
+      "class": "customer",
+      "why": "held quota slots of a survey's sessions"
+    },
+    "quota_progress": {
+      "class": "customer",
+      "why": "a survey's quota progress"
+    },
+    "recruitment_events": {
+      "class": "shared",
+      "why": "recruitment exchange"
+    },
+    "recruitment_forecasts": {
+      "class": "shared",
+      "why": "recruitment exchange"
+    },
+    "recruitment_markets": {
+      "class": "shared",
+      "why": "the recruitment exchange spans clients"
+    },
+    "recruitment_orders": {
+      "class": "shared",
+      "why": "recruitment exchange"
+    },
+    "recruitment_projects": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "report_theme_selections": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "report_theme_versions": {
+      "class": "customer",
+      "why": "child of report_themes"
+    },
+    "report_themes": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "respondent_trust_ids": {
+      "class": "shared",
+      "why": "cross-client respondent identity"
+    },
+    "respondents": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "response_counters": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "response_edits": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "response_reviews": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "responses": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "sample_allocations": {
+      "class": "review",
+      "why": "recruitment sample allocations \u2014 client data or exchange data? decide with the recruitment design"
+    },
+    "sample_sources": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "schema_marks": {
+      "class": "platform",
+      "why": "schema bookkeeping \u2014 exists in every database"
+    },
+    "settlement_differences": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "settlement_reconciliations": {
+      "class": "platform",
+      "why": "billing"
+    },
+    "support_tickets": {
+      "class": "platform",
+      "why": "support"
+    },
+    "survey_access_tokens": {
+      "class": "platform",
+      "why": "invitation tokens resolve before the survey's database is known"
+    },
+    "survey_test_cases": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "survey_test_runs": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "survey_versions": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "surveys": {
+      "class": "customer",
+      "why": "a client's survey \u2014 its id \u2192 client mapping must ALSO be kept centrally (the directory), so a survey id can be routed"
+    },
+    "themes": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "tracker_waves": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    },
+    "translation_cache": {
+      "class": "platform",
+      "why": "shared translation cache"
+    },
+    "usage_events": {
+      "class": "platform",
+      "why": "metering"
+    },
+    "usage_reservations": {
+      "class": "platform",
+      "why": "metering"
+    },
+    "user_ai_credentials": {
+      "class": "platform",
+      "why": "a person's own AI keys"
+    },
+    "user_ai_settings": {
+      "class": "platform",
+      "why": "a person's AI settings"
+    },
+    "user_sessions": {
+      "class": "platform",
+      "why": "sign-in sessions"
+    },
+    "vendor_api_calls": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "vendor_capabilities": {
+      "class": "shared",
+      "why": "vendor catalogue"
+    },
+    "vendor_capacity": {
+      "class": "shared",
+      "why": "vendor catalogue"
+    },
+    "vendor_circuit_state": {
+      "class": "shared",
+      "why": "vendor health shared by all clients"
+    },
+    "vendor_integrations": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "vendor_participant_mappings": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "vendor_pricing": {
+      "class": "shared",
+      "why": "vendor catalogue shared by all clients"
+    },
+    "vendor_quality_metrics": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "vendor_quotations": {
+      "class": "shared",
+      "why": "vendor catalogue"
+    },
+    "vendor_webhook_receipts": {
+      "class": "customer",
+      "why": "a client's own settings or content (customer_id)"
+    },
+    "wallet_ledger": {
+      "class": "platform",
+      "why": "wallets"
+    },
+    "wave_trackers": {
+      "class": "customer",
+      "why": "holds a survey's, session's or interview project's data"
+    }
+  }
+}
