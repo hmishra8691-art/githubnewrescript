@@ -315,8 +315,9 @@ export function OptionGroupsEditor({ q, patch }: {
             return (
               <div className="row" key={i.key} style={{ gap: 6, fontSize: 13, marginBottom: 3 }}>
                 <span className="muted mono" style={{ minWidth: 34 }}>{i.key}</span>
-                <span className="grow">{i.label}</span>
-                <select className="select" data-testid={`assign-${i.key}`}
+                {/* the label keeps room beside the group select (text-overlap audit 2026-11-13: it shrank to 0 px) */}
+                <span className="grow" style={{ flex: "1 1 120px", minWidth: 0, overflowWrap: "anywhere" }}>{i.label}</span>
+                <select className="select" style={{ width: "auto", maxWidth: "55%", flex: "0 1 auto" }} data-testid={`assign-${i.key}`}
                   value={g?.id ?? ""} onChange={(e) => assign(i.key, e.target.value)}
                   disabled={groups.length === 0}>
                   <option value="">— no group —</option>

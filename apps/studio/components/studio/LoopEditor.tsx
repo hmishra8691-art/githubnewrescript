@@ -235,7 +235,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
       <div className="loop-summary" data-testid="loop-summary">
         {summary.map((line, i) => <p key={i} className={i === 0 ? "loop-summary-main" : "loop-summary-more"}>{line}</p>)}
         {checks.map((c, i) => (
-          <div key={i} className={`loop-check ${c.level}`} data-testid="loop-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
+          <div key={i} className={`loop-check lvl-${c.level}`} data-testid="loop-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
             <span className="loop-check-tag">{c.level === "problem" ? "Fix" : c.level === "warning" ? "Check" : "Tip"}</span>{c.message}
           </div>
         ))}

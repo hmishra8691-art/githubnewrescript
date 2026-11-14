@@ -751,7 +751,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 @media (max-width: 1100px) {
   .topbar { gap: 6px; }
   .topbar > .btn { padding: 0 9px; }
-  .topbar > .btn .ico + * { display: inline; }
+  .topbar > .btn .ico + *:not(.tb-label):not(.palette-kbd) { display: inline; } /* the secondary buttons stay icon-only (2026-11-13) */
 }
 @media (max-width: 900px) {
   .ide { height: auto; min-height: 100vh; overflow: visible; }
@@ -2775,9 +2775,11 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .loop-summary p { margin: 0; }
 .loop-summary-main { font-size: 14.5px; font-weight: 600; color: var(--c-text); line-height: 1.45; }
 .loop-summary-more { font-size: 13px; color: var(--c-text-2); margin-top: 3px !important; }
-.loop-check { display: flex; gap: 8px; align-items: baseline; font-size: 13px; margin-top: 8px; padding: 7px 10px; border-radius: 8px; background: var(--c-surface); border: 1px solid var(--c-border); }
-.loop-check.problem { border-color: var(--c-error-bd); background: var(--c-error-bg); color: var(--c-error-fg); }
-.loop-check.warning { border-color: var(--c-warning-bd); background: var(--c-warning-bg); color: var(--c-warning-fg); }
+/* level classes are `lvl-*`: a bare `.tip` is the Studio's 16 px tooltip icon (design-system.css), and a check carrying it collapsed to a 22 px column */
+.loop-check { display: flex; gap: 8px; align-items: baseline; overflow-wrap: anywhere; font-size: 13px; margin-top: 8px; padding: 7px 10px; border-radius: 8px; background: var(--c-surface); border: 1px solid var(--c-border); }
+.loop-check.lvl-problem { border-color: var(--c-error-bd); background: var(--c-error-bg); color: var(--c-error-fg); }
+.loop-check.lvl-warning { border-color: var(--c-warning-bd); background: var(--c-warning-bg); color: var(--c-warning-fg); }
+.loop-check > * { min-width: 0; }
 .loop-check-tag { flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .loop-more { margin: 4px 0 12px; border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-surface); }
 .loop-more > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 13.5px; list-style-position: inside; }
@@ -2799,3 +2801,25 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .alr-goal-preview { margin: 6px 0 0; font-size: 12.5px; }
 .alr-goal-preview.warn { color: var(--c-warning-fg); }
 .alr-goal-note { color: var(--c-warning-fg); }
+/* TOP BAR AT LAPTOP WIDTHS (2026-11-13, text-overlap audit). At 1280 px the bar was 41 px wider than the window: the
+   project name was squeezed to nothing, "● Unsaved changes" slid under the search button, and Publish was cut off.
+   The name keeps a minimum width and ellipsises; the save status truncates (its full text is the tooltip); below
+   1500 px the secondary buttons show their icon only (their name stays as tooltip and accessible label). */
+.topbar .ctx { min-width: 150px; }
+.ctx-line { flex-wrap: nowrap; }
+.ctx-title { flex: 0 1 auto; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-line .save-state { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1500px) {
+  .topbar .tb-label { display: none; }
+  .topbar .palette-kbd { display: none; }
+}
+@media (max-width: 1100px) { .topbar .ctx { min-width: 110px; } }
+/* a question row never squeezes its text to nothing (text-overlap audit 2026-11-13): at 1024 px with the properties
+   panel open the badges and actions left the text 0–60 px, nine lines tall, over the "+ Question" button. Now the
+   row wraps: the text keeps 140 px or more, and the chips and actions move to a second line */
+.qcard .qlist-item { flex-wrap: wrap; row-gap: 4px; }
+.qcard .qcard-text { flex: 1 1 200px; min-width: 140px; }
+/* a growing field in a wrapping row keeps a usable width (text-overlap audit 2026-11-13): `flex: 1` starts from 0, so
+   in the narrow properties panel "Spoken instruction" shrank to 1 px beside a 260 px field instead of wrapping */
+.row > label.f.grow { flex: 1 1 180px; min-width: 0; }
+.row > label.f[style*="width"] { max-width: 100%; }

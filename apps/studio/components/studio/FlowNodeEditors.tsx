@@ -693,7 +693,7 @@ function FlowNodeGuide({ node }: { node: FlowNode }) {
     <div className="loop-summary" data-testid="flow-guide" data-node-type={node.type}>
       <p className="loop-summary-main">{summary}</p>
       {checks.map((c, i) => (
-        <div key={i} className={`loop-check ${c.level}`} data-testid="flow-guide-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
+        <div key={i} className={`loop-check lvl-${c.level}`} data-testid="flow-guide-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
           <span className="loop-check-tag">{c.level === "problem" ? "Fix" : c.level === "warning" ? "Check" : "Tip"}</span>{c.message}
         </div>
       ))}

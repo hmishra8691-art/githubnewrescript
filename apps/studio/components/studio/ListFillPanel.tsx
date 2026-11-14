@@ -242,7 +242,7 @@ export function ListFillPanel() {
             <div className="loop-summary" data-testid={`lf-summary-${lf.id}`}>
               {listFillPlainSummary(s.def, lf as never).map((line, k) => <p key={k} className={k === 0 ? "loop-summary-main" : "loop-summary-more"}>{line}</p>)}
               {listFillChecks(s.def, lf as never).map((c, k) => (
-                <div key={k} className={`loop-check ${c.level}`} data-testid="lf-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
+                <div key={k} className={`loop-check lvl-${c.level}`} data-testid="lf-check" data-level={c.level} role={c.level === "problem" ? "alert" : undefined}>
                   <span className="loop-check-tag">{c.level === "problem" ? "Fix" : c.level === "warning" ? "Check" : "Tip"}</span>{c.message}
                 </div>
               ))}

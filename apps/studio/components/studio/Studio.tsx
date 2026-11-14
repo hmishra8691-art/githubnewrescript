@@ -942,18 +942,18 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         {/* 2026-11-09: Help → Help (this drawer) or Developer Docs (a new tab, so the survey stays open) */}
         <HelpMenu className="btn" active={helpOpen} onHelp={() => setHelpOpen((o) => !o)} docsInNewTab align="right" testId="studio-help" />
         <button className="btn" onClick={preview} disabled={saving}
-          title="Full-page preview of the survey you are editing right now"><Icon name="play" size={15} /> Preview</button>
-        <button className="btn" onClick={testSurvey} disabled={saving || roWrite} data-testid="test-survey"
+          title="Full-page preview of the survey you are editing right now" aria-label="Preview"><Icon name="play" size={15} /> <span className="tb-label">Preview</span></button>
+        <button className="btn" onClick={testSurvey} disabled={saving || roWrite} data-testid="test-survey" aria-label="Test Survey"
           {...(roWrite ? { title: "Enter edit mode to save a test build" } : {})}
           title={lastTest
             ? `Saves your latest changes as a new version and opens exactly that. Last test build: v${lastTest.version}${lastTest.revision != null ? ` (rev ${lastTest.revision})` : ""}`
             : "Saves your latest changes as a new version, deploys it to the test link and opens exactly that version with the inspector"}>
-          <Icon name="flask" size={15} /> {saving ? "Saving…" : "Test Survey"}
+          <Icon name="flask" size={15} /> <span className="tb-label">{saving ? "Saving…" : "Test Survey"}</span>
         </button>
-        <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank"><Icon name="download" size={15} /> Variables .xlsx</a>
+        <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank" title="Download the variable list as an Excel file" aria-label="Variables .xlsx"><Icon name="download" size={15} /> <span className="tb-label">Variables .xlsx</span></a>
         <button className="btn" data-testid="export-survey" onClick={() => setExportOpen(true)}
-          title="Export the survey you are editing as Word or JSON"><Icon name="export" size={15} /> Export</button>
-        <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses"><Icon name="data" size={15} /> Data</button>
+          title="Export the survey you are editing as Word or JSON" aria-label="Export"><Icon name="export" size={15} /> <span className="tb-label">Export</span></button>
+        <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses" aria-label="Data"><Icon name="data" size={15} /> <span className="tb-label">Data</span></button>
         {/* the wallet, compact, beside the account (dashboard brief §3): the owner's balance, never this project's spend; its actions behind it */}
         {/* G3 2026-10-22: my alerts (distress flags, quotas, the cost cap …) */}
         <AlertBell />
