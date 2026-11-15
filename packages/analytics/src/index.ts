@@ -58,3 +58,6 @@ export * from "./advancedStale.js";
 export * from "./panels/service.js";
 export * from "./panels/stores.js";
 export * from "./infographic.js";
+export * from "./analysisLayer.js";
+export * from "./analysisPlanner.js";
+export { npsByGroups, npsForCases, type NpsGroupRow } from "./analyses/npsCompare.js";

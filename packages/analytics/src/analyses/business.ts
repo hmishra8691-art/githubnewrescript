@@ -6,6 +6,18 @@ import { proportionCI, proportionTest, type TestResult } from "../stats/tests.js
 import { ols } from "../stats/regression.js";
 import { answeredN, fmtNum, fmtP, fmtPct, makeResult, opt, pct, refused, round } from "./common.js";
 import { expandBattery } from "./basics.js";
+import { npsByGroups, type NpsGroupRow } from "./npsCompare.js";
+import type { CorrectionMethod } from "../posthoc.js";
+
+/** the plain-language reading of one grouping's NPS: highest, lowest, and only the differences that tested significant */
+function insightsFromGroups(insights: string[], byLabel: string, rows: NpsGroupRow[]): void {
+  const usable = rows.filter((r) => r.nps != null && !r.small);
+  if (usable.length < 2) return;
+  const sorted = [...usable].sort((a, b) => b.nps! - a.nps!);
+  const top = sorted[0], low = sorted[sorted.length - 1];
+  const sigPairs = rows.flatMap((r) => r.sig.split("").filter(Boolean).map((l) => `${r.group} > ${rows.find((x) => x.letter === l)?.group ?? l}`));
+  insights.push(`By ${byLabel}: NPS is highest among ${top.group} (${Math.round(top.nps!)}) and lowest among ${low.group} (${Math.round(low.nps!)}). ${sigPairs.length ? `Statistically significant: ${sigPairs.join("; ")}.` : "None of the differences is statistically significant — they may be sampling noise."}`);
+}
 import { ladderDemand, nmsAnalysis, nmsCalibrationFor, vanWestendorpCurves, vanWestendorpPoints, type NmsRow, type VwDefinition, type VwRow } from "./pricingModels.js";
 
 /* ============================================================ NPS */
@@ -81,9 +93,30 @@ export function nps(def: AnalysisDefinition, ds: Dataset, totalCases: number): A
   ];
   const insights = [`NPS is ${fmtNum(r.nps, 0)} (${r.ci ? `95% CI ${fmtNum(r.ci[0], 0)} to ${fmtNum(r.ci[1], 0)}` : `no interval: fewer than ${NPS_MIN_CI_N} answers`}): ${fmtPct(r.promoters, 0)} promoters, ${fmtPct(r.passives, 0)} passives, ${fmtPct(r.detractors, 0)} detractors (n = ${r.n}).`];
   const tests: TestResult[] = [];
+  const noteList: string[] = [];
+  const groupBars: { label: string; x: NpsGroupRow }[] = [];
   // by segment / by group
-  const by = opt(def, "by", def.columns?.[0] ?? null) as string | null;
+  const byOpt = opt(def, "by", def.columns?.[0] ?? null) as string | string[] | null;
   const segRows: { name: string; n: number; chart: ChartData }[] = [];
+  /*
+   * SEVERAL GROUPINGS, TESTED (npsCompare.ts, 2026-11-15): `by` as a list — "NPS by gender and age group" — gets one
+   * table per grouping with the promoter / passive / detractor split, the NPS, its interval at `confidence`, and the
+   * letters of the groups each is significantly higher than.
+   */
+  const byList = Array.isArray(byOpt) ? byOpt.filter((b) => typeof b === "string" && ds.byName.has(b)) : [];
+  const confidence = [0.9, 0.95, 0.99].includes(Number(opt(def, "confidence", 0.95))) ? Number(opt(def, "confidence", 0.95)) : 0.95;
+  const correction = opt(def, "correction", "holm") as CorrectionMethod | "none";
+  for (const b of byList) {
+    const g = npsByGroups(ds, v, vals, w, b, { confidence, correction });
+    tables.push(g.table);
+    tests.push(...g.tests);
+    insightsFromGroups(insights, labelOf(ds, b), g.rows);
+    noteList.push(...g.notes);
+    segRows.push(...g.rows.map((x) => ({ name: `${labelOf(ds, b)}: ${x.group}`, n: x.n, chart: { kpis: [{ label: "NPS", value: round(x.nps, 0) ?? 0 }], categories: ["Promoters", "Passives", "Detractors"], series: [{ name: x.group, values: [pct(x.promoters) ?? 0, pct(x.passives) ?? 0, pct(x.detractors) ?? 0] }] } })));
+    groupBars.push(...g.rows.map((x) => ({ label: byList.length > 1 ? `${labelOf(ds, b)}: ${x.group}` : x.group, x })));
+  }
+  if (Array.isArray(byOpt) && byOpt.length && !byList.length) noteList.push(`None of ${byOpt.join(", ")} is a variable here, so NPS was not broken down.`);
+  const by = Array.isArray(byOpt) ? null : byOpt;
   if (by && ds.byName.has(by)) {
     const cats = categoriesOf(ds, by), col = categoricalColumn(ds, by);
     const rows = cats.map((c) => { const idx = col.map((x, i) => (Array.isArray(x) ? x.includes(c.code) : x === c.code) ? i : -1).filter((i) => i >= 0); const rr = npsOf(idx.map((i) => vals[i]), w ? idx.map((i) => w[i]) : undefined); return { group: c.label, code: c.code, ...rr }; }).filter((x) => x.n > 0);
@@ -113,8 +146,15 @@ export function nps(def: AnalysisDefinition, ds: Dataset, totalCases: number): A
     }
   }
   return makeResult(def, ds, {
-    tables, chart: { kpis: [{ label: "NPS", value: round(r.nps, 0) ?? 0, target: opt(def, "target", undefined) }, { label: "Promoters", value: pct(r.promoters) ?? 0, unit: "%" }, { label: "Passives", value: pct(r.passives) ?? 0, unit: "%" }, { label: "Detractors", value: pct(r.detractors) ?? 0, unit: "%" }], categories: ["Detractors (0–6)", "Passives (7–8)", "Promoters (9–10)"], series: [{ name: "Share", values: [pct(r.detractors), pct(r.passives), pct(r.promoters)] }], valueFormat: "pct", ...(trendRows.length > 1 ? { matrix: undefined } : {}), points: undefined },
-    tests, insights, recommendedCharts: ["gauge", "kpi_card", "bar_stacked_100", "line", "bar_horizontal"], segments: segRows.length ? segRows : undefined, totalCases,
+    tables, chart: { kpis: [{ label: "NPS", value: round(r.nps, 0) ?? 0, target: opt(def, "target", undefined) }, { label: "Promoters", value: pct(r.promoters) ?? 0, unit: "%" }, { label: "Passives", value: pct(r.passives) ?? 0, unit: "%" }, { label: "Detractors", value: pct(r.detractors) ?? 0, unit: "%" }], ...(groupBars.length
+      /* compared across groups: one bar per group, split into detractors / passives / promoters (a 100% stacked bar) */
+      ? { categories: ["Total", ...groupBars.map((g) => g.label)], series: [
+          { name: "Detractors (0–6)", values: [pct(r.detractors), ...groupBars.map((g) => pct(g.x.detractors))] },
+          { name: "Passives (7–8)", values: [pct(r.passives), ...groupBars.map((g) => pct(g.x.passives))] },
+          { name: "Promoters (9–10)", values: [pct(r.promoters), ...groupBars.map((g) => pct(g.x.promoters))] }] }
+      : { categories: ["Detractors (0–6)", "Passives (7–8)", "Promoters (9–10)"], series: [{ name: "Share", values: [pct(r.detractors), pct(r.passives), pct(r.promoters)] }] }), valueFormat: "pct", ...(trendRows.length > 1 ? { matrix: undefined } : {}), points: undefined },
+    tests, insights, recommendedCharts: byList.length ? ["bar_stacked_100", "bar_horizontal", "gauge", "kpi_card", "line"] : ["gauge", "kpi_card", "bar_stacked_100", "line", "bar_horizontal"], segments: segRows.length ? segRows : undefined, totalCases,
+    ...(noteList.length ? { warnings: noteList } : {}),
   });
 }
 

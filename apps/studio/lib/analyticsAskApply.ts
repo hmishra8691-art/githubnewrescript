@@ -28,13 +28,25 @@ export async function applyOps(db: SupabaseClient, surveyId: string, surveyVersi
     const v = validateAskOp(op, ctx);
     if (v.blocked.length) { out.push({ index, name, status: "blocked", message: v.blocked.join(" ") }); continue; }
     try {
-      if (op.op === "add_crosstab" || op.op === "add_test" || op.op === "add_descriptive") {
+      if (op.op === "add_crosstab" || op.op === "add_test" || op.op === "add_descriptive" || op.op === "add_analysis") {
         const def = definitionFor(op, dataset, request)!;
         const row = { survey_id: surveyId, name: op.name.slice(0, 160), kind: def.kind, definition: { ...def, name: op.name.slice(0, 160), surveyVersion: surveyVersion ?? undefined }, version: 1, folder: null, tags: [], created_by: userId, updated_by: userId };
         const { data, error } = await db.from("analytics_analyses").insert(row).select("id, definition").single();
         if (error || !data) { out.push({ index, name, status: "failed", message: error?.message ?? "The analysis could not be saved." }); continue; }
         await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: data.definition, summary: "Created from a request", created_by: userId });
         out.push({ index, name, status: "done", message: "Created.", createdId: String(data.id), undo: { kind: "created_analysis", id: String(data.id) } });
+      } else if (op.op === "update_analysis") {
+        /* a change in words to a saved analysis: a new version, the old one kept, written only if nobody saved it in between */
+        const { data: cur } = await db.from("analytics_analyses").select("id, version, definition").eq("id", op.analysisId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+        if (!cur) { out.push({ index, name, status: "blocked", message: "That analysis no longer exists." }); continue; }
+        const prev = Number(cur.version) || 1;
+        const def = definitionFor(op, dataset, request)!;
+        const definition = { ...def, name: String((cur.definition as { name?: string })?.name ?? op.name).slice(0, 160), surveyVersion: surveyVersion ?? undefined };
+        const { data: upd, error } = await db.from("analytics_analyses").update({ definition, version: prev + 1, updated_by: userId }).eq("id", op.analysisId).eq("survey_id", surveyId).eq("version", prev).select("id");
+        if (error) { out.push({ index, name, status: "failed", message: error.message }); continue; }
+        if (!upd?.length) { out.push({ index, name, status: "blocked", message: "The analysis was changed by someone else just now — reopen it and ask again." }); continue; }
+        await db.from("analytics_analysis_versions").insert({ analysis_id: op.analysisId, survey_id: surveyId, version: prev + 1, definition, summary: `Changed from a request: ${request.slice(0, 200)}`, created_by: userId });
+        out.push({ index, name, status: "done", message: "Changed (the previous version is kept; Undo restores it).", undo: { kind: "updated_analysis", id: op.analysisId, version: prev } });
       } else if (op.op === "remove_analysis") {
         const { data: charts } = await db.from("analytics_charts").select("id").eq("analysis_id", op.analysisId).is("deleted_at", null);
         const { error } = await db.from("analytics_analyses").update({ deleted_at: now(), updated_by: userId }).eq("id", op.analysisId).eq("survey_id", surveyId).is("deleted_at", null);
@@ -73,6 +85,17 @@ export async function undoRecords(db: SupabaseClient, surveyId: string, userId: 
         const { error } = await db.from("analytics_analyses").update({ deleted_at: null, updated_by: userId }).eq("id", r.id).eq("survey_id", surveyId);
         if (!error && r.chartIds.length) await db.from("analytics_charts").update({ deleted_at: null }).eq("survey_id", surveyId).in("id", r.chartIds);
         out.push({ name: r.id, status: error ? "skipped" : "undone", message: error ? error.message : "Analysis restored." });
+      } else if (r.kind === "updated_analysis") {
+        /* restore the version the request replaced — read from the saved history, never from the browser */
+        const { data: cur } = await db.from("analytics_analyses").select("version").eq("id", r.id).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+        if (!cur) { out.push({ name: r.id, status: "skipped", message: "That analysis no longer exists." }); continue; }
+        if (Number(cur.version) !== r.version + 1) { out.push({ name: r.id, status: "skipped", message: "The analysis was changed again since, so it was left as it is." }); continue; }
+        const { data: old } = await db.from("analytics_analysis_versions").select("definition").eq("analysis_id", r.id).eq("survey_id", surveyId).eq("version", r.version).maybeSingle();
+        if (!old) { out.push({ name: r.id, status: "skipped", message: "The earlier version is not in the history, so nothing was changed." }); continue; }
+        const next = r.version + 2;
+        const { error } = await db.from("analytics_analyses").update({ definition: old.definition, version: next, updated_by: userId }).eq("id", r.id).eq("survey_id", surveyId).eq("version", r.version + 1);
+        if (!error) await db.from("analytics_analysis_versions").insert({ analysis_id: r.id, survey_id: surveyId, version: next, definition: old.definition, summary: `Restored version ${r.version} (Undo)`, created_by: userId });
+        out.push({ name: r.id, status: error ? "skipped" : "undone", message: error ? error.message : "Previous version restored." });
       } else {
         const { data: rep } = await db.from("analytics_reports").select("definition").eq("id", r.reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
         const def = rep?.definition as ReportDefinition | undefined;

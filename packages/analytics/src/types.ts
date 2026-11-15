@@ -218,6 +218,12 @@ export interface AnalysisResult {
   variablesUsed: string[];
   /** what this result was computed from, and how long it took (audit S-14) — set by `runAnalysis` */
   provenance?: ResultProvenance;
+  /**
+   * The analysis layer this result was computed on (2026-11-15): each derived variable the analysis defined
+   * (`options.layer`), how many respondents it was populated for, what fitted no rule, and the checks that held —
+   * plus the filters applied (`options.layerFilter`). Absent when the analysis defines none.
+   */
+  layer?: { reports: import("./analysisLayer.js").LayerReport[]; filtered?: { label: string; before: number; after: number }[] };
   /** set when the analysis could not be computed at all — a stable code and a sentence a researcher can act on, never a raw exception */
   /** `job_pending` (2026-10-22): a model that runs as a background job (HB) has not finished yet — nothing is read from it until it has */
   error?: { code: "unknown_kind" | "not_computable" | "no_data" | "unknown_variable" | "job_pending"; message: string };

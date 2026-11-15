@@ -22,8 +22,8 @@ type Status = "proposed" | "done" | "blocked" | "failed";
 interface Shown { item: AskItem; status: Status; message?: string; checked: boolean }
 interface HistoryEntry { at: string; request: string; done: number; blocked: number; items: { title: string; status: Status }[] }
 
-const EXAMPLES = ["Create cross-tabs of satisfaction by age and gender", "Remove redundant analyses", "Choose the best chart for each question", "Prepare a management summary", "Make an animated report of the key findings"];
-const FOCUS_EXAMPLES = ["Cross-tab this by gender", "Test whether this differs by region", "Use a horizontal bar for this"];
+const EXAMPLES = ["Create cross-tabs of satisfaction by age and gender", "Calculate NPS across gender and age groups at 95% confidence", "Remove redundant analyses", "Choose the best chart for each question", "Prepare a management summary", "Make an animated report of the key findings"];
+const FOCUS_EXAMPLES = ["Cross-tab this by gender", "Now by region", "Add significance testing at 99%", "Test whether this differs by region", "Use a horizontal bar for this"];
 const histKey = (id: string) => `ax-ask-history:${id}`;
 const loadHistory = (id: string): HistoryEntry[] => { try { const r = JSON.parse(localStorage.getItem(histKey(id)) ?? "[]"); return Array.isArray(r) ? r.slice(0, 20) : []; } catch { return []; } };
 const saveHistory = (id: string, h: HistoryEntry[]) => { try { localStorage.setItem(histKey(id), JSON.stringify(h.slice(0, 20))); } catch { /* history is a convenience */ } };
@@ -136,7 +136,7 @@ export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = n
                   <b style={{ flex: 1 }}>{s.item.title}</b>
                   <span style={{ fontSize: 12, color: b.color, whiteSpace: "nowrap" }} data-testid="ax-ask-status">{b.text}</span>
                 </div>
-                <div className="muted" style={{ fontSize: 12.5, marginLeft: 24 }}>{s.item.why}</div>
+                <div className="muted" style={{ fontSize: 12.5, marginLeft: 24, whiteSpace: "pre-line" }} data-testid="ax-ask-item-why">{s.item.why}</div>
                 {s.item.blocked.map((t, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 24, color: "var(--c-error-fg)" }} data-testid="ax-ask-blocked">Cannot be applied: {t}</div>)}
                 {s.item.warnings.map((t, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 24, color: "var(--c-warning-fg)" }}>{t}</div>)}
                 {s.message && <div style={{ fontSize: 12.5, marginLeft: 24, color: b.color }} data-testid="ax-ask-result">{s.message}</div>}

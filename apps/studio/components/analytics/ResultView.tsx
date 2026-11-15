@@ -274,6 +274,17 @@ export function ResultView(p: ResultViewProps) {
         {p.actions}
       </div>
       <Warnings items={r.warnings} />
+      {r.layer && (r.layer.reports.length > 0 || (r.layer.filtered?.length ?? 0) > 0) && (
+        <details className="ax-layer" data-testid="ax-layer" style={{ fontSize: 12.5, margin: "4px 0 8px" }}>
+          <summary className="muted">Derived variables and filters ({r.layer.reports.length + (r.layer.filtered?.length ?? 0)}) — computed from the raw answers on every run; the responses are not changed</summary>
+          <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+            {r.layer.reports.map((x) => (
+              <li key={x.name} data-testid="ax-layer-var"><b>{x.label}</b> <span className="muted">({x.kind.replace(/_/g, " ")} from {x.sources.join(", ")})</span>: populated for {x.populated} of {x.eligible}{x.missing ? `, ${x.missing} with no answer` : ""}{x.invalid.length ? `, ${x.invalid.reduce((a, b) => a + b.n, 0)} outside every rule (${x.invalid.slice(0, 4).map((i) => `${i.value} ×${i.n}`).join(", ")}) left without a value` : ""}{x.categories?.length ? ` — ${x.categories.map((c) => `${c.label} ${c.n}`).join(" · ")}` : ""}</li>
+            ))}
+            {(r.layer.filtered ?? []).map((f, k) => <li key={`f${k}`} data-testid="ax-layer-filter">Filter: {f.label} — {f.before} → {f.after} respondents</li>)}
+          </ul>
+        </details>
+      )}
       {view === "results" && (
         <div className="ax-tabs">
           {(["chart", "tables", "tests", "insights"] as const).map((t) => <button key={t} className={`ax-tab ${tab === t ? "on" : ""}`} onClick={() => setTab(t)}>{t === "chart" ? "Chart" : t === "tables" ? `Tables (${r.tables.length})` : t === "tests" ? `Tests (${r.tests.length})` : `Insights (${r.insights.length})`}</button>)}

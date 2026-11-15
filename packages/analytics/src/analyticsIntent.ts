@@ -6,6 +6,8 @@ import { reportAnalysisIds } from "./blockRefs.js";
 import { CHART_CATALOG } from "./recommend.js";
 import { reportBriefFromText, tokens, wordsMatch, type ReportBrief } from "./reportBuilder.js";
 import { allQuestionsTable, itemTableFor, variableGroups } from "./tablePresets.js";
+import { definitionFromSpec, layerMeta, parseSpec, planRequest, type AnalysisSpec } from "./analysisPlanner.js";
+import { layerName } from "./analysisLayer.js";
 
 /**
  * INTELLIGENT MODE FOR ANALYTICS (Data Analytics audit, Phase 5).
@@ -34,7 +36,11 @@ export type AskOp =
   | { op: "add_descriptive"; name: string; variables: string[] }
   | { op: "remove_analysis"; name: string; analysisId: string; keptId?: string }
   | { op: "set_chart"; name: string; reportId: string; blockId: string; analysisId: string; chart: ChartType; from?: ChartType }
-  | { op: "build_report"; name: string; brief: ReportBrief; story: boolean };
+  | { op: "build_report"; name: string; brief: ReportBrief; story: boolean }
+  /** a planned, multi-step analysis (analysisPlanner.ts): derived variables, filters, groupings, test level, chart — one item */
+  | { op: "add_analysis"; name: string; spec: AnalysisSpec }
+  /** a change to the analysis that is open: "now by region", "exclude don't know", "add significance testing" */
+  | { op: "update_analysis"; name: string; analysisId: string; spec: AnalysisSpec };
 
 export interface AskItem {
   id: string;
@@ -48,7 +54,7 @@ export interface AskItem {
   /** things to know before applying it */
   warnings: string[];
   /** what applying it creates / changes, in words */
-  effect: "creates an analysis" | "removes an analysis" | "changes a chart" | "creates a report";
+  effect: "creates an analysis" | "removes an analysis" | "changes a chart" | "creates a report" | "changes an analysis";
   /** for a chart change: the other charts that suit this result, best first — the person can swap the proposed one for any of them */
   options?: { chart: ChartType; reason: string }[];
 }
@@ -133,7 +139,7 @@ const labelOf = (v: VariableMeta) => core(v.label);
 
 /* ------------------------------------------------------------ the rules */
 
-const CHART_WORDS: [RegExp, ChartType][] = [
+export const CHART_WORDS: [RegExp, ChartType][] = [
   [/\bhorizontal\s+bars?\b/, "bar_horizontal"], [/\b(?:100\s*%?\s*stacked|stacked\s*100)/, "bar_stacked_100"], [/\bstacked\b/, "bar_stacked"], [/\b(?:grouped|clustered)\b/, "bar_grouped"],
   [/\bdiverging|\blikert\b/, "diverging_likert"], [/\b(?:donut|doughnut)\b/, "donut"], [/\bpie\b/, "pie"], [/\bline\b/, "line"], [/\bhistogram\b/, "histogram"], [/\bbox\s?plot\b/, "box_plot"],
   [/\bheat\s?map\b/, "heatmap"], [/\b(?:column|vertical\s+bars?|bars?)\b/, "bar_vertical"], [/\btable\b/, "table"],
@@ -152,6 +158,21 @@ const joinWords = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(", 
 function validate(op: AskOp, ctx: AskContext): { blocked: string[]; warnings: string[] } {
   const blocked: string[] = []; const warnings: string[] = [];
   const byName = new Map(ctx.variables.map((v) => [v.name, v]));
+  if (op.op === "add_analysis" || op.op === "update_analysis") {
+    /* the derived variables are checked against the survey (their sources must exist) and then stand in as variables for the rest */
+    const layerNames = new Set(op.spec.layer.map((l) => l.name ?? layerName(l)));
+    for (const l of op.spec.layer) {
+      const missing = l.from.filter((f) => !byName.has(f) && !layerNames.has(f));
+      if (missing.length) blocked.push(`${l.label}: ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not in this survey's data.`);
+    }
+    for (const f of op.spec.filters) if (!byName.has(f.variable) && !layerNames.has(f.variable)) blocked.push(`The filter on ${f.variable} names nothing in this survey.`);
+    const vars = [...ctx.variables, ...op.spec.layer.map(layerMeta)];
+    const d = definitionFromSpec(op.spec, op.name, ctx.dataset, "");
+    for (const i of validateAnalysis(d, vars, ctx.known)) (i.severity === "error" ? blocked : warnings).push(i.message);
+    if (op.op === "update_analysis") { if (!ctx.analyses.some((a) => a.id === op.analysisId)) blocked.push("That analysis no longer exists."); }
+    else { const dup = findExistingDuplicate(d, ctx.analyses); if (dup) blocked.push(`You already have “${dup.name}”, which computes the same thing.`); }
+    return { blocked: [...new Set(blocked)], warnings: [...new Set(warnings)] };
+  }
   const def = definitionFor(op, ctx.dataset, "");
   if (def) {
     for (const i of validateAnalysis(def, ctx.variables, ctx.known)) (i.severity === "error" ? blocked : warnings).push(i.message);
@@ -241,6 +262,23 @@ export function proposeFromText(request: string, ctx: AskContext): AskProposal {
   const focusAnalysis = ctx.focus ? ctx.analyses.find((a) => a.id === ctx.focus!.analysisId) : undefined;
   const focusVariable = focusAnalysis ? (focusAnalysis.definition.variables?.[0] ?? focusAnalysis.definition.rows?.[0]) : undefined;
   let focusSaid = false;
+
+  /*
+   * A MULTI-STEP ANALYSIS (analysisPlanner.ts, 2026-11-15). A metric (NPS, CSAT, top-2 box …), groups that need a
+   * derived variable ("age groups"), a confidence level, a filter, or a change to the analysis that is open — the
+   * whole sentence is planned as one analysis, with its steps, instead of clause by clause.
+   */
+  const planned = planRequest(text, { variables: ctx.variables, focus: focusAnalysis ? { id: focusAnalysis.id, name: focusAnalysis.name, definition: focusAnalysis.definition } : undefined, findVariables, chartWords: CHART_WORDS });
+  if (planned.handled) {
+    if (planned.spec && planned.name) {
+      const sp = planned.spec;
+      const op: AskOp = focusAnalysis && sp.steps[0]?.startsWith("Update") ? { op: "update_analysis", name: planned.name, analysisId: focusAnalysis.id, spec: sp } : { op: "add_analysis", name: planned.name, spec: sp };
+      const title = op.op === "update_analysis" ? `Change “${planned.name}”` : `${sp.kind === "nps" ? "Calculate" : "Build"} “${planned.name}”`;
+      const why = [...sp.steps, ...(sp.assumptions.length ? [`Assumed: ${sp.assumptions.join(" ")}`] : [])].join("\n");
+      items.push(item(op, ctx, title, why, op.op === "update_analysis" ? "changes an analysis" : "creates an analysis"));
+    }
+    return { request: text, items, read: planned.clarify.length ? [] : [text], unread: planned.clarify, notes: planned.notes };
+  }
 
   clauses.forEach((raw, ci) => {
     let c = stems(raw);
@@ -502,6 +540,14 @@ export function parseAskOps(raw: unknown): { ops: AskOp[]; rejected: string[] } 
         const audience = b.audience === "executive" || b.audience === "researcher" ? b.audience : "client";
         ops.push({ op: "build_report", name, story: o.story === true, brief: { objective: nm(b.objective, 1000), audience, tone: b.tone === "formal" || b.tone === "concise" ? b.tone : "plain", keyQuestions: [], ...(nm(b.title, 120) ? { title: nm(b.title, 120) } : {}) } }); break;
       }
+      case "add_analysis":
+      case "update_analysis": {
+        const sp = parseSpec(o.spec, (c) => c === "table" || CHART_CATALOG.some((x) => x.type === c));
+        if (!sp) { rejected.push("A planned analysis needs a valid specification."); break; }
+        if (o.op === "update_analysis") { if (!idOk(o.analysisId)) { rejected.push("An analysis to change must be named by its id."); break; } ops.push({ op: "update_analysis", name: name || "Analysis", analysisId: o.analysisId, spec: sp }); }
+        else ops.push({ op: "add_analysis", name: name || "Analysis", spec: sp });
+        break;
+      }
       default: rejected.push(`${typeof o?.op === "string" ? o.op : "An item"} is not something this can do.`);
     }
   }
@@ -516,6 +562,7 @@ export function definitionFor(op: AskOp, dataset: DatasetSpec, request: string):
   if (op.op === "add_crosstab") return { name: op.name, kind: "crosstab", dataset, variables: [...op.rows, ...op.columns], rows: op.rows, columns: op.columns, measure: "pct_col", options: { layout: "separate", significance: true, requested } } as AnalysisDefinition;
   if (op.op === "add_test") return { name: op.name, kind: "test", dataset, variables: [op.outcome, op.groupBy], options: { test: "auto", requested } } as AnalysisDefinition;
   if (op.op === "add_descriptive") return { name: op.name, kind: "descriptive", dataset, variables: op.variables, options: { requested } } as AnalysisDefinition;
+  if (op.op === "add_analysis" || op.op === "update_analysis") return definitionFromSpec(op.spec, op.name, dataset, request);
   return null;
 }
 
@@ -524,7 +571,9 @@ export function definitionFor(op: AskOp, dataset: DatasetSpec, request: string):
 export type UndoRecord =
   | { kind: "created_analysis"; id: string }
   | { kind: "removed_analysis"; id: string; chartIds: string[] }
-  | { kind: "chart_changed"; reportId: string; blockId: string; before: ChartSpec; after: ChartSpec };
+  | { kind: "chart_changed"; reportId: string; blockId: string; before: ChartSpec; after: ChartSpec }
+  /** an analysis changed in words: undone by restoring the saved version it had before (read on the server, never sent by the browser) */
+  | { kind: "updated_analysis"; id: string; version: number };
 
 const spec = (x: unknown): ChartSpec | null => {
   const o = x as Record<string, unknown> | null;
@@ -539,6 +588,7 @@ export function parseUndo(raw: unknown): UndoRecord[] {
   for (const r of (Array.isArray(raw) ? raw.slice(0, 40) : []) as Record<string, unknown>[]) {
     if (r?.kind === "created_analysis" && idOk(r.id)) out.push({ kind: "created_analysis", id: r.id });
     else if (r?.kind === "removed_analysis" && idOk(r.id)) out.push({ kind: "removed_analysis", id: r.id, chartIds: (Array.isArray(r.chartIds) ? r.chartIds : []).filter(idOk).slice(0, 50) });
+    else if (r?.kind === "updated_analysis" && idOk(r.id) && Number.isInteger(r.version) && Number(r.version) >= 1) out.push({ kind: "updated_analysis", id: r.id, version: Number(r.version) });
     else if (r?.kind === "chart_changed" && idOk(r.reportId) && nm(r.blockId, 80)) {
       const before = spec(r.before), after = spec(r.after);
       if (before && after) out.push({ kind: "chart_changed", reportId: r.reportId, blockId: nm(r.blockId, 80), before, after });

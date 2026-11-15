@@ -1,3 +1,5 @@
+import { layerMeta } from "./analysisPlanner.js";
+import type { LayerVariable } from "./analysisLayer.js";
 import type { AnalysisDefinition } from "./types.js";
 import type { VariableMeta } from "./dataset.js";
 import { crosstabDefinition, testDefinition, type PlannedAnalysis } from "./planBridge.js";
@@ -199,7 +201,10 @@ const knownSet = (variables: readonly VariableMeta[], extra: KnownNames): { has(
   return base;
 };
 
-export function validateAnalysis(def: AnalysisDefinition, variables: readonly VariableMeta[], extraNames: KnownNames = []): PlanIssue[] {
+export function validateAnalysis(def: AnalysisDefinition, variablesIn: readonly VariableMeta[], extraNames: KnownNames = []): PlanIssue[] {
+  /* an analysis's own derived variables (options.layer, analysisLayer.ts) are variables of that analysis — their sources are checked, they are not "unknown" */
+  const layer = Array.isArray((def.options as Record<string, unknown> | undefined)?.layer) ? ((def.options as Record<string, unknown>).layer as LayerVariable[]) : [];
+  const variables = layer.length ? [...variablesIn, ...layer.filter((l) => l && Array.isArray(l.from)).map(layerMeta)] : variablesIn;
   const known = knownSet(variables, extraNames);
   const meta = new Map(variables.map((v) => [v.name, v]));
   const out: PlanIssue[] = [];

@@ -2,6 +2,7 @@ import { provenanceOf } from "../provenance.js";
 import { adviseChart } from "../questionChart.js";
 import type { AnalysisDefinition, AnalysisResult } from "../types.js";
 import { filterDataset, type Dataset } from "../dataset.js";
+import { applyLayer, type LayerFilter, type LayerVariable } from "../analysisLayer.js";
 import { allocation, crosstab, descriptive, ranking, topbox } from "./basics.js";
 import { cluster, correlation, factor, quality, regression, reliability, segmentation, statisticalTest, weighting } from "./statistics.js";
 import { brand, csat, gap, nps, pricing, text, trend, turf } from "./business.js";
@@ -22,19 +23,44 @@ export const RUNNERS: Record<AnalysisDefinition["kind"], AnalysisRunner> = {
  * `filter` is applied here (the dataset may already be narrowed by the caller's
  * dataset spec); segments are resolved by each runner.
  */
-function runAnalysisCore(def: AnalysisDefinition, dataset: Dataset): AnalysisResult {
+/*
+ * THE ANALYSIS LAYER (analysisLayer.ts): the derived variables this analysis defines are computed from the raw answers
+ * on a copy of the dataset, then its filters applied — nothing is written back, and every run recomputes.
+ */
+function prepareLayer(def: AnalysisDefinition, source: Dataset): { dataset: Dataset; layer: ReturnType<typeof applyLayer> | null; failed?: true } {
+  /* a definition that cannot even be read is the runner's "not computable" result below, never an exception out of runAnalysis */
+  try { return prepareLayerUnsafe(def, source); } catch (e) { console.error(`[analytics] layer for “${String(def?.name)}” failed:`, e); return { dataset: source, layer: null, failed: true }; }
+}
+
+function prepareLayerUnsafe(def: AnalysisDefinition, source: Dataset): { dataset: Dataset; layer: ReturnType<typeof applyLayer> | null } {
+  const layerDefs = Array.isArray(def.options?.layer) ? (def.options!.layer as LayerVariable[]) : [];
+  const layerFilters = Array.isArray(def.options?.layerFilter) ? (def.options!.layerFilter as LayerFilter[]) : [];
+  if (!layerDefs.length && !layerFilters.length) return { dataset: source, layer: null };
+  const layer = applyLayer(source, layerDefs, layerFilters);
+  return { dataset: layer.dataset, layer };
+}
+
+function runAnalysisCore(def: AnalysisDefinition, source: Dataset, prepared = prepareLayer(def, source)): AnalysisResult {
   const runner = RUNNERS[def.kind];
+  const { dataset, layer } = prepared;
   const ds = def.filter ? filterDataset(dataset, def.filter) : dataset;
+  const withLayer = (r: AnalysisResult): AnalysisResult => !layer ? r : {
+    ...r,
+    layer: { reports: layer.reports, ...(layer.filtered ? { filtered: layer.filtered } : {}) },
+    warnings: [...r.warnings, ...layer.problems.filter((p) => !r.warnings.includes(p))],
+  };
   const stub = (warning: string, error: NonNullable<AnalysisResult["error"]>): AnalysisResult => ({
     kind: def.kind, name: def.name, base: { total: dataset.cases.length, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
     tables: [], chart: {}, tests: [], insights: [], warnings: [warning], recommendedCharts: ["table"], computedAt: new Date().toISOString(), definitionHash: "", variablesUsed: def.variables ?? [], error,
   });
-  if (!runner) return stub(`Unknown analysis kind “${def.kind}”.`, { code: "unknown_kind", message: `“${def.kind}” is not an analysis type this version can run.` });
+  const notComputable = () => withLayer(stub("This analysis could not be computed with the selected data. Check that the variables it uses exist in this survey and have answers, then run it again.", { code: "not_computable", message: "The analysis could not be computed with the selected data." }));
+  if (prepared.failed) return notComputable();
+  if (!runner) return withLayer(stub(`Unknown analysis kind “${def.kind}”.`, { code: "unknown_kind", message: `“${def.kind}” is not an analysis type this version can run.` }));
   try {
-    const result = runner(def, ds, dataset.cases.length);
+    const result = runner(def, ds, source.cases.length);
     /* a plan variable this analysis reads that could not be computed as planned: the dataset's own note, on the result that depends on it */
     const relevant = (dataset.warnings ?? []).filter((w) => def.variables.some((v) => v && mentionsVariable(w, v)) && !result.warnings.includes(w));
-    return relevant.length ? { ...result, warnings: [...result.warnings, ...relevant] } : result;
+    return withLayer(relevant.length ? { ...result, warnings: [...result.warnings, ...relevant] } : result);
   } catch (e) {
     /*
      * The raw message ("Cannot read properties of undefined…", a weights-length
@@ -44,7 +70,7 @@ function runAnalysisCore(def: AnalysisDefinition, dataset: Dataset): AnalysisRes
      * could not be computed" from "this was computed and is empty".
      */
     console.error(`[analytics] ${def.kind} “${def.name}” failed:`, e);
-    return stub("This analysis could not be computed with the selected data. Check that the variables it uses exist in this survey and have answers, then run it again.", { code: "not_computable", message: "The analysis could not be computed with the selected data." });
+    return notComputable();
   }
 }
 
@@ -53,7 +79,8 @@ const clock = (): number => { const p = (globalThis as { performance?: { now(): 
 /** Run one analysis. The result records what it was computed from and how long it took (audit S-14): `provenance`. */
 export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): AnalysisResult {
   const t0 = clock();
-  return finalizeResult(def, dataset, runAnalysisCore(def, dataset), t0);
+  const prepared = prepareLayer(def, dataset);
+  return finalizeResult(def, prepared.dataset, runAnalysisCore(def, dataset, prepared), t0);
 }
 
 /**

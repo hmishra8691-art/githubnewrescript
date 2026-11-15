@@ -136,3 +136,39 @@ test("a chart the result cannot be drawn as is blocked and the report is unchang
   assert.equal(JSON.stringify(db.tables.analytics_reports[0].definition), before);
   assert.equal(db.tables.analytics_reports.length, 1);
 });
+
+test("a planned analysis: created with its derived layer, changed in words as a new version, and Undo restores the version before", async () => {
+  const { proposeFromText, parseAskOps } = await import("@rescript/analytics");
+  const db = seed();
+  const first = proposeFromText("Calculate NPS across gender and age groups at 95%", await contextFor(db)(false));
+  const add = first.items.find((i) => i.op.op === "add_analysis")!;
+  assert.ok(add, JSON.stringify(first.unread));
+  const made = await apply(db, parseAskOps([wire(add.op)]).ops, "Calculate NPS across gender and age groups at 95%");
+  assert.equal(made[0].status, "done", made[0].message);
+  const id = made[0].createdId!;
+  const row = db.tables.analytics_analyses.find((r) => r.id === id)!;
+  assert.equal(row.kind, "nps");
+  assert.ok(row.definition.options.layer.some((l: { kind: string }) => l.kind === "group_numeric"), "the age bands are stored with the analysis, not in the responses");
+  assert.equal(runAnalysis(row.definition, ds).error, undefined);
+
+  const ctx = { ...(await contextFor(db)(false)), focus: { analysisId: id } };
+  const change = proposeFromText("now by region", ctx).items.find((i) => i.op.op === "update_analysis")!;
+  assert.ok(change);
+  const done = await apply(db, parseAskOps([wire(change.op)]).ops, "now by region");
+  assert.equal(done[0].status, "done", done[0].message);
+  const after = db.tables.analytics_analyses.find((r) => r.id === id)!;
+  assert.equal(after.version, 2);
+  assert.ok(after.definition.options.by.includes("REGION"));
+  assert.equal(db.tables.analytics_analysis_versions.filter((v) => v.analysis_id === id).length, 2);
+
+  const undone = await undoRecords(db as never, SURVEY, "u1", [wire(done[0].undo!)]);
+  assert.equal(undone[0].status, "undone", undone[0].message);
+  const restored = db.tables.analytics_analyses.find((r) => r.id === id)!;
+  assert.equal(restored.version, 3);
+  assert.ok(!restored.definition.options.by.includes("REGION"));
+  /* undoing twice does nothing: the version moved on */
+  assert.equal((await undoRecords(db as never, SURVEY, "u1", [wire(done[0].undo!)]))[0].status, "skipped");
+  /* another survey's analysis cannot be changed through this survey */
+  const forged = { ...(change.op as object), analysisId: A(9) } as AskOp;
+  assert.equal((await apply(db, [forged]))[0].status, "blocked");
+});
