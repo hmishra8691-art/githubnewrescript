@@ -799,8 +799,26 @@ function lintPiping(text: string | undefined, path: string, ctx: Ctx): void {
       }
       continue;
     }
-    if (t.rowCode && !(src.rows ?? []).some((r) => String(r.code) === String(t.rowCode))) {
-      ctx.push({ level: "warning", path, message: `${src.code} has no row “${t.rowCode}”.` });
+    /*
+     * GRID CELLS: the bracket of `{{Q[row:column].value}}` holds BOTH axes,
+     * which is how the runtime reads it (`piping.ts`, "GRID CELLS (2026-11-07)"
+     * splits on the first colon). This lint compared the whole bracket against
+     * the row codes, so every correct cell pipe was reported as a missing row
+     * — `S11 has no row "4:c_s11_n"` — while the token resolved perfectly at
+     * runtime. Split the same way the resolver does, then check each axis
+     * against the axis it names.
+     */
+    if (t.rowCode) {
+      const raw = String(t.rowCode);
+      const at = raw.indexOf(":");
+      const rowKey = at === -1 ? raw : raw.slice(0, at);
+      const colKey = at === -1 ? undefined : raw.slice(at + 1);
+      if (!(src.rows ?? []).some((r) => String(r.code) === rowKey)) {
+        ctx.push({ level: "warning", path, message: `${src.code} has no row “${rowKey}”.` });
+      } else if (colKey !== undefined && (src.columns ?? []).length > 0
+                 && !(src.columns ?? []).some((c) => String(c.id) === colKey)) {
+        ctx.push({ level: "warning", path, message: `${src.code} has no column “${colKey}”.` });
+      }
     }
   }
 }

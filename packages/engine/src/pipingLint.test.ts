@@ -146,3 +146,50 @@ test("the option code in the bracket is not checked against the row list", () =>
   const rowWarnings = lintSurveyLogic(d).filter((i) => /has no row/.test(i.message));
   assert.deepEqual(rowWarnings, []);
 });
+
+/**
+ * GRID CELL PIPES — `{{Q[row:column].value}}`.
+ *
+ * The runtime reads both axes out of the bracket (`piping.ts`, "GRID CELLS
+ * (2026-11-07)": it splits on the first colon). The lint used to compare the
+ * WHOLE bracket against the row codes, so every correct cell pipe came back as
+ * `S11 has no row "4:c_n"` on a token that resolves perfectly — exactly the
+ * crying-wolf failure the tests above were written to stop. It now splits the
+ * same way the resolver does and checks each axis against its own list.
+ */
+const gridDef = (text: string) =>
+  SurveyDefinition.parse({
+    meta: { id: "s2", title: "Grid" },
+    questions: [
+      {
+        id: "qg", code: "S11", variableName: "S11", type: "composite",
+        text: "How many of each?",
+        rows: [{ code: "1", label: "Monitors" }, { code: "4", label: "ICDs" }],
+        columns: [{ id: "c_n", label: "Number", responseType: "numeric", variableStem: "S11_DEV" }],
+      },
+      { id: "qa", code: "Q2", variableName: "Q2", type: "open_text", text },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["qg", "qa"] }, { type: "end", id: "e", status: "complete" }],
+  });
+
+test("a correct grid-cell pipe is not reported", () => {
+  const issues = lintSurveyLogic(gridDef("Of your {{S11[4:c_n].value}} ICDs…"));
+  assert.deepEqual(issues.filter((i) => /has no (row|column)/.test(i.message)), []);
+});
+
+test("a grid-cell pipe naming a row that does not exist is reported, by row alone", () => {
+  const issues = lintSurveyLogic(gridDef("Of your {{S11[9:c_n].value}} ICDs…"));
+  assert.ok(issues.some((i) => i.message === "S11 has no row “9”."), JSON.stringify(issues));
+});
+
+test("a grid-cell pipe naming a column that does not exist is reported", () => {
+  const issues = lintSurveyLogic(gridDef("Of your {{S11[4:c_missing].value}} ICDs…"));
+  assert.ok(issues.some((i) => i.message === "S11 has no column “c_missing”."), JSON.stringify(issues));
+});
+
+test("a plain row pipe still checks the row", () => {
+  const ok = lintSurveyLogic(gridDef("{{S11[4].value}}"));
+  assert.deepEqual(ok.filter((i) => /has no row/.test(i.message)), []);
+  const bad = lintSurveyLogic(gridDef("{{S11[7].value}}"));
+  assert.ok(bad.some((i) => i.message === "S11 has no row “7”."));
+});
