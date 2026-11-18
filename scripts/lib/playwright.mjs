@@ -22,3 +22,4 @@ const pw = await load();
 export const chromium = pw.chromium ?? pw.default?.chromium;
 export const firefox = pw.firefox ?? pw.default?.firefox;
 export const webkit = pw.webkit ?? pw.default?.webkit;
+export const devices = pw.devices ?? pw.default?.devices;

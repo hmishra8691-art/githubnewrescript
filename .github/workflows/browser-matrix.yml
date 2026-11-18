@@ -1,0 +1,59 @@
+# THE RESPONDENT PATH ON EVERY BROWSER (audit 2026-11-17, P1-04).
+#
+# One representative interview (required and range validation, multi choice, a grid, Back keeping answers, open
+# text, the end screen) on Chromium, Firefox and WebKit (Safari's engine), each on a desktop screen and two
+# emulated phones. Chromium alone ran before; a respondent on an iPhone runs WebKit.
+#   node scripts/browser-matrix-test.mjs   (locally: whatever browsers are installed; missing ones are skipped)
+name: browser matrix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  respondent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    env:
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the packages
+        run: pnpm -r --filter "./packages/*" build
+      - name: The browser under test
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+      - name: Build and start the runtime
+        run: |
+          cd apps/runtime
+          npx next build
+          PORT=3001 npx next start > ../../runtime.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:3001/preview > /dev/null && break; sleep 1; done
+      - name: Walk the interview (desktop, iPhone 13, Pixel 5)
+        run: BROWSERS=${{ matrix.browser }} REQUIRE_ALL_BROWSERS=1 RUNTIME_URL=http://localhost:3001 node scripts/browser-matrix-test.mjs
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-matrix-${{ matrix.browser }}
+          path: runtime.log
+          if-no-files-found: ignore
