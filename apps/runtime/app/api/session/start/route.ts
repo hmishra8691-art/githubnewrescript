@@ -4,6 +4,7 @@ import { BLOCKING_STATUSES, loadDeployment, loadTestBuild, type LoadedDeployment
 import { createSession } from "@/lib/session";
 import { clientIp } from "@rescript/quality/server";
 import { limited } from "@/lib/rateLimit";
+import { challengeConfig, challengeRequired, verifyChallenge } from "@/lib/botChallenge";
 import { fieldworkWindow, resolveSampleSource } from "@rescript/engine";
 import type { PanelConfig } from "@rescript/schema";
 import { panelParams, runtimePanels } from "@/lib/panels";
@@ -111,6 +112,17 @@ export async function POST(req: NextRequest) {
       const urlPw = body?.urlParams && typeof body.urlParams === "object" ? body.urlParams.pw : undefined;
       const given = typeof body?.pw === "string" ? body.pw : typeof urlPw === "string" ? urlPw : "";
       if (!access.password || given !== access.password) return NextResponse.json({ error: "Password required" }, { status: 403 });
+    }
+    /* P1-08: the optional bot challenge, before a row exists (lib/botChallenge.ts) */
+    const resuming = typeof body?.resume === "string" && body.resume.length >= 16;
+    if (access.botChallenge && !resuming && access.mode === "open") {
+      const cfg = challengeConfig(process.env);
+      if (!cfg) console.info("[rescript:challenge] the study asks for a bot challenge, but this runtime has no TURNSTILE keys — not challenged", JSON.stringify({ surveyId: d.surveyId }));
+      else if (challengeRequired({ enabled: access.botChallenge, isTest, resuming, accessMode: access.mode, config: cfg })) {
+        const v = await verifyChallenge(body?.challengeToken, clientIp(req.headers), cfg);
+        if (!v.ok) return NextResponse.json({ error: v.reason === "missing" ? "Please confirm you are not a robot to start the survey." : "The robot check did not pass. Please try again.", challenge: { siteKey: cfg.siteKey, reason: v.reason } }, { status: 403 });
+        if (v.unverified) console.warn("[rescript:challenge] started without verification (fail open)", JSON.stringify({ surveyId: d.surveyId, why: v.unverified }));
+      }
     }
   }
 

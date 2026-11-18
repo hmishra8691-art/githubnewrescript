@@ -1337,6 +1337,15 @@ export function SurveySettings() {
         Allow a respondent to retake the survey
       </label>
 
+      {mode === "open" && (
+        <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 8 }}
+          title="Cloudflare Turnstile, once, before the first page of the live open link. It runs only where the survey runtime has TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY; without them this does nothing. Test links and resumed sessions are never challenged. The quality checks' bot rules still run on every finished response.">
+          <input type="checkbox" checked={dep.access.botChallenge ?? false} data-testid="access-bot-challenge"
+            onChange={(e) => s.update((d) => { if (e.target.checked) d.deployment.access.botChallenge = true; else delete d.deployment.access.botChallenge; })} />
+          Ask for a bot check (“I'm not a robot”) before the survey starts
+        </label>
+      )}
+
       {/* dictation on every free-text field, on by default; a question can opt itself out in Properties → State */}
       <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 8 }}
         title="A microphone beside each editable free-text field (text answers, Other boxes, text fields of forms and lists) when the respondent's browser can recognise speech. Recognition runs in the browser — no audio is sent by the survey. Never on numeric, email, phone, URL, date, ZIP or masked fields.">

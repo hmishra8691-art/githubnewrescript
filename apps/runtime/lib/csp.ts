@@ -77,6 +77,8 @@ export function connectSources(env: Env): string[] {
     // LiveKit Cloud hands the client region hosts under the same domain
     if (/\.livekit\.cloud$/i.test(lk.hostname)) add("https://*.livekit.cloud", "wss://*.livekit.cloud");
   }
+  /* the optional bot challenge (P1-08, lib/botChallenge.ts): Cloudflare Turnstile, only when this runtime has its keys */
+  if ((env.TURNSTILE_SITE_KEY ?? "").trim() && (env.TURNSTILE_SECRET_KEY ?? "").trim()) add("https://challenges.cloudflare.com");
   // an operator's additions must spell the scheme (https://…, wss://…): a bare word is not an origin
   for (const x of (env.RUNTIME_CSP_CONNECT ?? "").split(/[\s,]+/)) { if (!/^(https?|wss?):\/\//i.test(x)) continue; const u = originOf(x); if (u) add(plain(u)); }
   return [...out];
@@ -98,12 +100,12 @@ export function buildRuntimeCsp(env: Env): RuntimeCsp {
   const base = [`connect-src ${connect.join(" ")}`, "form-action 'self'", "base-uri 'self'", "object-src 'none'"];
   const enforce = base.join("; ");
   /* stricter, to learn from: what would break if images / media / scripts were limited too */
-  const storage = connect.filter((c) => c !== "'self'" && /^https?:/.test(c));
+  const storage = connect.filter((c) => c !== "'self'" && c !== "https://challenges.cloudflare.com" && /^https?:/.test(c));
   const strict = [
     ...base,
     `img-src 'self' data: blob: ${storage.join(" ")}`.trim(),
     `media-src 'self' data: blob: ${storage.join(" ")}`.trim(),
-    "script-src 'self'",
+    `script-src 'self'${connect.includes("https://challenges.cloudflare.com") ? " https://challenges.cloudflare.com" : ""}`,
   ].join("; ");
   return mode === "enforce" ? { mode, enforce, reportOnly: strict } : { mode, enforce: null, reportOnly: enforce };
 }

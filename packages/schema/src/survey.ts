@@ -782,6 +782,12 @@ export const DeploymentConfig = z.object({
       password: z.string().optional(),
       allowRetake: z.boolean().default(false),
       captureAnonymous: z.boolean().default(true),
+      /**
+       * A bot challenge (Cloudflare Turnstile) before the first page of an OPEN live link (audit P1-08). Off when
+       * absent. It only runs where the runtime has TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY; elsewhere it does
+       * nothing. Test links, resumes and closed access modes are never challenged.
+       */
+      botChallenge: z.boolean().optional(),
     })
     .default({}),
   languages: z.array(z.string()).default(["en"]),

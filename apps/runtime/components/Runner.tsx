@@ -1,4 +1,5 @@
 "use client";
+import { BotChallenge } from "./BotChallenge";
 import React from "react";
 import type { SurveyDefinition, Branding, Question, ProbeConfig, UxTarget } from "@rescript/schema";
 import {
@@ -581,6 +582,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const assessmentResults = useAssessmentResults({ def: loadedDef, mode, sessionId: session?.sessionId ?? null, build, assessmentSubmit, previewScoringDef });
   const [bootError, setBootError] = React.useState<string | null>(null);
   const [bootAttempt, setBootAttempt] = React.useState(0);
+  /** P1-08: the start route asked for the bot challenge; the token it produced goes with the next start */
+  const [challenge, setChallenge] = React.useState<{ siteKey: string; message: string } | null>(null);
+  const challengeTokenRef = React.useRef<string | null>(null);
   /**
    * A survey that could not start. Distinct from `bootError`, which means the
    * SESSION could not be obtained (a network or server problem, worth
@@ -608,7 +612,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const [recovered, setRecovered] = React.useState(false);
   /** the final save's state: pending → saving → saved | failed (with Retry) */
   const [finalSave, setFinalSave] = React.useState<{ kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { kind: "failed"; error: string }>({ kind: "idle" });
-  const booting = !!sessionBoot && !session && !bootError;
+  const booting = !!sessionBoot && !session && !bootError && !challenge;
 
   React.useEffect(() => {
     if (!sessionBoot || session) return;
@@ -643,10 +647,13 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
            * page two the parameter is gone and no later request can recover
            * it. The server decides which parameter is the source.
            */
-          body: JSON.stringify({ client: sessionBoot.client, study: sessionBoot.study, mode: sessionBoot.mode, token: sessionBoot.token, requestedVersionId: sessionBoot.requestedVersionId ?? null, resume, urlParams: urlParams ?? null }),
+          body: JSON.stringify({ client: sessionBoot.client, study: sessionBoot.study, mode: sessionBoot.mode, token: sessionBoot.token, requestedVersionId: sessionBoot.requestedVersionId ?? null, resume, urlParams: urlParams ?? null, ...(challengeTokenRef.current ? { challengeToken: challengeTokenRef.current } : {}) }),
         });
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;
+        /* a token is good for one verification: whatever happened, the next start needs a fresh one */
+        challengeTokenRef.current = null;
+        if (r.status === 403 && j.challenge?.siteKey) { setChallenge({ siteKey: String(j.challenge.siteKey), message: j.error ?? "Please confirm you are not a robot to start the survey." }); return; }
         if (!r.ok || !j.session) { setBootError(j.error ?? `The survey could not be started (${r.status}).`); return; }
         writeResume(sessionBoot.mode, sessionBoot.surveyDbId, j.session.sessionId);
         if (j.resumed && j.saved) { savedRef.current = j.saved; setResumed(true); }
@@ -1553,6 +1560,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   }, [shownPageId]);
 
   const state = stateRef.current;
+  if (challenge && !session) {
+    return <BotChallenge siteKey={challenge.siteKey} message={challenge.message} onToken={(tok) => { challengeTokenRef.current = tok; setChallenge(null); setBootAttempt((n) => n + 1); }} />;
+  }
   if (bootError) {
     return (
       <div className="rs-shell"><div className="rs-card rs-end" data-testid="rs-boot-error">
