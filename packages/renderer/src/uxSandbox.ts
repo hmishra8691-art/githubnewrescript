@@ -198,9 +198,27 @@ __MICRO__
     /* SECTION NAVIGATION: a request the HOST checks with the engine's rule (refused jumps are logged with the reason) */
     goToPage: function (pageIdOrCode) { send("goToPage", [pageIdOrCode == null ? "" : String(pageIdOrCode)]); },
     goToSection: function (blockIdOrTitle) { send("goToSection", [blockIdOrTitle == null ? "" : String(blockIdOrTitle)]); },
-    log: function () { send("log", Array.prototype.map.call(arguments, String)); }
+    log: function () { send("log", Array.prototype.map.call(arguments, String)); },
+    /*
+     * ONE FIELD, ONE HANDLE (audit 2026-11-17, P1-03): rs.field("Q3").set(rs.field("S1").value()).then(() => rs.field("Q3").lock()).
+     * Every method is one of the calls above — the same rules apply (writes are requests, lock and hide are refused on
+     * a required unanswered question) — gathered so generated code names a field once instead of reaching for markup.
+     */
+    field: function (code) {
+      var c = code == null ? "" : String(code);
+      return Object.freeze({
+        code: c,
+        value: function (loopKey) { return rs.getAnswer(c, loopKey); },
+        set: function (v, loopKey) { return rs.setAnswer(c, v, loopKey); },
+        show: function () { rs.show(c); }, hide: function () { rs.hide(c); },
+        lock: function () { rs.lock(c); }, unlock: function () { rs.unlock(c); },
+        message: function (text) { rs.showMessage(c, text); }, clearMessage: function () { rs.hideMessage(c); },
+        onChange: function (fn) { rs.listen("change", c, fn); },
+        info: function () { return rs.getQuestion(c); }
+      });
+    }
   };
-  ["addClass","removeClass","toggleClass","animate","setStyle","clearStyle","show","hide","showMessage","hideMessage","scrollTo","focus"].forEach(function (n) { rs[n] = function () { send(n, Array.prototype.slice.call(arguments, 0, 3)); }; });
+  ["addClass","removeClass","toggleClass","animate","setStyle","clearStyle","show","hide","showMessage","hideMessage","scrollTo","focus","lock","unlock"].forEach(function (n) { rs[n] = function () { send(n, Array.prototype.slice.call(arguments, 0, 3)); }; });
 
   /* --------------------------------------------------------------- timers */
   var nativeTimeout = window.setTimeout.bind(window);

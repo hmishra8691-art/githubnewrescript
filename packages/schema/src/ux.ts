@@ -41,7 +41,7 @@ export const UX_PRESETS = ["fade-in", "fade-up", "fade-down", "slide-left", "sli
 export const UX_ANIMATION_TRIGGERS = ["appear", "page_enter", "hover", "focus", "select", "answer"] as const;
 /** what a behaviour listens for */
 export const UX_EVENTS = ["answer", "change", "select_option", "deselect_option", "page_complete", "block_complete", "appear", "page_enter", "click", "hover"] as const;
-export const UX_EFFECTS = ["add_class", "remove_class", "toggle_class", "animate", "set_style", "show", "hide", "show_message", "hide_message", "scroll_into_view", "focus", "show_popup", "hide_popup"] as const;
+export const UX_EFFECTS = ["add_class", "remove_class", "toggle_class", "animate", "set_style", "show", "hide", "show_message", "hide_message", "scroll_into_view", "focus", "show_popup", "hide_popup", "lock", "unlock"] as const;
 /**
  * show_popup: where the survey's own popup appears — a centred modal (confirmations, eligibility,
  * anything that needs attention), anchored next to its target (a hint about one element), a banner at

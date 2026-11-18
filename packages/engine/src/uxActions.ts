@@ -717,6 +717,8 @@ function effectWords(def: SurveyDefinition, e: UxEffect): string {
     case "set_style": return `restyle${on}`;
     case "show_message": return `show “${(e.text ?? "").slice(0, 60)}”${on ? ` under${on}` : ""}`;
     case "hide_message": return "hide the message";
+    case "lock": return `make${on || " it"} read-only`;
+    case "unlock": return `make${on || " it"} editable again`;
     case "scroll_into_view": return `scroll to${on}`;
     case "show_popup": {
       const where = e.placement === "anchored" ? `a popup next to${on || " it"}` : e.placement === "top" ? "a popup at the top of the screen" : e.placement === "inline" ? `a popup in${on || " the question's card"}` : "a centred popup";

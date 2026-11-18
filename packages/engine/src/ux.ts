@@ -671,7 +671,7 @@ export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseSta
   for (const b of ux.behaviors) for (const e of b.effects) if (e.preset) presets.add(e.preset);
   let css = [...presets].map(keyframesCss).join("");
   // what behaviours insert, styled once
-  css += `${uxScope(def)} [data-rs-ux-hidden]{display:none!important}${uxScope(def)} .rs-ux-message{margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(59,130,246,.08);border-left:3px solid rgba(59,130,246,.6);font-size:.95em}`;
+  css += `${uxScope(def)} [data-rs-ux-hidden]{display:none!important}${uxScope(def)} [data-rs-ux-locked]{opacity:.78;cursor:not-allowed}${uxScope(def)} .rs-ux-message{margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(59,130,246,.08);border-left:3px solid rgba(59,130,246,.6);font-size:.95em}`;
   const on = (x: { when?: Condition | null }) => !live || uxGuardHolds(def, x, live.state, live.now);
   for (const s of ux.styles) if (on(s)) css += compileStyle(def, s).css;
   for (const a of ux.animations) if (on(a)) css += compileAnimation(def, a);
@@ -685,10 +685,12 @@ export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", 
   /* S1a: the engine-checked write channel (requests the host decides — scriptWrites.ts) and the reads beside it; rs.error inside a "validate" handler */
   "getEmbedded", "getCalc", "setAnswer", "setEmbedded", "setCalc", "flag", "error",
   /* S5b (TE-12): read-only timing */
-  "getTiming"] as const;
+  "getTiming",
+  /* audit 2026-11-17 (P1-03): lock / unlock a field (never a required unanswered one) and the per-field handle rs.field(code) */
+  "lock", "unlock", "field"] as const;
 /** S1a: the rs calls that ask the host to write (each returns a promise of { ok, reason }) */
 export const UX_SCRIPT_WRITES = ["setAnswer", "setEmbedded", "setCalc", "flag"] as const;
-const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus"]);
+const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "lock", "unlock", "field"]);
 /** names that are refused wherever they appear */
 const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "window", "opener", "globalThis", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
 /** names that are only a problem on their own (`top` is a global; `el.style.top` is a style property) */

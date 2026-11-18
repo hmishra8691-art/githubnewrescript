@@ -129,6 +129,13 @@ export function uxElements(root: HTMLElement, t: UxTarget, opts: { content?: boo
 }
 
 interface Undo { run(): void }
+/** why a question's card may not be locked: required and still unanswered (its input carries no value) */
+export function lockRefusal(card: HTMLElement): string | null {
+  if (card.getAttribute("data-rs-required") !== "1") return null;
+  const inputs = [...card.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input, textarea, select")];
+  const answered = inputs.some((i) => (i instanceof HTMLInputElement && (i.type === "radio" || i.type === "checkbox") ? i.checked : String(i.value ?? "").trim() !== ""));
+  return answered ? null : "a required question with no answer yet — the respondent could not answer it and could not move on";
+}
 /** the inline properties the UX layer set on each element — so clearing them never touches React's own */
 const setByUx = new WeakMap<HTMLElement, Set<string>>();
 /** apply one effect; returns how to revert it (for held conditions) */
@@ -198,6 +205,29 @@ function applyEffect(root: HTMLElement, def: SurveyDefinition, owner: UxTarget, 
         break;
       }
       case "hide_message": for (const m of el.querySelectorAll(":scope > [data-rs-ux-msg]")) m.remove(); break;
+      /*
+       * LOCK (audit 2026-11-17, P1-03): the field keeps its value and cannot be changed — the script counterpart of
+       * `settings.readOnly`, for "fill Q3 from S1, then lock it". `inert` on the question's card takes every input in
+       * it out of reach (mouse, keyboard, assistive tech) and survives React re-rendering the inputs inside. Never a
+       * required question with no answer yet (lockRefusal): the respondent could not answer it and could not move on.
+       */
+      case "lock": {
+        const card = (el.closest("[data-qid]") as HTMLElement | null) ?? el;
+        if (lockRefusal(card)) break;
+        if (!card.hasAttribute("inert")) {
+          card.setAttribute("inert", ""); card.setAttribute("data-rs-ux-locked", ""); card.setAttribute("aria-disabled", "true");
+          undo.push({ run: () => { card.removeAttribute("inert"); card.removeAttribute("data-rs-ux-locked"); card.removeAttribute("aria-disabled"); } });
+        }
+        break;
+      }
+      case "unlock": {
+        const card = (el.closest("[data-qid]") as HTMLElement | null) ?? el;
+        if (card.hasAttribute("data-rs-ux-locked")) {
+          card.removeAttribute("inert"); card.removeAttribute("data-rs-ux-locked"); card.removeAttribute("aria-disabled");
+          undo.push({ run: () => { card.setAttribute("inert", ""); card.setAttribute("data-rs-ux-locked", ""); card.setAttribute("aria-disabled", "true"); } });
+        }
+        break;
+      }
       case "scroll_into_view": el.scrollIntoView?.({ behavior: reducedMotion() ? "auto" : "smooth", block: "center" }); break;
       case "focus": { const f = el.matches("input,select,textarea,button,[tabindex]") ? el : el.querySelector<HTMLElement>("input,select,textarea,button,[tabindex]"); f?.focus({ preventScroll: false }); break; }
     }
@@ -552,6 +582,13 @@ export function UxLayer(p: UxLayerProps) {
             effect({ do: "hide" }, ht); break;
           }
           case "showMessage": effect({ do: "show_message", text: str(a[1]) }, resolve(a[0])); break;
+          case "lock": {
+            const lt = resolve(a[0]);
+            const why = lt ? uxElements(root, lt).map((el) => lockRefusal((el.closest("[data-qid]") as HTMLElement | null) ?? el)).find(Boolean) : null;
+            if (why) { report(`rs.lock refused: ${why}`, "warn"); trace({ kind: "refused", text: `rs.lock refused: ${why}` }); break; }
+            effect({ do: "lock" }, lt); break;
+          }
+          case "unlock": effect({ do: "unlock" }, resolve(a[0])); break;
           case "popup": {
             // the survey's own popup — rs.popup(text, { title, placement, target, dismiss, autoMs }); one per script, replaced by the next
             const o = (a[1] && typeof a[1] === "object" ? a[1] : {}) as Record<string, unknown>;

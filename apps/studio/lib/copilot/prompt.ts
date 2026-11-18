@@ -200,7 +200,7 @@ THEME VARIABLES to prefer over hard-coded values: var(--rs-primary) var(--rs-acc
 {"op":"create_behavior","label":"…","target":"Q8","on":"answer","options":["3","Other"],"effects":[{"do":"animate","target":"next","preset":"pulse"}]}
   // any behaviour, style or animation may add "when":"Q3 = 2 AND Q1 >= 18" — it then applies only while that holds ("when": null removes it)
   // on: answer · change · select_option (with "options") · deselect_option · page_complete · block_complete · appear · page_enter · click · hover
-  // effects: animate {preset} · show_message {text: plain text} · hide_message · show_popup {text, title, placement, dismiss, autoMs} · hide_popup · add_class / remove_class / toggle_class {className} · set_style {style} · show · hide · scroll_into_view · focus — each with an optional "target" (default: the behaviour's own)
+  // effects: animate {preset} · show_message {text: plain text} · hide_message · show_popup {text, title, placement, dismiss, autoMs} · hide_popup · add_class / remove_class / toggle_class {className} · set_style {style} · show · hide · lock · unlock (read-only on the page; never a required unanswered question) · scroll_into_view · focus — each with an optional "target" (default: the behaviour's own)
   // select_option, page_complete, block_complete and hover HOLD while true and are undone when they stop being true; a style rule with "whenClass":"chosen" applies while add_class "chosen" is on
   // attach_behavior_to_question / _option / _block / _page = create_behavior on that kind of target
 CHOOSING THE PATTERN:
