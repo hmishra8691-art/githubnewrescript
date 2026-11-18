@@ -3,6 +3,7 @@ import React from "react";
 import { SurveyDefinition } from "@rescript/schema";
 import { importQuestions, listPages, markupToText } from "@rescript/engine";
 import { useStudio } from "./store";
+import { VALIDATED_SCALES, scaleBlock, citationText } from "@rescript/templates";
 
 /**
  * INSERT FROM ANOTHER SURVEY — the question / block library (2026-11-07).
@@ -22,6 +23,9 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
   const [pages, setPages] = React.useState<Set<string>>(new Set());
   const [qs, setQs] = React.useState<Set<string>>(new Set());
   const [filter, setFilter] = React.useState("");
+  /* P2-10: a published scale, with its items, options, citation and scoring, from the validated scale library */
+  const [mode, setMode] = React.useState<"survey" | "scale">("survey");
+  const [scaleId, setScaleId] = React.useState("");
 
   React.useEffect(() => {
     fetch("/api/projects").then((r) => r.json()).then((d: { owned?: unknown[]; shared?: unknown[]; workspace?: unknown[]; error?: string }) => {
@@ -46,12 +50,33 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
     })();
   }, [srcId]);
 
-  const preview = React.useMemo(() => (src && (pages.size || qs.size) ? importQuestions(s.def, src, { pageIds: [...pages], questionIds: [...qs], ...(intoBlock ? { intoBlock } : {}) }) : null), [src, pages, qs, s.def, intoBlock]);
+  /** the scale as a one-page survey, under a stem nobody here uses yet (PSS10, PSS10_2 …), with its score calculations */
+  const scaleSrc = React.useMemo(() => {
+    const scale = VALIDATED_SCALES.find((x) => x.id === scaleId);
+    if (mode !== "scale" || !scale) return null;
+    const used = new Set([...s.def.questions.flatMap((q) => [q.code.toUpperCase(), (q.variableName ?? "").toUpperCase()]), ...s.def.calculations.map((c) => c.targetVariable.toUpperCase())]);
+    const base = scale.short.replace(/[^A-Za-z0-9]+/g, "").toUpperCase();
+    let stem = base; for (let k = 2; used.has(stem) || scale.scores.some((sc) => used.has(`${stem}_${sc.id}`)); k++) stem = `${base}_${k}`;
+    const b = scaleBlock(scale, { prefix: stem, idPrefix: `q_${scale.id}_${Date.now().toString(36)}` });
+    const def = SurveyDefinition.parse({ meta: { id: scale.id, code: scale.short, title: scale.name, version: "1", schemaVersion: 1, status: "draft" }, questions: [b.question], flow: [b.page, { type: "end", id: "e", status: "complete" }], calculations: b.calculations });
+    return { scale, def, pageId: b.page.id, calculations: def.calculations, stem };
+  }, [mode, scaleId, s.def]);
+  const preview = React.useMemo(() => (mode === "scale"
+    ? (scaleSrc ? importQuestions(s.def, scaleSrc.def, { pageIds: [scaleSrc.pageId], ...(intoBlock ? { intoBlock } : {}) }) : null)
+    : (src && (pages.size || qs.size) ? importQuestions(s.def, src, { pageIds: [...pages], questionIds: [...qs], ...(intoBlock ? { intoBlock } : {}) }) : null)), [mode, scaleSrc, src, pages, qs, s.def, intoBlock]);
   const toggle = (set: Set<string>, id: string, put: (x: Set<string>) => void) => { const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); put(n); };
   const f = filter.trim().toLowerCase();
   const strip = (t: string) => markupToText(t);
 
   const insert = () => {
+    if (mode === "scale") {
+      if (!preview || !scaleSrc) return;
+      s.labelNextEdit(`insert the ${scaleSrc.scale.short}`);
+      s.update((d) => { const next = preview.def; d.questions = next.questions; d.flow = next.flow; d.calculations = [...d.calculations, ...scaleSrc.calculations]; });
+      s.toast(`Inserted the ${scaleSrc.scale.name} as ${scaleSrc.stem}, with ${scaleSrc.calculations.length === 1 ? "its score" : `its ${scaleSrc.calculations.length} scores`} (${scaleSrc.calculations.map((c) => c.targetVariable).join(", ")}).`);
+      onClose();
+      return;
+    }
     if (!preview || !src) return;
     s.labelNextEdit(`insert ${preview.count} question${preview.count === 1 ? "" : "s"} from ${src.meta.code}`);
     s.update((d) => { const next = preview.def; d.questions = next.questions; d.flow = next.flow; });
@@ -61,8 +86,31 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
 
   return (
     <div className="modal-back" onClick={onClose}>
-      <div className="modal" style={{ width: 720, maxWidth: "calc(100vw - 32px)" }} onClick={(e) => e.stopPropagation()} data-testid="library-dialog" role="dialog" aria-label="Insert from another survey">
-        <h3 style={{ marginTop: 0 }}>Insert from another survey</h3>
+      <div className="modal" style={{ width: 720, maxWidth: "calc(100vw - 32px)" }} onClick={(e) => e.stopPropagation()} data-testid="library-dialog" role="dialog" aria-label="Insert from a library">
+        <h3 style={{ marginTop: 0 }}>Insert from a library</h3>
+        <div className="row" style={{ gap: 6, marginBottom: 8 }} role="tablist">
+          <button type="button" role="tab" aria-selected={mode === "survey"} className={`btn small ${mode === "survey" ? "primary" : ""}`} onClick={() => setMode("survey")} data-testid="library-mode-survey">Another survey</button>
+          <button type="button" role="tab" aria-selected={mode === "scale"} className={`btn small ${mode === "scale" ? "primary" : ""}`} onClick={() => setMode("scale")} data-testid="library-mode-scale">Validated scale</button>
+        </div>
+        {mode === "scale" ? (
+          <div data-testid="library-scales">
+            <p className="muted" style={{ marginTop: 0 }}>Published measures with their exact items, options and scoring. The score is added as a calculation. Check the licence line before commercial use.</p>
+            <div style={{ maxHeight: "46vh", overflow: "auto", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 8, padding: 8 }}>
+              {VALIDATED_SCALES.map((sc) => (
+                <label key={sc.id} className="row" style={{ gap: 8, alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid var(--c-border, #eef0f3)" }}>
+                  <input type="radio" name="scale" checked={scaleId === sc.id} onChange={() => setScaleId(sc.id)} data-testid={`library-scale-${sc.id}`} style={{ marginTop: 4 }} />
+                  <span>
+                    <b>{sc.short}</b> — {sc.name} <span className="muted">· {sc.items.length} items · {sc.construct}</span>
+                    <div className="muted" style={{ fontSize: 12 }}>{citationText(sc.citation)}</div>
+                    <div style={{ fontSize: 12 }}>Licence: {sc.licence}</div>
+                    {sc.caution && <div style={{ fontSize: 12, color: "var(--c-warning-fg)" }}>{sc.caution}</div>}
+                    <div className="muted" style={{ fontSize: 12 }}>Scores: {sc.scores.map((x) => `${x.label}${x.bands ? " (with published bands)" : ""}`).join("; ")}</div>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : <>
         <p className="muted" style={{ marginTop: -6 }}>Any project you can open works as a library. Pick pages or single questions; they arrive {intoBlock ? "next to the block you opened this from (in it, while it is still empty)" : "as a new block"}, with fresh codes where needed.</p>
         {err && <div className="callout err" role="alert">{err}</div>}
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
@@ -97,6 +145,7 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
             })}
           </div>
         )}
+        </>}
         {preview && (
           <div style={{ marginTop: 10, fontSize: 13 }} data-testid="library-preview">
             <b>{preview.count}</b> question{preview.count === 1 ? "" : "s"} will be added {intoBlock ? "here — right after this block, or in it if it has no questions yet" : "as a new block"}.
@@ -106,7 +155,7 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
         )}
         <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!preview?.count || s.readOnly} onClick={insert} data-testid="library-insert">Insert{preview?.count ? ` ${preview.count}` : ""}</button>
+          <button className="btn primary" disabled={!preview?.count || s.readOnly} onClick={insert} data-testid="library-insert">{mode === "scale" && scaleSrc ? `Insert the ${scaleSrc.scale.short}` : `Insert${preview?.count ? ` ${preview.count}` : ""}`}</button>
         </div>
       </div>
     </div>
