@@ -3,6 +3,7 @@ import React from "react";
 import type { Localization, TranslationEntry } from "@rescript/schema";
 import { translatableElements, recordTranslation, setTranslationStatus, confirmTranslation, markOutdated, glossaryFor, applyGlossary, textHash, languageName, languageLocale, lintLanguage, type TranslatableElement } from "@rescript/engine";
 import { useLocalization, useEditorName, useProviderStatus, STATUS_LABEL, STATUS_COLOR, PROVIDER_NAMES, fmtDate } from "./shared";
+import { BackTranslationPanel } from "./BackTranslationPanel";
 
 /**
  * THE TRANSLATION TABLE — a translation-management view over the survey.
@@ -43,6 +44,7 @@ export function TranslationEditor({ focusKey, onFocused }: { focusKey?: string |
   const provider = useProviderStatus();
   const [busy, setBusy] = React.useState(false);
   const [history, setHistory] = React.useState<{ key: string; lang: string } | null>(null);
+  const [backOpen, setBackOpen] = React.useState(false);
   const rowRefs = React.useRef<Record<string, HTMLTableRowElement | null>>({});
 
   const elements = React.useMemo(() => translatableElements(s.def), [s.def]);
@@ -220,7 +222,11 @@ export function TranslationEditor({ focusKey, onFocused }: { focusKey?: string |
         <button type="button" className="btn small" data-testid="loc-retranslate-outdated" disabled={busy || !outdatedIn(shown).length} onClick={() => translate(shown, outdatedIn(shown), true)} title="Re-translate every OUTDATED cell in the shown languages">
           Re-translate outdated ({outdatedIn(shown).length})
         </button>
+        <button type="button" className={`btn small ${backOpen ? "on" : ""}`} data-testid="loc-backcheck-toggle" onClick={() => setBackOpen((v) => !v)} title="Translate each translation back into the source language and compare the meaning (P2-09)">
+          Back-translation check
+        </button>
       </div>
+      {backOpen && <BackTranslationPanel langs={shown} loc={loc} elements={elements} surveyId={s.surveyDbId} editor={editor} update={setLoc} onFocus={(key) => { const el = rowRefs.current[key]; if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("loc-row-focus"); setTimeout(() => el.classList.remove("loc-row-focus"), 2000); } }} />}
       <div className="muted" style={{ fontSize: 12, marginBottom: 6 }} data-testid="loc-provider-line">
         {provider.status ? (provider.status.provider.connected ? <>Provider: <strong>{provider.status.provider.name}</strong>{provider.status.provider.via === "user" ? " · yours" : ""} · cache: {provider.status.cache.backend}{loc.cache === false ? " (off for this survey)" : ""}</> : provider.status.provider.refused ? <span style={{ color: "var(--c-warning-fg)" }}>{provider.status.provider.refused.message} You can still translate by hand or import a file.</span> : <span style={{ color: "var(--c-warning-fg)" }}>No translation provider is configured on this Studio — Settings tab explains what to set. You can still translate by hand or import a file.</span>) : "…"}
       </div>

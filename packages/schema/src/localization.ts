@@ -265,6 +265,23 @@ export const LocalizationRouting = z.object({
 });
 export type LocalizationRouting = z.infer<typeof LocalizationRouting>;
 
+/**
+ * A BACK-TRANSLATION CHECK of one language (audit P2-09, `@rescript/ai` backTranslation.ts): the translations put back
+ * into the source language and compared with it. What was flagged, the score, and how each flag was reconciled —
+ * kept as the evidence that the meaning was preserved.
+ */
+export const BackCheckIssue = z.object({ kind: z.string(), severity: z.enum(["shift", "review"]), message: z.string() });
+export const BackCheck = z.object({
+  checkedAt: z.string(),
+  provider: z.string().optional(),
+  score: z.number(),
+  counts: z.object({ ok: z.number(), review: z.number(), shift: z.number() }),
+  /** the flagged strings only; `translationHash` ties the flag to the wording it was raised on */
+  flagged: z.array(z.object({ key: z.string(), status: z.enum(["review", "shift"]), issues: z.array(BackCheckIssue), back: z.string(), translationHash: z.string() })).default([]),
+  record: z.array(z.object({ key: z.string(), status: z.string(), action: z.enum(["keep", "revise"]), reason: z.string().optional(), from: z.string().optional(), to: z.string().optional(), by: z.string(), at: z.string() })).default([]),
+});
+export type BackCheck = z.infer<typeof BackCheck>;
+
 export const Localization = z.object({
   /** the language the survey is written in — the one every translation is FROM */
   sourceLanguage: z.string().default("en"),
@@ -283,5 +300,7 @@ export const Localization = z.object({
   cache: z.boolean().default(true),
   /** the provider that produced the machine translations — informational (google | llm | fake) */
   provider: z.string().optional(),
+  /** language → its latest back-translation check (P2-09) */
+  backChecks: z.record(BackCheck).optional(),
 });
 export type Localization = z.infer<typeof Localization>;
