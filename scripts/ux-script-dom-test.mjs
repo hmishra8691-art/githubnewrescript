@@ -355,6 +355,8 @@ await page.waitForSelector(".block-badge");
 }
 
 { // Intelligent mode
+  /* 2026-11-18: the first turn compiles /api/copilot/turn (≈2,900 modules) on a cold dev server, which took 55–60 s
+     here: the old 40 s wait failed on that compile, not on the product. A production build answers in well under a second. */
   await switchMode(page, "intelligent");
   await page.waitForSelector('[data-testid="intelligent-view"]');
   const turns = () => page.$$('[data-testid="cp-turn"]');
@@ -363,7 +365,7 @@ await page.waitForSelector(".block-badge");
     const k = (await turns()).length;
     await page.fill('[data-testid="iq-input"]', text);
     await page.keyboard.press("Enter");
-    await page.waitForFunction((c) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > c && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, k, { timeout: 40000 });
+    await page.waitForFunction((c) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > c && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, k, { timeout: 120000 });
     return (await turns()).at(-1);
   };
   const SCRIPT = `var next = document.querySelector('[data-testid="rs-next"]');
@@ -374,7 +376,7 @@ document.body.setAttribute("data-ai-ready", "1");`;
     kind: "proposal", reply: "A script on Q1 that counts clicks on Next.",
     actions: [{ op: "create_behavior", label: "Count Next clicks", target: "Q1", script: SCRIPT }],
   });
-  await page.waitForSelector('[data-testid="cp-panel-apply"]');
+  await page.waitForSelector('[data-testid="cp-panel-apply"]').catch(async (e) => { console.log("LAST TURN:", (await page.locator('[data-testid="cp-turn"]').last().innerText().catch(() => "?")).slice(0, 800)); console.log("IDS:", (await page.$$eval("[data-testid]", (es) => [...new Set(es.map((x) => x.getAttribute("data-testid")).filter((x) => /^cp-|^iq-/.test(x)))])).join(" ")); throw e; });
   assert.equal(await page.$('[data-testid="cp-refused"]'), null, "a script that uses document.querySelector passes the gate");
   await page.click('[data-testid="cp-panel-apply"]');
   await page.waitForTimeout(500);
@@ -399,7 +401,7 @@ document.body.setAttribute("data-ai-ready", "1");`;
     kind: "proposal", reply: "Custom code on Q2 as a script.",
     actions: [{ op: "set_custom_code", target: "Q2", js: `rs.listen("select", "self", function (e) { rs.addClass("self", "chosen-" + e.option); });` }],
   });
-  await page.waitForSelector('[data-testid="cp-panel-apply"]');
+  await page.waitForSelector('[data-testid="cp-panel-apply"]').catch(async (e) => { console.log("LAST TURN:", (await page.locator('[data-testid="cp-turn"]').last().innerText().catch(() => "?")).slice(0, 800)); console.log("IDS:", (await page.$$eval("[data-testid]", (es) => [...new Set(es.map((x) => x.getAttribute("data-testid")).filter((x) => /^cp-|^iq-/.test(x)))])).join(" ")); throw e; });
   await page.click('[data-testid="cp-panel-apply"]');
   await page.waitForTimeout(500);
   def = await readDef();
