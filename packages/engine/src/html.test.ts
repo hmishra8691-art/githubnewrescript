@@ -74,3 +74,10 @@ test("sanitizeHtml still blocks script vectors (unchanged behaviour)", () => {
 test("escapeHtml is unaffected by the MSO changes", () => {
   assert.equal(escapeHtml("<b>&\"'"), "&lt;b&gt;&amp;&quot;&#39;");
 });
+
+test("plain text decodes spaces and typographic entities but never < or > (Error.xlsx, 2026-11-17)", () => {
+  assert.equal(stripHtmlText("In what year were you born?&nbsp; &nbsp;&nbsp;"), "In what year were you born?");
+  assert.equal(stripHtmlText("<p>Tom &amp; Jerry&rsquo;s &#8211; caf&eacute;</p>"), "Tom & Jerry’s – caf&eacute;");
+  assert.equal(stripHtmlText("a &lt;script&gt; &#60;b&#62; &#x3c;"), "a &lt;script&gt; &#60;b&#62; &#x3c;");
+  assert.equal(stripHtmlText("no entities  here"), "no entities  here", "text without entities is untouched");
+});

@@ -176,7 +176,32 @@ export function sanitizeHtml(html: string, opts: SanitizeOptions = {}): string {
  * which is what makes this safe to use even for already-stored content that
  * predates the `sanitizeHtml` input-time fix, with no data rewrite needed.
  */
+/*
+ * ENTITIES IN PLAIN TEXT (2026-11-17, Error.xlsx: "In what year were you born?&nbsp; &nbsp;&nbsp;" in the question
+ * header). Text is stored as HTML, so `&nbsp;` and `&amp;` are correct there — but the plain form (block lists,
+ * logic summaries, variable labels, exports) showed them as literal characters. Decoded here: spaces and the
+ * typographic entities. `&lt;` / `&gt;` (and their numeric forms) are deliberately left encoded, so plain text that
+ * is ever put back into markup cannot open a tag.
+ */
+const NAMED: Record<string, string> = { nbsp: " ", amp: "&", quot: "\"", apos: "'", ndash: "–", mdash: "—", hellip: "…", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", laquo: "«", raquo: "»", copy: "©", reg: "®", trade: "™", deg: "°", euro: "€", pound: "£", middot: "·", bull: "•", times: "×", divide: "÷", shy: "" };
+export function decodePlainEntities(text: string): string {
+  return text.replace(/&(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z]{2,8});/gi, (m, body: string) => {
+    if (body[0] === "#") {
+      const n = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(n) || n === 60 || n === 62 || n < 9 || n > 0x10ffff) return m;
+      return n === 160 ? " " : String.fromCodePoint(n);
+    }
+    const v = NAMED[body.toLowerCase()];
+    return v === undefined ? m : v;
+  });
+}
+
 export function stripHtmlText(html: string | null | undefined): string {
+  return decodeAndTidy(stripHtmlTextRaw(html));
+}
+const decodeAndTidy = (s: string) => (s.includes("&") ? decodePlainEntities(s).replace(/[ \u00a0]{2,}/g, " ").trim() : s);
+
+function stripHtmlTextRaw(html: string | null | undefined): string {
   if (!html) return "";
   /*
    * A picture stands for its alt text — an option that is only a logo reads

@@ -242,7 +242,9 @@ export function cleanPastedText(input: string, field: PasteField): CleanResult {
   if (visible !== first.text) note("invisible characters");
   if (field === "code" || field === "open") { const text = unfence(visible, first.held); return { text, instructions: [], removed, changed: text !== input }; }
 
-  let text = unfence(visible, first.held);
+  /* "born?&nbsp; &nbsp;&nbsp;" copied from a page's source or an HTML export: the entity is a space, not words */
+  let text = unfence(visible, first.held).replace(/&nbsp;|&#160;|&#xa0;/gi, " ");
+  if (text !== unfence(visible, first.held)) note("non-breaking spaces");
   const unwrapped = unwrapCell(text);
   if (unwrapped !== text) { text = unwrapped; note("spreadsheet quotes"); }
   const { text: fenced, held } = fence(text);

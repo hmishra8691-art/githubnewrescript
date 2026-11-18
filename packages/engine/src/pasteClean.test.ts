@@ -250,3 +250,9 @@ test("the source's colours, fonts and sizes are left behind; emphasis, links and
   /* a Text / HTML block and a code field keep the markup the author pasted */
   assert.match(cleanPastedHtml(`<p style="color:red">kept</p>`, "open").html, /style="color:red"/);
 });
+
+test("pasted &nbsp; entities become spaces in question text and options (Error.xlsx, 2026-11-17)", () => {
+  assert.equal(cleanPastedText("In what year were you born?&nbsp; &nbsp;&nbsp;", "question").text, "In what year were you born?");
+  assert.equal(cleanPastedText("Retired&nbsp;", "option").text, "Retired");
+  assert.equal(cleanPastedText("x&nbsp;=&nbsp;1", "code").text, "x&nbsp;=&nbsp;1", "code is never touched");
+});
