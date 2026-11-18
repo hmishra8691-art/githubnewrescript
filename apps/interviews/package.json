@@ -6,7 +6,8 @@
     "dev": "next dev -p 3002",
     "build": "pnpm --filter @rescript/interviews-app^... build && next build",
     "start": "next start -p 3002",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --no-warnings --import ./test/register.mjs --test \"test/**/*.test.ts\""
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
