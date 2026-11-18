@@ -4,6 +4,7 @@ import { Loading } from "@/components/ui/Loading";
 import type { Condition, Question, SurveyDefinition } from "@rescript/schema";
 import { stripHtmlText } from "@rescript/engine";
 import { useStudio } from "./store";
+import { ErasureDialog } from "./ErasureDialog";
 import { ConditionEditor, conditionToText } from "./ConditionBuilder";
 
 /**
@@ -84,6 +85,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [openId, setOpenId] = React.useState<string | null>(null);
   const [importOpen, setImportOpen] = React.useState(false);
+  const [eraseOpen, setEraseOpen] = React.useState(false);
   const [filterOpen, setFilterOpen] = React.useState(false);
   const [filter, setFilter] = React.useState<Condition | null>(null);
   const [match, setMatch] = React.useState<{ busy: boolean; total?: number; exact?: boolean; note?: string; error?: string } | null>(null);
@@ -225,6 +227,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
         </div>
         <div className="qd-config-actions">
           <button className="btn small" data-testid="rm-import-open" onClick={() => setImportOpen(true)}>⬆ Import responses</button>
+          <button className="btn small" data-testid="rm-erase-open" onClick={() => setEraseOpen(true)} title="A request to erase someone's data: find them by email, respondent code, panel id or session, and erase everything of theirs in this project">Erase a person…</button>
           <button className={`btn small ${bin ? "primary" : ""}`} data-testid="rm-bin" onClick={() => setBin((b) => !b)}>
             🗑 {bin ? "Back to responses" : `Recycle bin${counts?.[environment]?.deleted ? ` (${counts[environment].deleted})` : ""}`}
           </button>
@@ -232,6 +235,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
       </div>
 
       {toast && <div className={`chip ${toast.ok ? "on" : "warn"} qd-note`} data-testid="rm-toast">{toast.text}</div>}
+      {eraseOpen && s.surveyDbId && <ErasureDialog surveyId={s.surveyDbId} onClose={() => setEraseOpen(false)} onDone={(text) => { setToast({ text, ok: true }); void load(); }} />}
 
       {/* ------------------------------------------------------ search + filters */}
       <div className="rm-tools">
