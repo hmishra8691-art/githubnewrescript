@@ -7,7 +7,7 @@ import { buildDataset, type AnalyticsRow } from "./dataset.js";
 import { runAnalysis } from "./analyses/index.js";
 import { runPlan, type AnalysisRun } from "./findings.js";
 import { chooseChart, purposeOf, describeChoice } from "./chartPurpose.js";
-import { deckFromRun, describeDeck, type DeckSlide } from "./deck.js";
+import { deckFromRun, describeDeck, unlinkedClaims, type DeckSlide } from "./deck.js";
 import { gateNarrative, runNumbers, sentenceProblem } from "./narrative.js";
 import { buildDeckPptx } from "./export/deck.js";
 import { buildProposalDocx, buildFindingsDocx } from "./export/docx.js";
@@ -196,7 +196,7 @@ test("the deck as PowerPoint: one slide per story slide, the design system's wor
   const buf = await buildDeckPptx({ deck, results, footer: "Prepared for Acme" });
   assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
   assert.ok(buf.length > 40_000, `${buf.length} bytes`);
-  assert.equal(slideCount(buf), deck.slides.length, "one slide per story slide");
+  assert.equal(slideCount(buf), deck.slides.length + (deck.sources!.length ? deck.sources!.length + 1 : 0), "one slide per story slide, then the source tables after their divider");
   const raw = buf.toString("latin1");
   for (const w of ["SIGNIFICANT", "So what", "Who differs", "STATISTICAL HIGHLIGHT", "Cohen", "What it means", "What to do next", "How this was done", "Prepared for Acme", "client edition"]) assert.ok(raw.includes(w), w);
   assert.ok(/<c:barChart>|<c:scatterChart>/.test(raw), "native charts");
@@ -266,4 +266,62 @@ test("the findings report (Word): the executive summary, the verdicts, each key 
   const rows: AnalyticsRow[] = synthRows(44).map((r, i) => ({ ...r, answers: { ...r.answers, q_gender: i < 12 ? 1 : 2, q_sat: i < 12 ? (i === 0 ? 5 : 1) : 3 + (i % 3) } }));
   const adv = docxText(await buildFindingsDocx(def, runPlan(def, buildDataset(def, rows, { spec }), { discover: false })));
   assert.match(adv, /What the data says about the methods Analysis Checks Recommended .*Mann–Whitney/);
+});
+
+/** every slide part's XML, inflated: name → text */
+function pptxParts(buf: Buffer): Map<string, string> {
+  const out = new Map<string, string>();
+  for (let i = 0; i + 30 < buf.length; i++) {
+    if (buf.readUInt32LE(i) !== 0x04034b50) continue;
+    const method = buf.readUInt16LE(i + 8), size = buf.readUInt32LE(i + 18), nameLen = buf.readUInt16LE(i + 26), extraLen = buf.readUInt16LE(i + 28);
+    const name = buf.subarray(i + 30, i + 30 + nameLen).toString("utf8");
+    if (!/^ppt\/slides\/(_rels\/)?slide\d+\.xml(\.rels)?$/.test(name)) continue;
+    const body = buf.subarray(i + 30 + nameLen + extraLen, i + 30 + nameLen + extraLen + size);
+    out.set(name, (method === 8 ? inflateRawSync(body) : body).toString("utf8"));
+  }
+  return out;
+}
+
+test("every claim in the deck cites its table, and every citation links to that table's slide (audit P2-11)", async () => {
+  const def = planned();
+  const run = runPlan(def, synthDataset(400), { trigger: "halfway", now: "2026-10-09T09:00:00Z" });
+  const results = resultsOf(run);
+  const deck = deckFromRun(def, run, { audience: "client", results });
+  assert.deepEqual(unlinkedClaims(deck), [], "no claim without a source");
+  assert.ok(deck.sources!.length >= 2, JSON.stringify(deck.sources));
+  assert.deepEqual(deck.sources!.map((x) => x.ref), deck.sources!.map((_, i) => `T${i + 1}`), "numbered in the order first cited");
+  const kf = deck.slides.filter((x): x is Extract<DeckSlide, { type: "key_finding" }> => x.type === "key_finding" && !x.beyond);
+  for (const k of kf) {
+    const src = deck.sources!.find((x) => x.ref === k.source)!;
+    assert.equal(src.analysisId, k.analysisId, "a planned finding cites its own analysis");
+  }
+  const summary = deck.slides.find((x) => x.type === "summary") as Extract<DeckSlide, { type: "summary" }>;
+  assert.equal(summary.refs![0], null, "the objective is context, not a claim");
+  assert.ok(summary.refs!.some((r) => r && r.length), "the findings in the summary cite tables");
+
+  /* the gate is not vacuous: a claim with no source, or a source that does not exist, is reported */
+  const broken = { ...deck, slides: deck.slides.map((x) => (x.type === "key_finding" ? { ...x, source: undefined } : x.type === "implications" ? { ...x, refs: x.refs!.map((r) => (r ? ["T99"] : r)) } : x)) };
+  const un = unlinkedClaims(broken);
+  assert.ok(un.some((u) => u.startsWith("key_finding")) && un.some((u) => u.startsWith("implications")), un.join("\n"));
+  /* a model-written section carries the sources its engine version cites */
+  const told = deckFromRun(def, run, { results, narrative: { implications: ["Gender is the lever."] } });
+  const imp = told.slides.find((x) => x.type === "implications") as Extract<DeckSlide, { type: "implications" }>;
+  assert.equal(imp.refs, undefined);
+  assert.ok(imp.sources!.length > 0);
+  assert.deepEqual(unlinkedClaims(told), []);
+
+  const buf = await buildDeckPptx({ deck, results });
+  const parts = pptxParts(buf);
+  const story = deck.slides.length;
+  /* the source table slides, after the divider, titled with their ref and holding a table */
+  for (const [i, src] of deck.sources!.entries()) {
+    const xml = parts.get(`ppt/slides/slide${story + 2 + i}.xml`) ?? "";
+    assert.ok(xml.includes(`${src.ref} · `), `${src.ref} titles its slide`);
+    assert.ok(xml.includes("<a:tbl>") || xml.includes("not in this export"), `${src.ref} carries its table`);
+  }
+  /* citations are internal links to those slides */
+  const rels = [...parts].filter(([k]) => k.includes("_rels")).map(([, v]) => v).join("\n");
+  for (const [i] of deck.sources!.entries()) assert.match(rels, new RegExp(`Target="slide${story + 2 + i}\\.xml"`), `a link to T${i + 1}`);
+  const links = [...parts].filter(([k]) => !k.includes("_rels")).map(([, v]) => (v.match(/<a:hlinkClick /g) ?? []).length).reduce((a, b) => a + b, 0);
+  assert.ok(links >= deck.sources!.length, `${links} links`);
 });

@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import type { AnalysisResult, ChartSpec } from "./types.js";
+import type { AnalysisResult, ChartSpec, ResultTable } from "./types.js";
 import type { AnalysisRun, Finding, HypothesisVerdict, RunItem } from "./findings.js";
 import type { Audience } from "./chartPurpose.js";
 import { rankedCharts } from "./questionChart.js";
@@ -26,13 +26,13 @@ import { CORRECTION_WORDS } from "./posthoc.js";
  */
 export type DeckSlide =
   | { type: "title"; title: string; subtitle: string; date: string; client?: string; audience: Audience }
-  | { type: "summary"; title: string; headline: string; bullets: string[] }
+  | { type: "summary"; title: string; headline: string; bullets: string[]; refs?: BulletRefs; sources?: string[] }
   | { type: "section"; title: string; subtitle?: string }
-  | { type: "key_finding"; title: string; analysisId?: string; chart: ChartSpec; evidence: string; soWhat: string; hypothesis?: string; significant: boolean; beyond?: boolean }
-  | { type: "segment_comparison"; title: string; measure: string; analysisId?: string; chart?: ChartSpec; groups: { label: string; value: string; n: number }[]; differs: string }
-  | { type: "statistical_highlight"; title: string; stat: string; label: string; test: string; p: string; n: number; context: string; pairs?: string }
-  | { type: "implications"; title: string; bullets: string[] }
-  | { type: "recommendations"; title: string; items: string[] }
+  | { type: "key_finding"; title: string; analysisId?: string; chart: ChartSpec; evidence: string; soWhat: string; hypothesis?: string; significant: boolean; beyond?: boolean; source?: string }
+  | { type: "segment_comparison"; title: string; measure: string; analysisId?: string; chart?: ChartSpec; groups: { label: string; value: string; n: number }[]; differs: string; source?: string }
+  | { type: "statistical_highlight"; title: string; stat: string; label: string; test: string; p: string; n: number; context: string; pairs?: string; source?: string }
+  | { type: "implications"; title: string; bullets: string[]; refs?: BulletRefs; sources?: string[] }
+  | { type: "recommendations"; title: string; items: string[]; refs?: BulletRefs; sources?: string[] }
   | { type: "method"; title: string; items: { label: string; value: string }[] }
   | { type: "caveats"; title: string; bullets: string[] }
   /** what moved since the previous run (Phase 8): the KPIs with their deltas and whether each move is significant, the findings that changed, the verdicts that changed */
@@ -45,7 +45,33 @@ export interface DeckQuote { quote: string; source: string; speaker?: string; ti
 /** a theme's reviewed quotes, in the order they are to be shown (the Studio selects and redacts them) */
 export interface DeckQuoteSet { theme: string; quotes: DeckQuote[]; /** how many sources the theme was found in, in words */ coverage?: string }
 
-export interface DeckDefinition { title: string; subtitle: string; audience: Audience; slides: DeckSlide[]; /** the analysis ids the slides draw */ analysisIds: string[] }
+export interface DeckDefinition { title: string; subtitle: string; audience: Audience; slides: DeckSlide[]; /** the analysis ids the slides draw */ analysisIds: string[]; /** the source tables, in the order the slides cite them (the appendix) */ sources?: DeckSource[] }
+
+/**
+ * CLAIM → TABLE (audit 2026-11-17, P2-11). Every statement a deck makes from the data cites the table it came from:
+ * "T1", "T2" … in the order first cited. A source is an analysis's result table when the run has it, otherwise the
+ * finding's own evidence (its groups, test, p, effect and n) as a table — the numbers the sentence was written from.
+ * The PowerPoint ends with one appendix slide per source, and every citation is a link to it.
+ */
+export interface DeckSource { ref: string; title: string; analysisId?: string; /** the table, when the source is the finding's evidence rather than an analysis result */ table?: ResultTable }
+/** per bullet: the sources it cites; null = not a claim from the data (the brief's question, a plan to test something) */
+export type BulletRefs = (string[] | null)[];
+
+/** the statements in a deck that make a claim from the data but cite no table — empty for every deck the engine writes */
+export function unlinkedClaims(deck: DeckDefinition): string[] {
+  const out: string[] = [];
+  const known = new Set((deck.sources ?? []).map((x) => x.ref));
+  const cites = (ref: string | undefined) => !!ref && known.has(ref);
+  for (const sl of deck.slides) {
+    if (sl.type === "key_finding" || sl.type === "segment_comparison" || sl.type === "statistical_highlight") { if (!cites(sl.source)) out.push(`${sl.type}: ${sl.title}`); continue; }
+    if (sl.type === "summary" || sl.type === "implications" || sl.type === "recommendations") {
+      const items = sl.type === "recommendations" ? sl.items : sl.bullets;
+      if (!sl.refs) { if (!(sl.sources ?? []).some(cites) && items.length) out.push(`${sl.type}: model-written text with no sources`); continue; }
+      items.forEach((t, i) => { const r = sl.refs![i]; if (r === null) return; if (!r || !r.length || !r.every(cites)) out.push(`${sl.type}: ${t}`); });
+    }
+  }
+  return out;
+}
 
 /** model-written sections that passed the gate: each replaces the engine's text on its slide */
 export interface NarrativeSections { headline?: string; summary?: string[]; implications?: string[]; recommendations?: string[]; soWhat?: Record<string, string> }
@@ -127,19 +153,40 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
 
   slides.push({ type: "title", title, subtitle, date, ...(client ? { client } : {}), audience });
 
+  /* the sources (P2-11): one per analysis result, or per finding when its analysis is not among the results */
+  const sources: DeckSource[] = [];
+  const byKey = new Map<string, string>();
+  const sourceOf = (f: Finding): string => {
+    const it = itemOf(f); const id = idOf(it);
+    const result = resultOf(it, id);
+    const key = id && result ? `a:${id}` : `f:${f.id}`;
+    const have = byKey.get(key); if (have) return have;
+    const ref = `T${sources.length + 1}`;
+    byKey.set(key, ref);
+    if (id && result) sources.push({ ref, title: it?.definition.name ?? f.analysis.name, analysisId: id });
+    else sources.push({ ref, title: evidenceTitle(f), table: evidenceTable(f) });
+    return ref;
+  };
+  const refsOf = (fs: readonly Finding[]): string[] => [...new Set(fs.map(sourceOf))];
+  /** a model-written section: the sources the engine's own version of it cites */
+  const union = (refs: BulletRefs) => [...new Set(refs.flatMap((r) => r ?? []))];
+
   /* summary: what we set out to learn, what we found */
   const n = reportNarrative(def, run);
   const sig = run.findings.filter((f) => f.significant && f.kind !== "inconclusive" && f.kind !== "low_base" && !["segment", "anomaly", "trend"].includes(f.kind));
-  const bullets = narrative.summary?.length ? narrative.summary : [
+  const engineSummary: [string, string[] | null][] = [
     /* Phase 8: the brief's question and decision open the summary — the findings are read against them */
-    ...(brief?.businessQuestion ? [`Business question: ${short(brief.businessQuestion, 140)}`] : []),
-    ...(brief?.decision ? [`Decision this informs: ${short(brief.decision, 140)}`] : []),
-    ...(def.research?.objective ? [`Objective: ${short(def.research.objective, 140)}`] : []),
-    ...run.verdicts.map((v) => `${v.label} ${VERDICT_WORD[v.verdict]}: ${short(v.text, 100)}`),
-    ...sig.slice(0, 3).map((f) => strip(f.headline)),
-    ...(run.discoveries?.segments.length ? [`Beyond the plan: ${run.discoveries.segments.length} segment difference${run.discoveries.segments.length === 1 ? "" : "s"} the plan did not test`] : []),
-  ];
-  slides.push({ type: "summary", title: "What we learned", headline: narrative.headline ?? (sig[0] ? strip(sig[0].headline) : n.summary.split(". ")[0]), bullets: bullets.slice(0, 6) });
+    ...(brief?.businessQuestion ? [[`Business question: ${short(brief.businessQuestion, 140)}`, null] as [string, null]] : []),
+    ...(brief?.decision ? [[`Decision this informs: ${short(brief.decision, 140)}`, null] as [string, null]] : []),
+    ...(def.research?.objective ? [[`Objective: ${short(def.research.objective, 140)}`, null] as [string, null]] : []),
+    /* a verdict with no evidence ("untested") states the plan, not the data */
+    ...run.verdicts.map((v) => [`${v.label} ${VERDICT_WORD[v.verdict]}: ${short(v.text, 100)}`, v.findings.length ? refsOf(v.findings) : null] as [string, string[] | null]),
+    ...sig.slice(0, 3).map((f) => [strip(f.headline), refsOf([f])] as [string, string[]]),
+    ...(run.discoveries?.segments.length ? [[`Beyond the plan: ${run.discoveries.segments.length} segment difference${run.discoveries.segments.length === 1 ? "" : "s"} the plan did not test`, refsOf(run.discoveries.segments)] as [string, string[]]] : []),
+  ].slice(0, 6);
+  const summaryRefs = engineSummary.map(([, r]) => r);
+  slides.push({ type: "summary", title: "What we learned", headline: narrative.headline ?? (sig[0] ? strip(sig[0].headline) : n.summary.split(". ")[0]),
+    ...(narrative.summary?.length ? { bullets: narrative.summary.slice(0, 6), sources: union(summaryRefs) } : { bullets: engineSummary.map(([t]) => t), refs: summaryRefs }) });
 
   /* since the last wave (Phase 8): right after the summary — a tracker's reader asks "what moved?" before "what did we find?" */
   const wave = waveSlide(run);
@@ -153,7 +200,7 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
     const it = itemOf(f); const id = idOf(it);
     if (id) analysisIds.add(id);
     const evidence = `${f.evidence.test ? f.evidence.test.replace(/_/g, " ") : f.analysis.kind}${f.evidence.p != null ? `, ${fmtP(f.evidence.p)}` : ""}${f.evidence.effect ? `, ${f.evidence.effect.name} = ${fmt(f.evidence.effect.value)}` : ""}, n = ${f.evidence.n}${f.evidence.adjusted ? ` · ${CORRECTION_WORDS[f.evidence.adjusted.method]}-adjusted ${fmtP(f.evidence.adjusted.p)}${f.evidence.adjusted.significant ? "" : " (does not hold)"}` : ""}`;
-    slides.push({ type: "key_finding", title: strip(f.headline), ...(id ? { analysisId: id } : {}), chart: chartFor(it, id, it?.definition.name ?? f.analysis.name), evidence, soWhat: narrative.soWhat?.[f.id] ?? soWhatFor(def, f, run.verdicts), ...(f.hypotheses[0] ? { hypothesis: f.hypotheses[0] } : {}), significant: f.significant });
+    slides.push({ type: "key_finding", title: strip(f.headline), ...(id ? { analysisId: id } : {}), chart: chartFor(it, id, it?.definition.name ?? f.analysis.name), evidence, soWhat: narrative.soWhat?.[f.id] ?? soWhatFor(def, f, run.verdicts), ...(f.hypotheses[0] ? { hypothesis: f.hypotheses[0] } : {}), significant: f.significant, source: sourceOf(f) });
   }
 
   /* segment comparison: the group tests with their means, and the discoveries by segment */
@@ -165,7 +212,7 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
     const it = itemOf(f); const id = idOf(it);
     const groups = groupsOf(f);
     const hi = groups[0], lo = groups[groups.length - 1];
-    slides.push({ type: "segment_comparison", title: strip(f.headline), measure: f.variables[0], ...(id ? { analysisId: id, chart: chartFor(it, id, it?.definition.name ?? f.analysis.name) } : {}), groups, differs: f.significant ? `${hi.label} (${hi.value}) vs ${lo.label} (${lo.value}) — ${STRENGTH_WORD[f.strength]}${f.evidence.pairwise ? `. ${f.evidence.pairwise.summary}` : ""}` : "the groups do not differ significantly" });
+    slides.push({ type: "segment_comparison", title: strip(f.headline), measure: f.variables[0], ...(id ? { analysisId: id, chart: chartFor(it, id, it?.definition.name ?? f.analysis.name) } : {}), groups, differs: f.significant ? `${hi.label} (${hi.value}) vs ${lo.label} (${lo.value}) — ${STRENGTH_WORD[f.strength]}${f.evidence.pairwise ? `. ${f.evidence.pairwise.summary}` : ""}` : "the groups do not differ significantly", source: sourceOf(f) });
   }
 
   /* in their own words (platform audit 2026-11-05): the qualitative phase's reviewed quotes, one slide per theme, four at most each */
@@ -178,17 +225,18 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
   /* statistical highlight: the strongest effects */
   const strong = sig.filter((f) => f.evidence.effect && (f.strength === "strong" || f.strength === "moderate")).slice(0, 2);
   for (const f of strong) {
-    slides.push({ type: "statistical_highlight", title: strip(f.headline), stat: `${f.evidence.effect!.name} = ${fmt(f.evidence.effect!.value)}`, label: STRENGTH_WORD[f.strength], test: (f.evidence.test ?? f.analysis.kind).replace(/_/g, " "), p: fmtP(f.evidence.p), n: f.evidence.n, context: `${f.hypotheses.length ? `${f.hypotheses.join(", ")} · ` : ""}${f.evidence.adjusted ? `${CORRECTION_WORDS[f.evidence.adjusted.method]}-adjusted ${fmtP(f.evidence.adjusted.p)} — ${f.evidence.adjusted.significant ? "holds" : "does not hold"}` : "uncorrected"}`, ...(f.evidence.pairwise?.significant.length ? { pairs: f.evidence.pairwise.summary } : {}) });
+    slides.push({ type: "statistical_highlight", title: strip(f.headline), stat: `${f.evidence.effect!.name} = ${fmt(f.evidence.effect!.value)}`, label: STRENGTH_WORD[f.strength], test: (f.evidence.test ?? f.analysis.kind).replace(/_/g, " "), p: fmtP(f.evidence.p), n: f.evidence.n, context: `${f.hypotheses.length ? `${f.hypotheses.join(", ")} · ` : ""}${f.evidence.adjusted ? `${CORRECTION_WORDS[f.evidence.adjusted.method]}-adjusted ${fmtP(f.evidence.adjusted.p)} — ${f.evidence.adjusted.significant ? "holds" : "does not hold"}` : "uncorrected"}`, ...(f.evidence.pairwise?.significant.length ? { pairs: f.evidence.pairwise.summary } : {}), source: sourceOf(f) });
   }
 
   /* beyond the plan: the trends and the segment differences not already shown, the anomalies */
   const d = run.discoveries;
   const beyond: DeckSlide[] = [];
-  for (const f of [...(d?.trends ?? []), ...(d?.segments ?? []).filter((x) => !segs.includes(x))].slice(0, 3)) beyond.push({ type: "key_finding", title: strip(f.headline), chart: { type: f.kind === "trend" ? "line" : "bar_grouped", options: { title: f.variables.join(" by "), dataLabels: true } }, evidence: `${f.evidence.adjusted ? `${CORRECTION_WORDS[f.evidence.adjusted.method]}-adjusted ${fmtP(f.evidence.adjusted.p)}` : ""}${f.evidence.effect ? `, ${f.evidence.effect.name} = ${fmt(f.evidence.effect.value)}` : ""}, n = ${f.evidence.n}`.replace(/^, /, ""), soWhat: soWhatFor(def, f, run.verdicts), significant: f.significant, beyond: true });
+  for (const f of [...(d?.trends ?? []), ...(d?.segments ?? []).filter((x) => !segs.includes(x))].slice(0, 3)) beyond.push({ type: "key_finding", title: strip(f.headline), chart: { type: f.kind === "trend" ? "line" : "bar_grouped", options: { title: f.variables.join(" by "), dataLabels: true } }, evidence: `${f.evidence.adjusted ? `${CORRECTION_WORDS[f.evidence.adjusted.method]}-adjusted ${fmtP(f.evidence.adjusted.p)}` : ""}${f.evidence.effect ? `, ${f.evidence.effect.name} = ${fmt(f.evidence.effect.value)}` : ""}, n = ${f.evidence.n}`.replace(/^, /, ""), soWhat: soWhatFor(def, f, run.verdicts), significant: f.significant, beyond: true, source: sourceOf(f) });
   if (d?.anomalies.length) beyond.push({ type: "caveats", title: "Data anomalies", bullets: d.anomalies.slice(0, 6).map((f) => f.headline) });
   if (beyond.length && d) slides.push({ type: "section", title: "Beyond the plan", subtitle: d.summary }, ...beyond);
 
   /* implications: the verdicts against the design */
+  const implicationRefs: BulletRefs = run.verdicts.map((v) => (v.findings.length ? refsOf(v.findings) : null)).slice(0, 7);
   const implications = narrative.implications?.length ? narrative.implications : run.verdicts.map((v) => {
     const lead = `${v.label} (${short(v.text, 70)}) is ${VERDICT_WORD[v.verdict]}`;
     switch (v.verdict) {
@@ -199,18 +247,22 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
       default: return `${lead}: no analysis in the plan serves it, so the data says nothing about it yet.`;
     }
   });
-  if (implications.length) slides.push({ type: "implications", title: "What it means", bullets: implications.slice(0, 7) });
+  if (implications.length) slides.push({ type: "implications", title: "What it means", bullets: implications.slice(0, 7), ...(narrative.implications?.length ? { sources: union(implicationRefs) } : { refs: implicationRefs }) });
 
   /* recommendations: the next steps the evidence calls for */
-  const recs = narrative.recommendations?.length ? narrative.recommendations : [
-    ...(keys[0] ? [`Lead the story with the strongest finding: ${short(strip(keys[0].headline), 100)}.`] : []),
-    ...run.findings.filter((f) => f.significant && f.evidence.adjusted && !f.evidence.adjusted.significant).slice(0, 2).map((f) => `Treat “${short(strip(f.headline), 70)}” with caution — it does not hold once corrected for the family of tests.`),
-    ...run.verdicts.filter((v) => v.verdict === "inconclusive").slice(0, 2).map((v) => `Re-run the plan for ${v.label} when the base allows: ${short(v.reason, 90)}`),
-    ...run.verdicts.filter((v) => v.verdict === "untested").slice(0, 2).map((v) => `Plan a test for ${v.label} (“${short(v.text, 60)}”) before the next wave — nothing in the plan serves it.`),
-    ...(run.discoveries?.segments ?? []).slice(0, 2).map((f) => `Add ${f.variables[0]} by ${f.variables[1]} to the analysis plan — it was found outside it and holds after correction.`),
-    ...(run.advice ?? []).filter((a) => a.recommended).slice(0, 2).map((a) => `Re-run ${a.name} as ${a.recommended!.label}: ${a.recommended!.reason}`),
-  ];
-  if (recs.length) slides.push({ type: "recommendations", title: "What to do next", items: recs.slice(0, 7) });
+  const engineRecs: [string, string[] | null][] = [
+    ...(keys[0] ? [[`Lead the story with the strongest finding: ${short(strip(keys[0].headline), 100)}.`, refsOf([keys[0]])] as [string, string[]]] : []),
+    ...run.findings.filter((f) => f.significant && f.evidence.adjusted && !f.evidence.adjusted.significant).slice(0, 2).map((f) => [`Treat “${short(strip(f.headline), 70)}” with caution — it does not hold once corrected for the family of tests.`, refsOf([f])] as [string, string[]]),
+    ...run.verdicts.filter((v) => v.verdict === "inconclusive").slice(0, 2).map((v) => [`Re-run the plan for ${v.label} when the base allows: ${short(v.reason, 90)}`, v.findings.length ? refsOf(v.findings) : null] as [string, string[] | null]),
+    /* a plan to test something is not a claim from the data */
+    ...run.verdicts.filter((v) => v.verdict === "untested").slice(0, 2).map((v) => [`Plan a test for ${v.label} (“${short(v.text, 60)}”) before the next wave — nothing in the plan serves it.`, null] as [string, null]),
+    ...(run.discoveries?.segments ?? []).slice(0, 2).map((f) => [`Add ${f.variables[0]} by ${f.variables[1]} to the analysis plan — it was found outside it and holds after correction.`, refsOf([f])] as [string, string[]]),
+    /* method advice is about how an analysis was run, not a finding */
+    ...(run.advice ?? []).filter((a) => a.recommended).slice(0, 2).map((a) => [`Re-run ${a.name} as ${a.recommended!.label}: ${a.recommended!.reason}`, null] as [string, null]),
+  ].slice(0, 7);
+  const recRefs = engineRecs.map(([, r]) => r);
+  const recs = narrative.recommendations?.length ? narrative.recommendations.slice(0, 7) : engineRecs.map(([t]) => t);
+  if (recs.length) slides.push({ type: "recommendations", title: "What to do next", items: recs, ...(narrative.recommendations?.length ? { sources: union(recRefs) } : { refs: recRefs }) });
 
   /* method and caveats */
   slides.push({ type: "method", title: "How this was done", items: [
@@ -224,7 +276,25 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
   const caveats = [...run.warnings.slice(0, 4), ...(run.corrections?.families.some((f) => f.lost.length) ? [run.corrections.summary] : []), ...(run.advice ?? []).slice(0, 2).map((a) => a.summary), ...(run.n < 30 ? [`Only ${run.n} completes — nothing here is conclusive yet.`] : [])];
   if (caveats.length) slides.push({ type: "caveats", title: "Caveats", bullets: caveats.slice(0, 6) });
 
-  return { title, subtitle, audience, slides, analysisIds: [...analysisIds] };
+  return { title, subtitle, audience, slides, analysisIds: [...analysisIds], sources };
+}
+
+/** "NPS by REGION": what a finding outside the plan compared, in its own variables (its analysis name is only "Beyond the plan") */
+const evidenceTitle = (f: Finding) => (f.variables.length >= 2 ? `${f.variables[0]} by ${f.variables.slice(1).join(", ")}${f.kind === "trend" ? " (trend)" : ""}` : f.variables[0] ?? f.analysis.name);
+
+/** a finding's own evidence as a table: what its sentence was written from, when its analysis is not in the export */
+function evidenceTable(f: Finding): ResultTable {
+  const e = f.evidence;
+  if (e.groups?.length) return { id: "evidence", title: evidenceTitle(f), columns: [{ key: "group", label: "Group" }, { key: "mean", label: f.variables[0] ?? "Mean", type: "number", decimals: 2 }, { key: "n", label: "n", type: "count" }], rows: e.groups.map((g) => ({ group: g.label, mean: g.mean, n: g.n })), base: { n: e.n }, notes: [[e.test ? e.test.replace(/_/g, " ") : f.analysis.kind, e.p != null ? fmtP(e.p) : "", e.effect ? `${e.effect.name} = ${fmt(e.effect.value)}` : ""].filter(Boolean).join(", ")] };
+  const rows = [
+    { what: "Test", value: e.test ? e.test.replace(/_/g, " ") : f.analysis.kind },
+    ...(e.statistic != null ? [{ what: "Statistic", value: fmt(e.statistic) }] : []),
+    ...(e.p != null ? [{ what: "p", value: fmtP(e.p).replace(/^p\s*=\s*/, "").replace(/^p\s*/, "") }] : []),
+    ...(e.effect ? [{ what: e.effect.name, value: fmt(e.effect.value) }] : []),
+    ...(e.adjusted ? [{ what: `${CORRECTION_WORDS[e.adjusted.method]}-adjusted p`, value: fmtP(e.adjusted.p).replace(/^p\s*=\s*/, "").replace(/^p\s*/, "") }] : []),
+    { what: "n", value: String(e.n) },
+  ];
+  return { id: "evidence", title: evidenceTitle(f), columns: [{ key: "what", label: "" }, { key: "value", label: "" }], rows, base: { n: e.n } };
 }
 
 /** "11 slides: title, summary, 3 key findings, 2 segment comparisons, …" */

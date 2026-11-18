@@ -1,6 +1,6 @@
 import type { AnalysisResult, ReportTheme } from "../types.js";
 import { DEFAULT_THEME } from "../types.js";
-import type { DeckDefinition, DeckSlide } from "../deck.js";
+import type { BulletRefs, DeckDefinition, DeckSlide } from "../deck.js";
 import { PptxCtor, addTable, drawAnalysisVisual, hex, type Pres, type Slide } from "./pptx.js";
 import { orderSections } from "../reportThemes.js";
 
@@ -115,11 +115,47 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
     s.addShape(p.ShapeType.roundRect, { x, y, w: 1.55, h: 0.26, fill: { color: ok ? accent : subtle }, line: { color: ok ? accent : subtle }, rectRadius: 0.13 });
     s.addText(label, { x, y, w: 1.55, h: 0.26, fontSize: st.type.caption, bold: true, color: "FFFFFF", align: "center", valign: "middle", fontFace: font });
   };
-  const bullets = (s: Slide, items: string[], box: { x: number; y: number; w: number; h: number }, size = st.type.body) => {
-    s.addText(items.map((t) => ({ text: t, options: { bullet: { indent: 14 }, breakLine: true, paraSpaceAfter: 6 } })) as never, { x: box.x, y: box.y, w: box.w, h: box.h, fontSize: size, color: text, fontFace: font, valign: "top", fit: "shrink" } as never);
+  /*
+   * CITATIONS (P2-11): the source tables are the deck's last slides, after a divider; every citation is a link to its
+   * table's slide. The slide numbers are known before anything is drawn: the story slides in their order, then the
+   * divider, then one slide per source.
+   */
+  const ordered = orderDeckSlides(input.deck.slides, input.sectionOrder);
+  const sources = input.deck.sources ?? [];
+  const sourceSlide = new Map(sources.map((x, i) => [x.ref, ordered.length + 2 + i]));
+  const sourceTitle = new Map(sources.map((x) => [x.ref, x.title]));
+  /*
+   * One run per paragraph: pptxgenjs writes a paragraph-properties element for EVERY run, so a paragraph of several
+   * runs carries several <a:pPr> (which PowerPoint repairs and LibreOffice misreads). A bullet therefore ends with its
+   * refs as plain text ("… [T1, T2]"), and the links are a row of small single-run boxes: "Sources: T1 T2", each a
+   * link to its table's slide.
+   */
+  const cite = (t: string, refs: readonly string[] | null | undefined) => {
+    const known = (refs ?? []).filter((r) => sourceSlide.has(r));
+    return known.length ? `${t} [${known.join(", ")}]` : t;
   };
+  const sourceLine = (s: Slide, refs: readonly string[], box: { x: number; y: number; w: number }) => {
+    const known = [...new Set(refs)].filter((r) => sourceSlide.has(r));
+    if (!known.length) return;
+    const size = st.type.caption - 1;
+    const label = known.length === 1 ? "Source:" : "Sources:";
+    const lw = 0.07 * label.length + 0.1;
+    s.addText(label, { x: box.x, y: box.y, w: lw, h: 0.22, fontSize: size, color: subtle, fontFace: font, valign: "middle", margin: 0 });
+    let x = box.x + lw;
+    for (const r of known) {
+      const words = known.length === 1 ? `${r} · ${sourceTitle.get(r)}` : r;
+      const w = Math.min(box.x + box.w - x, 0.075 * words.length + 0.12);
+      if (w < 0.25) break;
+      s.addText(words, { x, y: box.y, w, h: 0.22, fontSize: size, bold: true, color: primary, fontFace: font, valign: "middle", margin: 0, fit: "shrink", hyperlink: { slide: sourceSlide.get(r)!, tooltip: `Source table ${r}: ${sourceTitle.get(r)}` } } as never);
+      x += w + 0.08;
+    }
+  };
+  const bullets = (s: Slide, items: string[], box: { x: number; y: number; w: number; h: number }, size = st.type.body, refs?: BulletRefs) => {
+    s.addText(items.map((t, i) => ({ text: cite(t, refs?.[i]), options: { bullet: { indent: 14 }, breakLine: true, paraSpaceAfter: 6 } })) as never, { x: box.x, y: box.y, w: box.w, h: box.h, fontSize: size, color: text, fontFace: font, valign: "top", fit: "shrink" } as never);
+  };
+  const refsUnion = (refs: BulletRefs | undefined) => [...new Set((refs ?? []).flatMap((r) => r ?? []))];
 
-  for (const slide of orderDeckSlides(input.deck.slides, input.sectionOrder)) {
+  for (const slide of ordered) {
     const s = p.addSlide();
     switch (slide.type) {
       case "title": {
@@ -138,7 +174,8 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
         frame(s, slide.title, "Summary");
         card(s, { x: g, y: 1.2, w: W - 2 * g, h: 0.95 }, "F5F7FA");
         s.addText(slide.headline, { x: g + 0.25, y: 1.25, w: W - 2 * g - 0.5, h: 0.85, fontSize: st.type.headline, bold: true, color: primary, fontFace: heading, valign: "middle", fit: "shrink" });
-        bullets(s, slide.bullets, { x: g, y: 2.3, w: W - 2 * g, h: H - 2.3 - 0.5 });
+        bullets(s, slide.bullets, { x: g, y: 2.3, w: W - 2 * g, h: H - 2.3 - 0.75 }, st.type.body, slide.refs);
+        sourceLine(s, slide.refs ? refsUnion(slide.refs) : slide.sources ?? [], { x: g, y: H - 0.62, w: W - 2 * g - 0.8 });
         break;
       }
       case "section": {
@@ -162,6 +199,7 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
         s.addText("So what", { x: bx + 0.2, y: 1.8, w: bw - 0.4, h: 0.25, fontSize: st.type.caption, bold: true, color: subtle, fontFace: font, charSpacing: 2 });
         s.addText(slide.soWhat, { x: bx + 0.2, y: 2.05, w: bw - 0.4, h: 1.75, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" });
         s.addText(slide.evidence, { x: bx + 0.2, y: 3.85, w: bw - 0.4, h: 0.6, fontSize: st.type.caption, italic: true, color: subtle, fontFace: font, valign: "bottom", fit: "shrink" });
+        if (slide.source) sourceLine(s, [slide.source], { x: g, y: 4.62, w: 5.7 });
         break;
       }
       case "segment_comparison": {
@@ -178,6 +216,7 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
         s.addText("Who differs", { x: bx + 0.2, y: 1.35, w: bw - 0.4, h: 0.25, fontSize: st.type.caption, bold: true, color: subtle, fontFace: font, charSpacing: 2 });
         s.addText(slide.differs, { x: bx + 0.2, y: 1.62, w: bw - 0.4, h: 1.5, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" });
         s.addText(slide.groups.map((gr) => ({ text: `${gr.label}: ${gr.value} (n = ${gr.n})`, options: { breakLine: true } })) as never, { x: bx + 0.2, y: 3.15, w: bw - 0.4, h: 1.3, fontSize: st.type.caption, color: subtle, fontFace: font, valign: "top", fit: "shrink" } as never);
+        if (slide.source) sourceLine(s, [slide.source], { x: g, y: 4.62, w: 5.4 });
         break;
       }
       case "statistical_highlight": {
@@ -190,16 +229,19 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
         const bx = g + 3.6 + 0.35, bw = W - g - bx;
         s.addText(slide.context, { x: bx, y: 1.4, w: bw, h: 0.8, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" });
         if (slide.pairs) { s.addText("Pairs that differ", { x: bx, y: 2.3, w: bw, h: 0.25, fontSize: st.type.caption, bold: true, color: subtle, fontFace: font, charSpacing: 2 }); s.addText(slide.pairs, { x: bx, y: 2.55, w: bw, h: 1.7, fontSize: st.type.body - 1, color: text, fontFace: font, valign: "top", fit: "shrink" }); }
+        if (slide.source) sourceLine(s, [slide.source], { x: g, y: 4.45, w: 3.6 });
         break;
       }
       case "implications": {
         frame(s, slide.title, "Implications");
-        bullets(s, slide.bullets, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.5 });
+        bullets(s, slide.bullets, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.75 }, st.type.body, slide.refs);
+        sourceLine(s, slide.refs ? refsUnion(slide.refs) : slide.sources ?? [], { x: g, y: H - 0.62, w: W - 2 * g - 0.8 });
         break;
       }
       case "recommendations": {
         frame(s, slide.title, "Recommendations");
-        s.addText(slide.items.map((t, i) => ({ text: t, options: { bullet: { type: "number" as const, indent: 18 }, breakLine: true, paraSpaceAfter: 7 } })) as never, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.5, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" } as never);
+        s.addText(slide.items.map((t, i) => ({ text: cite(t, slide.refs?.[i]), options: { bullet: { type: "number" as const, indent: 18 }, breakLine: true, paraSpaceAfter: 7 } })) as never, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.75, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" } as never);
+        sourceLine(s, slide.refs ? refsUnion(slide.refs) : slide.sources ?? [], { x: g, y: H - 0.62, w: W - 2 * g - 0.8 });
         break;
       }
       case "method": {
@@ -241,6 +283,28 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
         if (side.length) bullets(s, side, { x: slide.kpis.length ? g + tw + 0.3 : g, y: 1.2, w: slide.kpis.length ? W - 2 * g - tw - 0.3 : W - 2 * g, h: H - 1.2 - 0.8 }, st.type.body - 2);
         if (!slide.kpis.length && !side.length) s.addText("Nothing moved since the last wave: the KPIs and the findings stand.", { x: g, y: 1.3, w: W - 2 * g, h: 0.6, fontSize: st.type.body, color: text, fontFace: font });
         break;
+      }
+    }
+  }
+  /* the source tables: a divider, then one slide per source, each the table its citations point to */
+  if (sources.length) {
+    const d = p.addSlide(); no++;
+    d.background = { color: secondary };
+    d.addText("Source tables", { x: g, y: 2.35, w: W - 2 * g, h: 0.9, fontSize: st.type.display - 6, bold: true, color: "FFFFFF", fontFace: heading });
+    d.addText(`The ${sources.length} table${sources.length === 1 ? "" : "s"} this deck's statements come from. The [T…] after a statement names its table; the Source links at the foot of each slide open it.`, { x: g, y: 3.25, w: W - 2 * g, h: 0.6, fontSize: st.type.body + 2, color: "FFFFFF", fontFace: font, fit: "shrink" });
+    for (const src of sources) {
+      const s = p.addSlide();
+      frame(s, `${src.ref} · ${src.title}`, "Source table");
+      const result = src.analysisId ? input.results[src.analysisId] : undefined;
+      const table = src.table ?? result?.tables.find((t) => t.id === "groups") ?? result?.tables[0];
+      if (table) {
+        const end = addTable(s, table, theme, { x: g, y: 1.2, w: W - 2 * g }, 14, 9);
+        const base = table.base?.n ?? result?.base?.n;
+        const notes = [base != null ? `Base: n = ${base}` : "", ...(table.notes ?? []).slice(0, 2), ...(result?.tests?.[0] ? [`${result.tests[0].test.replace(/_/g, " ")}${result.tests[0].p != null ? `, p ${result.tests[0].p < 0.001 ? "< .001" : `= ${result.tests[0].p.toFixed(3).replace(/^0/, "")}`}` : ""}`] : [])].filter(Boolean).join(" · ");
+        if (notes) s.addText(notes, { x: g, y: Math.min(H - 0.75, end + 0.08), w: W - 2 * g, h: 0.3, fontSize: st.type.caption, color: subtle, fontFace: font, fit: "shrink" });
+      } else {
+        card(s, { x: g, y: 1.2, w: W - 2 * g, h: 1 }, "F5F7FA");
+        s.addText("This table is not in this export: re-export with the analysis results included.", { x: g, y: 1.2, w: W - 2 * g, h: 1, fontSize: st.type.body, color: subtle, align: "center", valign: "middle", fontFace: font });
       }
     }
   }
