@@ -219,6 +219,7 @@ function CrosstabOptions({ def, set, o, alpha, sel, num, variables }: { def: Ana
         </> : null}
         {check("stackRows", "Stack row variables in one table", false, "Banner only: every row question under a section heading in the same table")}
         {check("nestRows", `Nest the second row variable inside the first${nRows < 2 ? " (needs two row variables)" : ""}`, false)}
+        {check("nestCols", `Nest the column variables (each one inside the one before, up to three)${nCols < 2 ? " (needs two column variables)" : ""}`, false, "Gender › Region: every region within each gender, under a two-level header; letters compare the columns under the same outer category")}
       </fieldset>
       <fieldset className="ax-optgroup"><legend>Significance</legend>
         {check("significance", "Column letters (a, b, c…)", true)}
@@ -542,6 +543,7 @@ export function AnalysisBuilder(p: BuilderProps) {
                         <span>{MEASURE_LABEL[def.measure ?? "pct_col"]}</span>
                         <span>·</span><span>{def.options?.layout === "items" ? `One row per item${def.options?.transpose ? ", transposed" : ""}` : def.options?.layout === "banner" ? (def.options?.stackRows ? "Banner, rows stacked" : "Banner") : "Separate tables"}</span>
                         {def.options?.nestRows && (def.rows?.length ?? 0) >= 2 ? <><span>·</span><span>Nested rows</span></> : null}
+                        {def.options?.nestCols && (def.columns?.length ?? 0) >= 2 ? <><span>·</span><span>Nested columns</span></> : null}
                         <span>·</span><span>{def.options?.significance === false ? "No letters" : `Letters at ${Math.round((1 - ((def.options?.alpha as number | undefined) ?? 0.05)) * 100)}%`}</span>
                         <button type="button" className="ax-linkbtn" onClick={() => setSection(4)}>Options ›</button>
                       </div>

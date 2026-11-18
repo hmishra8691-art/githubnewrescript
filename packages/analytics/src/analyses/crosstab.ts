@@ -1,5 +1,5 @@
 import type { AnalysisDefinition, AnalysisResult, ChartData, ResultColumn, ResultTable, CrosstabRowKind } from "../types.js";
-import { categoricalColumn, categoriesOf, labelOf, numericColumn, weights, type Dataset } from "../dataset.js";
+import { categoricalColumn, categoriesOf, labelOf, numericColumn, weights, type Dataset, type VariableMeta } from "../dataset.js";
 import { chiSquare, oneWayAnova, type TestResult } from "../stats/tests.js";
 import { normalCdf, tTestP } from "../stats/distributions.js";
 import { fmtNum, fmtPct, isOrdered, makeResult, MIN_BASE, opt, pct, refused, round } from "./common.js";
@@ -24,6 +24,9 @@ import { itemTable, npsCapable, NPS_GROUPS } from "./itemTable.js";
  *   layout        "separate" | "banner"   — banner puts every column variable side by side in one table
  *   stackRows     boolean                 — banner tables stack every row variable in one table (section rows)
  *   nestRows      boolean                 — rows[1] nested inside rows[0] (group rows, expandable in the UI)
+ *   nestCols      boolean                 — columns[1] nested under columns[0] (Gender › Region: every region within
+ *                                           each gender), a two-level header; letters compare the columns under the
+ *                                           same outer category, the usual banner convention. Up to three levels.
  *   base          "answered" | "all"      — "all" bases on everyone in the column and adds a "No answer" row
  *   minBase       number                  — suppress cells of columns with fewer respondents than this
  *   sortRows      "none" | "desc" | "asc" — order category rows by their Total
@@ -120,7 +123,42 @@ function zMeans(a: Acc, b: Acc): number | null {
   return tTestP((ma - mb) / se, df);
 }
 
-interface ColumnDef { key: string; label: string; code: string; variable: string; group: string; letter: string }
+interface ColumnDef { key: string; label: string; code: string; variable: string; group: string; letter: string; /** the letter family when it is not the variable (nested columns: one per outer category) */ family?: string }
+
+const NEST_SEP = "\u203a";
+/**
+ * NESTED COLUMN BANNERS (audit 2026-11-17, P2-05). The column variables are crossed into one derived column
+ * variable whose categories are every combination (Male · North, Male · South, Female · North …), so every count,
+ * base, mean and test below is the ordinary single-variable machinery — nothing is computed twice. A multi-select at
+ * any level puts a respondent in each combination they belong to. Combinations nobody can fall into are kept (an
+ * empty column is information), and the outer category labels become the header groups.
+ */
+function nestColumns(ds: Dataset, cvs: string[]): { ds: Dataset; name: string; outer: Map<string, { group: string; family: string }> } {
+  const name = cvs.join(NEST_SEP);
+  const levels = cvs.map((cv) => categoriesOf(ds, cv));
+  let combos: { code: string; labels: string[] }[] = [{ code: "", labels: [] }];
+  for (const cats of levels) combos = combos.flatMap((c) => cats.map((k) => ({ code: c.code ? `${c.code}.${k.code}` : k.code, labels: [...c.labels, k.label] })));
+  const outer = new Map<string, { group: string; family: string }>();
+  for (const c of combos) {
+    const parts = c.code.split(".");
+    outer.set(c.code, { group: c.labels.slice(0, -1).join(` ${NEST_SEP} `), family: `${name}#${parts.slice(0, -1).join(".")}` });
+  }
+  const label = cvs.map((cv) => labelOf(ds, cv)).join(` ${NEST_SEP} `);
+  const meta: VariableMeta = { name, label, role: "categorical", categories: combos.map((c) => ({ code: c.code, label: c.labels[c.labels.length - 1] })), derived: true, hidden: false };
+  const cols = cvs.map((cv) => categoricalColumn(ds, cv));
+  const cases = ds.cases.map((x, i) => {
+    let codes: string[] = [""];
+    for (const col of cols) {
+      const v = col[i];
+      if (v == null || (Array.isArray(v) && !v.length)) { codes = []; break; }
+      const vs = Array.isArray(v) ? v : [v];
+      codes = codes.flatMap((c) => vs.map((k) => (c ? `${c}.${k}` : k)));
+    }
+    return { ...x, vars: { ...x.vars, [name]: codes.length === 0 ? null : codes.length === 1 ? codes[0] : codes } };
+  });
+  const byName = new Map(ds.byName); byName.set(name, meta);
+  return { ds: { ...ds, cases, byName, variables: [...ds.variables, meta] }, name, outer };
+}
 
 interface CrosstabNet { variable: string; label: string; codes: string[] }
 
@@ -146,8 +184,20 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   /* one row per item (a loop's brands, a grid's statements) instead of one block per variable — itemTable.ts */
   if ((opt(def, "layout", "separate") as string) === "items") return itemTable(def, ds, totalCases);
   const rowVars = def.rows?.length ? def.rows : def.variables.slice(0, 1);
-  const colVars = def.columns?.length ? def.columns : def.variables.slice(1, 2);
+  let colVars = def.columns?.length ? def.columns : def.variables.slice(1, 2);
+  const colVarsAsked = colVars;
   const layerVar = def.layers?.[0];
+  /* nested columns: crossed into one derived variable before anything is counted (see nestColumns) */
+  let nested: ReturnType<typeof nestColumns> | null = null;
+  const nestWarnings: string[] = [];
+  if ((opt(def, "nestCols", false) as boolean) && colVars.length >= 2) {
+    const usable = colVars.filter((cv) => ds.byName.get(cv));
+    if (colVars.length > 3) nestWarnings.push(`Nested columns go three levels deep; ${colVars.slice(3).map((cv) => labelOf(ds, cv)).join(", ")} ${colVars.length - 3 === 1 ? "was" : "were"} left out.`);
+    const levels = usable.slice(0, 3);
+    const width = levels.reduce((n, cv) => n * Math.max(1, categoriesOf(ds, cv).length), 1);
+    if (levels.length >= 2 && width <= 120) { nested = nestColumns(ds, levels); ds = nested.ds; colVars = [nested.name]; }
+    else if (levels.length >= 2) nestWarnings.push(`Nesting these columns would make ${width} columns; the limit is 120, so they are shown side by side instead.`);
+  }
   const measure = def.measure ?? "pct_col";
   const alpha = opt(def, "alpha", 0.05) as number;
   const showSig = opt(def, "significance", true) as boolean;
@@ -183,7 +233,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const autoNps = opt(def, "autoNps", true) as boolean;
   const totalRow = opt(def, "totalRow", false) as boolean;
   const decimals = Math.min(4, Math.max(0, Number(opt(def, "decimals", 1)) || 0));
-  const warnings: string[] = [];
+  const warnings: string[] = [...nestWarnings];
   const nets = cleanNets(opt(def, "nets", []), ds, warnings);
   /** columns under the minimum base, across every table — reported ONCE, not once per column */
   const lowCols = new Map<string, { label: string; group: string; n: number }>();
@@ -212,7 +262,8 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     let j = 0;
     for (const cv of cvs) for (const c of categoriesOf(ds, cv)) {
       // separate tables keep the bare code as the key (what saved charts and exports read); a banner qualifies it
-      out.push({ key: cvs.length > 1 ? `${cv}::${c.code}` : c.code, label: c.label, code: c.code, variable: cv, group: labelOf(ds, cv), letter: columnLetter(j++) });
+      const nest = nested && cv === nested.name ? nested.outer.get(c.code) : undefined;
+      out.push({ key: cvs.length > 1 ? `${cv}::${c.code}` : c.code, label: c.label, code: c.code, variable: cv, group: nest ? nest.group : labelOf(ds, cv), letter: columnLetter(j++), ...(nest ? { family: nest.family } : {}) });
     }
     /* a net on a column variable is a banner column of its own (everyone in any of its categories), lettered only
        against the other nets of that variable — it overlaps its own categories, so testing it against them is invalid */
@@ -292,7 +343,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const letterMarks = (cols: ColumnDef[], suppressed: Set<string>, test: (a: ColumnDef, b: ColumnDef) => { p: number | null; aHigher: boolean } | null): Record<string, string> => {
     const out: Record<string, string> = {};
     const families = new Map<string, ColumnDef[]>();
-    for (const c of cols) { if (!c.variable || suppressed.has(c.key)) continue; const f = families.get(c.variable) ?? []; f.push(c); families.set(c.variable, f); }
+    for (const c of cols) { if (!c.variable || suppressed.has(c.key)) continue; const fk = c.family ?? c.variable; const f = families.get(fk) ?? []; f.push(c); families.set(fk, f); }
     for (const fam of families.values()) {
       const pairs: { a: ColumnDef; b: ColumnDef; p: number | null; aHigher: boolean }[] = [];
       for (let i = 0; i < fam.length; i++) for (let j = i + 1; j < fam.length; j++) { const r = test(fam[i], fam[j]); if (r) pairs.push({ a: fam[i], b: fam[j], p: r.p, aHigher: r.aHigher }); }
@@ -324,7 +375,8 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
         const me = prop(c.key); if (!me || t.n <= me.n) continue;
         // the column against its complement, so a large column is not tested against itself
         const rest = { p: (t.p * t.n - me.p * me.n) / (t.n - me.n), n: t.n - me.n };
-        const f = families.get(c.variable) ?? []; f.push({ key: c.key, p: zProportions(me.p, me.n, rest.p, rest.n), higher: me.p > rest.p }); families.set(c.variable, f);
+        const fk = c.family ?? c.variable;
+        const f = families.get(fk) ?? []; f.push({ key: c.key, p: zProportions(me.p, me.n, rest.p, rest.n), higher: me.p > rest.p }); families.set(fk, f);
       }
       for (const f of families.values()) {
         const adj = correction === "none" ? f.map((x) => x.p) : adjustP(f.map((x) => x.p), correction);
@@ -609,7 +661,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
 
     const columns: ResultColumn[] = [
       { key: "row", label: rvs.length > 1 ? "" : labelOf(ds, rvs[0]) },
-      ...cols.map((c) => ({ key: c.key, label: `${c.label}${showSig && c.variable ? ` (${c.letter})` : ""}${suppressed.has(c.key) ? " *" : ""}`, type: cellType, decimals: cellType === "number" ? Math.max(decimals, 2) : decimals, ...(c.group && cvs.length > 1 ? { group: c.group } : {}), ...(c.letter ? { letter: c.letter } : {}), ...(suppressed.has(c.key) ? { suppressed: true } : {}) })),
+      ...cols.map((c) => ({ key: c.key, label: `${c.label}${showSig && c.variable ? ` (${c.letter})` : ""}${suppressed.has(c.key) ? " *" : ""}`, type: cellType, decimals: cellType === "number" ? Math.max(decimals, 2) : decimals, ...(c.group && (cvs.length > 1 || c.family) ? { group: c.group } : {}), ...(c.letter ? { letter: c.letter } : {}), ...(suppressed.has(c.key) ? { suppressed: true } : {}) })),
     ];
     const colBases: Record<string, number> = {}; for (const c of cols) colBases[c.key] = top.colBase.get(c.key)?.count ?? 0;
     /* a banner run of many questions is named by their number, not by a paragraph of labels */
@@ -619,6 +671,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       measure === "pct_col" ? "Column percentages." : measure === "pct_row" ? "Row percentages." : measure === "pct_total" ? "Percent of total." : measure === "mean" ? "Column means." : ds.weighted ? "Weighted counts." : "Counts.",
       ...(baseMode === "all" ? ["Based on everyone in the column; “No answer” counts the respondents who did not answer the row question."] : []),
       ...(showSig ? [top.meanMode ? `Letters mark columns with a significantly lower mean at the ${Math.round((1 - alpha) * 100)}% level (Welch t${ds.weighted ? ", weighted, effective bases" : ""}${correctionWords}).` : sigNote] : []),
+      ...(showSig && nested ? ["Nested columns: letters compare the columns under the same outer category."] : []),
       ...(showSig && sigMinBase > 0 && unlettered > 0 ? [`Columns with an effective base below ${sigMinBase} carry no significance letters: too few respondents to test.`] : []),
       ...(sigVsTotal ? [`+ / − mark cells significantly above / below the rest of the sample${correction === "none" ? "" : ` (${CORRECTION_WORDS[correction]}-adjusted for the columns compared in each row)`}.`] : []),
       ...(suppressed.size ? [`* Columns with fewer than ${minBase} respondents are suppressed.`] : []),
@@ -672,7 +725,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   return makeResult(def, ds, {
     tables, chart, tests, insights, warnings: [...new Set(warnings)],
     recommendedCharts: ["bar_grouped", "bar_stacked_100", "heatmap_crosstab", "bar_horizontal", "table"],
-    variablesUsed: [...rowVars, ...colVars, ...(layerVar ? [layerVar] : [])], totalCases,
+    variablesUsed: [...rowVars, ...colVarsAsked, ...(layerVar ? [layerVar] : [])], totalCases,
     validN: headerBase.n, ...(ds.weighted && headerBase.weightedN != null ? { validWeightedN: headerBase.weightedN } : {}),
   });
 }
