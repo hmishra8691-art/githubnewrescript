@@ -105,6 +105,8 @@ d = await readDef();
 q2 = d.questions.find((q) => q.id === "q2");
 assert.deepEqual(q2.options.map((o) => plain(o.label)), ["Apple", "Samsung", "OnePlus 12", "18-24 edition", "Other", "None of these"]);
 assert.equal(new Set(q2.options.map((o) => String(o.code))).size, 6, "six distinct codes");
+/* Error.xlsx item 1 (2026-11-17): pasted into the empty starter option, the list numbers from 1, not 2 */
+assert.deepEqual(q2.options.map((o) => String(o.code)), ["1", "2", "3", "4", "5", "6"], "numbered from 1");
 assert.ok((q2.options[4].flags ?? []).includes("other_specify"), "Other (SPECIFY) → specify");
 assert.ok((q2.options[5].flags ?? []).includes("exclusive"), "[EXCLUSIVE] → exclusive");
 assert.equal(q2.randomization?.enabled, true, "[RANDOMIZE] → randomized");
