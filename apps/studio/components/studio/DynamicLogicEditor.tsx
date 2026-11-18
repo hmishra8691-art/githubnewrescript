@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { Question } from "@rescript/schema";
-import { buildTernary, compileDynamicGrid, dynamicOutcomes, lintDynamicLogic, GRID_OTHERWISE, type DynamicProblem, type DynamicGrid } from "@rescript/engine";
+import { buildTernary, compileDynamicGrid, dynamicOutcomes, lintDynamicLogic, GRID_OTHERWISE, type DynamicProblem, type DynamicGrid, markupToText } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -69,7 +69,7 @@ export function DynamicLogicEditor({ q, patch }: { q: Question; patch(p: Partial
               <div key={String(o.code)} style={{ marginBottom: 6 }}>
                 <div className="row" style={{ gap: 6 }}>
                   <span className="mono muted" style={{ width: 44 }}>{String(o.code)}</span>
-                  <span style={{ width: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={o.label.replace(/<[^>]*>/g, "")}>{o.label.replace(/<[^>]*>/g, "")}</span>
+                  <span style={{ width: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={markupToText(o.label)}>{markupToText(o.label)}</span>
                   <input className="input mono grow" data-testid="dynamic-option-label" data-code={String(o.code)} value={o.labelExpression ?? ""}
                     placeholder={'Q1 == "A" ? "Great for A" : ""'} onChange={(e) => setOptionLabel(o.code, e.target.value)} />
                 </div>
@@ -90,7 +90,7 @@ export function DynamicLogicEditor({ q, patch }: { q: Question; patch(p: Partial
                 <tr key={i}>
                   <td className="mono">{o.when}</td>
                   {q.dynamicText && <td>{(o.text ?? "").replace(/<[^>]*>/g, "")}</td>}
-                  {(q.dynamicOptions || q.options.some((x) => x.labelExpression)) && <td>{(o.optionLabels ?? []).map((l, j) => `${o.optionCodes?.[j] ?? ""} ${l.replace(/<[^>]*>/g, "")}`).join(" · ")}</td>}
+                  {(q.dynamicOptions || q.options.some((x) => x.labelExpression)) && <td>{(o.optionLabels ?? []).map((l, j) => `${o.optionCodes?.[j] ?? ""} ${markupToText(l)}`).join(" · ")}</td>}
                 </tr>
               ))}
             </tbody>
@@ -108,7 +108,7 @@ function TernaryBuilder({ q, mode, onBuild }: { q: Question; mode: "text" | "opt
   const [srcId, setSrcId] = React.useState(sources[0]?.id ?? "");
   const src = sources.find((x) => x.id === srcId);
   const [vals, setVals] = React.useState<Record<string, string>>({});
-  const [fallback, setFallback] = React.useState(mode === "text" ? q.text.replace(/<[^>]*>/g, "") : q.options.map((o) => String(o.code)).join(","));
+  const [fallback, setFallback] = React.useState(mode === "text" ? markupToText(q.text) : q.options.map((o) => String(o.code)).join(","));
   if (!sources.length) return <p className="muted" data-testid="ternary-builder">No earlier question with options to build from — type the expression instead.</p>;
   const build = () => {
     if (!src) return;
@@ -125,11 +125,11 @@ function TernaryBuilder({ q, mode, onBuild }: { q: Question; mode: "text" | "opt
     <div className="card" style={{ padding: 10, marginBottom: 10 }} data-testid="ternary-builder">
       <label className="f"><span>Based on</span>
         <select className="select" value={srcId} onChange={(e) => { setSrcId(e.target.value); setVals({}); }} data-testid="ternary-source">
-          {sources.map((x) => <option key={x.id} value={x.id}>{x.code} — {x.text.replace(/<[^>]*>/g, "").slice(0, 50)}</option>)}
+          {sources.map((x) => <option key={x.id} value={x.id}>{x.code} — {markupToText(x.text).slice(0, 50)}</option>)}
         </select></label>
       {(src?.options ?? []).map((o) => (
         <div key={String(o.code)} className="row" style={{ gap: 6, marginBottom: 4, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ width: 140 }}>If {src!.code} = {o.label.replace(/<[^>]*>/g, "")}</span>
+          <span style={{ width: 140 }}>If {src!.code} = {markupToText(o.label)}</span>
           {mode === "text" ? (
             <input className="input grow" data-testid="ternary-case" value={vals[String(o.code)] ?? ""} placeholder="the text to show"
               onChange={(e) => setVals({ ...vals, [String(o.code)]: e.target.value })} />
@@ -138,7 +138,7 @@ function TernaryBuilder({ q, mode, onBuild }: { q: Question; mode: "text" | "opt
               {q.options.map((qo) => (
                 <label key={String(qo.code)} className="row" style={{ gap: 2, fontSize: 12.5 }}>
                   <input type="checkbox" checked={(vals[String(o.code)] ?? "").split(",").includes(String(qo.code))} onChange={() => toggleCode(String(o.code), String(qo.code))} />
-                  {qo.label.replace(/<[^>]*>/g, "")}
+                  {markupToText(qo.label)}
                 </label>
               ))}
             </span>
@@ -168,7 +168,7 @@ function OptionGrid({ q, patch }: { q: Question; patch(p: Partial<Question>): vo
   const [said, setSaid] = React.useState<string | null>(null);
   const src = sources.find((x) => x.id === grid.source || x.code === grid.source || x.variableName === grid.source);
   if (!sources.length) return null;
-  const plain = (h: string) => h.replace(/<[^>]*>/g, "").trim();
+  const plain = (h: string) => markupToText(h).trim();
   const cell = (oc: string, ac: string) => grid.cells[oc]?.[ac] ?? {};
   const setCell = (oc: string, ac: string, patchCell: { text?: string; hide?: boolean }) =>
     setGrid((g) => ({ ...g, cells: { ...g.cells, [oc]: { ...(g.cells[oc] ?? {}), [ac]: { ...(g.cells[oc]?.[ac] ?? {}), ...patchCell } } } }));

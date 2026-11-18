@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { MediaDisplay } from "@rescript/schema";
-import { mediaDisplayStyle, resolveMediaUrl } from "@rescript/engine";
+import { mediaDisplayStyle, resolveMediaUrl, markupToText } from "@rescript/engine";
 import { MediaDisplayControls } from "./MediaDisplayControls";
 
 /**
@@ -57,7 +57,7 @@ export function ImageCustomizeDialog({ open, url, display, alt, label, onApply, 
         <div className="imgc-body">
           <div className="imgc-controls">
             <label className="f"><span>Alt text <span className="muted">(what a screen reader says — blank uses the option label)</span></span>
-              <input className="input" data-testid="image-customize-alt" value={a} placeholder={label ? label.replace(/<[^>]*>/g, "") : "e.g. Acme logo"} onChange={(e) => setA(e.target.value)} /></label>
+              <input className="input" data-testid="image-customize-alt" value={a} placeholder={label ? markupToText(label) : "e.g. Acme logo"} onChange={(e) => setA(e.target.value)} /></label>
             <h3 className="sec" style={{ marginTop: 6 }}>Size &amp; layout</h3>
             <MediaDisplayControls kind="image" value={d} onChange={setD} compact />
           </div>

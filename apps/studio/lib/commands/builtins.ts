@@ -1,7 +1,6 @@
 import type { SurveyDefinition, Question, FlowNode } from "@rescript/schema";
 import {
-  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages, listBlocks, findNode, splitPageAfter, joinPageAfter, boundaryAfter,
-} from "@rescript/engine";
+  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages, listBlocks, findNode, splitPageAfter, joinPageAfter, boundaryAfter, markupToText } from "@rescript/engine";
 import type { Command, CommandContextBase } from "./core.ts";
 import { MODES, type ProgrammingMode } from "../programmingMode.ts";
 
@@ -372,7 +371,7 @@ export function navigationCommands(tabs: { key: string; label: string; group: st
 export function findCommands(def: SurveyDefinition): C[] {
   const out: C[] = [];
   for (const q of def.questions) {
-    const text = String(q.text ?? "").replace(/<[^>]*>/g, "").trim();
+    const text = markupToText(String(q.text ?? "")).trim();
     out.push({
       id: `find.question.${q.id}`,
       title: `${q.code} · ${q.variableName}${text ? ` — ${text.slice(0, 80)}` : ""}`,

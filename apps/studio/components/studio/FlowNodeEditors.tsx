@@ -9,8 +9,7 @@ import {
   validateRedirectUrl, urlVariableCatalog, embeddedCatalog, stripHtmlText,
   lintEmbeddedPiping, describeDetectedType, type EmbeddedField,
   nameBranch, newPathLabel, nextBranchTitle, splitBranchByQuestion, uniqueName, isGenericBranchTitle,
-  flowNodePlainSummary, flowNodeChecks,
-} from "@rescript/engine";
+  flowNodePlainSummary, flowNodeChecks, markupToText } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { Icon } from "@/components/ui/Icon";
 import { InsertPipedText } from "./InsertPipedText";
@@ -608,7 +607,7 @@ function SplitByQuestion({ node, onChange }: { node: BranchNode; onChange(n: Flo
                 onChange({ ...node, title: isGenericBranchTitle(node.title) ? made.title : node.title, branches: blank ? paths : [...node.branches, ...paths] });
                 setOpen(false);
               }}>
-              <span className="mono">{q.code}</span> — {q.text.replace(/<[^>]*>/g, "").slice(0, 60)} <span className="muted">({q.options.length} options)</span>
+              <span className="mono">{q.code}</span> — {markupToText(q.text).slice(0, 60)} <span className="muted">({q.options.length} options)</span>
             </button>
           ))}
         </span>

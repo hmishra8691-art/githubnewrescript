@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { Question } from "@rescript/schema";
-import { CARD_FIELD_TYPES, CURRENCIES, type CardField } from "@rescript/engine";
+import { CARD_FIELD_TYPES, CURRENCIES, type CardField, markupToText } from "@rescript/engine";
 import { registerVariantSettings, type VariantSettingsProps } from "./registry";
 import { MediaUrlInput } from "../MediaUrlInput";
 import { randomAxes, toggleRandomAxis } from "@/lib/builder/randomAxes";
@@ -25,7 +25,7 @@ const DIRS = [
 
 function Directions({ q, patch, patchSettings }: VariantSettingsProps) {
   const map = q.settings.swipeDirections ?? {};
-  const plain = (s: string) => s.replace(/<[^>]*>/g, "");
+  const plain = (s: string) => markupToText(s);
   /* the label a direction shows IS its option's label — edit it here, in place */
   const target = (key: string, i: number) => {
     const code = map[key as keyof typeof map];
@@ -104,7 +104,7 @@ function CardsEditor({ q, patch }: VariantSettingsProps) {
     if (value === undefined || value === "") delete meta[key]; else meta[key] = value;
     patch({ rows: rows.map((r, k) => (k === i ? { ...r, meta } : r)) });
   };
-  const plain = (s: string) => s.replace(/<[^>]*>/g, "");
+  const plain = (s: string) => markupToText(s);
   return (
     <div data-testid="cards-editor">
       <h3 className="sec">Card content</h3>

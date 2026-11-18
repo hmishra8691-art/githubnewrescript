@@ -1,4 +1,5 @@
 "use client";
+import { markupToText } from "@rescript/engine";
 import { registerVariantSettings, registerOptionMetaFields, DESC, PRICE, BADGE } from "./registry";
 
 /**
@@ -30,8 +31,8 @@ registerVariantSettings("cardsort", ({ q }) => {
             : `${piles} piles, ${q.rows.length} card${q.rows.length === 1 ? "" : "s"} in the deck.`}
       </div>
       <div className="chip" data-testid="cardsort-swipe-note" style={{ marginLeft: 6 }}>
-        Swipe left → “{q.options[0]?.label.replace(/<[^>]*>/g, "") ?? "—"}”, right → “
-        {q.options[1]?.label.replace(/<[^>]*>/g, "") ?? "—"}”. A card can also be dragged onto any
+        Swipe left → “{q.options[0] ? markupToText(q.options[0].label) : "—"}”, right → “
+        {q.options[1] ? markupToText(q.options[1].label) : "—"}”. A card can also be dragged onto any
         pile, or the pile tapped.
       </div>
       {q.rows.length === 0 && (

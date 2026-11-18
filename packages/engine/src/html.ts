@@ -196,6 +196,16 @@ export function decodePlainEntities(text: string): string {
   });
 }
 
+/**
+ * Markup to the words a person reads, WITHOUT trimming or collapsing — the drop-in for the ad-hoc
+ * `x.replace(/<[^>]*>/g, "")` the Studio used in ~40 places, which left `&nbsp;` / `&amp;` on screen (audit P1-05).
+ */
+export function markupToText(html: string | null | undefined): string {
+  if (!html) return "";
+  const t = String(html).replace(/<[^>]*>/g, "");
+  return t.includes("&") ? decodePlainEntities(t) : t;
+}
+
 export function stripHtmlText(html: string | null | undefined): string {
   return decodeAndTidy(stripHtmlTextRaw(html));
 }

@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { registerVariantSettings, type VariantSettingsProps } from "./registry";
-import { lintShelf } from "@rescript/engine";
+import { lintShelf, markupToText } from "@rescript/engine";
 
 /**
  * Studio authoring for the hotspot family — see docs/VARIANT-BATCH.md §4.
@@ -24,7 +24,7 @@ function rectOf(meta: Record<string, unknown> | undefined): Rect | null {
     : null;
 }
 const pct = (n: number) => Math.max(0, Math.min(100, Math.round(n * 10) / 10));
-const plain = (s: string) => s.replace(/<[^>]*>/g, "");
+const plain = (s: string) => markupToText(s);
 
 function RegionSettings({ q, patch, patchSettings }: VariantSettingsProps) {
   const [active, setActive] = React.useState<string>(String(q.options[0]?.code ?? ""));

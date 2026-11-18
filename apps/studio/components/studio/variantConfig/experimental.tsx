@@ -1,4 +1,5 @@
 "use client";
+import { markupToText } from "@rescript/engine";
 import React from "react";
 import { MediaUrlInput } from "../MediaUrlInput";
 import type { Question } from "@rescript/schema";
@@ -87,7 +88,7 @@ registerVariantSettings("attention", ({ q, patch, patchSettings }) => {
                 <input type="checkbox" data-testid={`attention-expected-${code}`}
                   checked={expected.includes(code)}
                   onChange={() => toggleCode(code)} />
-                <span>{o.label.replace(/<[^>]*>/g, "")}</span>
+                <span>{markupToText(o.label)}</span>
                 <span className="muted mono" style={{ fontSize: 12.5 }}>{code}</span>
               </label>
             );
@@ -220,10 +221,10 @@ registerVariantSettings("iat", ({ q, patchSettings }) => {
         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px", marginTop: 6 }} data-testid="iat-key">
           {(q.rows ?? []).map((r) => (
             <React.Fragment key={String(r.code)}>
-              <span className="flabel">{r.label.replace(/<[^>]*>/g, "")}</span>
+              <span className="flabel">{markupToText(r.label)}</span>
               <select className="input" value={String(b.key?.[String(r.code)] ?? "")} onChange={(e) => set({ ...b, key: { ...(b.key ?? {}), [String(r.code)]: e.target.value } })}>
                 <option value="">— correct category —</option>
-                {(q.options ?? []).map((o) => <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>)}
+                {(q.options ?? []).map((o) => <option key={String(o.code)} value={String(o.code)}>{markupToText(o.label)}</option>)}
               </select>
             </React.Fragment>
           ))}

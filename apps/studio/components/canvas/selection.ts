@@ -1,3 +1,4 @@
+import { markupToText } from "@rescript/engine";
 import type { Question, SurveyDefinition } from "@rescript/schema";
 import { parseCellId } from "@rescript/renderer";
 
@@ -29,7 +30,7 @@ export type SelectionKind = SelectedEntity["type"];
 
 /** Human label for the panel heading — "OPTION: Google". */
 export function selectionLabel(sel: SelectedEntity, q: Question | undefined): string {
-  const plain = (s: string) => s.replace(/<[^>]*>/g, "").trim();
+  const plain = (s: string) => markupToText(s).trim();
   switch (sel.type) {
     case "question": return q ? `${q.code} — question` : "Question";
     case "text": return "Question text";

@@ -3,7 +3,7 @@ import React from "react";
 import type { Question, QuestionColumn } from "@rescript/schema";
 import { registerVariantSettings } from "./registry";
 import { CountInput } from "../CountInput";
-import { ratingLabelMode, ratingScaleOptions, switchRatingLabels, RATING_SCALE_SIZES, type RatingLabelMode } from "@rescript/engine";
+import { ratingLabelMode, ratingScaleOptions, switchRatingLabels, RATING_SCALE_SIZES, type RatingLabelMode, markupToText } from "@rescript/engine";
 
 /**
  * Studio authoring for the matrix family — see docs/VARIANT-BATCH.md §4.
@@ -161,7 +161,7 @@ registerVariantSettings("variant:matrix.rating", ({ q, patch }) => {
       </div>
       {/* what the header will read — the same cells the preview draws */}
       <div className="rating-head-preview" aria-hidden data-testid="rating-head-preview">
-        {q.options.map((o) => <span key={String(o.code)} className="rating-head-cell">{String(o.label).replace(/<[^>]*>/g, "") || o.code}</span>)}
+        {q.options.map((o) => <span key={String(o.code)} className="rating-head-cell">{markupToText(String(o.label)) || o.code}</span>)}
       </div>
       {mode === "text" ? (
         <div className="rating-labels" data-testid="rating-label-list">

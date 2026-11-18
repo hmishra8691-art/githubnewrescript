@@ -4,8 +4,7 @@ import type { FlowNode, SurveyDefinition } from "@rescript/schema";
 import {
   neighbours, parseObjectKey, conditionSummary, findNode, questionLogicSummary, formatSetExpression, objectKey,
   pagePositionOf, boundaryAfter, listBlocks, questionsInFlowOrder,
-  type DependencyIndex, type ObjectKey, type ObjectStatusMap, type DependencyEdge,
-} from "@rescript/engine";
+  type DependencyIndex, type ObjectKey, type ObjectStatusMap, type DependencyEdge, markupToText } from "@rescript/engine";
 import { objectTags, logicChips, TAG_LABEL } from "../../lib/architect/structure";
 import { useStudio } from "../studio/store";
 import { PropertiesPanel } from "../studio/PropertiesPanel";
@@ -162,7 +161,7 @@ function QuestionSummary({ id, index }: { id: string; index?: DependencyIndex })
   const q = s.def.questions.find((x) => x.id === id);
   if (!q) return null;
   const def = s.def;
-  const text = String(q.text ?? "").replace(/<[^>]*>/g, "").trim();
+  const text = markupToText(String(q.text ?? "")).trim();
   const tags = objectTags(q);
   const rows: [string, React.ReactNode][] = [
     ["Variable", <span className="mono">{q.variableName}</span>],
@@ -178,7 +177,7 @@ function QuestionSummary({ id, index }: { id: string; index?: DependencyIndex })
   } else rows.push(["Page", <span className="muted">not on any page</span>]);
   const loop = loopAround(def.flow as FlowNode[], q.id);
   if (loop) rows.push(["Loop", `inside ${loop.title ?? "loop"} — once per ${loop.loopVar}`]);
-  if (q.options?.length) rows.push(["Options", `${q.options.length}: ${q.options.slice(0, 6).map((o) => String(o.label ?? o.code).replace(/<[^>]*>/g, "")).join(", ")}${q.options.length > 6 ? ", …" : ""}`]);
+  if (q.options?.length) rows.push(["Options", `${q.options.length}: ${q.options.slice(0, 6).map((o) => markupToText(String(o.label ?? o.code))).join(", ")}${q.options.length > 6 ? ", …" : ""}`]);
   if (q.rows?.length) rows.push(["Rows", `${q.rows.length}`]);
   if (q.validation?.length) rows.push(["Validation", q.validation.map((v) => `${String(v.kind).replace(/_/g, " ")}${v.value !== undefined && v.value !== null && typeof v.value !== "object" ? ` ${v.value}` : ""}`).join(", ")]);
   if (q.mask) rows.push(["Mask", `${q.mask.action} ${formatSetExpression(def, q.mask.expr)}`]);

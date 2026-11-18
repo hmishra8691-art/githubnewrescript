@@ -1,4 +1,5 @@
 "use client";
+import { markupToText } from "@rescript/engine";
 import { UxItemsEditor } from "../studio/UxItemsEditor";
 import React from "react";
 import type { Option, Question, QuestionColumn, QuestionRow, ValidationRule } from "@rescript/schema";
@@ -351,7 +352,7 @@ function CellProps({ q, rowCode, columnId, onSelect }: {
         intersection, so this is a cross-reference — edit whichever side you meant.
       </div>
       <dl className="kv">
-        <dt>Row</dt><dd>{row ? row.label.replace(/<[^>]*>/g, "") : rowCode}</dd>
+        <dt>Row</dt><dd>{row ? markupToText(row.label) : rowCode}</dd>
         <dt>Column</dt><dd>{(col?.label ?? opt?.label ?? columnId).replace(/<[^>]*>/g, "")}</dd>
         <dt>Variable</dt><dd className="mono">{col ? `${col.variableStem}_${rowCode}` : `${q.variableName}_${rowCode}`}</dd>
       </dl>

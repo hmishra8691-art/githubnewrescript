@@ -1,4 +1,5 @@
 "use client";
+import { markupToText } from "@rescript/engine";
 import React from "react";
 import type { Option, Question } from "@rescript/schema";
 import { registerVariantSettings } from "./registry";
@@ -106,7 +107,7 @@ registerVariantSettings("pairwiseset", ({ q, patch }) => {
       ))}
       {unpairedOptions(q).length > 0 && (
         <p className="chip warn" data-testid="pair-unpaired" style={{ display: "block", whiteSpace: "normal" }}>
-          Not in any pair, so never shown: {unpairedOptions(q).map((o) => o.label.replace(/<[^>]*>/g, "") || String(o.code)).join(", ")}.{" "}
+          Not in any pair, so never shown: {unpairedOptions(q).map((o) => markupToText(o.label) || String(o.code)).join(", ")}.{" "}
           <button type="button" className="btn small" data-testid="pair-unpaired-remove"
             onClick={() => { const drop = new Set(unpairedOptions(q).map((o) => String(o.code))); patch({ options: q.options.filter((o) => !drop.has(String(o.code))) }); }}>
             remove {unpairedOptions(q).length === 1 ? "it" : "them"}</button>

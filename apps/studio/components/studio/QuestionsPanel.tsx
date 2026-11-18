@@ -11,7 +11,7 @@ import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./Varian
 import { applyPasteNotes } from "./pasteNotes";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { DefaultValueBox } from "./DefaultValueBox";
-import { autoNextKind, isConsentQuestion, holdsData, DATA_PROTECTION_NOTICE } from "@rescript/engine";
+import { autoNextKind, isConsentQuestion, holdsData, DATA_PROTECTION_NOTICE, markupToText } from "@rescript/engine";
 
 /** Put the caret at the end of a label field — an input or a contentEditable line. */
 function focusLabel(el: HTMLElement | null | undefined) {
@@ -629,7 +629,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         </div>
         {enableLogic && logicOpen === String(o.code) && (
           <OptionLogicEditor
-            title={`Logic for “${o.label.replace(/<[^>]*>/g, "") || o.code}”`}
+            title={`Logic for “${markupToText(o.label) || o.code}”`}
             logic={o.logic}
             visibleIf={o.visibleIf}
             onChange={(patch) => set(i, patch as Partial<Option>)} />
@@ -817,7 +817,7 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
           {logicOpen === c.id && (
             <div data-testid="column-logic">
               <OptionLogicEditor
-                title={`Logic for column “${c.label.replace(/<[^>]*>/g, "") || c.id}”`}
+                title={`Logic for column “${markupToText(c.label) || c.id}”`}
                 logic={c.logic}
                 visibleIf={c.visibleIf}
                 onChange={(patch) => set(i, patch as Partial<QuestionColumn>)} />
@@ -1623,8 +1623,8 @@ export function QuestionEditor({ q }: { q: Question }) {
               if (q.type === "composite" || q.type === "custom_table") {
                 for (const c of q.columns ?? []) {
                   if (c.expression) continue;
-                  if (["text", "longtext"].includes(String(c.responseType))) out.push({ key: `cell:${c.id}`, label: `${c.label.replace(/<[^>]*>/g, "") || c.id} default`, accept: "text" });
-                  else if (["numeric", "slider"].includes(String(c.responseType))) out.push({ key: `cell:${c.id}`, label: `${c.label.replace(/<[^>]*>/g, "") || c.id} default`, accept: "number" });
+                  if (["text", "longtext"].includes(String(c.responseType))) out.push({ key: `cell:${c.id}`, label: `${markupToText(c.label) || c.id} default`, accept: "text" });
+                  else if (["numeric", "slider"].includes(String(c.responseType))) out.push({ key: `cell:${c.id}`, label: `${markupToText(c.label) || c.id} default`, accept: "number" });
                 }
               }
               if ((o.flags ?? []).includes("other_specify")) out.push({ key: "otherDefault", label: "Other box default", accept: "text" });

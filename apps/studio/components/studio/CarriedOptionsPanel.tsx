@@ -18,9 +18,9 @@
  */
 import React from "react";
 import type { Question, SurveyDefinition } from "@rescript/schema";
-import { authoringQuestionView } from "@rescript/engine";
+import { authoringQuestionView, markupToText } from "@rescript/engine";
 
-const plain = (s: string) => String(s ?? "").replace(/<[^>]*>/g, "");
+const plain = (s: string) => markupToText(String(s ?? ""));
 
 export function CarriedOptionsPanel({ def, q, patch }: { def: SurveyDefinition; q: Question; patch(p: Partial<Question>): void }) {
   const cf = q.carryForward;

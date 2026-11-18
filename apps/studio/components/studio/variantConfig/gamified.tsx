@@ -2,7 +2,7 @@
 import React from "react";
 import { registerOptionMetaFields, registerVariantSettings } from "./registry";
 import { CountInput } from "../CountInput";
-import { quizKey } from "@rescript/engine";
+import { quizKey, markupToText } from "@rescript/engine";
 import type { Question } from "@rescript/schema";
 
 /**
@@ -46,7 +46,7 @@ registerVariantSettings("quiz", ({ q, patch, patchSettings }) => {
           <label key={String(o.code)} className="row" style={{ gap: 6, fontSize: 13 }}>
             <input type="checkbox" data-testid={`option-meta-correct-${i}`} checked={key.includes(String(o.code))}
               onChange={(e) => setQuizKey(q, o.code, e.target.checked, patch)} />
-            <span className="mono">{String(o.code)}</span> <span>{o.label.replace(/<[^>]*>/g, "")}</span> <span className="muted">correct</span>
+            <span className="mono">{String(o.code)}</span> <span>{markupToText(o.label)}</span> <span className="muted">correct</span>
           </label>
         ))}
       </div>
@@ -174,7 +174,7 @@ registerVariantSettings("matching", ({ q, patch, patchSettings }) => {
             {q.rows.map((r) => (
               <tr key={String(r.code)}>
                 <td style={{ padding: "3px 6px 3px 0", maxWidth: 160, overflowWrap: "anywhere" }}>
-                  {r.label.replace(/<[^>]*>/g, "") || String(r.code)}
+                  {markupToText(r.label) || String(r.code)}
                 </td>
                 <td style={{ padding: "3px 0" }}>
                   <select className="select" data-testid={`matching-answer-${r.code}`}
@@ -190,7 +190,7 @@ registerVariantSettings("matching", ({ q, patch, patchSettings }) => {
                       })
                       .map((o) => (
                         <option key={String(o.code)} value={String(o.code)}>
-                          {o.label.replace(/<[^>]*>/g, "")}
+                          {markupToText(o.label)}
                         </option>
                       ))}
                   </select>
@@ -203,7 +203,7 @@ registerVariantSettings("matching", ({ q, patch, patchSettings }) => {
       {duplicated.length > 0 && (
         <div className="chip warn" data-testid="matching-duplicate-key" style={{ display: "block", marginTop: 6 }}>
           {duplicated.length === 1 ? "One prompt shares" : `${duplicated.length} prompts share`} an answer with
-          another prompt ({duplicated.map((r) => r.label.replace(/<[^>]*>/g, "") || String(r.code)).join(", ")}).
+          another prompt ({duplicated.map((r) => markupToText(r.label) || String(r.code)).join(", ")}).
           One answer can only match one prompt — whichever prompt a respondent gives it to, the other is scored wrong.
           Pick a different answer, or clear one of them.
         </div>

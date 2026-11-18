@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeHtml, stripHtmlText, escapeHtml } from "./html.js";
+import { sanitizeHtml, stripHtmlText, escapeHtml, markupToText } from "./html.js";
 
 /**
  * Word/MSO paste residue (see the doc comment on `stripMsoArtifacts` in
@@ -80,4 +80,10 @@ test("plain text decodes spaces and typographic entities but never < or > (Error
   assert.equal(stripHtmlText("<p>Tom &amp; Jerry&rsquo;s &#8211; caf&eacute;</p>"), "Tom & Jerry’s – caf&eacute;");
   assert.equal(stripHtmlText("a &lt;script&gt; &#60;b&#62; &#x3c;"), "a &lt;script&gt; &#60;b&#62; &#x3c;");
   assert.equal(stripHtmlText("no entities  here"), "no entities  here", "text without entities is untouched");
+});
+
+test("markupToText: tags out, entities decoded, spacing kept (the Studio's display helper, audit P1-05)", () => {
+  assert.equal(markupToText("<b>Tom</b> &amp; Jerry&nbsp;"), "Tom & Jerry ");
+  assert.equal(markupToText("a &lt;b&gt;"), "a &lt;b&gt;");
+  assert.equal(markupToText(null), "");
 });

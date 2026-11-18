@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { SurveyDefinition } from "@rescript/schema";
-import { importQuestions, listPages } from "@rescript/engine";
+import { importQuestions, listPages, markupToText } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -49,7 +49,7 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
   const preview = React.useMemo(() => (src && (pages.size || qs.size) ? importQuestions(s.def, src, { pageIds: [...pages], questionIds: [...qs], ...(intoBlock ? { intoBlock } : {}) }) : null), [src, pages, qs, s.def, intoBlock]);
   const toggle = (set: Set<string>, id: string, put: (x: Set<string>) => void) => { const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); put(n); };
   const f = filter.trim().toLowerCase();
-  const strip = (t: string) => t.replace(/<[^>]*>/g, "");
+  const strip = (t: string) => markupToText(t);
 
   const insert = () => {
     if (!preview || !src) return;

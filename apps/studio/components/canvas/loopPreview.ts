@@ -1,3 +1,4 @@
+import { markupToText } from "@rescript/engine";
 import type { Question, SurveyDefinition } from "@rescript/schema";
 import type { LoopContext } from "@rescript/engine";
 
@@ -115,7 +116,7 @@ export function contextFor(loop: LoopPreview, index: number, overrides?: Record<
   return {
     loopVar: loop.loopVar,
     code: item.code,
-    label: item.label.replace(/<[^>]*>/g, ""),
+    label: markupToText(item.label),
     index: i,
     count: loop.items.length,
     ...(Object.keys(references).length ? { references } : {}),
