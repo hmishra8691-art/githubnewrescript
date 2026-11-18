@@ -85,7 +85,7 @@ const MEDIA_OWNING = new Set(["beforeafter", "videorecording", "videorating", "v
 import { InsertPipingButton } from "./PipingPicker";
 import {
   FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes, recodeOptionCode, recodeRowCode, renameQuestionCode,
-  parsePastedOptions, pastedOptionNotes, insertPastedQuestions, planPaste, optionsToPaste, type PasteMode,
+  parsePastedOptions, pastedOptionNotes, insertPastedQuestions, planPaste, pasteIntoOption, optionsToPaste, type PasteMode,
   stripHtmlText, referencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
   resolveMediaUrl,
@@ -407,12 +407,16 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
     focusLabel(rootRef.current?.querySelector<HTMLElement>(`[data-oidx="${i + dir}"]`));
   };
   const onLabelPasteLines = (text: string, i: number): boolean => {
-    const parsed = parsePastedOptions(text, Number(nextCode(options)));
-    if (parsed.length === 0) return false;
-    const next = [...options];
-    next[i] = withOther({ ...next[i], label: parsed[0].label, code: options[i].label ? next[i].code : parsed[0].code }, options[i].label);
-    next.splice(i + 1, 0, ...(parsed.slice(1).map((o) => withOther({ ...o, id: uid("opt") } as Option))));
-    pendingFocus.current = i + parsed.length - 1;
+    /* codes come from the engine (pasteIntoOption): a placeholder row keeps its slot, a new question numbers from 1 */
+    const plan = pasteIntoOption(options, i, text);
+    if (!plan) return false;
+    const prior = new Map(options.map((o) => [o.id, o]));
+    const next = plan.options.map((o) => {
+      const was = o.id ? prior.get(o.id) : undefined;
+      if (was === o) return o;
+      return was ? withOther(o, was.label) : withOther({ ...o, id: uid("opt") } as Option);
+    });
+    pendingFocus.current = plan.focus;
     setShowAll(true); // the pasted rows must be mounted for focus to land
     onChange(next);
     /* notes written in the list ("[RANDOMIZE]", "None [EXCLUSIVE]") go to the question, not into a label */

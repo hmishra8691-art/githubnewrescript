@@ -98,7 +98,75 @@ function explicitCodes(text: string): Set<string> {
 
 const norm = (s: string) => stripHtmlText(s).replace(/\s+/g, " ").trim().toLowerCase();
 
-export function planPaste(existing: Option[], text: string, mode: PasteMode): PastePlan {
+/*
+ * A PLACEHOLDER OPTION (Error.xlsx item 1, 2026-11-17): an option nobody has written yet — an empty label, or the
+ * "Option n" a new question starts with, still coded n, with no flags, image or logic. It has no identity to
+ * protect: no answer, condition or quota can name it yet. Treating it as a real option is what made a paste into a
+ * new question number 2, 3, 4… — the starter's code 1 counted as taken while its row was being overwritten.
+ */
+export function isPlaceholderOption(o: Option): boolean {
+  const label = stripHtmlText(String(o.label ?? "")).trim();
+  const flags = ((o as { flags?: unknown[] }).flags ?? []).length;
+  const extra = o as unknown as Record<string, unknown>;
+  if (flags || extra.image || extra.imageUrl || extra.visibleIf || extra.mask || extra.labelExpression || extra.logic) return false;
+  return label === "" || new RegExp(`^option\\s*${String(o.code).replace(/[^\w]/g, "")}$`, "i").test(label);
+}
+
+/** every option is still a placeholder: the question's list has not been written yet */
+const allPlaceholders = (options: readonly Option[]) => options.length > 0 && options.every(isPlaceholderOption);
+
+/**
+ * A multi-line paste into ONE option's label field (the Studio's inline paste). The first pasted line goes into
+ * that row, the rest are inserted after it.
+ *
+ *  - a list that is still all placeholders is replaced by the paste, numbered from 1 (or by the codes the paste
+ *    spells, `code<TAB>label`);
+ *  - otherwise the row keeps its own code when it was a placeholder (it is the slot being filled), every new row
+ *    gets a code no other option has, and existing options never change code.
+ *
+ * Returns null when the text holds no option. Ids are the caller's to mint (`id` is absent on new options).
+ */
+export function pasteIntoOption(options: readonly Option[], index: number, text: string): { options: Option[]; focus: number } | null {
+  const explicit = explicitCodes(text);
+  if (allPlaceholders(options)) {
+    const parsed = parsePastedOptions(text, 1);
+    if (!parsed.length) return null;
+    const used = new Set(parsed.filter((p) => explicit.has(String(p.code))).map((p) => String(p.code)));
+    let n = 1;
+    const fresh = () => { while (used.has(String(n))) n++; const c = String(n++); used.add(c); return c; };
+    const out = parsed.map((p, k) => {
+      const code = explicit.has(String(p.code)) ? String(p.code) : fresh();
+      /* the first row keeps the placeholder's id, so focus and selection stay on it */
+      return (k === 0 && options[0] ? { ...options[0], ...p, code } : { ...p, code }) as Option;
+    });
+    return { options: out, focus: out.length - 1 };
+  }
+  const parsed = parsePastedOptions(text, 1);
+  if (!parsed.length) return null;
+  const row = options[index];
+  if (!row) return null;
+  const used = new Set(options.map((o) => String(o.code)));
+  const ownCode = String(row.code);
+  const firstExplicit = explicit.has(String(parsed[0].code)) && (String(parsed[0].code) === ownCode || !used.has(String(parsed[0].code)));
+  const firstCode = firstExplicit ? String(parsed[0].code) : ownCode;
+  if (firstCode !== ownCode) { used.delete(ownCode); used.add(firstCode); }
+  let n = Number(nextCode([...options])) || 1;
+  const fresh = () => { while (used.has(String(n))) n++; const c = String(n++); used.add(c); return c; };
+  const rest = parsed.slice(1).map((p) => {
+    const c = String(p.code);
+    const code = explicit.has(c) && !used.has(c) ? (used.add(c), c) : fresh();
+    return { ...p, code } as Option;
+  });
+  const next = [...options];
+  next[index] = { ...row, label: parsed[0].label, code: isPlaceholderOption(row) ? firstCode : row.code, flags: [...new Set([...(((row as { flags?: string[] }).flags) ?? []), ...(((parsed[0] as { flags?: string[] }).flags) ?? [])])] } as Option;
+  next.splice(index + 1, 0, ...rest);
+  return { options: next, focus: index + parsed.length - 1 };
+}
+
+export function planPaste(existingIn: Option[], text: string, mode: PasteMode): PastePlan {
+  /* appending to a list that is still only placeholders starts the real list: the placeholders go, numbering from 1 */
+  const fresh0 = mode === "append" && allPlaceholders(existingIn);
+  const existing = fresh0 ? [] : existingIn;
   const highWater = Number(nextCode(existing)) || 1;
   const parsed = parsePastedOptions(text, highWater);
   if (parsed.length === 0) return { options: existing, kept: existing.length, added: 0, removed: 0, removedCodes: [] };
@@ -118,7 +186,7 @@ export function planPaste(existing: Option[], text: string, mode: PasteMode): Pa
       used.add(code);
       out.push({ ...p, code });
     }
-    return { options: out, kept: existing.length, added: parsed.length, removed: 0, removedCodes: [] };
+    return { options: out, kept: existing.length, added: parsed.length, removed: fresh0 ? existingIn.length : 0, removedCodes: fresh0 ? existingIn.map((o) => o.code) : [] };
   }
 
   /*

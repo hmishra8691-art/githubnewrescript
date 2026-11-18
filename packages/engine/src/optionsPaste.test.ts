@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planPaste, parsePastedOptions, optionsToPaste } from "./optionsPaste.js";
+import { planPaste, parsePastedOptions, optionsToPaste, pasteIntoOption, isPlaceholderOption } from "./optionsPaste.js";
 
 const existing = () => [
   { code: "1", label: "Coke", flags: [] as any[], imageUrl: "https://x/coke.png" },
@@ -89,4 +89,54 @@ test("a replace that keeps options never reuses a removed option's code", () => 
   assert.deepEqual(codes[0], "1");            // Coke kept its identity
   assert.notEqual(codes[1], "2");             // Dr Pepper did NOT inherit Pepsi's code
   assert.deepEqual(plan.removedCodes.map(String), ["2"]);
+});
+
+/* Error.xlsx item 1 (2026-11-17): "numbering starts from 2 instead of 1" when options are pasted directly */
+const LINES = "Entrepreneur / business owner\nFull-time employee\nPart-time employee\nRetired";
+const codes = (os: readonly { code: unknown }[]) => os.map((o) => String(o.code)).join(",");
+
+test("pasting into the empty starter option numbers from 1", () => {
+  const r = pasteIntoOption([{ id: "o1", code: "1", label: "", flags: [] } as never], 0, LINES)!;
+  assert.equal(codes(r.options), "1,2,3,4");
+  assert.equal((r.options[0] as { id?: string }).id, "o1", "the starter row keeps its id");
+  assert.equal(r.focus, 3);
+});
+
+test("pasting into a new question's untouched Option 1/2/3 replaces them, numbered from 1", () => {
+  const starter = [1, 2, 3].map((n) => ({ id: `o${n}`, code: n, label: `Option ${n}`, flags: [] })) as never[];
+  const r = pasteIntoOption(starter, 0, LINES)!;
+  assert.equal(codes(r.options), "1,2,3,4");
+  assert.deepEqual(r.options.map((o) => o.label), ["Entrepreneur / business owner", "Full-time employee", "Part-time employee", "Retired"]);
+});
+
+test("pasting into a blank row of a written list keeps every existing code and fills the slot", () => {
+  const list = [{ id: "a", code: 1, label: "Apple", flags: [] }, { id: "b", code: 2, label: "", flags: [] }, { id: "c", code: 3, label: "Cherry", flags: [] }] as never[];
+  const r = pasteIntoOption(list, 1, "Banana\nDate\nElder")!;
+  assert.equal(codes(r.options), "1,2,4,5,3");
+  assert.deepEqual(r.options.map((o) => o.label), ["Apple", "Banana", "Date", "Elder", "Cherry"]);
+});
+
+test("explicit codes in the paste are kept; a colliding explicit code gets a fresh one", () => {
+  const r = pasteIntoOption([{ id: "o1", code: "1", label: "", flags: [] } as never], 0, "10\tTen\n20\tTwenty")!;
+  assert.equal(codes(r.options), "10,20");
+  const list = [{ id: "a", code: 1, label: "Apple", flags: [] }, { id: "b", code: 2, label: "", flags: [] }] as never[];
+  const r2 = pasteIntoOption(list, 1, "Banana\n1\tAgain")!;
+  assert.equal(codes(r2.options), "1,2,3");
+});
+
+test("the paste box: append onto an untouched starter replaces it from 1; append onto a written list continues", () => {
+  const blank = planPaste([{ id: "o1", code: "1", label: "", flags: [] } as never], LINES, "append");
+  assert.equal(codes(blank.options), "1,2,3,4");
+  assert.equal(blank.removed, 1);
+  const written = planPaste([{ id: "a", code: 1, label: "Apple", flags: [] } as never], "Banana\nCherry", "append");
+  assert.equal(codes(written.options), "1,2,3");
+  assert.equal(written.removed, 0);
+  assert.equal(codes(planPaste([{ id: "o1", code: "1", label: "", flags: [] } as never], LINES, "replace").options), "1,2,3,4");
+});
+
+test("an option with a flag, an image or logic is never a placeholder", () => {
+  assert.equal(isPlaceholderOption({ code: 1, label: "", flags: ["exclusive"] } as never), false);
+  assert.equal(isPlaceholderOption({ code: 1, label: "Option 1", flags: [], image: "x.png" } as never), false);
+  assert.equal(isPlaceholderOption({ code: 2, label: "Option 1", flags: [] } as never), false, "\"Option 1\" coded 2 was renamed by someone");
+  assert.equal(isPlaceholderOption({ code: 1, label: "  ", flags: [] } as never), true);
 });
