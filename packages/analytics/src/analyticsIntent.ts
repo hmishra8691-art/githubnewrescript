@@ -252,6 +252,18 @@ export function redundantAnalyses(analyses: ReadonlyArray<{ id: string; name: st
   return out;
 }
 
+/** one sentence through the analysis planner (analysisPlanner.ts) — the rules' reading and the model's restatement share it */
+function plannedItem(text: string, ctx: AskContext): { handled: boolean; item?: AskItem; clarify: string[]; notes: string[] } {
+  const focusAnalysis = ctx.focus ? ctx.analyses.find((a) => a.id === ctx.focus!.analysisId) : undefined;
+  const planned = planRequest(text, { variables: ctx.variables, focus: focusAnalysis ? { id: focusAnalysis.id, name: focusAnalysis.name, definition: focusAnalysis.definition } : undefined, findVariables, chartWords: CHART_WORDS });
+  if (!planned.handled || !planned.spec || !planned.name) return { handled: planned.handled, clarify: planned.clarify, notes: planned.notes };
+  const sp = planned.spec;
+  const op: AskOp = focusAnalysis && sp.steps[0]?.startsWith("Update") ? { op: "update_analysis", name: planned.name, analysisId: focusAnalysis.id, spec: sp } : { op: "add_analysis", name: planned.name, spec: sp };
+  const title = op.op === "update_analysis" ? `Change “${planned.name}”` : `${sp.kind === "nps" ? "Calculate" : "Build"} “${planned.name}”`;
+  const why = [...sp.steps, ...(sp.assumptions.length ? [`Assumed: ${sp.assumptions.join(" ")}`] : [])].join("\n");
+  return { handled: true, item: item(op, ctx, title, why, op.op === "update_analysis" ? "changes an analysis" : "creates an analysis"), clarify: planned.clarify, notes: planned.notes };
+}
+
 export function proposeFromText(request: string, ctx: AskContext): AskProposal {
   const text = request.trim();
   const items: AskItem[] = []; const read: string[] = []; const unread: string[] = []; const notes: string[] = [];
@@ -268,15 +280,9 @@ export function proposeFromText(request: string, ctx: AskContext): AskProposal {
    * derived variable ("age groups"), a confidence level, a filter, or a change to the analysis that is open — the
    * whole sentence is planned as one analysis, with its steps, instead of clause by clause.
    */
-  const planned = planRequest(text, { variables: ctx.variables, focus: focusAnalysis ? { id: focusAnalysis.id, name: focusAnalysis.name, definition: focusAnalysis.definition } : undefined, findVariables, chartWords: CHART_WORDS });
+  const planned = plannedItem(text, ctx);
   if (planned.handled) {
-    if (planned.spec && planned.name) {
-      const sp = planned.spec;
-      const op: AskOp = focusAnalysis && sp.steps[0]?.startsWith("Update") ? { op: "update_analysis", name: planned.name, analysisId: focusAnalysis.id, spec: sp } : { op: "add_analysis", name: planned.name, spec: sp };
-      const title = op.op === "update_analysis" ? `Change “${planned.name}”` : `${sp.kind === "nps" ? "Calculate" : "Build"} “${planned.name}”`;
-      const why = [...sp.steps, ...(sp.assumptions.length ? [`Assumed: ${sp.assumptions.join(" ")}`] : [])].join("\n");
-      items.push(item(op, ctx, title, why, op.op === "update_analysis" ? "changes an analysis" : "creates an analysis"));
-    }
+    if (planned.item) items.push(planned.item);
     return { request: text, items, read: planned.clarify.length ? [] : [text], unread: planned.clarify, notes: planned.notes };
   }
 
@@ -457,6 +463,7 @@ export const ASK_INSTRUCTIONS = `You turn a researcher's request about survey AN
 {"op":"add_test","outcome":"<variable code>","groupBy":"<variable code>","why":"..."}
 {"op":"add_descriptive","variables":["<variable code>"],"why":"..."}
 {"op":"build_report","objective":"<one sentence>","audience":"executive|client|researcher","story":false,"why":"..."}
+{"op":"plan_analysis","request":"<the request restated in plain words, naming variables by their code>","why":"..."} — for a metric (NPS, CSAT, CES, top/bottom-2 box) across groups, derived groups (age bands …), a filter ("only those aware of X", "exclude don't know"), a confidence level, or a change to the open analysis ("now by REGION"); e.g. "Calculate NPS from Q15 across GENDER and AGE groups at 95% confidence"
 Rules: variable codes must come from the VARIABLES list exactly; never invent a variable, a number or a result; if the request cannot be expressed with these operations answer {"ops": []}. At most 8 operations.`;
 
 export function askBrief(request: string, variables: readonly VariableMeta[]): string {
@@ -492,6 +499,13 @@ export function itemsFromModel(raw: unknown, ctx: AskContext): { items: AskItem[
       const objective = typeof o.objective === "string" ? o.objective.trim().slice(0, 500) : "";
       const story = o.story === true;
       items.push(item({ op: "build_report", name: story ? "Animated report" : "Survey report", brief: { objective, audience, tone: audience === "executive" ? "concise" : "plain", keyQuestions: [], title: story ? "Animated report" : "Survey report" }, story }, ctx, `Build a ${story ? "report with an animated story" : "report"}`, why, "creates a report"));
+    } else if (o?.op === "plan_analysis") {
+      /* the model restates; the planner decides — the same rules, checks and clarifications as a typed sentence (audit P2-01) */
+      const req = typeof o.request === "string" ? o.request.trim().slice(0, 400) : "";
+      const p = req ? plannedItem(req, ctx) : { handled: false, clarify: [], notes: [] } as { handled: boolean; item?: AskItem; clarify: string[]; notes: string[] };
+      if (p.item) items.push({ ...p.item, why: `${p.item.why}\n(The model read the request as: “${req}”)` });
+      else if (p.clarify.length) rejected.push(`plan_analysis “${req}” needs an answer: ${p.clarify.join(" ")}`);
+      else rejected.push(`plan_analysis “${req}” is not an analysis the planner can build`);
     } else rejected.push(`${typeof o?.op === "string" ? o.op : "an unknown operation"} is not something this can do`);
   }
   return { items, rejected };

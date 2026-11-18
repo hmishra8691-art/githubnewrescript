@@ -145,3 +145,19 @@ test("requests the planner does not need still go to the existing readings", () 
   assert.ok(p.items.some((i) => i.op.op === "add_crosstab"));
   assert.ok(!p.items.some((i) => i.op.op === "add_analysis"));
 });
+
+test("the model path restates, the planner decides: plan_analysis becomes the same checked item; a bad restatement is dropped with the reason (audit P2-01)", async () => {
+  const { itemsFromModel } = await import("./analyticsIntent.js");
+  const r = itemsFromModel({ ops: [
+    { op: "plan_analysis", request: "Calculate NPS from Q15 across GENDER at 95% confidence", why: "loyalty by sex" },
+    { op: "plan_analysis", request: "NPS of Q15 by income groups", why: "x" },
+    { op: "plan_analysis", request: "", why: "empty" },
+  ] }, ctx());
+  assert.equal(r.items.length, 1);
+  const op = r.items[0]!.op as Extract<AskOp, { op: "add_analysis" }>;
+  assert.equal(op.op, "add_analysis"); assert.deepEqual(op.spec.by, ["GENDER"]); assert.equal(op.spec.confidence, 0.95);
+  assert.match(r.items[0]!.why, /The model read the request as: “Calculate NPS from Q15 across GENDER/);
+  assert.deepEqual(r.items[0]!.blocked, []);
+  assert.equal(r.rejected.length, 2);
+  assert.match(r.rejected[0]!, /needs an answer: .*income groups/);
+});
