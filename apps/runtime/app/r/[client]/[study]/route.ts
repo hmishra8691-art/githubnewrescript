@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BLOCKING_STATUSES, loadDeployment } from "@/lib/deployment";
 import { clientIp } from "@rescript/quality/server";
+import { limited } from "@/lib/rateLimit";
 import { admitArrival } from "@/lib/identity";
 import { runGateway } from "@/lib/gateway";
 import { panelParams, runtimePanels } from "@/lib/panels";
@@ -50,6 +51,8 @@ function surveyUrl(req: NextRequest, client: string, study: string, token: strin
 
 export async function GET(req: NextRequest, { params }: { params: { client: string; study: string } }) {
   const { client, study } = params;
+  const flood = limited("entry", clientIp(req.headers) ?? "");
+  if (flood) return flood;
 
   const dep = await loadDeployment(client, study, "live");
   if (!dep) return NextResponse.json({ error: "Survey not found" }, { status: 404 });

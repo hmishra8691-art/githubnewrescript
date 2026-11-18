@@ -7,6 +7,8 @@ import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, ba
 import { sandboxRow, sandboxSurvey } from "@/lib/sessionSandbox";
 import { isStaleSave, parseSaveSeq } from "@/lib/saveSeq";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
+import { clientIp } from "@rescript/quality/server";
+import { limited } from "@/lib/rateLimit";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 import { surveyFieldworkEvents, responseEvents } from "@/lib/notifyEmit";
 import { sanitizeTelemetry } from "@/lib/telemetrySanitize";
@@ -34,6 +36,8 @@ export const dynamic = "force-dynamic";
  * can be recomputed from the Studio.
  */
 export async function POST(req: NextRequest) {
+  const flood = limited("save", clientIp(req.headers) ?? "");
+  if (flood) return flood;
   let body: any;
   try {
     body = await req.json();

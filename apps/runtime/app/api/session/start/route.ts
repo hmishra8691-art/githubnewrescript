@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { BLOCKING_STATUSES, loadDeployment, loadTestBuild, type LoadedDeployment } from "@/lib/deployment";
 import { createSession } from "@/lib/session";
 import { clientIp } from "@rescript/quality/server";
+import { limited } from "@/lib/rateLimit";
 import { fieldworkWindow, resolveSampleSource } from "@rescript/engine";
 import type { PanelConfig } from "@rescript/schema";
 import { panelParams, runtimePanels } from "@/lib/panels";
@@ -69,6 +70,9 @@ function sandboxStart(token: string, body: any) {
  * refuses nobody until a project turns enforcement on — see lib/identity.ts.
  */
 export async function POST(req: NextRequest) {
+  /* a flood of starts from one connection is refused before it touches the database (lib/rateLimit.ts) */
+  const flood = limited("start", clientIp(req.headers) ?? "");
+  if (flood) return flood;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const client = String(body?.client ?? "");
