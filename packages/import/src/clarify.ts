@@ -26,6 +26,8 @@ export type Decision =
   | { id: string; type: "carry_forward"; questionId: string; source: string; filter: "selected" | "notSelected" | "displayed" | "all" }
   | { id: string; type: "loop"; questionId: string; source: string }
   | { id: string; type: "drop_dynamic"; questionId: string; feature: "carry_forward" | "loop" }
+  /* 2026-11-18 (audit P1-01): where an auto-filled field takes its value — an earlier answer or today's date */
+  | { id: string; type: "prefill"; questionId: string; source: string }
   | { id: string; type: "keep" }
   | { id: string; type: "dismiss" };
 
@@ -33,7 +35,7 @@ export interface ClarificationOption { label: string; decision: Decision }
 export interface Clarification {
   /** stable across re-runs of the same file: kind + question + instruction words */
   id: string;
-  kind: "missing_condition" | "missing_target" | "randomize_scope" | "embedded_source" | "conflict" | "undefined_reference" | "dynamic_list" | "confirm_dynamic";
+  kind: "missing_condition" | "missing_target" | "randomize_scope" | "embedded_source" | "conflict" | "undefined_reference" | "dynamic_list" | "confirm_dynamic" | "fill_source";
   /** the question asked of the person, specific to this survey */
   question: string;
   /** the source's own words */
@@ -125,6 +127,25 @@ export function clarifications(c: CanonicalSurvey): Clarification[] {
           question: `Should all of ${label(q)}'s options be randomized, or should ${names || "options such as Other and None"} stay fixed at the end?`,
           recommended: special.length ? fix : null, because: "Answers like Other, None and Don't know conventionally stay at the end of the list.", suggestedBy: "rules",
           alternatives: [{ label: "Randomize every option", decision: { id, type: "randomize", questionId: q.sourceId, mode: "all" } }, { label: "Do not randomize", decision: { id, type: "randomize", questionId: q.sourceId, mode: "none" } }],
+        });
+        break;
+      }
+      case "prefill": {
+        /* "AUTO-POPULATE FROM THE PREVIOUS QUESTION": the questions just before it, today's date, or leave it — no guess */
+        const before: CanonicalQuestion[] = [];
+        for (let k = (idx.get(q.sourceId) ?? 0) - 1; k >= 0 && before.length < 3; k--) if (qs[k].kind !== "descriptive") before.push(qs[k]);
+        const t = (x: CanonicalQuestion) => `${label(x)} (“${x.text.replace(/<[^>]+>/g, "").slice(0, 50)}”)`;
+        const alternatives: ClarificationOption[] = [
+          ...before.map((x) => ({ label: `Fill it with the answer to ${t(x)}`, decision: { id, type: "prefill", questionId: q.sourceId, source: x.sourceId } as Decision })),
+          { label: "Fill it with today's date", decision: { id, type: "prefill", questionId: q.sourceId, source: "today" } },
+          { label: "Leave it — I will set the default in Studio", decision: { id, type: "dismiss" } },
+        ];
+        const previous = /\b(?:previous|prior|last|above|preceding)\s+(?:question|answer|response)\b/i.test(ins.text) && before[0] ? alternatives[0] : null;
+        push({
+          id, kind: "fill_source", location: issue.location, questionId: q.sourceId, evidence: ins.text,
+          question: `Where does ${label(q)} get its value? The document says “${ins.text}” but not from which question.`,
+          recommended: previous, ...(previous ? { because: `“the previous question” is ${label(before[0])}, the question just before it.`, suggestedBy: "rules" as const } : {}),
+          alternatives: alternatives.filter((a) => a !== previous),
         });
         break;
       }
@@ -336,6 +357,14 @@ export function applyDecisions(source: CanonicalSurvey, decisions: Decision[]): 
         if (!e || e.t !== "group" || e.op !== "and") { rejected.push({ id: d.id, reason: `${q!.variable} has no AND display rule to change` }); break; }
         q!.displayLogic = { ...e, op: "or" };
         applied.push(d.id); break;
+      }
+      case "prefill": {
+        if (d.source !== "today" && !byId.has(d.source)) { rejected.push({ id: d.id, reason: `question ${d.source} is not in the survey` }); break; }
+        if (d.source === q!.sourceId) { rejected.push({ id: d.id, reason: `${q!.variable} cannot be filled from itself` }); break; }
+        const st = (q!.settings ??= {});
+        if (q!.kind === "hidden" || q!.kind === "calculated" || st.hidden === true) { q!.kind = "calculated"; q!.expression = d.source === "today" ? "today()" : `{{@${d.source}}}`; }
+        else { if (q!.kind === "descriptive" || q!.kind === "unknown") q!.kind = "text"; st.defaultValue = d.source === "today" ? "{{date.today}}" : `{{@${d.source}}}`; }
+        applied.push(d.id); resolved(d); break;
       }
       case "keep": { applied.push(d.id); break; }
       case "carry_forward": {

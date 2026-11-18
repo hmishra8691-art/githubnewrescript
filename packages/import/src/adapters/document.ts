@@ -706,5 +706,9 @@ function applyBehaviour(q: CanonicalQuestion, b: Behaviour, text: string, issues
     q.confidence = worst(q.confidence, "review");
   }
   /* what cannot be set without the person: asked, never guessed (clarification engine, review screen) */
-  for (const u of b.unclear) issues.push({ location: where, type: "ambiguous", severity: "high", message: `${q.sourceId}: ${u}`, suggestion: "Say which question or value the field takes, then set it in the question's Default value.", autoAttempted: false, refs: [q.sourceId] });
+  for (const u of b.unclear) issues.push({ location: where, type: "ambiguous", severity: "high", message: `${q.sourceId}: ${u}`, suggestion: "Say which question or value the field takes, then set it in the question's Default value.", autoAttempted: false, refs: [q.sourceId],
+    /* a fill with no source is asked in the import's clarification step (clarify.ts "fill_source"), like a condition with no question */
+    ...(/fill this field/.test(u) ? { instruction: { kind: "prefill" as const, text, questionId: q.sourceId } } : {}) });
+  /* a field that is only to be filled, with nothing to fill it from yet, is still a field */
+  if (b.unclear.length && !b.prefill && wasDisplay && /fill this field/.test(b.unclear.join(" "))) { q.kind = "text"; q.required = false; q.notes = q.notes.filter((n) => !n.startsWith("read as text shown to the respondent")); }
 }

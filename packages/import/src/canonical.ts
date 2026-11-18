@@ -298,7 +298,7 @@ export interface Issue {
  * question it is attached to, and what part of it IS known (a skip's target, a condition's words, a variable name).
  */
 export interface PendingInstruction {
-  kind: "display" | "skip" | "skip_target" | "terminate" | "randomize" | "embedded" | "dynamic";
+  kind: "display" | "skip" | "skip_target" | "terminate" | "randomize" | "embedded" | "dynamic" | "prefill";
   text: string;
   questionId: string;
   /** a skip whose target is known but whose condition is not */

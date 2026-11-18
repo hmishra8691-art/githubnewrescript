@@ -138,6 +138,7 @@ const WHY: Record<Clarification["kind"], string> = {
   missing_target: "The instruction says to skip, but not where to.",
   randomize_scope: "The instruction says to randomize, but not whether some answers stay in a fixed place.",
   embedded_source: "This value is used, but the document does not say where it comes from.",
+  fill_source: "The instruction says to fill this field automatically, but not from which answer.",
   conflict: "Two instructions cannot both be followed.",
   undefined_reference: "The instruction names a question that is not in the document.",
   dynamic_list: "The answers depend on an earlier question, and the document can be read more than one way.",

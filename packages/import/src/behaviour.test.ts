@@ -96,3 +96,22 @@ test("the reader's vocabulary: fills, locks, hides, comparisons and totals; logi
   assert.equal(r("RANDOMIZE OPTIONS"), null);
   assert.equal(r("Show the logo above"), null);
 });
+
+test("an auto-fill with no named source becomes a clarification; the answer fills the field (audit P1-01)", async () => {
+  const { clarifications, applyDecisions, mapCanonical } = await import("./index.js");
+  const doc = "S1. What is your medical specialty?\n1. Cardiology\n2. Oncology\nQ1. Specialty on file\nPROGRAMMER NOTE: AUTO-POPULATE FROM THE PREVIOUS QUESTION. READ-ONLY.\n";
+  const r = await analyzeImport(new TextEncoder().encode(doc), "fill.txt", { surveyId: "f" });
+  const asks = clarifications(r.canonical!);
+  const fill = asks.find((a) => a.kind === "fill_source");
+  assert.ok(fill, JSON.stringify(asks.map((a) => a.kind)));
+  assert.match(fill.question, /Where does Q1 get its value\?/);
+  assert.match(fill.recommended?.label ?? "", /answer to S1/, "“the previous question” is recommended as S1");
+  assert.ok(fill.alternatives.some((a) => /today's date/.test(a.label)) && fill.alternatives.some((a) => /Leave it/.test(a.label)));
+  const done = applyDecisions(r.canonical!, [fill.recommended!.decision]);
+  assert.deepEqual(done.rejected, []);
+  const def = mapCanonical(done.canonical, { surveyId: "f" }).def!;
+  const q1 = def.questions.find((x) => x.code === "Q1")!;
+  assert.equal(q1.type, "open_text", "a field, not display text");
+  assert.equal(q1.settings.defaultValue, "{{S1}}");
+  assert.equal(q1.settings.readOnly, true);
+});
