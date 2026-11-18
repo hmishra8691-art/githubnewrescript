@@ -4,7 +4,24 @@ The Studio and the respondent runtime are two applications with their own endpoi
 
 ## Authentication and authorisation
 
-Studio endpoints are authorised by the **session cookie** (`rescript_session`) a sign-in sets (`POST /api/auth/login`); there are no API keys or webhooks yet. Every request is checked in the handler against the database: who the session belongs to, what role they hold on the project, and — for a write to the questionnaire — whether they hold the project's edit lock. Roles (`owner, editor, programmer, reviewer, viewer, test_user, deployment_manager`) map to capabilities such as `project.read`, `survey.edit`, `survey.save_version`, `responses.read`, `responses.export`, `responses.manage`, `deploy.manage`, `analytics.read`, `analytics.edit`, `analytics.export`, `project.share`, `project.manage_members`, `project.lock_settings`, `billing.read`. The capability each route needs is listed below.
+Studio endpoints are authorised by the **session cookie** (`rescript_session`) a sign-in sets (`POST /api/auth/login`). Scripts and integrations use the **public API** below with an API key. Every request is checked in the handler against the database: who the session belongs to, what role they hold on the project, and — for a write to the questionnaire — whether they hold the project's edit lock. Roles (`owner, editor, programmer, reviewer, viewer, test_user, deployment_manager`) map to capabilities such as `project.read`, `survey.edit`, `survey.save_version`, `responses.read`, `responses.export`, `responses.manage`, `deploy.manage`, `analytics.read`, `analytics.edit`, `analytics.export`, `project.share`, `project.manage_members`, `project.lock_settings`, `billing.read`. The capability each route needs is listed below.
+
+## Public API (`/api/v1`, API keys)
+
+Create a key on **Security → API keys**. A key acts as the person who created it. It can never reach a project that person cannot open, and it is limited further by its scopes: `surveys:read` and `responses:read`. Send it as a bearer token:
+
+```
+curl -H "Authorization: Bearer rsk_…" https://<studio>/api/v1/surveys
+```
+
+| Route | Scope | Returns |
+|---|---|---|
+| `GET /api/v1/surveys` | surveys:read | `{ data: [{ id, code, title, status, updatedAt, role, version, liveResponses, testResponses }] }`: the projects you can open |
+| `GET /api/v1/surveys/{id}/responses` | responses:read (and `responses.export` on the project) | `{ data: [{ id, respondentCode, status, startedAt, completedAt, surveyVersion, sampleSource, sampleSourceRespondent, quality, review, variables }], next_cursor }` |
+
+Responses: `?environment=live|test` (default live), `?dataset=all|clean` (clean leaves out responses removed in review or flagged by quality checks), `?limit=1..500` (default 100), `?cursor=` with the previous page's `next_cursor`. The last page has `next_cursor: null`. Rows come in order of start time. Each row is read through the questionnaire version it was collected under, and its variables are keyed by name. With `dataset=clean`, a page can hold fewer than `limit` rows. Keep following `next_cursor`.
+
+Errors: `401` (no key, an unknown, revoked or expired key, or its owner's account is inactive), `403` (missing scope or project role), `429` (more than 120 requests a minute for the key, with a `Retry-After` header), `503` (the API is not enabled on this server). The first page of a response read is recorded in the project's activity as an export.
 
 ## Studio routes
 

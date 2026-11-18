@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { AccountHeader } from "@/components/AccountHeader";
+import { ApiKeysCard } from "@/components/settings/ApiKeysCard";
 import { api, useSession } from "@/lib/useSession";
 
 /**
@@ -235,6 +236,7 @@ export default function SecurityPage() {
           </table>
         </div>
       )}
+      {user && <ApiKeysCard />}
     </div>
   );
 }

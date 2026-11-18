@@ -125,6 +125,10 @@
       "class": "customer",
       "why": "holds a survey's, session's or interview project's data"
     },
+    "api_keys": {
+      "class": "platform",
+      "why": "a person's API credentials (P2-13) — credentials are platform data, like sign-in"
+    },
     "audit_logs": {
       "class": "review",
       "why": "security audit trail spans platform and client actions \u2014 decide: central, or one per database"

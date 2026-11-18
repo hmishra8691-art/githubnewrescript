@@ -17,7 +17,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const ROOT = "apps/studio/app/api";
-const GUARDS = ["requireUser", "requireProject", "requireProjectFor", "requireEditRight", "requireEditRightFor", "requireAdmin"];
+/* requireApiKey (P2-13): the public API's gate — a bearer key resolved to its owner, who is then held to requireProjectFor */
+const GUARDS = ["requireUser", "requireProject", "requireProjectFor", "requireEditRight", "requireEditRightFor", "requireAdmin", "requireApiKey"];
 
 /**
  * SHARED GATES — helpers in `lib/` that several routes call instead of a
@@ -386,7 +387,8 @@ for (const file of files) {
     const libGates = Object.entries(LIB_GATES).filter(([, file]) => {
       try { return GUARDS.some((g) => readFileSync(join("apps/studio", file), "utf8").includes(`${g}(`)); } catch { return false; }
     }).map(([name]) => name);
-    const guard = [...GUARDS, ...delegates, ...libGates].find((g) => body.includes(`${g}(`));
+    /* the guard called FIRST (a route may call two: requireApiKey, then requireProjectFor on the key's owner) */
+    const guard = [...GUARDS, ...delegates, ...libGates].filter((g) => body.includes(`${g}(`)).sort((a, b) => body.indexOf(`${a}(`) - body.indexOf(`${b}(`))[0];
     if (!guard) {
       failures.push(`${rel} ${verb} — NO GUARD CALL`);
       continue;

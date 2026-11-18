@@ -146,6 +146,8 @@ export const AUDIT_EVENTS = [
   "responses.export_preset_deleted",
   "responses.purged",
   "privacy.erasure",
+  "api_key.created",
+  "api_key.revoked",
   "survey.exported",
 
   /* quota management (the dashboard records each numeric change with before/after) */
@@ -384,6 +386,8 @@ export function describeEvent(r: AuditRow): string {
     case "responses.exported": return `${who} exported response data${d.format ? ` as ${str(d.format).toUpperCase()}` : ""}${d.dataset ? ` (${str(d.dataset)})` : ""}`;
     case "responses.export_preset_created": return `${who} saved the export preset “${str(d.name)}” for the whole workspace`;
     case "responses.export_preset_deleted": return `${who} deleted an export preset`;
+    case "api_key.created": return `${who} created the API key “${str(d.name)}” (${str(d.prefix)}…)`;
+    case "api_key.revoked": return `${who} revoked the API key “${str(d.name)}”`;
     case "privacy.erasure": return `${who} erased a respondent (by ${str(d.identifierKind).replace("_", " ")})${d.verified === false ? " — NOT fully verified" : ""}`;
     case "responses.purged": return `${who} permanently purged response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "survey.exported": return `${who} exported the survey${d.format ? ` as ${str(d.format).toUpperCase()}` : ""}`;
