@@ -31,7 +31,9 @@ for (const n of [1, 2, 3, 4, 5]) {
     const a = await load(`decipher/decipher_${n}.xml`);
     const def = a.result!.def!;
     assert.deepEqual(a.result!.quality!.errors, [], "the engine's own publish check finds no error");
-    assert.ok(a.report!.risks.high.length <= DECIPHER_HIGH_CEILING[n], `${a.report!.risks.high.length} high findings (ceiling ${DECIPHER_HIGH_CEILING[n]}): ${a.report!.risks.high.map((i) => i.location).join("; ")}`);
+    /* the ceiling is CONVERSION loss; what the questionnaire review finds about the survey itself (location "Review · …", 2026-11-17) is a different thing and is not counted against it */
+    const lost = a.report!.risks.high.filter((i) => !i.location.startsWith("Review"));
+    assert.ok(lost.length <= DECIPHER_HIGH_CEILING[n], `${lost.length} high findings (ceiling ${DECIPHER_HIGH_CEILING[n]}): ${lost.map((i) => i.location).join("; ")}`);
     /* nothing of the fraud service or the source's own quality bookkeeping is carried, and the report says so once */
     assert.ok(!def.questions.some((x) => /^RD_|^straightLine|^speeder$/i.test(x.code ?? "")));
     assert.ok(a.result!.issues.filter((i) => i.location === "fraud service").length <= 1);
@@ -75,7 +77,7 @@ test("Decipher corpus 4: a loop over what was selected, a jump to a block, and h
   for (const l of loops) assert.deepEqual(l.source, { kind: "question", questionId: q(def, "hQ27").id, filter: "selected" }, "<looprow cond=\"hQ27.rN\"> is a loop over hQ27's selected answers");
   assert.ok(!JSON.stringify(def.questions).includes("{{loop.var1}}"), "[loopvar: var1] reads the answer's label");
   assert.ok(!def.questions.some((x) => /loopvar/i.test(x.code ?? "")), "a label carrying the loop variable is one question, not an orphan");
-  assert.ok(!a.result!.issues.some((i) => /Section_6/.test(i.message)), "goto a block → its first question");
+  assert.ok(!a.result!.issues.some((i) => /Section_6/.test(i.message) && !i.location.startsWith("Review")), "goto a block → its first question");
   /* anyCodes(Q2, ['ch:2-8']) with a run of labels, and the "only these answers" counting idiom */
   assert.ok(q(def, "hAge").punches.length === 3 && q(def, "Q5_term").punches.length === 2);
   const only = q(def, "Q5_term").punches.find((p) => (p.source as { codes: string[] }).codes[0] === "1")!;
@@ -122,7 +124,8 @@ const QUALTRICS_HIGH_CEILING: Record<number, number> = { 1: 0, 2: 0, 3: 12, 4: 0
 for (const n of [1, 2, 3, 4, 5]) {
   test(`Qualtrics corpus ${n}: imports and stays under its ceiling of unconverted logic`, async () => {
     const a = await load(`qualtrics/qualtrics_${n}.qsf`);
-    assert.ok(a.report!.risks.high.length <= QUALTRICS_HIGH_CEILING[n], `${a.report!.risks.high.length} high findings (ceiling ${QUALTRICS_HIGH_CEILING[n]})`);
+    const lost = a.report!.risks.high.filter((i) => !i.location.startsWith("Review"));
+    assert.ok(lost.length <= QUALTRICS_HIGH_CEILING[n], `${lost.length} high findings (ceiling ${QUALTRICS_HIGH_CEILING[n]})`);
     assert.ok(!a.result!.issues.some((i) => /operator \? is not supported/.test(i.message)), "no condition is unreadable for want of an operator");
     assert.ok(!a.result!.quality!.errors.some((e) => /Duplicate variable|has no option coded/.test(e)), "no duplicate column, no rule on an answer the question lacks");
   });

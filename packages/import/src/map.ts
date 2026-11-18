@@ -1,6 +1,6 @@
 import { SurveyDefinition, PanelConfig, Localization, LanguageConfig, resolveVariant, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
 import { reconstruct, type Reconstruction } from "./reconstruct.js";
-import { runQualityCheck, listBlocks, constantCondition, recordTranslation, codeGate, gateReason, ensureBranchNames } from "@rescript/engine";
+import { runQualityCheck, listBlocks, constantCondition, recordTranslation, codeGate, gateReason, ensureBranchNames, reviewSurvey } from "@rescript/engine";
 import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField, InventoryItem,
 } from "./canonical.js";
@@ -912,6 +912,28 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     for (const i of relevant.filter((x) => x.level === "error").slice(0, 60)) all.push({ location: where(i), type: "validation", severity: "high", message: i.message, autoAttempted: false, ...(i.questionId ? { refs: [i.questionId] } : {}) });
     for (const i of relevant.filter((x) => x.level !== "error").slice(0, 60)) all.push({ location: where(i), type: "validation", severity: "low", message: i.message, autoAttempted: false, ...(i.questionId ? { refs: [i.questionId] } : {}) });
   } catch (e) { all.push({ location: "validation", type: "validation", severity: "medium", message: `The quality check could not run: ${(e as Error).message}`, autoAttempted: false }); }
+  /*
+   * THE QUESTIONNAIRE'S OWN CONTRADICTIONS (audit 2026-11-17, P1-02). The Studio's "review my survey" already finds
+   * conditions that can never be true, questions no one reaches, overlapping or gapped answer ranges and scales
+   * that disagree inside a block — but only when someone asks for a review after the import. A specification that
+   * contradicts itself is found here, at import, beside everything else the review screen lists.
+   */
+  try {
+    const rv = reviewSurvey(def);
+    const imported = new Set(built.map((b) => b.id));
+    const seen = new Set(all.map((i) => i.message));
+    const codeOfId = new Map(def.questions.map((q) => [q.id, q.code]));
+    for (const f of rv.findings) {
+      const ofImport = !existing || f.questionIds.length === 0 || f.questionIds.some((id) => imported.has(id));
+      const kept = f.severity === "critical" ? ["logic", "reachability", "options", "structure"].includes(f.category) : f.severity === "warning" && ["logic", "options", "scales"].includes(f.category);
+      /* a question the source hides on purpose (a hidden variable, a "hidden" setting) is not one that "can never be shown" by mistake */
+      const deliberate = f.questionIds.length > 0 && f.questionIds.every((id) => { const q = def.questions.find((x) => x.id === id); return !!q && (q.type === "hidden" || q.type === "calculated" || q.type === "embedded_data" || (q.settings as { hidden?: boolean } | undefined)?.hidden === true); });
+      if (!ofImport || !kept || deliberate || seen.has(f.message)) continue;
+      seen.add(f.message);
+      const codes = f.questionIds.map((id) => codeOfId.get(id) ?? id);
+      all.push({ location: `Review${codes.length ? ` · ${codes.slice(0, 4).join(", ")}` : ""}`, type: "structure", severity: f.severity === "critical" ? "high" : "medium", message: f.message, ...(f.suggestion ? { suggestion: f.suggestion } : {}), autoAttempted: false, ...(f.questionIds.length ? { refs: f.questionIds } : {}) });
+    }
+  } catch (e) { all.push({ location: "review", type: "validation", severity: "low", message: `The questionnaire review could not run: ${(e as Error).message}`, autoAttempted: false }); }
   return { def, mapping, issues: sortIssues(all), created: createdStats(def, built, existing), confidence, merge, quality, inventory: [...(c.inventory ?? []).map(adjustJs), ...inventory], unresolved, jsMigrations, ...(reconstruction ? { reconstruction } : {}) };
 }
 
