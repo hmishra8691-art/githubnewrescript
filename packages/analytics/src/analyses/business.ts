@@ -1,4 +1,5 @@
 import type { AnalysisDefinition, AnalysisResult, ChartData, ResultTable } from "../types.js";
+import { relativeImportance, MAX_SHAPLEY, type RelativeImportance } from "../stats/relativeImportance.js";
 import { categoricalColumn, categoriesOf, itemLabelOf, labelOf, numericColumn, scaleCodes, segmentDatasets, textColumn, weights, type Dataset } from "../dataset.js";
 import { boxShares, describe, frequencies } from "../stats/descriptive.js";
 import { correlate } from "../stats/correlation.js";
@@ -140,9 +141,10 @@ export function nps(def: AnalysisDefinition, ds: Dataset, totalCases: number): A
   if (drivers.length) {
     const fit = ols(vals, { predictors: drivers.map((d) => ({ name: labelOf(ds, d), values: numericColumn(ds, d) })) });
     if (!("error" in fit)) {
-      const rows = fit.coefficients.slice(1).map((c) => ({ driver: c.term, beta: round(c.standardized, 3), estimate: round(c.estimate, 3), p: fmtP(c.p), r: round(correlate(numericColumn(ds, drivers[fit.coefficients.indexOf(c) - 1]), vals).r, 3) })).sort((a, b) => Math.abs(b.beta ?? 0) - Math.abs(a.beta ?? 0));
-      tables.push({ id: "drivers", title: "Key drivers of recommendation", columns: [{ key: "driver", label: "Driver" }, { key: "beta", label: "Standardized β", type: "number", decimals: 3 }, { key: "r", label: "Correlation", type: "number", decimals: 3 }, { key: "estimate", label: "Estimate", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows, notes: [`R² = ${fmtNum(fit.r2, 3)}`, ...fit.warnings] });
-      if (rows[0]) insights.push(`Strongest driver of likelihood to recommend: ${rows[0].driver} (β = ${fmtNum(rows[0].beta, 2)}); the drivers explain ${fmtPct(fit.r2 * 100, 0)} of the variance.`);
+      const ri = importanceOf(vals, drivers.map((d) => numericColumn(ds, d)), w);
+      const rows = fit.coefficients.slice(1).map((c, j) => ({ driver: c.term, ...ri.cells(j), beta: round(c.standardized, 3), estimate: round(c.estimate, 3), p: fmtP(c.p), r: round(correlate(numericColumn(ds, drivers[j]), vals).r, 3) })).sort(ri.order);
+      tables.push({ id: "drivers", title: "Key drivers of recommendation", columns: [{ key: "driver", label: "Driver" }, ...ri.columns, { key: "beta", label: "Standardized β", type: "number", decimals: 3 }, { key: "r", label: "Correlation", type: "number", decimals: 3 }, { key: "estimate", label: "Estimate", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows, notes: [`R² = ${fmtNum(fit.r2, 3)}`, ...ri.notes, ...fit.warnings] });
+      if (rows[0]) insights.push(`Strongest driver of likelihood to recommend: ${rows[0].driver}${ri.lead(rows[0]) ?? ` (β = ${fmtNum(rows[0].beta, 2)})`}; the drivers explain ${fmtPct(fit.r2 * 100, 0)} of the variance.`);
     }
   }
   return makeResult(def, ds, {
@@ -212,9 +214,10 @@ export function csat(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
     const y = numericColumn(ds, vars[0]);
     const fit = ols(y, { predictors: drivers.map((d) => ({ name: labelOf(ds, d), values: numericColumn(ds, d) })) });
     if (!("error" in fit)) {
-      const drows = fit.coefficients.slice(1).map((c) => ({ driver: c.term, beta: round(c.standardized, 3), p: fmtP(c.p) })).sort((a, b) => Math.abs(b.beta ?? 0) - Math.abs(a.beta ?? 0));
-      tables.push({ id: "drivers", title: "Key drivers", columns: [{ key: "driver", label: "Driver" }, { key: "beta", label: "Standardized β", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: drows, notes: [`R² = ${fmtNum(fit.r2, 3)}`, ...fit.warnings] });
-      if (drows[0]) insights.push(`Strongest driver: ${drows[0].driver} (β = ${fmtNum(drows[0].beta, 2)}).`);
+      const ri = importanceOf(y, drivers.map((d) => numericColumn(ds, d)), w);
+      const drows = fit.coefficients.slice(1).map((c, j) => ({ driver: c.term, ...ri.cells(j), beta: round(c.standardized, 3), p: fmtP(c.p) })).sort(ri.order);
+      tables.push({ id: "drivers", title: "Key drivers", columns: [{ key: "driver", label: "Driver" }, ...ri.columns, { key: "beta", label: "Standardized β", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: drows, notes: [`R² = ${fmtNum(fit.r2, 3)}`, ...ri.notes, ...fit.warnings] });
+      if (drows[0]) insights.push(`Strongest driver: ${drows[0].driver}${ri.lead(drows[0]) ?? ` (β = ${fmtNum(drows[0].beta, 2)})`}.`);
     }
   }
   return makeResult(def, ds, {
@@ -607,3 +610,23 @@ export function text(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
 }
 
 export { proportionCI };
+
+/*
+ * DRIVERS RANKED BY THEIR SHARE OF R² (audit 2026-11-17, P2-06): Shapley / LMG shares (exact, up to MAX_SHAPLEY drivers) and
+ * Johnson's relative weights, as % of the explained variance. They are stable when drivers are correlated, which betas are
+ * not; the betas stay in the table beside them. When neither can be computed, the old β ordering is kept and said.
+ */
+function importanceOf(y: (number | null)[], xs: (number | null)[][], w: number[] | undefined) {
+  const ri = relativeImportance(y, xs, w);
+  const ok = !("error" in ri) && ri.r2 > 0;
+  const share = (v: number | null | undefined) => (ok && v != null ? round((v / (ri as RelativeImportance).r2) * 100, 1) : null);
+  const hasShapley = ok && (ri as RelativeImportance).shapley != null;
+  type Row = { shapley?: number | null; johnson?: number | null; beta?: number | null };
+  return {
+    cells: (j: number) => (ok ? { ...(hasShapley ? { shapley: share((ri as RelativeImportance).shapley![j]) } : {}), johnson: share((ri as RelativeImportance).johnson[j]) } : {}),
+    columns: (ok ? [...(hasShapley ? [{ key: "shapley", label: "Share of R² % (Shapley)", type: "pct" as const, decimals: 1 }] : []), { key: "johnson", label: "Relative weight % (Johnson)", type: "pct" as const, decimals: 1 }] : []),
+    order: (a: Row, b: Row) => (ok ? ((hasShapley ? (b.shapley ?? 0) - (a.shapley ?? 0) : (b.johnson ?? 0) - (a.johnson ?? 0))) : Math.abs(b.beta ?? 0) - Math.abs(a.beta ?? 0)),
+    notes: ok ? [`Ranked by each driver's share of the explained variance${hasShapley ? " (Shapley / LMG, exact)" : ` (Johnson's relative weights; Shapley is computed up to ${MAX_SHAPLEY} drivers)`} — stable when drivers are correlated, unlike β. n = ${(ri as RelativeImportance).n} complete cases.`] : [`Relative importance could not be computed (${"error" in ri ? ri.error : "R² is 0"}); ranked by |β|.`],
+    lead: (r: Row): string | null => (ok ? ` — ${fmtNum(hasShapley ? r.shapley : r.johnson, 0)}% of the explained variance${hasShapley ? " (Shapley)" : " (relative weight)"}` : null),
+  };
+}

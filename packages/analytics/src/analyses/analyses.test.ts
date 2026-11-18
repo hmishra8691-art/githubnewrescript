@@ -134,6 +134,20 @@ test("NPS, CSAT, trend", () => {
   assert.equal(tr.chart.series!.length, 2);
 });
 
+test("driver tables rank by share of R² (Shapley + Johnson), beside the betas (audit P2-06)", () => {
+  const n = runAnalysis(D("nps", ["NPS"], { options: { drivers: ["ITEMS_a", "ITEMS_b", "ITEMS_c"] } }), ds);
+  const t = n.tables.find((x) => x.id === "drivers")!;
+  const keys = t.columns.map((c) => c.key);
+  assert.ok(keys.includes("shapley") && keys.includes("johnson") && keys.includes("beta"), keys.join(","));
+  const sh = t.rows.map((r) => r.shapley as number);
+  assert.deepEqual([...sh].sort((a, b) => b - a), sh, "sorted by Shapley share");
+  const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+  assert.ok(Math.abs(sum(sh) - 100) < 0.5, `Shapley shares are % of R² and add to 100 (${sum(sh)})`);
+  assert.ok(Math.abs(sum(t.rows.map((r) => r.johnson as number)) - 100) < 0.5);
+  assert.ok(t.notes!.some((x) => /Shapley \/ LMG, exact/.test(x)));
+  assert.match(n.insights.find((i) => /Strongest driver/.test(i)) ?? "", /% of the explained variance \(Shapley\)/);
+});
+
 test("TURF and brand funnel", () => {
   const t = runAnalysis(D("turf", ["AWARE"], { options: { maxSize: 3 } }), ds);
   assert.equal(t.tables[0].rows.length, 3);
