@@ -24,6 +24,10 @@
     "./tenancy": {
       "types": "./dist/tenancy.d.ts",
       "default": "./dist/tenancy.js"
+    },
+    "./observe": {
+      "types": "./dist/observe.d.ts",
+      "default": "./dist/observe.js"
     }
   },
   "scripts": {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { observed } from "@rescript/storage/observe";
 import { supabaseAdmin } from "@/lib/admin";
 import { BLOCKING_STATUSES, loadDeployment, loadTestBuild, type LoadedDeployment } from "@/lib/deployment";
 import { createSession } from "@/lib/session";
@@ -70,7 +71,7 @@ function sandboxStart(token: string, body: any) {
  * the same person cannot take part twice through two different vendors. That check starts in SHADOW mode and
  * refuses nobody until a project turns enforcement on — see lib/identity.ts.
  */
-export async function POST(req: NextRequest) {
+export const POST = observed(async function POST(req: NextRequest) {
   /* a flood of starts from one connection is refused before it touches the database (lib/rateLimit.ts) */
   const flood = limited("start", clientIp(req.headers) ?? "");
   if (flood) return flood;
@@ -300,4 +301,4 @@ export async function POST(req: NextRequest) {
      */
     respondentEmbedded: session.respondentEmbedded ?? null,
   });
-}
+}, { app: "runtime", route: "/api/session/start" });

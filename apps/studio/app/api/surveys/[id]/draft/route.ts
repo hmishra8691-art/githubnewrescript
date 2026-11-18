@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { observed } from "@rescript/storage/observe";
 import { supabaseAdmin } from "@/lib/admin";
 import { guardLiveData } from "@/lib/liveDataGuard";
 import { SurveyDefinition, normalizeAsParsed } from "@rescript/schema";
@@ -40,7 +41,7 @@ const NEEDS_MIGRATION =
 const NEEDS_GUARD_MIGRATION =
   "Autosave's stale-write guard needs supabase/migrations/0004_revisions.sql applied. Your work is safe — nothing was overwritten — but this save was not applied, to avoid silently disabling the protection that stops one editor's save from clobbering another's. Use Save version until then.";
 
-export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+export const PUT = observed(async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireEditRight(req, params.id, "survey.edit");
   if (isFailure(gate)) return gate.response;
 
@@ -248,7 +249,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
    * losing its safety net.
    */
   return NextResponse.json({ error: NEEDS_GUARD_MIGRATION }, { status: 501 });
-}
+}, { app: "studio", route: "/api/surveys/[id]/draft" });
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "project.read");

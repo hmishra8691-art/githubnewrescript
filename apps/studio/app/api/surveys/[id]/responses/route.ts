@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { observed } from "@rescript/storage/observe";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
@@ -25,7 +26,7 @@ function parseDataset(raw: string | null): DatasetFilter {
 }
 
 /** Response data export (CSV / JSON / XLSX) + summary counts. */
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export const GET = observed(async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   /*
    * DOC-07 (audit 2026-10-16). The summary count is a READ; a file that
    * leaves the platform is an EXPORT, and the role model keeps the two
@@ -609,4 +610,4 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       "content-disposition": `attachment; filename="${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}_responses.csv"`,
     },
   });
-}
+}, { app: "studio", route: "/api/surveys/[id]/responses" });

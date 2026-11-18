@@ -44,7 +44,8 @@ function routes(root) {
 }
 
 function handlerBody(src, verb) {
-  const re = new RegExp(`export async function ${verb}\\s*\\(|export function ${verb}\\s*\\(`);
+  /* a handler wrapped by observed() (P1-13: errors reported) is still that handler: export const POST = observed(async function POST( */
+  const re = new RegExp(`export async function ${verb}\\s*\\(|export function ${verb}\\s*\\(|export const ${verb} = observed\\(async function ${verb}\\s*\\(`);
   const m = re.exec(src);
   if (!m) return null;
   const from = m.index;
@@ -58,6 +59,7 @@ const INTERVIEWS_ROOT = "apps/interviews/app/api";
 const INTERVIEWS_GATES = ["requireUser", "requireProject", "requireProjectFor", "requireMedia", "candidateGate", "authorised"];
 const INTERVIEWS_PUBLIC = {
   "auth/callback/route.ts": "the sign-in callback from the Studio's hand-off: it is what CREATES the session, so it cannot require one; it verifies the signed code",
+  "health/route.ts": "uptime monitors have no account (P1-13); it answers only check names, ok and timings — no data, no configuration values",
 };
 
 for (const file of routes(INTERVIEWS_ROOT)) {
@@ -82,6 +84,7 @@ for (const file of routes(INTERVIEWS_ROOT)) {
 const RUNTIME_ROOT = "apps/runtime/app/api";
 /** route → what authenticates it, and the evidence that must still be in the source */
 const RUNTIME_CREDENTIALS = {
+  "health/route.ts": { by: "none — public by design for uptime monitors (P1-13); answers check names, ok and timings only", evidence: /runHealth\(/ },
   "ai-interview/begin/route.ts": { by: "the study's participant token (aiInterviewDeps → the service checks it)", evidence: /aiInterviewDeps\(/ },
   "ai-interview/media/[action]/route.ts": { by: "the participant's session and a signed media ticket", evidence: /aiInterviewDeps\(|signed/ },
   "ai-interview/realtime/session/route.ts": { by: "the participant's session (the service checks it)", evidence: /aiInterviewDeps\(/ },

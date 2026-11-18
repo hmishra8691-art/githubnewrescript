@@ -50,6 +50,7 @@ const PUBLIC = {
   "auth/password/route.ts": "a password reset is for people who cannot sign in; answers identically for unknown addresses",
   "auth/logout/route.ts": "signing out must never fail, including from an already-dead session",
   "auth/heartbeat/route.ts": "validates the session cookie itself and answers 401 without the guard's shape",
+  "health/route.ts": "uptime monitors and the synthetic check have no account (P1-13); it answers only check names, ok and timings — no data, no configuration values",
   "localization/export/route.ts":
     "a pure transform of the document in the request body into a spreadsheet: reads no data, spends no provider, keeps nothing",
   "localization/import/route.ts":
@@ -330,7 +331,8 @@ for (const file of files) {
   }
 
   for (const verb of VERBS) {
-    const re = new RegExp(`export async function ${verb}\\s*\\(`, "g");
+    /* a handler wrapped by observed() (P1-13: errors reported) is still that handler */
+    const re = new RegExp(`export async function ${verb}\\s*\\(|export const ${verb} = observed\\(async function ${verb}\\s*\\(`, "g");
     const m = re.exec(src);
     if (!m) continue;
     checked++;

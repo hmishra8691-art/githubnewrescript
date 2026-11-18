@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { observed } from "@rescript/storage/observe";
 import { supabaseAdmin } from "@/lib/admin";
 import { loadQuotaCounts, qualitySalt } from "@/lib/session";
 import { recordSessionUsage } from "@/lib/metering";
@@ -35,7 +36,7 @@ export const dynamic = "force-dynamic";
  * the engine never fails the save: the answers are the data, the assessment
  * can be recomputed from the Studio.
  */
-export async function POST(req: NextRequest) {
+export const POST = observed(async function POST(req: NextRequest) {
   const flood = limited("save", clientIp(req.headers) ?? "");
   if (flood) return flood;
   let body: any;
@@ -393,7 +394,7 @@ export async function POST(req: NextRequest) {
     status: newStatus,
     definition: { source: run.source, versionId: run.versionId, configHash: def ? configFingerprint(resolveConfig(def)) : null },
   });
-}
+}, { app: "runtime", route: "/api/session/save" });
 
 let warnedNavColumn = false;
 let warnedSeqColumn = false;
