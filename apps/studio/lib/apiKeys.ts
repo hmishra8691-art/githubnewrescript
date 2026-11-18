@@ -23,7 +23,8 @@ export interface ApiCaller { user: AuthedUser; keyId: string; scopes: string[] }
 export async function requireApiKey(req: NextRequest, scope: ApiScope): Promise<ApiCaller | GuardFailure> {
   const key = bearerKey(req.headers.get("authorization"));
   if (!key) return json({ error: "Send an API key: Authorization: Bearer rsk_…", code: "no_key" }, 401, { "www-authenticate": "Bearer" });
-  const db = platformDb();
+  let db: ReturnType<typeof platformDb>;
+  try { db = platformDb(); } catch { return json({ error: "The API is not available on this server (no database).", code: "api_unavailable" }, 503); }
   const { data: row, error } = await db.from("api_keys").select("id, user_id, scopes, expires_at, revoked_at, last_used_at").eq("key_hash", hashApiKey(key)).maybeSingle();
   if (error) {
     if (/api_keys|does not exist|schema cache/i.test(error.message)) return json({ error: "The API is not enabled on this server yet (migration 0100).", code: "api_unavailable" }, 503);

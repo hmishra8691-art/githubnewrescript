@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * 200 when ok or degraded, 503 when a critical check fails.
  */
 export async function GET() {
-  const dbConfigured = !!(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL) && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const dbConfigured = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
   const checks: HealthCheck[] = [
     dbConfigured
       ? { name: "database", run: async () => { const { error } = await platformDb().from("surveys").select("id").limit(1); if (error) throw new Error(error.message); } }
