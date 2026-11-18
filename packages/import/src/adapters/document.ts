@@ -4,6 +4,7 @@ import type {
 } from "../canonical.js";
 import { looksLikeOtherSpecify } from "@rescript/engine";
 import { readDynamicInstructions, rewritePlaceholders, type DynDraft, type DynLoop } from "./dynamics.js";
+import { readBehaviour, OP_WORDS, type Behaviour } from "./behaviour.js";
 import type { DocBlock, DocImage } from "./docx.js";
 
 /**
@@ -398,6 +399,15 @@ function readInstructions(d: Draft, next: CanonicalQuestion | undefined, byCode:
       issues.push({ location: `${q.sourceId} · “${text}”`, type: "reference", severity: "high", message: `${q.sourceId} refers to ${/^[aeiou]/i.test(kind) ? "an" : "a"} ${kind.toLowerCase()}${name ? ` (${name})` : ""} that is not in the document. A placeholder “${mark}” was left in the question — nothing was substituted.`, suggestion: "Upload the file in Assets and place it in the question, or remove the placeholder if it is not needed.", autoAttempted: false, refs: [q.sourceId] });
       continue;
     }
+    /*
+     * 2026-11-17 (audit ERR-03 to ERR-06): how the FIELD behaves — filled from another answer or the date,
+     * read-only, hidden, checked against another question, adding up to a total. Read before the logic forms (a
+     * logic instruction never reaches here) and applied with the settings the engine already supports.
+     */
+    if (!/^(?:ASK|SHOW|DISPLAY|IF|SKIP|GO|JUMP|BASE|FILTER|TERMINATE|SCREEN|THANK|DISQUALIFY|CLOSE)\b/i.test(text)) {
+      const b = readBehaviour(text, q, byCode);
+      if (b) { applyBehaviour(q, b, text, issues); continue; }
+    }
     // display: ASK IF / SHOW IF / BASE: / ASK Qx ONLY IF / ask only for respondents who …
     if ((m = /^(?:ASK|SHOW|DISPLAY)\s+(?:(?:Q\w+)\s+)?(?:ONLY\s+)?(?:IF|WHEN|TO|FOR)\s+(.+)$/i.exec(text)) || (m = /^(?:BASE|FILTER)\s*:\s*(.+)$/i.exec(text)) || (m = /^IF\s+(.+?)\s*,?\s*(?:THEN\s+)?(?:ASK|SHOW)\b.*$/i.exec(text))
       /* 2026-11-13: "ASK ONLY EXISTING CUSTOMERS" / "SHOW ONLY TO OWNERS" — who, with no IF: the same condition, to be resolved or asked about (it used to be reported as not understood) */
@@ -652,3 +662,49 @@ function splitTopLevel(t: string, op: "and" | "or"): string[] {
 export type { CRef };
 
 const toBase64 = (b: Uint8Array) => Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("base64");
+
+
+/* ------------------------------------------------------------ field behaviour (behaviour.ts) */
+
+function applyBehaviour(q: CanonicalQuestion, b: Behaviour, text: string, issues: Issue[]) {
+  const cs = (q.settings ??= {});
+  const where = `${q.sourceId} · “${text}”`;
+  /* a field that is filled, locked or hidden is a field — never the display text an option-less block defaults to */
+  const wasDisplay = q.kind === "descriptive" || q.kind === "unknown";
+  if (b.hidden || (b.prefill && wasDisplay)) {
+    if (b.hidden && b.prefill?.kind === "now") {
+      /* the calc engine has a date (today()) but no clock time; the response's start time is recorded anyway */
+      q.kind = "hidden";
+      issues.push({ location: where, type: "ambiguous", severity: "medium", message: `${q.sourceId} asks for a hidden field holding the current time. A computed field can hold today's date but not the time; every response already records its start and end time.`, suggestion: "Use the response's start time in the data export, or say if today's date is enough.", autoAttempted: false, refs: [q.sourceId] });
+    } else if (b.hidden && b.prefill) {
+      /* a hidden field with a value is computed (calculated question): the engine evaluates it without showing it */
+      q.kind = "calculated";
+      q.expression = b.prefill.kind === "question" ? `{{@${b.prefill.ref}}}` : b.prefill.kind === "today" ? "today()" : JSON.stringify(b.prefill.kind === "static" ? b.prefill.value : "");
+    } else if (b.hidden) {
+      q.kind = q.kind === "calculated" ? "calculated" : "hidden";
+    } else if (wasDisplay) {
+      q.kind = b.prefill?.kind === "today" || b.prefill?.kind === "now" ? "date" : "text";
+    }
+    q.required = false;
+  } else if (b.readOnly && wasDisplay) { q.kind = "text"; q.required = false; }
+  if (b.prefill && q.kind !== "calculated" && !(b.hidden && b.prefill.kind === "now")) {
+    cs.defaultValue = b.prefill.kind === "question" ? `{{@${b.prefill.ref}}}` : b.prefill.kind === "today" ? "{{date.today}}" : b.prefill.kind === "now" ? "{{date.now}}" : b.prefill.value;
+  }
+  if (b.readOnly) { cs.readOnly = true; q.required = false; }
+  if (b.hidden) cs.hidden = true;
+  for (const c of b.compare ?? []) {
+    q.validation.push({ kind: "custom_expression", value: `value ${c.op} {{@${c.ref}}}`, message: `Your answer must be ${OP_WORDS[c.op]} {{@${c.ref}}}.` } as never);
+  }
+  if (b.total !== undefined) {
+    if (q.kind === "constant_sum") { if (!q.validation.some((v) => v.kind === "sum_equals")) q.validation.push({ kind: "sum_equals", value: b.total }); }
+    else issues.push({ location: where, type: "ambiguous", severity: "medium", message: `${q.sourceId} says its answers must total ${b.total}, but it was not read as a constant-sum question.`, suggestion: "Change its type to Constant sum if respondents split a total across options.", autoAttempted: false, refs: [q.sourceId] });
+  }
+  if (b.understood.length) q.notes.push(`behaviour: ${b.understood.join("; ")} (“${text}”)`);
+  if (wasDisplay && q.kind !== "descriptive") {
+    q.notes = q.notes.filter((n) => !n.startsWith("read as text shown to the respondent"));
+    q.notes.push("kept as a field, not display text: the instruction gives it a value or a behaviour");
+    q.confidence = worst(q.confidence, "review");
+  }
+  /* what cannot be set without the person: asked, never guessed (clarification engine, review screen) */
+  for (const u of b.unclear) issues.push({ location: where, type: "ambiguous", severity: "high", message: `${q.sourceId}: ${u}`, suggestion: "Say which question or value the field takes, then set it in the question's Default value.", autoAttempted: false, refs: [q.sourceId] });
+}

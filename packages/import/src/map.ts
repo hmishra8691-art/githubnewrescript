@@ -295,7 +295,11 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       text: cq.text, required: cq.required && cq.kind !== "descriptive" && cq.kind !== "hidden" && cq.kind !== "calculated",
       options: [], rows: [], columns: [], validation: [], skipLogic: [], listLogic: [],
       settings: {
-        readOnly: false, hidden: cs.hidden === true, ...num("minValue"), ...num("maxValue"), ...num("decimalPlaces"),
+        readOnly: cs.readOnly === true, hidden: cs.hidden === true, ...num("minValue"), ...num("maxValue"), ...num("decimalPlaces"),
+        /* a calculated / hidden value's expression (document behaviour, 2026-11-17); question references are resolved to variable names below */
+        ...(cq.expression && (cq.kind === "calculated" || cq.kind === "hidden") ? { expression: cq.expression } : {}),
+        /* a constant sum's target, from its "must add to N" rule — the renderer draws the running total against it */
+        ...(cq.kind === "constant_sum" && cq.validation.some((v) => v.kind === "sum_equals" && typeof v.value === "number") ? { sumTarget: cq.validation.find((v) => v.kind === "sum_equals")!.value as number } : {}),
         ...(cs.defaultValue !== undefined ? { defaultValue: cs.defaultValue } : {}),
         ...(cs.headerRepeat === "auto" || cs.headerRepeat === "off" || typeof cs.headerRepeat === "number" ? { headerRepeat: cs.headerRepeat } : {}),
         ...(cs.fieldLabelPosition === "left" || cs.fieldLabelPosition === "above" || cs.fieldLabelPosition === "right" ? { fieldLabelPosition: cs.fieldLabelPosition } : {}),
@@ -760,6 +764,22 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     inventory.push({ feature: "piping", sourceId: `${where} ${m}`, status: "imported" });
     return `{{${code}${mapped}}}`;
   });
+  /* expressions name questions by VARIABLE: a {{@SRC}} in a calculated expression or a cross-question check becomes that question's variable name */
+  const varOf = new Map<string, string>();
+  for (const [src, id] of idOf) { const q = built.find((b) => b.id === id) ?? existing?.questions.find((e) => e.id === id); if (q) varOf.set(src, q.variableName); }
+  const exprRefs = (s: string, where: string): string => s.replace(/\{\{@(\w+)\}\}/g, (_m, src: string) => {
+    const v = varOf.get(src);
+    if (v) return v;
+    issues.push({ location: where, type: "reference", severity: "medium", message: `An expression refers to ${src}, which is not in the imported survey.`, autoAttempted: true, refs: [src] });
+    unresolved.push({ location: where, ref: src, kind: "piping", message: `An expression refers to ${src}, which is not in the imported survey.` });
+    return "0";
+  });
+  for (const q of built) {
+    const st = q.settings as Record<string, unknown> | undefined;
+    if (st && typeof st.expression === "string" && st.expression.includes("{{@")) st.expression = exprRefs(st.expression, `${q.code} expression`);
+    if (st && typeof st.defaultValue === "string" && st.defaultValue.includes("{{@")) st.defaultValue = pipe(st.defaultValue, `${q.code} default value`);
+    for (const v of (q.validation ?? []) as { kind: string; value?: unknown }[]) if (v.kind === "custom_expression" && typeof v.value === "string" && v.value.includes("{{@")) v.value = exprRefs(v.value, `${q.code} validation`);
+  }
   for (const q of built) {
     q.text = pipe(q.text, q.code) ?? "";
     for (const o of q.options ?? []) o.label = pipe(o.label, `${q.code} options`) ?? "";
