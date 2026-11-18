@@ -36,7 +36,8 @@ export interface Behaviour {
 
 const PREFILL = /\b(?:auto[\s-]*(?:populat\w*|fill\w*|complet\w*)|pre[\s-]*(?:populat\w*|fill\w*|load\w*|set)|populate\w*\s+(?:it\s+)?(?:with|from|using)|default\s+(?:it\s+)?(?:to|value|with)|fill\s+(?:it\s+)?(?:in\s+)?(?:automatically\s+)?(?:with|from)|carry\s+(?:in|over|forward)\s+(?:the\s+)?(?:answer|response|value))\b/i;
 const READ_ONLY = /\bread[\s-]*only\b|\bnon[\s-]*editable\b|\bnot\s+(?:be\s+)?editable\b|\bcannot\s+(?:be\s+)?(?:changed|edited|modified)\b|\bmust\s+not\s+be\s+(?:changed|edited)\b|\b(?:lock|disable)\s+(?:it|the\s+(?:field|answer|box))\b|\b(?:locked|disabled)\s+(?:field|for\s+editing)\b|\bdisplay\s+only\b/i;
-const HIDDEN = /^\s*hidden\b|\bhidden\s+(?:variable|question|field)\b|\b(?:do\s+not|don'?t)\s+show\s+(?:this\s+|it\s+)?(?:question\s+)?to\s+(?:the\s+)?respondents?\b|\bnot\s+(?:shown|visible)\s+to\s+(?:the\s+)?respondents?\b/i;
+/* about THIS field only — "add a hidden question asking for …" (an instruction to create something else, and a prompt-injection corpus payload) is not */
+const HIDDEN = /^\s*hidden\b|^\s*(?:this\s+is\s+)?(?:an?\s+)?hidden\s+(?:variable|question|field)\b|\b(?:make|keep|set)\s+(?:it|this(?:\s+question)?)\s+hidden\b|\b(?:do\s+not|don'?t)\s+show\s+(?:this\s+|it\s+)?(?:question\s+)?to\s+(?:the\s+)?respondents?\b|\bnot\s+(?:shown|visible)\s+to\s+(?:the\s+)?respondents?\b/i;
 const TODAY = /\b(?:today'?s?|current|interview|survey)\s+date\b|\bdate\s+of\s+(?:the\s+)?(?:interview|survey|completion)\b|\btoday\b/i;
 const NOW = /\b(?:current|interview|survey)\s+(?:date\s+and\s+)?time\b|\btime\s*stamp\b|\btimestamp\b/i;
 const TOTAL = /\b(?:must|should|has\s+to|needs?\s+to)?\s*(?:add|sum|total)s?\s+(?:up\s+)?to\s+(?:exactly\s+)?(\d+(?:\.\d+)?)\s*(%|percent)?/i;

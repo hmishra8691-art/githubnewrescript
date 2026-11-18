@@ -115,3 +115,13 @@ test("an auto-fill with no named source becomes a clarification; the answer fill
   assert.equal(q1.settings.defaultValue, "{{S1}}");
   assert.equal(q1.settings.readOnly, true);
 });
+
+test("no prompt-injection corpus payload, written as a programmer note, changes how a field behaves", async () => {
+  const { readFileSync } = await import("node:fs");
+  const corpus = JSON.parse(readFileSync(new URL("../../engine/src/fixtures/prompt-injection-corpus.json", import.meta.url), "utf8")) as { payloads: (string | { text?: string })[] };
+  const by = new Map([["Q1", { sourceId: "Q1" }], ["S1", { sourceId: "S1" }]]) as never;
+  const moved = corpus.payloads.map((p) => (typeof p === "string" ? p : p.text ?? "")).filter((t) => t && readBehaviour(t, { sourceId: "Q9" } as never, by));
+  assert.deepEqual(moved, []);
+  assert.equal(readBehaviour("HIDDEN VARIABLE", { sourceId: "Q9" } as never, by)?.hidden, true, "a real hidden-field note still reads");
+  assert.equal(readBehaviour("MAKE THIS QUESTION HIDDEN", { sourceId: "Q9" } as never, by)?.hidden, true);
+});
