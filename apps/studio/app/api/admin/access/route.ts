@@ -137,6 +137,7 @@ export async function PUT(req: NextRequest) {
     session: body?.session ?? null,
     throttle: body?.throttle ?? null,
     workspace: body?.workspace ?? null,
+    mfa: body?.mfa ?? null,
   });
 
   if (draft.rejected.length) {

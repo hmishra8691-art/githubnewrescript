@@ -8,6 +8,7 @@ import {
   setSessionCookie, supabaseService, verifyPassword,
 } from "@/lib/authServer";
 import { audit } from "@/lib/guard";
+import { secondFactor } from "@/lib/mfa";
 
 export const dynamic = "force-dynamic";
 
@@ -173,6 +174,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /* ---------------------------------------------------------- 3b. the second factor (P1-07, lib/mfa.ts) */
+  const second = await secondFactor({ account: { id: account.id, email: account.email, role: account.role ?? null, customer_id: account.customer_id ?? null }, policy: policies.mfa, body: body ?? {}, ipHash, throttleKey });
+  if (!second.pass) return second.response;
+
   /* ---------------------------------------------------------- 4. the session */
   const { data: loginRows, error: loginErr } = await db.rpc("rescript_login", {
     p_user: account.id,
@@ -241,6 +246,9 @@ export async function POST(req: NextRequest) {
           status: sessionStatus(existing, policies.session),
         },
         releasedAfterSeconds: policies.session.staleAfterSeconds,
+        /* the second factor already passed: the retry with force carries this instead of a fresh code (P1-07) */
+        ...(second.passToken ? { mfaPass: second.passToken } : {}),
+        ...(second.recoveryCodes ? { recoveryCodes: second.recoveryCodes } : {}),
       },
       { status: 409 },
     );
@@ -273,6 +281,9 @@ export async function POST(req: NextRequest) {
     },
     tookOver: result.outcome === "taken_over",
     invitationsClaimed: Number(claimed ?? 0),
+    /* shown once, right after two-step sign-in was set up; only their hashes are kept */
+    ...(second.recoveryCodes ? { recoveryCodes: second.recoveryCodes } : {}),
+    ...(second.note ? { notice: second.note } : {}),
   });
   setSessionCookie(res, result.session_id!, policies.session.absoluteLifetimeSeconds);
   return res;

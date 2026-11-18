@@ -1,4 +1,5 @@
 import "server-only";
+import { mfaPolicy, type MfaPolicy } from "@rescript/access/mfa";
 import { createClient } from "@supabase/supabase-js";
 import { supabaseFetch } from "./supabaseFetch";
 import { platformDb } from "./db";
@@ -169,6 +170,8 @@ export interface AccessPolicies {
   lock: LockPolicy;
   presence: PresencePolicy;
   workspace: WorkspaceAccessPolicy;
+  /** who must use a second factor at sign-in (P1-07); administrators always */
+  mfa: MfaPolicy;
 }
 
 /**
@@ -214,6 +217,7 @@ export async function loadPolicies(customerId: string | null): Promise<AccessPol
     throttle: throttlePolicy(section(raw, "throttle") as never),
     lock: lockPolicy(section(raw, "lock") as never),
     presence: presencePolicy(section(raw, "presence") as never),
+    mfa: mfaPolicy(section(raw, "mfa") as never),
     /*
      * Read from its own namespace only. Unlike the others this one has no
      * sensible flat spelling — a bare `defaultRole` key in a document that

@@ -38,6 +38,8 @@ export interface AccessPolicyInput {
   throttle?: Record<string, unknown> | null;
   /** `"none"` is an explicit "no baseline", distinct from omitting the key. */
   workspace?: { defaultRole?: unknown } | null;
+  /** who must use two-step sign-in (P1-07): "admins" (the default — administrators always) or "everyone" */
+  mfa?: { require?: unknown } | null;
 }
 
 export interface AccessPolicyDraft {
@@ -183,6 +185,14 @@ export function buildAccessPolicy(input: AccessPolicyInput): AccessPolicyDraft {
     } else {
       rejected.push(`“${baseline}” is not a role that can be granted`);
     }
+  }
+
+  /* ------------------------------------------------------ two-step sign-in */
+  const req = input.mfa?.require;
+  if (typeof req === "string" && req !== "") {
+    if (req === "everyone") policy.mfa = { require: "everyone" };
+    else if (req === "admins" || req === "off") { /* the default; administrators need it whatever this says, so "off" is stored as nothing */ }
+    else rejected.push(`“${req}” is not a two-step sign-in setting (admins or everyone)`);
   }
 
   return { policy, rejected, adjusted };

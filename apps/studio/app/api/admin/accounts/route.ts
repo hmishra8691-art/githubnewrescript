@@ -177,6 +177,17 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ ok: true, message: `${person.full_name}'s sign-in lockout has been cleared.` });
     }
+    case "reset_mfa": {
+      /* P1-07: a person who lost their phone and their recovery codes. Removing the factor means the next sign-in
+         sets a new one up (when it is required) — it never turns the requirement off. */
+      const { error: mfaErr } = await db.from("user_mfa").delete().eq("user_id", userId);
+      if (mfaErr && !/user_mfa|does not exist|schema cache/i.test(mfaErr.message)) return NextResponse.json({ error: mfaErr.message }, { status: 500 });
+      await audit({
+        action: "user.mfa_disabled", userId: admin.userId, sessionId: admin.sessionId, customerId: person.customer_id,
+        detail: { targetName: person.full_name, targetUserCode: person.user_code, by: "administrator", reason },
+      });
+      return NextResponse.json({ ok: true, message: `${person.full_name}'s two-step sign-in was reset; they will set it up again at their next sign-in.` });
+    }
     case "set_role": {
       const role = String(body?.role ?? "");
       if (!(PLATFORM_ROLES as readonly string[]).includes(role)) {

@@ -83,6 +83,14 @@ export default function LoginForm() {
   const [notice, setNotice] = React.useState<string | null>(null);
   const [retryIn, setRetryIn] = React.useState(0);
   const [next, setNext] = React.useState("/");
+  /* two-step sign-in (P1-07): the server asks for a code, or to set an app up first */
+  const [mfa, setMfa] = React.useState<null | { kind: "challenge" } | { kind: "enrol"; secret: string; qrSvg: string; otpauthUrl: string; ticket: string }>(null);
+  const [mfaCode, setMfaCode] = React.useState("");
+  const [useRecovery, setUseRecovery] = React.useState(false);
+  const [recoveryCode, setRecoveryCode] = React.useState("");
+  const [mfaPass, setMfaPass] = React.useState<string | null>(null);
+  /** shown once after setting the app up; the page waits until they are saved */
+  const [recoveryCodes, setRecoveryCodes] = React.useState<string[] | null>(null);
 
   /*
    * The query string is read from `window.location` in an effect rather than
@@ -135,10 +143,19 @@ export default function LoginForm() {
         method: "POST",
         cache: "no-store",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ identifier, password, force }),
+        body: JSON.stringify({
+          identifier, password, force,
+          ...(mfaPass ? { mfaPass } : mfa?.kind === "enrol" ? { mfaTicket: mfa.ticket, mfaCode } : mfa?.kind === "challenge" ? (useRecovery ? { recoveryCode } : { mfaCode }) : {}),
+        }),
       });
       const data = await res.json().catch(() => ({} as any));
 
+      if (res.ok && Array.isArray(data?.recoveryCodes) && data.recoveryCodes.length) {
+        setRecoveryCodes(data.recoveryCodes);
+        return;
+      }
+      /* codes handed out on an earlier attempt that then met a session conflict: still show them before leaving */
+      if (res.ok && recoveryCodes) return;
       if (res.ok) {
         // a full navigation, not a router push — the session cookie was just
         // set and the middleware has to run again to see it
@@ -147,7 +164,18 @@ export default function LoginForm() {
         return;
       }
 
+      if (res.status === 401 && (data?.mfa === "challenge" || data?.mfa === "enrol")) {
+        if (data.mfa === "enrol" && data.ticket) setMfa({ kind: "enrol", secret: String(data.secret ?? ""), qrSvg: String(data.qrSvg ?? ""), otpauthUrl: String(data.otpauthUrl ?? ""), ticket: String(data.ticket) });
+        else if (data.mfa === "challenge" && mfa?.kind !== "challenge") setMfa({ kind: "challenge" });
+        setMfaCode(""); setRecoveryCode("");
+        /* the first answer is the question, not a failure: say it as an instruction */
+        if (data.code === "mfa_required" || data.code === "mfa_enrolment_required") setNotice(data.error); else setError(data?.error ?? "That code did not work.");
+        return;
+      }
+
       if (res.status === 409 && data?.code === "session_conflict") {
+        if (typeof data.mfaPass === "string") setMfaPass(data.mfaPass);
+        if (Array.isArray(data.recoveryCodes) && data.recoveryCodes.length) setRecoveryCodes(data.recoveryCodes);
         setConflict({
           message: data?.error ?? "This account is already logged in elsewhere.",
           existing: (data?.existingSession ?? {}) as ExistingSession,
@@ -261,6 +289,14 @@ export default function LoginForm() {
           </div>
         )}
 
+        {recoveryCodes && (
+          <div className="auth-note" data-testid="login-recovery-codes">
+            <strong>Two-step sign-in is on. Save these recovery codes now.</strong>
+            <div style={{ fontSize: 13, margin: "6px 0" }}>Each one signs you in once if you lose your phone. They are shown only this time.</div>
+            <pre className="mono" style={{ columns: 2, fontSize: 14, margin: "8px 0", userSelect: "all" }}>{recoveryCodes.join("\n")}</pre>
+            <button type="button" className="btn primary" data-testid="login-recovery-done" onClick={() => { window.location.href = next; }}>I have saved them — continue</button>
+          </div>
+        )}
         {error && <div className="auth-note err" data-testid="login-error">{error}</div>}
 
         <form onSubmit={submit} noValidate>
@@ -289,6 +325,27 @@ export default function LoginForm() {
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
+
+          {mfa?.kind === "enrol" && !mfaPass && (
+            <div className="auth-field" data-testid="login-mfa-enrol">
+              <label>Set up two-step sign-in</label>
+              <div className="muted" style={{ fontSize: 13, marginBottom: 6 }}>Scan this with an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password…), or type the key into it. Then enter the 6-digit code it shows.</div>
+              {mfa.qrSvg && <div style={{ width: 180, height: 180, background: "#fff" }} data-testid="login-mfa-qr" dangerouslySetInnerHTML={{ __html: mfa.qrSvg }} />}
+              <div className="mono" style={{ fontSize: 13, marginTop: 6, userSelect: "all" }} data-testid="login-mfa-secret">{mfa.secret}</div>
+            </div>
+          )}
+          {mfa && !mfaPass && (
+            <div className="auth-field">
+              {useRecovery ? <>
+                <label htmlFor="login-recovery">Recovery code</label>
+                <input id="login-recovery" data-testid="login-recovery" className="input" autoComplete="off" value={recoveryCode} onChange={(e) => setRecoveryCode(e.target.value)} placeholder="XXXX-XXXX" />
+              </> : <>
+                <label htmlFor="login-mfa">6-digit code from your authenticator app</label>
+                <input id="login-mfa" data-testid="login-mfa-code" className="input" inputMode="numeric" autoComplete="one-time-code" autoFocus maxLength={7} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/[^\d ]/g, ""))} />
+              </>}
+              {mfa.kind === "challenge" && <button type="button" className="ax-linkbtn" style={{ fontSize: 12.5, marginTop: 4 }} data-testid="login-use-recovery" onClick={() => setUseRecovery((v) => !v)}>{useRecovery ? "Use the code from my app" : "I don't have my phone: use a recovery code"}</button>}
+            </div>
+          )}
 
           <div className="auth-actions">
             <button

@@ -649,6 +649,10 @@
       "class": "platform",
       "why": "a person's AI settings"
     },
+    "user_mfa": {
+      "class": "platform",
+      "why": "a person's second factor for signing in (P1-07) — sign-in is platform data"
+    },
     "user_sessions": {
       "class": "platform",
       "why": "sign-in sessions"

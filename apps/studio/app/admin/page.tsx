@@ -175,7 +175,7 @@ export default function AdminPage() {
    * anything to report — so the confirmation sentence is written here from
    * what was asked for rather than read back from the response.
    */
-  const accountAction = async (row: AccountRow, action: "disable" | "enable" | "unlock" | "set_role", role?: string) => {
+  const accountAction = async (row: AccountRow, action: "disable" | "enable" | "unlock" | "set_role" | "reset_mfa", role?: string) => {
     setBusy(`${row.userId}:${action}`);
     try {
       const r = await api<{ ok: true; sessionsEnded?: number; role?: string }>("/api/admin/accounts", {
@@ -192,6 +192,8 @@ export default function AdminPage() {
             ? `${row.name} can sign in again.`
             : action === "unlock"
               ? `The sign-in lockout on ${row.name} has been cleared.`
+              : action === "reset_mfa"
+                ? `${row.name}'s two-step sign-in was reset; they set it up again at their next sign-in.`
               : `${row.name} is now ${ROLE_WORDS[r.data.role ?? role ?? ""] ?? r.data.role ?? role}.`,
       );
       await loadAccounts(query);
@@ -486,6 +488,15 @@ export default function AdminPage() {
                               onClick={() => void accountAction(a, "unlock")}
                             >
                               Unlock
+                            </button>
+                            <button
+                              className="btn small"
+                              data-testid="admin-reset-mfa"
+                              disabled={frozen || busy !== null}
+                              title={a.immutableReason ?? "Lost phone and recovery codes: remove their authenticator so they set a new one up at the next sign-in"}
+                              onClick={() => { if (window.confirm(`Reset two-step sign-in for ${a.name}? They will set it up again at their next sign-in.`)) void accountAction(a, "reset_mfa"); }}
+                            >
+                              Reset 2-step
                             </button>
                           </div>
                           {a.immutableReason && (

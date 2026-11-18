@@ -33,6 +33,7 @@ interface Payload {
     session: Record<string, number | boolean>;
     throttle: Record<string, number>;
     workspace: { defaultRole: string | null };
+    mfa?: { require: string };
   };
   defaults: { session: Record<string, number | boolean>; throttle: Record<string, number> };
   stored: Record<string, Record<string, unknown>>;
@@ -64,6 +65,7 @@ export function AccessPolicyPanel() {
   const [draft, setDraft] = React.useState<Record<string, Record<string, string>>>({ session: {}, throttle: {} });
   const [role, setRole] = React.useState<string>("");
   const [takeover, setTakeover] = React.useState<boolean | null>(null);
+  const [mfaAll, setMfaAll] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [note, setNote] = React.useState<string | null>(null);
@@ -90,6 +92,7 @@ export function AccessPolicyPanel() {
         .map(([k, v]) => [k, String(v)]));
     setDraft({ session: asText("session"), throttle: asText("throttle") });
     setRole(typeof stored.workspace?.defaultRole === "string" ? stored.workspace.defaultRole : "");
+    setMfaAll(stored.mfa?.require === "everyone");
     setTakeover(typeof stored.session?.allowForceTakeover === "boolean" ? stored.session.allowForceTakeover : null);
   }, []);
 
@@ -124,6 +127,7 @@ export function AccessPolicyPanel() {
         session: { ...numbers("session"), ...(takeover === null ? {} : { allowForceTakeover: takeover }) },
         throttle: numbers("throttle"),
         ...(role ? { workspace: { defaultRole: role } } : {}),
+        mfa: { require: mfaAll ? "everyone" : "admins" },
       },
     });
     setBusy(false);
@@ -243,13 +247,25 @@ export function AccessPolicyPanel() {
         </select>
       </div>
 
+      <div className="card" style={{ padding: 12, marginBottom: 10 }} data-testid="access-mfa">
+        <div className="flabel">TWO-STEP SIGN-IN</div>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
+          A code from an authenticator app after the password. Platform administrators always need it. It is set up at
+          the person's next sign-in, with ten one-time recovery codes.
+        </p>
+        <label className="row" style={{ gap: 6, fontSize: 13 }}>
+          <input type="checkbox" checked={mfaAll} data-testid="access-mfa-everyone" onChange={(e) => setMfaAll(e.target.checked)} />
+          Require it of everyone in this workspace
+        </label>
+      </div>
+
       <div className="row" style={{ gap: 8 }}>
         <button className="btn primary" disabled={busy} data-testid="access-save" onClick={() => void save()}>
           {busy ? "Saving…" : "Save policy"}
         </button>
         <button
           className="btn" disabled={busy} data-testid="access-reset"
-          onClick={() => { setDraft({ session: {}, throttle: {} }); setRole(""); setTakeover(null); }}
+          onClick={() => { setDraft({ session: {}, throttle: {} }); setRole(""); setTakeover(null); setMfaAll(false); }}
         >
           Clear all overrides
         </button>

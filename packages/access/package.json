@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./mfa": {
+      "types": "./dist/mfa.d.ts",
+      "default": "./dist/mfa.js"
     }
   },
   "scripts": {

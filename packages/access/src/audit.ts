@@ -30,6 +30,10 @@ export const AUDIT_EVENTS = [
   "user.logged_out",
   "user.profile_updated",
   "user.password_changed",
+  "user.mfa_enabled",
+  "user.mfa_disabled",
+  "user.mfa_recovery_used",
+  "user.login_without_mfa",
   /* the user's OWN AI provider (BYOK): a key added, replaced or removed, and a feature switched between the platform's AI and theirs.
      The detail names the feature, the provider and the model — never the key, not even its mask. */
   "user.ai_credential_saved",
@@ -266,6 +270,10 @@ export function describeEvent(r: AuditRow): string {
     case "user.logged_out": return `${who} signed out`;
     case "user.profile_updated": return `${who} updated their profile`;
     case "user.password_changed": return `${who} changed their password`;
+    case "user.mfa_enabled": return `${who} turned on two-step sign-in`;
+    case "user.mfa_disabled": return `${who} turned off two-step sign-in`;
+    case "user.mfa_recovery_used": return `${who} signed in with a recovery code`;
+    case "user.login_without_mfa": return `${who} signed in without a second factor (two-step sign-in is not set up on this server)`;
     case "notify.channel_added": return `${who} added the ${str(d.kind) || "alert"} channel ${str(d.name) || ""}`.trim();
     case "notify.channel_removed": return `${who} removed the ${str(d.kind) || "alert"} channel ${str(d.name) || ""}`.trim();
     case "recruitment.vendor_configured": return `${who} set the sample vendor ${str(d.vendor) || ""} to ${str(d.mode) || "a new mode"}`.replace(/\s+/g, " ").trim();
