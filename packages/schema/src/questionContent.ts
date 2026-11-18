@@ -107,3 +107,43 @@ export function normalizeLegacyRowRandomization(raw: unknown): unknown {
 export function normalizeQuestion(raw: unknown): unknown {
   return normalizeLegacyRowRandomization(normalizeQuestionContent(raw));
 }
+
+/*
+ * THE SAME VALUE THE SCHEMA STORES, for comparing (2026-11-17, Error.xlsx item 2).
+ *
+ * The draft save asks whether anything the editor sent failed to survive parsing (`droppedFieldPaths`). Parsing is
+ * not only stripping: every question goes through `normalizeQuestion` (customHtml folded into text / instruction,
+ * legacy row randomisation moved) and every flag list through `normalizeOptionFlags` (the retired "none of the
+ * above" / "don't know" / "refused" flags become "exclusive"). Compared with the raw input, those migrations looked
+ * like data loss: "Save failed — Saved, but the server did not recognise questions[3].options[7].flags[0]" on a
+ * save that had stored everything, repeated on every later save.
+ *
+ * This applies exactly those migrations to the input and nothing else (no stripping, no defaults), so what is left
+ * different after it really was dropped. A new `transform` / `preprocess` in the schema must be added here too —
+ * `schemaTransforms.test.ts` fails until it is.
+ */
+export function normalizeAsParsed<T>(value: T): T {
+  const walk = (v: unknown, key: string | null): unknown => {
+    if (Array.isArray(v)) {
+      if (key === "flags" && v.every((x) => typeof x === "string")) return normalizeOptionFlagsLocal(v as string[]);
+      const items = key === "questions" ? v.map((q) => normalizeQuestion(q)) : v;
+      return items.map((x) => walk(x, null));
+    }
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = walk(x, k);
+      return out;
+    }
+    return v;
+  };
+  return walk(value, null) as T;
+}
+
+/* the retirement rule of question.ts `normalizeOptionFlags`, repeated here to keep this module free of the question
+   schema (question.ts imports this file); schemaTransforms.test.ts checks the two agree */
+const RETIRED = new Set(["none_of_above", "dont_know", "refused"]);
+function normalizeOptionFlagsLocal(flags: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const f of flags) { const m = RETIRED.has(f) ? "exclusive" : f; if (!out.includes(m)) out.push(m); }
+  return out;
+}

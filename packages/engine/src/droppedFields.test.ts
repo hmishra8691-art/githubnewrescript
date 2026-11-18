@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SurveyDefinition, Question } from "@rescript/schema";
+import { SurveyDefinition, Question, normalizeAsParsed } from "@rescript/schema";
+const SD2 = SurveyDefinition;
 import { droppedFieldPaths, hasDroppedFields } from "./droppedFields.js";
 
 /*
@@ -153,4 +154,28 @@ test("deep nesting terminates", () => {
 test("hasDroppedFields agrees with the paths", () => {
   assert.equal(hasDroppedFields({ a: 1 }, { a: 1, b: 2 }), false);
   assert.equal(hasDroppedFields({ a: 1 }, {}), true);
+});
+
+/* Error.xlsx item 2 (2026-11-17): "Save failed — Saved, but the server did not recognise …" on lossless saves */
+const surveyWith = (q: Record<string, unknown>) => ({ meta: { id: "s", code: "S", title: "T", version: "1.0" }, questions: [{ id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "x", options: [{ code: 1, label: "A", flags: [] }, { code: 2, label: "None of the above", flags: [] }], ...q }], flow: [{ type: "page", id: "p", questionIds: ["q1"] }] });
+
+test("the schema's own migrations are not reported as lost once the sent copy is normalised the same way", () => {
+  const cases: [string, Record<string, unknown>][] = [
+    ["retired none_of_above flag", surveyWith({ options: [{ code: 1, label: "A", flags: [] }, { code: 2, label: "None of the above", flags: ["none_of_above"] }] })],
+    ["retired dont_know + refused", surveyWith({ options: [{ code: 1, label: "A", flags: ["dont_know", "refused"] }] })],
+    ["customHtml on a question", surveyWith({ customHtml: "<b>note</b>" })],
+    ["legacy randomizeRows", surveyWith({ type: "matrix_single", rows: [{ code: 1, label: "r1" }], settings: { randomizeRows: true } })],
+  ];
+  for (const [name, sent] of cases) {
+    const raw = JSON.parse(JSON.stringify(sent));
+    const parsed = SD2.parse(JSON.parse(JSON.stringify(sent)));
+    assert.ok(droppedFieldPaths(raw, parsed).length > 0, `${name}: the raw comparison did report it (the defect)`);
+    assert.deepEqual(droppedFieldPaths(normalizeAsParsed(raw), parsed), [], name);
+  }
+});
+
+test("a key the schema really does not know is still reported after normalising", () => {
+  const sent = surveyWith({ futureSetting: { on: true } });
+  const parsed = SD2.parse(JSON.parse(JSON.stringify(sent)));
+  assert.deepEqual(droppedFieldPaths(normalizeAsParsed(JSON.parse(JSON.stringify(sent))), parsed), ["questions[0].futureSetting"]);
 });

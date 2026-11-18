@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AnalysisPlan, SurveyDefinition } from "@rescript/schema";
-import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
+import { SurveyDefinition as SurveyDefinitionSchema, normalizeAsParsed } from "@rescript/schema";
 import { applySurveyActions, coerceSurveyActions, droppedFieldPaths, ensureElementIds, hypothesisCoverage, isAnalysisOp, type SurveyAction } from "@rescript/engine";
 import { planTrace,
   variableMetadata, reportFromRun, planItemViews, planVariableViews, planOverview, planAnalysisSync, planChartSync, planChartSpec, planDashboard, stampedDefinition, summarizeApply, withOrigin, editedSinceApply, plannedIdOf, runTiming,
@@ -209,7 +209,7 @@ export async function editPlan(db: SupabaseClient, surveyId: string, ctx: Loaded
   if (!out.results.some((r) => r.ok)) return { ok: false, status: 400, error: out.errors.join(" ") || "Nothing could be applied.", results };
   const parsed = SurveyDefinitionSchema.safeParse(out.def);
   if (!parsed.success) return { ok: false, status: 422, error: `The edited definition failed validation: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`, results };
-  if (droppedFieldPaths(out.def, parsed.data).length) return { ok: false, status: 422, error: "The edited definition would lose fields this server does not know; nothing was saved.", results };
+  if (droppedFieldPaths(normalizeAsParsed(out.def), parsed.data).length) return { ok: false, status: 422, error: "The edited definition would lose fields this server does not know; nothing was saved.", results };
   const definition = ensureElementIds(parsed.data).def;
   const baseRevision = typeof input.baseRevision === "number" && Number.isFinite(input.baseRevision) ? input.baseRevision : ctx.revision;
   if (baseRevision == null) return { ok: false, status: 501, error: "This database has no revision guard (migration 0004), so the plan cannot be saved safely from here. Edit it in Intelligent mode.", results };

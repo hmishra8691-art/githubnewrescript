@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { guardLiveData } from "@/lib/liveDataGuard";
-import { SurveyDefinition } from "@rescript/schema";
+import { SurveyDefinition, normalizeAsParsed } from "@rescript/schema";
 import { droppedFieldPaths, ensureElementIds } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { scriptAuditRows } from "@/lib/scriptAuditLog";
@@ -76,7 +76,9 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
    * Both were reported as data loss while the data was being stored fine.
    * See droppedFieldPaths.
    */
-  const dropped = droppedFieldPaths(body.definition, parsed.data);
+  /* compared with the sent copy migrated the way parsing migrates it (retired flags, customHtml, legacy row
+     randomisation): those are stored, not lost — reporting them was Error.xlsx item 2 ("Save failed — Saved, but …") */
+  const dropped = droppedFieldPaths(normalizeAsParsed(body.definition), parsed.data);
   const droppedFields = dropped.length > 0 ? dropped : undefined;
 
   /*

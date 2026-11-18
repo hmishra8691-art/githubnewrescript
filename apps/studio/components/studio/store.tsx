@@ -593,10 +593,11 @@ export function StudioProvider({
           setSaveState({
             kind: "error",
             message:
-              "Saved, but the server did not recognise " +
+              "Not stored: " +
               (lost.length ? lost.join(", ") : "some settings") +
-              ", so that part was NOT stored. This editor is newer than the " +
-              "deployed build — reload the page to match it.",
+              ". Everything else in this save was stored. The server does not know " +
+              (lost.length === 1 ? "this setting" : "these settings") +
+              " — reload the page; if it happens again, report the path shown here.",
           });
           return false;
         }

@@ -27,10 +27,13 @@
  * fine, and order is not information. So this walks the sent value and
  * reports the paths that did not survive.
  *
- * The schema has no `coerce`, `transform`, `preprocess` or `catch` anywhere
- * (checked), so a primitive whose value changed during parsing is a genuine
- * loss and not normalisation. If one is ever added, exempt it here explicitly
- * rather than loosening the comparison.
+ * The schema DOES migrate on parse (2026-11-17 correction — the note here used
+ * to say it did not): retired option flags become "exclusive", `customHtml` is
+ * folded into the text, legacy row randomisation moves. Callers therefore pass
+ * `normalizeAsParsed(sent)` (schema, questionContent.ts), which applies exactly
+ * those migrations; anything still different is a genuine loss. A new
+ * migration goes into normalizeAsParsed — the schema's transform guard test
+ * fails until it does. Reporting the migrations as losses was Error.xlsx item 2.
  */
 
 const MAX_PATHS = 8;
