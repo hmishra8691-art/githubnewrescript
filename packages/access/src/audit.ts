@@ -148,6 +148,7 @@ export const AUDIT_EVENTS = [
   "privacy.erasure",
   "api_key.created",
   "tool.called",
+  "fieldwork.proposal_decided",
   "api_key.revoked",
   "survey.exported",
 
@@ -387,6 +388,7 @@ export function describeEvent(r: AuditRow): string {
     case "responses.exported": return `${who} exported response data${d.format ? ` as ${str(d.format).toUpperCase()}` : ""}${d.dataset ? ` (${str(d.dataset)})` : ""}`;
     case "responses.export_preset_created": return `${who} saved the export preset “${str(d.name)}” for the whole workspace`;
     case "responses.export_preset_deleted": return `${who} deleted an export preset`;
+    case "fieldwork.proposal_decided": return `${who} ${d.decision === "accept" ? "accepted" : "rejected"} the fieldwork agent's ${str(d.kind)} proposal: ${str(d.reason)}`;
     case "tool.called": return `${d.caller && typeof d.caller === "object" && (d.caller as { kind?: string }).kind === "agent" ? `An agent (for ${who})` : who} ${d.phase === "dry_run" ? "dry-ran" : d.phase === "executed" ? "ran" : d.phase === "failed" ? "tried and failed to run" : "was refused"} the tool ${str(d.tool)}`;
     case "api_key.created": return `${who} created the API key “${str(d.name)}” (${str(d.prefix)}…)`;
     case "api_key.revoked": return `${who} revoked the API key “${str(d.name)}”`;

@@ -1,4 +1,5 @@
 "use client";
+import { FieldworkAgentPanel } from "./FieldworkAgentPanel";
 import React from "react";
 import type { FieldBucket, Pace } from "@rescript/analytics";
 import { describePace } from "@rescript/analytics";
@@ -208,6 +209,7 @@ export function FieldOverTime({
     <div data-testid="fw-over-time">
       {/* ============================================ §27 — right now */}
       <LiveHalf pulse={d.pulse} positions={d.positions} pageLabels={pageLabels} env={env} />
+      {env === "LIVE" && surveyId && <FieldworkAgentPanel surveyId={surveyId} pace={d.pace} fieldTo={d.project.fieldworkTo} />}
 
       {/* ============================================ §26 — the pace */}
       <div className="row" style={{ margin: "16px 0 8px", flexWrap: "wrap", gap: 8 }}>
