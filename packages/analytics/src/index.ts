@@ -61,3 +61,4 @@ export * from "./infographic.js";
 export * from "./analysisLayer.js";
 export * from "./analysisPlanner.js";
 export { npsByGroups, npsForCases, type NpsGroupRow } from "./analyses/npsCompare.js";
+export * from "./lineage.js";
