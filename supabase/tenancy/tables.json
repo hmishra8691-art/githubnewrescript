@@ -625,6 +625,10 @@
       "class": "customer",
       "why": "a client's survey \u2014 its id \u2192 client mapping must ALSO be kept centrally (the directory), so a survey id can be routed"
     },
+    "tenant_directory": {
+      "class": "platform",
+      "why": "the directory: survey / session / group code / media / interview project \u2192 which client, read before routing"
+    },
     "themes": {
       "class": "customer",
       "why": "a client's own settings or content (customer_id)"

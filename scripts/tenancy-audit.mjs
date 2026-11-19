@@ -44,7 +44,7 @@ for (const v of Object.values(classified)) byClass[v.class] = (byClass[v.class] 
 /* ---------------------------------------------------------------- 2. call sites */
 const APPS = ["studio", "runtime", "interviews"];
 const DIRECT = /\b(supabaseAdmin|supabaseService)\(\)/g;
-const ROUTED = /\b(dbFor|platformDb|customerDb)\(/g;
+const ROUTED = /\b(dbFor|platformDb|customerDb|surveyDb|sessionDb|keyDb|projectDb)\(/g;
 const walk = (dir, out = []) => {
   for (const name of readdirSync(dir)) {
     if (name === "node_modules" || name === ".next" || name.startsWith(".")) continue;

@@ -28,6 +28,10 @@
     "./observe": {
       "types": "./dist/observe.d.ts",
       "default": "./dist/observe.js"
+    },
+    "./directory": {
+      "types": "./dist/directory.d.ts",
+      "default": "./dist/directory.js"
     }
   },
   "scripts": {

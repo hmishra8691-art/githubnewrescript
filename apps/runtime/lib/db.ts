@@ -1,6 +1,7 @@
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
 import { readTenancyConfig, resolveDatabase, describeTenancy, type TenantScope, type TenancyConfig } from "@rescript/storage/tenancy";
+import { makeDirectory, routingActive } from "@rescript/storage/directory";
 import { supabaseFetch } from "./supabaseFetch";
 
 /**
@@ -43,3 +44,66 @@ export const platformDb = () => dbFor({ kind: "platform" });
 export const customerDb = (customerId: string | null | undefined) => dbFor({ kind: "customer", customerId });
 
 export type { TenantScope };
+
+/* ----------------------------------------------------------------------------------------------------------------
+ * THE DIRECTORY (tenancy wiring, 2026-11-19). The respondent app holds survey ids, session ids, group join codes and
+ * media ids — not client ids. `public.tenant_directory` (migration 0101, in the primary) says which client owns each.
+ *
+ *   surveyDb(surveyId)               a survey's data (responses, quotas, respondents, recruitment, assessments…)
+ *   sessionDb(sessionId, surveyId?)  a session's row and everything keyed by it. When the caller has the survey id
+ *                                    (the runner sends `surveyDbId` with every save) it is used directly; otherwise
+ *                                    the session's directory row. A database that does not hold the session answers
+ *                                    "unknown session", so a wrong or forged survey id can only fail, never reach
+ *                                    another client's row.
+ *   keyDb(kind, key)                 a group join code, a media object id
+ *   registerKey(kind, key, surveyId) records a new key once routing is active (sessions at start, media at ticket)
+ *
+ * While routing is inactive (today) nothing is read or written and every call returns the primary, exactly as before.
+ * A key with no directory row also resolves to the primary: a client not yet moved.
+ * -------------------------------------------------------------------------------------------------------------- */
+export type DirectoryKind = "survey" | "session" | "group" | "media" | "interview_project";
+
+const lookup = (kind: DirectoryKind) => async (key: string) => {
+  const { data, error } = await platformDb().from("tenant_directory").select("customer_id").eq("kind", kind).eq("key", key).maybeSingle();
+  if (error) throw new Error(`tenant directory: ${error.message}`);
+  return (data?.customer_id as string | undefined) ?? null;
+};
+const directory = makeDirectory<DirectoryKind>({
+  lookups: { survey: lookup("survey"), session: lookup("session"), group: lookup("group"), media: lookup("media"), interview_project: lookup("interview_project") },
+});
+
+export async function customerOf(kind: DirectoryKind, key: string | null | undefined): Promise<string | null> {
+  if (!key || !routingActive(tenancyConfig())) return null;
+  return directory.customerOf(kind, key);
+}
+
+export async function keyDb(kind: DirectoryKind, key: string | null | undefined) {
+  return customerDb(await customerOf(kind, key));
+}
+
+export const surveyDb = (surveyId: string | null | undefined) => keyDb("survey", surveyId);
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export async function sessionDb(sessionId: string, surveyId?: unknown) {
+  if (typeof surveyId === "string" && UUID.test(surveyId)) return surveyDb(surveyId);
+  return keyDb("session", sessionId);
+}
+
+/**
+ * record that a new key belongs to this survey's client — only once routing is active. Never throws; false means the
+ * row could not be written, and a caller whose later requests depend on it (a new session) should refuse rather than
+ * create something that cannot be found again.
+ */
+export async function registerKey(kind: Exclude<DirectoryKind, "survey">, key: string, surveyId: string): Promise<boolean> {
+  if (!routingActive(tenancyConfig())) return true;
+  try {
+    const customerId = await customerOf("survey", surveyId);
+    if (!customerId) return true; // a client on the primary needs no row
+    const { error } = await platformDb().from("tenant_directory").upsert({ kind, key, customer_id: customerId, survey_id: surveyId }, { onConflict: "kind,key", ignoreDuplicates: true });
+    if (error) throw new Error(error.message);
+    return true;
+  } catch (e) {
+    console.error("[rescript:tenancy] directory row not written", JSON.stringify({ kind, error: (e as Error).message }));
+    return false;
+  }
+}
