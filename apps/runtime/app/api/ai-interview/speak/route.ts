@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const deps = aiInterviewDeps();
+    const deps = await aiInterviewDeps({ session: body?.sessionToken });
     const { session, study } = await interviewFor(deps, body?.sessionToken);
     if (session.mode === "text") return NextResponse.json({ error: "this interview is in text mode" }, { status: 400 });
     const turns = await deps.store.turns(session.id);

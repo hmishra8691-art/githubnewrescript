@@ -2,8 +2,7 @@ import { NextRequest } from "next/server";
 import { MediaError } from "@rescript/media";
 import { chunkAction } from "@rescript/analytics/live";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
-import { supabaseAdmin } from "@/lib/admin";
-import { forward, hasDatabase, liveDeps, liveStore, mediaChunkOps, reply, sandboxForwarding, studioSandbox } from "@/lib/live";
+import { forward, hasDatabase, liveDb, liveDeps, liveStore, mediaChunkOps, reply, sandboxForwarding, studioSandbox } from "@/lib/live";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,10 +29,9 @@ export async function POST(req: NextRequest, { params }: { params: { action: str
     return reply(data, r.status);
   }
   try {
-    /* tenancy: AI interviews and live rooms are routed with their stores (next step) — still the primary */
-    const handle = await mediaDbOrResponse(async () => supabaseAdmin());
+    const handle = await mediaDbOrResponse(() => liveDb({ member: body.token }));
     if ("response" in handle) return handle.response;
-    const r = await chunkAction(liveStore(), params.action, body, liveDeps, mediaChunkOps(handle.db), { allowRoles: ["participant"] });
+    const r = await chunkAction(await liveStore({ member: body.token }), params.action, body, liveDeps, mediaChunkOps(handle.db), { allowRoles: ["participant"] });
     return reply(r.body, r.status);
   } catch (e) {
     if (e instanceof MediaError) return reply({ error: e.message }, e.status);

@@ -2,7 +2,7 @@
   "$comment": "Direct primary-database call sites allowed per app (scripts/tenancy-audit.mjs). Only ever lowered — run the audit with --update after migrating call sites to lib/db.ts.",
   "direct": {
     "studio": 272,
-    "runtime": 5,
+    "runtime": 0,
     "interviews": 69
   }
 }

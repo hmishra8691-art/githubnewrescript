@@ -22,7 +22,7 @@ export const maxDuration = 60;
 const MAX = 4 * 1024 * 1024;
 export async function POST(req: NextRequest) {
   try {
-    const deps = aiInterviewDeps();
+    const deps = await aiInterviewDeps({ session: req.headers.get("x-session-token") });
     const { session, study } = await interviewFor(deps, req.headers.get("x-session-token"), { live: true });
     /* a chat or hybrid study lets a text-mode respondent dictate an answer (2026-11-08); a text-only study of old does not */
     if (session.mode === "text" && !dictationAllowed(moderationOf(study.guide))) return NextResponse.json({ error: "this interview is in text mode" }, { status: 400 });

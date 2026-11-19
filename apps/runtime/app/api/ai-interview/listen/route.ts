@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   if (!isFakeProvider()) delete body.script;
   try {
-    const out = await listen(aiInterviewDeps(), { sessionToken: String(body.sessionToken ?? ""), answer: body.answer, script: body.script });
+    const out = await listen(await aiInterviewDeps({ session: body.sessionToken }), { sessionToken: String(body.sessionToken ?? ""), answer: body.answer, script: body.script });
     return NextResponse.json({ ok: true, ...out }, { headers: { "cache-control": "no-store" } });
   } catch (e) { return errorResponse(e); }
 }

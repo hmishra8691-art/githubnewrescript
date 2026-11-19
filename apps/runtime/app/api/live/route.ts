@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { joinWithInvite, memberAction, type LiveRoomRow, type LiveMember } from "@rescript/analytics/live";
-import { connectionFor, forward, hasDatabase, liveDeps, liveStore, reply, sandboxForwarding } from "@/lib/live";
+import { connectionFor, forward, hasDatabase, liveDb, liveDeps, liveStoreOn, registerMember, reply, sandboxForwarding } from "@/lib/live";
 import { panelParams, runtimePanels } from "@/lib/panels";
 
 export const dynamic = "force-dynamic";
@@ -25,13 +25,15 @@ export async function POST(req: NextRequest) {
   if (!body || typeof body !== "object") return reply({ error: "bad request" }, 400);
   if (!hasDatabase()) return sandboxForwarding() ? forward("/room", body) : reply({ error: "Live sessions are not available on this installation." }, 503);
   try {
-    const store = liveStore();
+    /* tenancy: a join (and the panel check before it) is routed by the invite; everything else by the member token */
+    const db = await liveDb(body.action === "join" ? { invite: body.invite } : { member: body.token });
+    const store = liveStoreOn(db);
     /* G3 2026-10-22: a panel participant's end link, once the session has ended — { action: "panel", token } */
     if (body.action === "panel") {
       const m = /^[A-Za-z0-9_-]{24,120}$/.test(String(body.token ?? "")) ? await store.memberByHash(liveDeps.hash(String(body.token))) : null;
       if (!m || m.role !== "participant" || !m.inviteId) return reply({ ok: true, panel: null });
       const row = await store.room(m.roomId);
-      const panels = runtimePanels();
+      const panels = runtimePanels({ db });
       if (!row || !panels || row.state.status !== "ended") return reply({ ok: true, panel: null });
       const out = await panels.exit({ sessionRef: `live:${m.inviteId}`, outcome: "complete", status: "live_ended" });
       return reply({ ok: true, panel: out ? { url: out.url, code: out.showCode ? out.code : null } : null });
@@ -39,7 +41,7 @@ export async function POST(req: NextRequest) {
     /* G3 2026-10-22: a panel participant joining with consent — matched to the study's panel by the link's parameters;
        refused without the panel's id, or when that id already took part (a rejoin through the same invite is welcome) */
     let panelEntry: { entryId: string } | null = null;
-    const panelsForJoin = body.action === "join" && body.consent !== undefined ? runtimePanels() : null;
+    const panelsForJoin = body.action === "join" && body.consent !== undefined ? runtimePanels({ db }) : null;
     if (panelsForJoin && typeof body.invite === "string") {
       const invite = await store.inviteByHash(liveDeps.hash(String(body.invite)));
       const row = invite && invite.role === "participant" ? await store.room(invite.roomId) : null;
@@ -56,6 +58,7 @@ export async function POST(req: NextRequest) {
       const { params: _params, ...joinBody } = body;
       const r = await joinWithInvite(store, joinBody, liveDeps);
       if (r.status !== 200 || !r.body.token) return reply(r.body, r.status);
+      if (!(await registerMember(String(r.body.token), String(body.invite)))) return reply({ error: "The session could not be joined just now — trying again.", code: "directory_unavailable" }, 503);
       const m = (await store.memberByHash(liveDeps.hash(String(r.body.token))))!;
       const row = (await store.room(m.roomId))!;
       return reply({ ...r.body, connection: await connectionFor(row, m) });

@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   /* G1: the hands-free conversation asks for the reply's speech in the stream (gated sentences + their audio) */
   const wantsSpeech = (body as { voice?: { speak?: unknown } }).voice?.speak === true;
   const run = async (onSay?: (t: string, replace?: boolean) => void, speech?: ReturnType<typeof speechSink>) => {
-    try { const out = await turn(aiInterviewDeps(), body, { onSay, ...(speech ? { onSpeak: speech.sink } : {}) }); await speech?.done(); return { status: 200, body: { ok: true, ...out } }; }
+    try { const out = await turn(await aiInterviewDeps({ session: body.sessionToken }), body, { onSay, ...(speech ? { onSpeak: speech.sink } : {}) }); await speech?.done(); return { status: 200, body: { ok: true, ...out } }; }
     catch (e) { await speech?.done().catch(() => {}); const r = errorResponse(e); return { status: r.status, body: await r.json() }; }
   };
   if (wantsNdjson(req.headers.get("accept"))) return ndjsonResponse((emit) => run((delta, replace) => emit({ type: "text", delta, ...(replace ? { replace: true } : {}) }), wantsSpeech ? speechSink(emit, () => String((body as { language?: unknown }).language ?? "en")) : undefined));

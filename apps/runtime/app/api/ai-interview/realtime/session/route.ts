@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const refused = realtimeRefusal();
     if (refused) return NextResponse.json({ error: refused, code: "realtime_unavailable" }, { status: 501 });
-    const deps = aiInterviewDeps();
+    const deps = await aiInterviewDeps({ session: body?.sessionToken });
     const { session, study } = await interviewFor(deps, body?.sessionToken, { live: true });
     if (session.mode !== "voice" || session.state?.voice?.style !== "realtime") return NextResponse.json({ error: "this interview is not a realtime voice interview", code: "not_realtime" }, { status: 400 });
     const plan = planFor(study, session.language);

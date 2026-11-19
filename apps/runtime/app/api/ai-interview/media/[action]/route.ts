@@ -3,7 +3,7 @@ import { beginUpload, confirmUpload, resumeUpload, MediaError } from "@rescript/
 import { aiInterviewDeps, errorResponse } from "@/lib/aiInterview/runtimeDeps";
 import { interviewFor } from "@/lib/aiInterview/gate";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
-import { supabaseAdmin } from "@/lib/admin";
+import { registerKey, surveyDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,19 +20,19 @@ const KIND = { audio: "answer_audio", video: "answer_upload" } as const;
 export async function POST(req: NextRequest, { params }: { params: { action: string } }) {
   try {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const deps = aiInterviewDeps();
+    const deps = await aiInterviewDeps({ session: body.sessionToken });
     if (deps.store.kind !== "supabase") return NextResponse.json({ error: "recordings need a database and storage (the sandbox keeps none)" }, { status: 403 });
     const { session, study } = await interviewFor(deps, body.sessionToken, { live: true });
     if (!session.consent.recording) return NextResponse.json({ error: "the participant did not agree to recording" }, { status: 403 });
     if (!study.customerId) return NextResponse.json({ error: "this study has no project to store against" }, { status: 409 });
-    /* tenancy: AI interviews and live rooms are routed with their stores (next step) — still the primary */
-    const handle = await mediaDbOrResponse(async () => supabaseAdmin());
+    const handle = await mediaDbOrResponse(() => surveyDb(study.surveyId));
     if ("response" in handle) return handle.response;
     const db = handle.db;
     if (params.action === "ticket") {
       const kind = KIND[String(body.kind ?? "audio") as keyof typeof KIND];
       if (!kind || (kind === "answer_upload" && session.mode !== "video")) return NextResponse.json({ error: "audio, or video in a camera interview" }, { status: 400 });
       const ticket = await beginUpload(db, { kind, customerId: study.customerId, surveyId: study.surveyId, questionId: "ai_interview", sessionId: session.id, responseId: null, answerKey: null, fileName: typeof body.fileName === "string" ? body.fileName : null, mimeType: typeof body.mimeType === "string" ? body.mimeType : null, bytes: Number(body.bytes) || null, durationSeconds: Number(body.durationSeconds) || null, clientToken: typeof body.clientToken === "string" ? body.clientToken : null });
+      if (!(await registerKey("media", ticket.mediaId, study.surveyId))) return NextResponse.json({ error: "The upload could not be started just now — it will be retried." }, { status: 503 });
       return NextResponse.json({ ok: true, ...ticket });
     }
     const mediaId = String(body.mediaId ?? "");

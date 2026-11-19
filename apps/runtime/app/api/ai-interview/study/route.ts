@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: NextRequest) {
   try {
-    const r = await studyInfo(aiInterviewDeps(), req.nextUrl.searchParams.get("token") ?? "", req.nextUrl.searchParams.get("test"));
+    const r = await studyInfo(await aiInterviewDeps({ link: req.nextUrl.searchParams.get("token") }), req.nextUrl.searchParams.get("token") ?? "", req.nextUrl.searchParams.get("test"));
     return NextResponse.json({ ok: true, ...r }, { headers: { "cache-control": "no-store" } });
   } catch (e) { return errorResponse(e); }
 }

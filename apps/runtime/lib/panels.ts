@@ -4,7 +4,6 @@ import type { PanelConfig, PanelOutcome, PanelTarget } from "@rescript/schema";
 import { aiProviderName, openEnvelope } from "@rescript/ai";
 import { attachPanelSession, enterPanel, exitPanel, supabasePanelStore, type PanelEntryResult, type PanelStore } from "@rescript/analytics";
 import type { PanelHasher, PanelRedirect } from "@rescript/engine";
-import { supabaseAdmin } from "@/lib/admin";
 
 /**
  * PANEL RECRUITMENT AT THE RESPONDENT LINKS (2026-10-22, G3) — the AI-interview link (/i/), group sessions (/g/),
@@ -69,9 +68,12 @@ function sandboxPort(): PanelPort {
 }
 
 /** `panels`: the survey link passes its DEPLOYED definition's panels (the AI-interview, group and live links read the saved definition) */
-/** `db`: the survey's client database (surveyDb / sessionDb / keyDb, lib/db.ts); callers not yet routed get the primary */
+/** `db`: the survey's client database (surveyDb / sessionDb / keyDb, lib/db.ts) — required when this runtime has a database */
 export function runtimePanels(opts: { panels?: PanelConfig[] | null; db?: unknown } = {}): PanelPort | null {
-  if (dbConfigured()) return dbPort(supabasePanelStore((opts.db ?? supabaseAdmin()) as never, { openPanelSecret: (sealed, aad) => openEnvelope(sealed, aad), ...(opts.panels ? { panelsOverride: async () => opts.panels ?? null } : {}) }));
+  if (dbConfigured()) {
+    if (!opts.db) throw new Error("runtimePanels: pass the survey's routed database (lib/db.ts surveyDb / sessionDb / keyDb)");
+    return dbPort(supabasePanelStore(opts.db as never, { openPanelSecret: (sealed, aad) => openEnvelope(sealed, aad), ...(opts.panels ? { panelsOverride: async () => opts.panels ?? null } : {}) }));
+  }
   if (sandbox()) return sandboxPort();
   return null;
 }

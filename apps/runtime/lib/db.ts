@@ -61,7 +61,9 @@ export type { TenantScope };
  * While routing is inactive (today) nothing is read or written and every call returns the primary, exactly as before.
  * A key with no directory row also resolves to the primary: a client not yet moved.
  * -------------------------------------------------------------------------------------------------------------- */
-export type DirectoryKind = "survey" | "session" | "group" | "media" | "interview_project";
+/** keyed by an id, or — for bearer links — by the SHA-256 of the token (the token itself is never stored) */
+export const DIRECTORY_KINDS = ["survey", "session", "group", "media", "interview_project", "ai_interview_study", "ai_interview_session", "live_invite", "live_member"] as const;
+export type DirectoryKind = (typeof DIRECTORY_KINDS)[number];
 
 const lookup = (kind: DirectoryKind) => async (key: string) => {
   const { data, error } = await platformDb().from("tenant_directory").select("customer_id").eq("kind", kind).eq("key", key).maybeSingle();
@@ -69,7 +71,7 @@ const lookup = (kind: DirectoryKind) => async (key: string) => {
   return (data?.customer_id as string | undefined) ?? null;
 };
 const directory = makeDirectory<DirectoryKind>({
-  lookups: { survey: lookup("survey"), session: lookup("session"), group: lookup("group"), media: lookup("media"), interview_project: lookup("interview_project") },
+  lookups: Object.fromEntries(DIRECTORY_KINDS.map((k) => [k, lookup(k)])) as Record<DirectoryKind, (key: string) => Promise<string | null>>,
 });
 
 export async function customerOf(kind: DirectoryKind, key: string | null | undefined): Promise<string | null> {
@@ -95,9 +97,14 @@ export async function sessionDb(sessionId: string, surveyId?: unknown) {
  * create something that cannot be found again.
  */
 export async function registerKey(kind: Exclude<DirectoryKind, "survey">, key: string, surveyId: string): Promise<boolean> {
+  return registerKeyLike(kind, key, "survey", surveyId, surveyId);
+}
+
+/** the same, owned by whoever owns another key — a live member by its invite, an AI interview session by its study link */
+export async function registerKeyLike(kind: Exclude<DirectoryKind, "survey">, key: string, ownerKind: DirectoryKind, ownerKey: string, surveyId: string | null = null): Promise<boolean> {
   if (!routingActive(tenancyConfig())) return true;
   try {
-    const customerId = await customerOf("survey", surveyId);
+    const customerId = await customerOf(ownerKind, ownerKey);
     if (!customerId) return true; // a client on the primary needs no row
     const { error } = await platformDb().from("tenant_directory").upsert({ kind, key, customer_id: customerId, survey_id: surveyId }, { onConflict: "kind,key", ignoreDuplicates: true });
     if (error) throw new Error(error.message);

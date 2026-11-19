@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { aiInterviewDeps, errorResponse, isFakeProvider } from "@/lib/aiInterview/runtimeDeps";
+import { registerKeyLike } from "@/lib/db";
+import { aiInterviewDeps, tokenHash, errorResponse, isFakeProvider } from "@/lib/aiInterview/runtimeDeps";
 import { begin, type BeginBody } from "@/lib/aiInterview/service";
 import { ndjsonResponse, wantsNdjson } from "@/lib/aiInterview/ndjson";
 import { speechSink } from "@/lib/aiInterview/speech";
@@ -25,7 +26,16 @@ export async function POST(req: NextRequest) {
   /* G1: the hands-free conversation asks for the reply's speech in the stream (gated sentences + their audio) */
   const wantsSpeech = (body as { speak?: unknown }).speak === true;
   const run = async (onSay?: (t: string, replace?: boolean) => void, speech?: ReturnType<typeof speechSink>) => {
-    try { const out = await begin(aiInterviewDeps(), body, { onSay, ...(speech ? { onSpeak: speech.sink } : {}) }); await speech?.done(); return { status: 200, body: { ok: true, ...out } }; }
+    try {
+      const out = await begin(await aiInterviewDeps({ link: body.token }), body, { onSay, ...(speech ? { onSpeak: speech.sink } : {}) });
+      await speech?.done();
+      /* tenancy: once routing is on, the participant's later calls find the interview's database by this row */
+      const tok = (out as { sessionToken?: unknown }).sessionToken;
+      if (typeof tok === "string" && !(await registerKeyLike("ai_interview_session", tokenHash(tok), "ai_interview_study", String(body.token ?? "").slice(0, 80)))) {
+        return { status: 503, body: { error: "The interview could not be started just now — please try again in a moment.", code: "directory_unavailable" } };
+      }
+      return { status: 200, body: { ok: true, ...out } };
+    }
     catch (e) { await speech?.done().catch(() => {}); const r = errorResponse(e); return { status: r.status, body: await r.json() }; }
   };
   if (wantsNdjson(req.headers.get("accept"))) return ndjsonResponse((emit) => run((delta, replace) => emit({ type: "text", delta, ...(replace ? { replace: true } : {}) }), wantsSpeech ? speechSink(emit, () => String((body as { language?: unknown }).language ?? "en")) : undefined));

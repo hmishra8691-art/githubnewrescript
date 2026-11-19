@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { beginUpload, confirmUpload, resumeUpload, type MediaDb } from "@rescript/media";
 import { supabaseLiveStore, type ChunkMediaOps, type LiveDeps, type LiveMember, type LiveRoomRow, type LiveStore } from "@rescript/analytics/live";
 import { iceServersFor, livekitConfig, livekitToken, newMemberToken, sha256Hex } from "@rescript/analytics/live/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { keyDb, registerKeyLike } from "@/lib/db";
 
 /**
  * LIVE SESSIONS — THE RESPONDENT APP'S SERVER HALF (2026-10-22, G2). Participants and external observers join a
@@ -20,7 +20,26 @@ export const reply = (body: unknown, status = 200) => NextResponse.json(body, { 
 export const hasDatabase = () => !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 export const sandboxForwarding = () => !hasDatabase() && process.env.AI_API_URL === "fake:" && process.env.NODE_ENV !== "production";
 export const studioSandbox = () => (process.env.STUDIO_SANDBOX_URL ?? "http://localhost:3000").replace(/\/+$/, "");
-export const liveStore = (): LiveStore => supabaseLiveStore(supabaseAdmin() as never);
+/**
+ * The live-room store on the room's client database (tenancy, lib/db.ts). A request carries a bearer link: the invite
+ * (join) or the member token this tab was given (every later call). Directory rows are keyed by the token's SHA-256 —
+ * the same hash the room tables keep — and a new member's row is written when they join (`registerMember`).
+ */
+export type LiveKey = { invite: unknown } | { member: unknown };
+const TOKEN = /^[A-Za-z0-9_-]{24,120}$/; // as @rescript/analytics/live
+export async function liveDb(key: LiveKey) {
+  const raw = String(("invite" in key ? key.invite : key.member) ?? "");
+  const hash = TOKEN.test(raw) ? sha256Hex(raw) : null;
+  return keyDb("invite" in key ? "live_invite" : "live_member", hash);
+}
+export const liveStoreOn = (db: unknown): LiveStore => supabaseLiveStore(db as never);
+export async function liveStore(key: LiveKey): Promise<LiveStore> {
+  return liveStoreOn(await liveDb(key));
+}
+/** once routing is on: the member token just issued belongs to the invite's client */
+export async function registerMember(memberToken: string, invite: string): Promise<boolean> {
+  return registerKeyLike("live_member", sha256Hex(memberToken), "live_invite", sha256Hex(invite));
+}
 
 /** a forwarded request to the Studio's sandbox (fake provider, no database) */
 export async function forward(path: string, body: Record<string, unknown>): Promise<NextResponse> {

@@ -2,7 +2,7 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { aiConfigured, aiProviderName, completeJson, JsonTextExtractor } from "@rescript/ai";
-import { supabaseAdmin } from "@/lib/admin";
+import { keyDb } from "@/lib/db";
 import { contextOf, getMeter, meteredSessionAi, meterProvider, type SessionBilling } from "@/lib/metering";
 import { memoryStore } from "./memoryStore";
 import { realtimeRefusal } from "./realtime";
@@ -51,9 +51,24 @@ const model: ModelCaller = async (req, o) => {
   return { value: m.value, costUsd: m.event ? Number(m.event.customerCharge ?? 0) : 0 };
 };
 
-export function aiInterviewDeps(): Deps {
-  let store;
-  if (dbConfigured()) store = supabaseStore(supabaseAdmin() as never);
+export const tokenHash = (t: string) => createHash("sha256").update(t).digest("hex");
+
+/**
+ * Which interview this request is about — the routing key to the client's database (tenancy, lib/db.ts): the study's
+ * public link token (the study page, begin) or the participant's session token (every later call). Directory rows
+ * are keyed by the token's SHA-256, the same hash the store keeps.
+ */
+export type InterviewKey = { link: unknown } | { session: unknown };
+
+async function interviewDb(key: InterviewKey) {
+  if ("link" in key) return keyDb("ai_interview_study", String(key.link ?? "").slice(0, 80));
+  const t = String(key.session ?? "");
+  return keyDb("ai_interview_session", t ? tokenHash(t) : null);
+}
+
+export async function aiInterviewDeps(key: InterviewKey): Promise<Deps> {
+  let store, db: unknown = null;
+  if (dbConfigured()) { db = await interviewDb(key); store = supabaseStore(db as never); }
   else if (isFakeProvider()) store = memoryStore();
   else throw new AiInterviewError("AI interviews need a database on this runtime.", 501, "no_database");
   return {
@@ -61,9 +76,9 @@ export function aiInterviewDeps(): Deps {
     model: aiConfigured() ? model : null,
     now: () => Date.now(),
     newToken: () => randomBytes(32).toString("hex"),
-    hash: async (t) => createHash("sha256").update(t).digest("hex"),
+    hash: async (t) => tokenHash(t),
     /* G3 2026-10-22: panel recruitment and alert events */
-    panels: panelHooks(),
+    panels: panelHooks(db),
     notify: emitFromRuntime,
     /* G1: a realtime voice provider that can be gated (AI_REALTIME_*) */
     realtimeAvailable: realtimeRefusal() === null,
@@ -71,8 +86,8 @@ export function aiInterviewDeps(): Deps {
 }
 
 /** the runtime's panel port as the service's hooks (G3) */
-function panelHooks(): PanelHooks | null {
-  const port = runtimePanels();
+function panelHooks(db: unknown): PanelHooks | null {
+  const port = runtimePanels({ db: db ?? undefined });
   if (!port) return null;
   return {
     async enter(a) {
