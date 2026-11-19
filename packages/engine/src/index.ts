@@ -301,3 +301,4 @@ export * from "./maxdiffOptOut.js";
 export * from "./missingAsset.js";
 export * from "./conjointFixed.js";
 export * from "./designBrief.js";
+export * from "./toolRegistry.js";
