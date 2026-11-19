@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionForMedia } from "@/lib/aiSession";
+import { surveyDb } from "@/lib/db";
 import { mediaDbOrResponse, sessionStt } from "@/lib/mediaRoute";
 import { sttConfigured, sttProviderName } from "@/lib/ai";
 import { transcribe } from "@rescript/ai";
@@ -56,7 +57,7 @@ export async function GET(req: NextRequest) {
   const gate = await gateFor({ sessionId });
   if ("response" in gate) return gate.response;
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(gate.row!.surveyId));
   if ("response" in handle) return handle.response;
 
   try {
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest) {
   const questionId = String(body.questionId ?? "").trim();
   if (!mediaId) return NextResponse.json({ error: "mediaId required" }, { status: 400 });
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(gate.row!.surveyId));
   if ("response" in handle) return handle.response;
   const db = handle.db;
 

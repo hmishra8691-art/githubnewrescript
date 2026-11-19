@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionForMedia } from "@/lib/aiSession";
+import { surveyDb } from "@/lib/db";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { recordSessionUsage } from "@/lib/metering";
 import { sttConfigured } from "@/lib/ai";
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
   const questionId = String(body.questionId ?? "").trim();
   if (!mediaId) return NextResponse.json({ error: "mediaId required" }, { status: 400 });
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(gate.row!.surveyId));
   if ("response" in handle) return handle.response;
   const db = handle.db;
   const log = stageLogger(`session:${gate.row.sessionId.slice(0, 8)}`);

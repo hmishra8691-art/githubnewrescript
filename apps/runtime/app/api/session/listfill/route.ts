@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { sessionDb } from "@/lib/db";
 import { loadQuotaCounts } from "@/lib/session";
 import { pendingListFills, type ResponseState } from "@rescript/engine";
 import { allocateListFills, countersFromRows, type CounterRow, type ListFillStore } from "@/lib/listFillAllocate";
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
   if (typeof sessionId !== "string" || sessionId.length < 16)
     return NextResponse.json({ error: "invalid session" }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = await sessionDb(sessionId, body?.surveyDbId);
   const { data: existing } = await db
     .from("responses")
     .select("id, survey_id, version_id, status, is_test, seed, deleted_at")

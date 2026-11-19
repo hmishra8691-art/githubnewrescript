@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "./admin";
+import { surveyDb } from "./db";
 import { claimedAttributes, observedAttributes, type Attributes, type QuotaMapping, type ScreenerAnswer } from "@rescript/identity";
 import type { AdmissionMode } from "./gateway";
 
@@ -32,6 +32,8 @@ import type { AdmissionMode } from "./gateway";
 
 export interface QuotaProject {
   id: string;
+  /** the survey it recruits for — the routing key to the client's database */
+  surveyId: string;
   /** read here too, so the gateway's setting and the quota's mapping cost one query between them */
   admissionMode: AdmissionMode;
   mapping: QuotaMapping;
@@ -50,7 +52,7 @@ const EMPTY: QuotaProject | null = null;
  */
 export async function quotaProject(surveyId: string): Promise<QuotaProject | null> {
   try {
-    const { data } = await supabaseAdmin()
+    const { data } = await (await surveyDb(surveyId))
       .from("recruitment_projects").select("id, admission_mode, quota_mapping")
       .eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(1).maybeSingle();
     if (!data) return EMPTY;
@@ -59,6 +61,7 @@ export async function quotaProject(surveyId: string): Promise<QuotaProject | nul
     const mapping = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as QuotaMapping;
     return {
       id: String((data as { id: string }).id),
+      surveyId,
       admissionMode: mode === "review" || mode === "observe" ? mode : "off",
       mapping,
       mapped: Object.keys(mapping).length > 0,
@@ -91,7 +94,7 @@ export async function doorCheck(project: QuotaProject, params: Readonly<Record<s
   // nothing resolved means nothing to check: `{} @> {"gender":"male"}` matches no cell, so the round trip is waste
   if (!Object.keys(claimed).length) return OPEN(claimed);
   try {
-    const { data, error } = await supabaseAdmin().rpc("rescript_quota_check", {
+    const { data, error } = await (await surveyDb(project.surveyId)).rpc("rescript_quota_check", {
       p_project: project.id, p_attributes: claimed,
     });
     if (error) throw new Error(error.message);
@@ -105,10 +108,10 @@ export async function doorCheck(project: QuotaProject, params: Readonly<Record<s
 }
 
 /** Record that somebody was turned away at a full cell — the number that justifies widening a quota. */
-export async function recordTurnedAway(projectId: string, cells: string[]): Promise<void> {
+export async function recordTurnedAway(project: QuotaProject, cells: string[]): Promise<void> {
   if (!cells.length) return;
   try {
-    await supabaseAdmin().rpc("rescript_quota_turned_away", { p_project: projectId, p_cells: cells });
+    await (await surveyDb(project.surveyId)).rpc("rescript_quota_turned_away", { p_project: project.id, p_cells: cells });
   } catch (e) {
     console.warn("[rescript:quota] refusal not counted", (e as Error).message);
   }
@@ -121,10 +124,10 @@ export async function recordTurnedAway(projectId: string, cells: string[]): Prom
  * nothing further. Taken HERE rather than at the door because this is the first moment there is a row the
  * abandonment sweep can later find — a hold taken before the session exists is a hold nothing can release.
  */
-export async function holdSlot(projectId: string, sessionId: string, claimed: Attributes): Promise<void> {
+export async function holdSlot(project: QuotaProject, sessionId: string, claimed: Attributes): Promise<void> {
   try {
-    await supabaseAdmin().rpc("rescript_quota_hold_session", {
-      p_project: projectId, p_session: sessionId, p_claimed: claimed,
+    await (await surveyDb(project.surveyId)).rpc("rescript_quota_hold_session", {
+      p_project: project.id, p_session: sessionId, p_claimed: claimed,
     });
   } catch (e) {
     console.warn("[rescript:quota] hold not taken (the complete will still count)", (e as Error).message);
@@ -132,9 +135,9 @@ export async function holdSlot(projectId: string, sessionId: string, claimed: At
 }
 
 /** The session ended without a complete. Give the slots back. Idempotent; a session with no hold is fine. */
-export async function releaseSlot(sessionId: string, outcome: string): Promise<void> {
+export async function releaseSlot(surveyId: string, sessionId: string, outcome: string): Promise<void> {
   try {
-    await supabaseAdmin().rpc("rescript_quota_release_session", { p_session: sessionId, p_outcome: outcome });
+    await (await surveyDb(surveyId)).rpc("rescript_quota_release_session", { p_session: sessionId, p_outcome: outcome });
   } catch (e) {
     console.warn("[rescript:quota] slot not released", (e as Error).message);
   }
@@ -155,11 +158,11 @@ export interface CountedComplete {
  * people finishing into the last slot of a cell is a race the database has to settle. See migration 0089.
  */
 export async function countComplete(
-  projectId: string, sessionId: string, observed: Attributes,
+  project: QuotaProject, sessionId: string, observed: Attributes,
 ): Promise<CountedComplete | null> {
   try {
-    const { data, error } = await supabaseAdmin().rpc("rescript_quota_complete_session", {
-      p_project: projectId, p_session: sessionId, p_observed: observed,
+    const { data, error } = await (await surveyDb(project.surveyId)).rpc("rescript_quota_complete_session", {
+      p_project: project.id, p_session: sessionId, p_observed: observed,
     });
     if (error) throw new Error(error.message);
     const r = Array.isArray(data) ? data[0] : data;

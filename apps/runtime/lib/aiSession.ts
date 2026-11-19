@@ -2,7 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { SurveyDefinition } from "@rescript/schema";
 import { resolveRunDefinition } from "@rescript/quality/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { sessionDb } from "@/lib/db";
 import { aiConfigured, aiProviderName } from "@/lib/ai";
 import type { SessionBilling } from "@/lib/metering";
 
@@ -65,7 +65,8 @@ export async function definitionForProviderCall(
    * on, while a 500 reads as a bug and sends somebody looking for one.
    */
   let db;
-  try { db = supabaseAdmin(); }
+  /* the runner sends the survey id with each session call (`surveyDbId`): the routing key to the client's database */
+  try { db = await sessionDb(sessionId, body?.surveyDbId); }
   catch { return { response: NextResponse.json({ error: "this runtime has no database configured" }, { status: 501 }) }; }
 
   const { data: existing } = await db

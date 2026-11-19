@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { observed } from "@rescript/storage/observe";
-import { supabaseAdmin } from "@/lib/admin";
+import { sessionDb, surveyDb } from "@/lib/db";
 import { loadQuotaCounts, qualitySalt } from "@/lib/session";
 import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
@@ -53,7 +53,8 @@ export const POST = observed(async function POST(req: NextRequest) {
   /* D6 / 0078: the client's save sequence number — an intermediate save older than the row's is not written */
   const seq = parseSaveSeq(body?.seq);
 
-  const db = supabaseAdmin();
+  /* the runner sends the survey id with every save (`surveyDbId`): the routing key to the client's database */
+  const db = await sessionDb(sessionId, body?.surveyDbId);
   const { data: existing } = await db
     .from("responses")
     .select("id, survey_id, version_id, status, respondent_id, is_test, respondent_code, deleted_at, seed, started_at, surveys(customer_id)")
@@ -308,7 +309,7 @@ export const POST = observed(async function POST(req: NextRequest) {
       if (project) {
         if (newStatus === "complete") {
           const observed = observedFor(project, (update.answers as Record<string, unknown>) ?? answers ?? {});
-          const counted = await countComplete(project.id, sessionId, observed);
+          const counted = await countComplete(project, sessionId, observed);
           if (counted && (counted.overshot.length || counted.nowFull.length || counted.corrected)) {
             console.info("[rescript:quota] complete counted", JSON.stringify({
               survey: existing.survey_id.slice(0, 8), session: sessionId.slice(0, 8),
@@ -318,7 +319,7 @@ export const POST = observed(async function POST(req: NextRequest) {
             }));
           }
         } else {
-          await releaseSlot(sessionId, newStatus);
+          await releaseSlot(existing.survey_id, sessionId, newStatus);
         }
       }
     }
@@ -477,7 +478,7 @@ function withRecomputed<T extends { answers: unknown; calculated: unknown }>(pos
 async function storedBalanceClaims(def: SurveyDefinition, surveyId: string, isTest: boolean, sessionId: string): Promise<Record<string, string>> {
   if (!hasExactBalance(def)) return {};
   try {
-    const { data, error } = await supabaseAdmin().from("balance_claims").select("balance_key, arms").eq("survey_id", surveyId).eq("is_test", isTest).eq("session_id", sessionId).in("status", ["active", "completed"]);
+    const { data, error } = await (await surveyDb(surveyId)).from("balance_claims").select("balance_key, arms").eq("survey_id", surveyId).eq("is_test", isTest).eq("session_id", sessionId).in("status", ["active", "completed"]);
     if (error || !Array.isArray(data)) return {};
     const out: Record<string, string> = {};
     for (const r of data as { balance_key: string; arms: string[] }[]) { const v = balanceVariableForKey(def, r.balance_key); if (v && Array.isArray(r.arms)) out[v] = r.arms.join(","); }

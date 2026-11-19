@@ -69,8 +69,9 @@ function sandboxPort(): PanelPort {
 }
 
 /** `panels`: the survey link passes its DEPLOYED definition's panels (the AI-interview, group and live links read the saved definition) */
-export function runtimePanels(opts: { panels?: PanelConfig[] | null } = {}): PanelPort | null {
-  if (dbConfigured()) return dbPort(supabasePanelStore(supabaseAdmin() as never, { openPanelSecret: (sealed, aad) => openEnvelope(sealed, aad), ...(opts.panels ? { panelsOverride: async () => opts.panels ?? null } : {}) }));
+/** `db`: the survey's client database (surveyDb / sessionDb / keyDb, lib/db.ts); callers not yet routed get the primary */
+export function runtimePanels(opts: { panels?: PanelConfig[] | null; db?: unknown } = {}): PanelPort | null {
+  if (dbConfigured()) return dbPort(supabasePanelStore((opts.db ?? supabaseAdmin()) as never, { openPanelSecret: (sealed, aad) => openEnvelope(sealed, aad), ...(opts.panels ? { panelsOverride: async () => opts.panels ?? null } : {}) }));
   if (sandbox()) return sandboxPort();
   return null;
 }

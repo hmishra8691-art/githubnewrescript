@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { surveyDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "survey required" }, { status: 400 });
   }
 
-  const db = supabaseAdmin();
+  const db = await surveyDb(surveyId);
   const { data, error } = await db
     .from("surveys")
     .select("id, revision, current_version_id, draft_updated_at")

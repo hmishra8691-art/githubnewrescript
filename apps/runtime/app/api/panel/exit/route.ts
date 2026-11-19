@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { PanelConfig } from "@rescript/schema";
 import { outcomeForSurveyEnd } from "@rescript/engine";
-import { supabaseAdmin } from "@/lib/admin";
+import { sessionDb } from "@/lib/db";
 import { runtimePanels } from "@/lib/panels";
 
 export const dynamic = "force-dynamic";
@@ -29,14 +29,14 @@ export async function GET(req: NextRequest) {
   const r = req.nextUrl.searchParams.get("r") ?? "";
   if (!/^[0-9a-f-]{16,64}$/i.test(r)) return page("This link is not valid", "<p>Please return to the panel you came from.</p>", 400);
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return page("Thank you", "<p>(Test environment: the panel exit needs a database.)</p>", 503);
-  const db = supabaseAdmin();
+  const db = await sessionDb(r);
   const { data: resp } = await db.from("responses").select("session_id, survey_id, version_id, status, is_test, deleted_at").eq("session_id", r).maybeSingle();
   if (!resp || resp.deleted_at) return page("This link is not valid", "<p>Please return to the panel you came from.</p>", 404);
   const outcome = outcomeForSurveyEnd(String(resp.status));
   if (!outcome) return page("Not finished yet", "<p>This survey has not been completed yet. Please go back and finish it.</p>", 409);
   const { data: ver } = resp.version_id ? await db.from("survey_versions").select("definition").eq("id", resp.version_id).maybeSingle() : { data: null };
   const panels = ((ver?.definition as { panels?: PanelConfig[] } | null)?.panels ?? []) as PanelConfig[];
-  const port = runtimePanels({ panels });
+  const port = runtimePanels({ panels, db });
   const out = port ? await port.exit({ sessionRef: String(resp.session_id), outcome, status: String(resp.status) }) : null;
   if (!out) return page("Thank you", "<p>Thank you for taking part. You can close this page.</p>");
   if (out.url) return NextResponse.redirect(out.url, { status: 302, headers: { "cache-control": "no-store" } });

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionForMedia } from "@/lib/aiSession";
+import { registerKey, surveyDb } from "@/lib/db";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { beginUpload, MediaError, stageLogger, answerVideoRule, type MediaKind } from "@rescript/media";
 import { isVideoRecording, videoRecordingConfig } from "@rescript/engine";
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
     if (!verdict.ok) return NextResponse.json({ error: verdict.message }, { status: /MB/.test(verdict.message ?? "") ? 413 : 415 });
   }
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(gate.row!.surveyId));
   if ("response" in handle) return handle.response;
 
   try {
@@ -70,6 +71,8 @@ export async function POST(req: NextRequest) {
       durationSeconds: Number(body.durationSeconds) || null,
       clientToken: typeof body.clientToken === "string" ? body.clientToken : null,
     });
+    /* tenancy: once routing is on, playback (/api/media/<id>) finds the recording's database through this row */
+    if (!(await registerKey("media", ticket.mediaId, gate.row.surveyId))) return NextResponse.json({ error: "The upload could not be started just now — it will be retried." }, { status: 503 });
     stageLogger(`session:${gate.row.sessionId.slice(0, 8)}`)("upload_url_issued", { mediaId: ticket.mediaId, kind, questionId });
     return NextResponse.json({ ok: true, ...ticket });
   } catch (e) {

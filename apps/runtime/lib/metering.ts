@@ -1,7 +1,7 @@
 import "server-only";
 import { Meter, MemoryMeterStore, SupabaseMeterStore, estimateTokens, type MeterContext, type UsageEvent, type UsageSpec, type Environment } from "@rescript/billing";
 import { aiModelName, chatUsageUnits, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "./db";
 
 /**
  * THE RUNTIME'S METERING SERVICE.
@@ -29,7 +29,7 @@ declare global {
 export function getMeter(): Meter {
   if (!globalThis.__rescriptRuntimeMeter) {
     globalThis.__rescriptRuntimeMeter = dbConfigured()
-      ? new Meter(new SupabaseMeterStore(supabaseAdmin()))
+      ? new Meter(new SupabaseMeterStore(platformDb()))
       : new Meter(new MemoryMeterStore(), { seedBalance: Number(process.env.BILLING_SANDBOX_CREDITS ?? "100") || 100, cacheMs: 0 });
   }
   return globalThis.__rescriptRuntimeMeter;

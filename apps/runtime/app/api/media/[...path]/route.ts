@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { keyDb } from "@/lib/db";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { freshUrl, MediaError, PLAYBACK_URL_SECONDS } from "@rescript/media";
 
@@ -36,7 +36,7 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
   if (!/^[0-9a-f-]{36}$/i.test(id) || (params.path?.length ?? 0) > 2) {
     return NextResponse.json({ error: "no such recording" }, { status: 404 });
   }
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => keyDb("media", id));
   if ("response" in handle) return handle.response;
 
   const { data: row } = await handle.db.from("media_objects")
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
   if (!row || row.status !== "stored") return NextResponse.json({ error: "no such recording" }, { status: 404 });
 
   if (STIMULUS_KINDS.has(row.kind as string)) {
-    const { data: survey } = await supabaseAdmin().from("surveys").select("id, status").eq("id", row.survey_id).maybeSingle();
+    const { data: survey } = await (await keyDb("media", id)).from("surveys").select("id, status").eq("id", row.survey_id).maybeSingle();
     if (!survey) return NextResponse.json({ error: "no such recording" }, { status: 404 });
   } else {
     const s = req.nextUrl.searchParams.get("s") ?? "";

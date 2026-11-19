@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "./admin";
+import { platformDb, surveyDb } from "./db";
 import {
   decideAdmission, keyRing, tokensForArrival, type AdmissionDecision, type DedupeMode,
   type KeyRing, type MatchToken, type ParticipationState, type Resolution,
@@ -76,7 +76,7 @@ async function projectMode(surveyId: string): Promise<{ mode: DedupeMode; custom
   const hit = modeCache.get(surveyId);
   if (hit && Date.now() - hit.at < MODE_TTL_MS) return { mode: hit.mode, customerId: hit.customerId };
 
-  const db = supabaseAdmin();
+  const db = await surveyDb(surveyId);
   const { data, error } = await db
     .from("recruitment_projects")
     .select("customer_id, dedupe_mode")
@@ -151,7 +151,8 @@ export async function admitArrival(
   });
 
   try {
-    const db = supabaseAdmin();
+    /* the respondent trust ids and the participation ledger are shared, central (tables.json) */
+    const db = platformDb();
 
     const { data: resolved, error: resolveError } = await db.rpc("rescript_rtid_resolve", {
       p_customer: customerId,
@@ -214,7 +215,7 @@ export async function admitArrival(
 /** Tie an admitted arrival's ledger row to the session that was actually created. */
 export async function attachParticipation(ledgerId: string, sessionId: string): Promise<void> {
   try {
-    await supabaseAdmin().rpc("rescript_rtid_settle", {
+    await platformDb().rpc("rescript_rtid_settle", {
       p_ledger: ledgerId, p_state: "in_survey", p_response: null, p_outcome: null, p_session: sessionId,
     });
   } catch (e) {

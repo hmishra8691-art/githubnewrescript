@@ -3,6 +3,7 @@ import { beginUpload, confirmUpload, resumeUpload, MediaError } from "@rescript/
 import { aiInterviewDeps, errorResponse } from "@/lib/aiInterview/runtimeDeps";
 import { interviewFor } from "@/lib/aiInterview/gate";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
+import { supabaseAdmin } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,7 +25,8 @@ export async function POST(req: NextRequest, { params }: { params: { action: str
     const { session, study } = await interviewFor(deps, body.sessionToken, { live: true });
     if (!session.consent.recording) return NextResponse.json({ error: "the participant did not agree to recording" }, { status: 403 });
     if (!study.customerId) return NextResponse.json({ error: "this study has no project to store against" }, { status: 409 });
-    const handle = mediaDbOrResponse();
+    /* tenancy: AI interviews and live rooms are routed with their stores (next step) — still the primary */
+    const handle = await mediaDbOrResponse(async () => supabaseAdmin());
     if ("response" in handle) return handle.response;
     const db = handle.db;
     if (params.action === "ticket") {

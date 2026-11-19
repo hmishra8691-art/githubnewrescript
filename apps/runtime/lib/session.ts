@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "./admin";
+import { surveyDb, customerDb } from "./db";
 import type { LoadedDeployment } from "./deployment";
 import type { QuotaCounts } from "@rescript/engine";
 import { hashIdentifier } from "@rescript/quality/server";
@@ -31,7 +31,7 @@ function sampleColumns(opts: { sampleSource?: string | null; sampleSourceRespond
  * the log, exactly as the quota counters fall back for pre-0006 databases.
  */
 async function insertResponseRow(
-  db: ReturnType<typeof supabaseAdmin>,
+  db: ReturnType<typeof customerDb>,
   row: Record<string, unknown>,
 ): Promise<{ error: string } | null> {
   const { error } = await db.from("responses").insert(row);
@@ -93,7 +93,7 @@ export async function createSession(
     }
   | { error: string }
 > {
-  const db = supabaseAdmin();
+  const db = await surveyDb(dep.surveyId);
   const sessionId = crypto.randomUUID().replace(/-/g, "");
   const seed = Math.floor(Math.random() * 2 ** 31);
 
@@ -203,7 +203,7 @@ export async function createSession(
  * fallback for a database where 0006 has not been applied.
  */
 export async function loadQuotaCounts(surveyId: string, isTest: boolean): Promise<QuotaCounts> {
-  const db = supabaseAdmin();
+  const db = await surveyDb(surveyId);
   let { data, error } = (await db
     .from("quota_counts")
     .select("quota_id, cell_id, count")

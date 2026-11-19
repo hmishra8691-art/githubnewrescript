@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "./admin";
+import { platformDb, surveyDb } from "./db";
 import { SurveyDefinition } from "@rescript/schema";
 import { decideTestBuild, versionIdToFetch, type TestBuild } from "@rescript/engine";
 import { ensureElementIds } from "@rescript/engine";
@@ -40,8 +40,8 @@ export async function loadDeployment(
   studySlug: string,
   mode: "test" | "live",
 ): Promise<LoadedDeployment | null> {
-  const db = supabaseAdmin();
-  const { data: dep } = await db
+  /* the link directory (platform), then the survey's own client database */
+  const { data: dep } = await platformDb()
     .from("deployments")
     .select("id, survey_id, version_id, mode, active")
     .eq("client_slug", clientSlug)
@@ -50,6 +50,7 @@ export async function loadDeployment(
     .eq("active", true)
     .maybeSingle();
   if (!dep) return null;
+  const db = await surveyDb(dep.survey_id as string);
 
   /*
    * A published version is FROZEN by a database trigger (0012) — deliberately,
@@ -108,8 +109,7 @@ export async function loadTestBuild(
   studySlug: string,
   requestedVersionId: string | null,
 ): Promise<LoadedTestBuild> {
-  const db = supabaseAdmin();
-  const { data: dep } = await db
+  const { data: dep } = await platformDb()
     .from("deployments")
     .select("id, survey_id, version_id, mode, active")
     .eq("client_slug", clientSlug)
@@ -118,6 +118,7 @@ export async function loadTestBuild(
     .eq("active", true)
     .maybeSingle();
   if (!dep) return { kind: "none" };
+  const db = await surveyDb(dep.survey_id as string);
 
   const { data: survey, error: surveyErr } = await db
     .from("surveys")

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash, randomBytes } from "node:crypto";
 import { participantAction, supabaseGroupStore } from "@rescript/analytics";
-import { supabaseAdmin } from "@/lib/admin";
+import { keyDb } from "@/lib/db";
 import { panelParams, runtimePanels } from "@/lib/panels";
 import { detectAbuse, detectDistress, scanUntrusted } from "@rescript/engine";
 import { emitFromRuntime, studioPath } from "@/lib/notifyEmit";
@@ -51,7 +51,7 @@ async function participant(body: Record<string, unknown>): Promise<{ status: num
   }
   try {
     const { params: _p, ...rest } = body;
-    const r = await participantAction(supabaseGroupStore(supabaseAdmin(), {}), rest, { now: () => new Date().toISOString(), hash: sha, newToken });
+    const r = await participantAction(supabaseGroupStore(await keyDb("group", String(body.code ?? "")), {}), rest, { now: () => new Date().toISOString(), hash: sha, newToken });
     return reply(r.body, r.status);
   } catch (e) {
     console.warn("[rescript:group] participant request failed", JSON.stringify({ error: (e as Error).message }));
@@ -66,10 +66,10 @@ async function participant(body: Record<string, unknown>): Promise<{ status: num
  * itself is never stored). VIEW: once the conversation has ended, the panel's end link (complete) and code.
  */
 async function withPanels(body: Record<string, unknown>, run: () => Promise<{ status: number; body: unknown }>): Promise<{ status: number; body: unknown }> {
-  const panels = runtimePanels();
   const action = String(body.action ?? "view");
-  if (!panels || (action !== "join" && action !== "view")) return run();
   const code = String(body.code ?? "");
+  const panels = action === "join" || action === "view" ? runtimePanels({ db: process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY ? await keyDb("group", code) : undefined }) : null;
+  if (!panels) return run();
   if (action === "join") {
     const surveyId = await surveyOf(code);
     if (!surveyId) return run();
@@ -93,7 +93,7 @@ async function withPanels(body: Record<string, unknown>, run: () => Promise<{ st
 
 async function surveyOf(code: string): Promise<string | null> {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return "sandbox";
-  const { data } = await supabaseAdmin().from("qual_group_sessions").select("survey_id").eq("join_code", code).maybeSingle();
+  const { data } = await (await keyDb("group", code)).from("qual_group_sessions").select("survey_id").eq("join_code", code).maybeSingle();
   return (data?.survey_id as string) ?? null;
 }
 

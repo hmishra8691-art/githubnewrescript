@@ -6,6 +6,7 @@ import { admitArrival } from "@/lib/identity";
 import { runGateway } from "@/lib/gateway";
 import { panelParams, runtimePanels } from "@/lib/panels";
 import { doorCheck, quotaProject, recordTurnedAway } from "@/lib/quota";
+import { surveyDb } from "@/lib/db";
 import type { PanelConfig } from "@rescript/schema";
 
 export const dynamic = "force-dynamic";
@@ -70,7 +71,7 @@ export async function GET(req: NextRequest, { params }: { params: { client: stri
    * participant id, and it already refuses a second arrival from the same panel id (0072).
    */
   const panelList = (dep.definition as { panels?: PanelConfig[] }).panels;
-  const panels = Array.isArray(panelList) && panelList.length ? runtimePanels({ panels: panelList }) : null;
+  const panels = Array.isArray(panelList) && panelList.length ? runtimePanels({ panels: panelList, db: await surveyDb(dep.surveyId) }) : null;
   const entry = panels
     ? await panels.enter({ surveyId: dep.surveyId, target: "survey", targetRef: dep.versionId ?? null, params: panelParams(urlParams), isTest: false })
     : null;
@@ -108,7 +109,7 @@ export async function GET(req: NextRequest, { params }: { params: { client: stri
   if (project?.mapped && admission.admit) {
     const door = await doorCheck(project, panelParams(urlParams));
     if (!door.admit) {
-      await recordTurnedAway(project.id, door.fullCells);
+      await recordTurnedAway(project, door.fullCells);
       console.info("[rescript:quota] turned away at the door", JSON.stringify({
         survey: dep.surveyId.slice(0, 8), cells: door.fullCells,
       }));

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { observed } from "@rescript/storage/observe";
-import { supabaseAdmin } from "@/lib/admin";
+import { registerKey, surveyDb } from "@/lib/db";
 import { BLOCKING_STATUSES, loadDeployment, loadTestBuild, type LoadedDeployment } from "@/lib/deployment";
 import { createSession } from "@/lib/session";
 import { clientIp } from "@rescript/quality/server";
@@ -92,7 +92,7 @@ export const POST = observed(async function POST(req: NextRequest) {
   }
   if (!d) return NextResponse.json({ error: "Survey not found" }, { status: 404 });
   const isTest = mode === "test";
-  const db = supabaseAdmin();
+  const db = await surveyDb(d.surveyId);
 
   /*
    * RUNTIME-02 (audit 2026-10-16). The live page refuses a paused or closed
@@ -211,7 +211,7 @@ export const POST = observed(async function POST(req: NextRequest) {
    * when that panel id already took part (atomic in 0072), or sent back over quota when the panel's completes are
    * met. An admitted entry is tied to the new response; the signed exit is /api/panel/exit?r={{response.id}}.
    */
-  const panels = Array.isArray((d.definition as { panels?: unknown[] }).panels) && (d.definition as { panels: unknown[] }).panels.length ? runtimePanels({ panels: (d.definition as { panels: PanelConfig[] }).panels }) : null;
+  const panels = Array.isArray((d.definition as { panels?: unknown[] }).panels) && (d.definition as { panels: unknown[] }).panels.length ? runtimePanels({ panels: (d.definition as { panels: PanelConfig[] }).panels, db }) : null;
   const panelEntry = panels ? await panels.enter({ surveyId: d.surveyId, target: "survey", targetRef: d.versionId ?? null, params: panelParams(urlParams), isTest }) : null;
   if (panelEntry && (panelEntry.kind === "refused" || panelEntry.kind === "duplicate")) return NextResponse.json({ error: panelEntry.message, code: `panel_${panelEntry.kind}` }, { status: 409 });
   if (panelEntry && panelEntry.kind === "over_quota") return NextResponse.json({ error: panelEntry.message, code: "panel_over_quota", redirectUrl: panelEntry.redirect.url }, { status: 409 });
@@ -246,6 +246,10 @@ export const POST = observed(async function POST(req: NextRequest) {
     sampleSourceRespondent: sample.respondent,
   });
   if ("error" in session) return NextResponse.json({ error: session.error }, { status: 403 });
+  /* tenancy: once routing is on, a session's directory row is what later calls without the survey id find it by */
+  if (!(await registerKey("session", session.sessionId, d.surveyId))) {
+    return NextResponse.json({ error: "The survey could not be started just now. Please try again in a moment." }, { status: 503 });
+  }
   if (panels && panelEntry?.kind === "admitted") await panels.attach(panelEntry.entryId, session.sessionId);
   if (admission.ledgerId) await attachParticipation(admission.ledgerId, session.sessionId);
 
@@ -262,7 +266,7 @@ export const POST = observed(async function POST(req: NextRequest) {
    */
   if (!isTest) {
     const project = await quotaProject(d.surveyId);
-    if (project?.mapped) await holdSlot(project.id, session.sessionId, claimedFor(project, panelParams(urlParams)));
+    if (project?.mapped) await holdSlot(project, session.sessionId, claimedFor(project, panelParams(urlParams)));
   }
 
   /*

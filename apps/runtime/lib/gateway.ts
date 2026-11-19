@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
-import { supabaseAdmin } from "./admin";
+import { platformDb } from "./db";
 import { admissionRisk, type AdmissionSignals } from "@rescript/quality";
 import type { QualityConfig } from "@rescript/schema";
 
@@ -65,7 +65,8 @@ async function signalsFor(
   trustUuid: string | null,
   deviceToken: string | null,
 ): Promise<AdmissionSignals> {
-  const db = supabaseAdmin();
+  /* shared fraud intelligence stays central (supabase/tenancy/tables.json: shared) */
+  const db = platformDb();
   const out: AdmissionSignals = {};
 
   if (networkToken) {
@@ -194,7 +195,7 @@ async function issue(
   openCase: boolean,
 ): Promise<{ decisionId: string | null; caseId: string | null }> {
   try {
-    const { data, error } = await supabaseAdmin().rpc("rescript_admission_issue", {
+    const { data, error } = await platformDb().rpc("rescript_admission_issue", {
       p_customer: input.customerId, p_survey: input.surveyId, p_trust: input.trustUuid,
       p_ledger: input.ledgerId, p_integration: input.integrationId ?? null,
       p_decision: decision, p_risk: risk.score, p_band: risk.band, p_reasons: risk.reasons,
@@ -222,7 +223,7 @@ export async function redeemAccessToken(
   token: string, surveyId: string, sessionId: string,
 ): Promise<{ ok: boolean; reason: string; ledgerId: string | null }> {
   try {
-    const { data, error } = await supabaseAdmin().rpc("rescript_admission_redeem", {
+    const { data, error } = await platformDb().rpc("rescript_admission_redeem", {
       p_token_hash: hashAccessToken(token), p_survey: surveyId, p_session: sessionId, p_network_token: null,
     });
     if (error) throw new Error(error.message);

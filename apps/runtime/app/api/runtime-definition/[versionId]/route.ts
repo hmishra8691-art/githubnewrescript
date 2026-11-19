@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb, surveyDb } from "@/lib/db";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { definitionAccess, isVersionId, DENY_CACHE_CONTROL, type DeploymentRow } from "@/lib/definitionAccess";
 import { respondentDefinition } from "@/lib/assessmentPayload";
@@ -43,14 +43,15 @@ export async function GET(_req: NextRequest, { params }: { params: { versionId: 
     NextResponse.json({ error: "not found" }, { status: 404, headers: { "cache-control": cacheControl } });
   if (!isVersionId(params.versionId)) return notFound(DENY_CACHE_CONTROL);
 
-  const db = supabaseAdmin();
-  const { data: deps, error: depErr } = await db
+  /* the link directory (platform), then the survey's own client database */
+  const { data: deps, error: depErr } = await platformDb()
     .from("deployments")
     .select("version_id, mode, active, survey_id")
     .eq("version_id", params.versionId)
     .eq("active", true);
   if (depErr) return notFound(DENY_CACHE_CONTROL);
   const surveyId = (deps ?? [])[0]?.survey_id as string | undefined;
+  const db = await surveyDb(surveyId);
   const { data: survey } = surveyId
     ? await db.from("surveys").select("status").eq("id", surveyId).maybeSingle()
     : { data: null };

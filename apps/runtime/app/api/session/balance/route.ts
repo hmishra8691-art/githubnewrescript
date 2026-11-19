@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SurveyDefinition } from "@rescript/schema";
 import { hasExactBalance, type ResponseState } from "@rescript/engine";
 import { resolveRunDefinition } from "@rescript/quality/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { sessionDb } from "@/lib/db";
 import { aiProviderName } from "@/lib/ai";
 import { claimBalances, missingBalanceMigration, sandboxBalanceStore, type BalanceStore } from "@/lib/balanceClaim";
 
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   let db;
-  try { db = supabaseAdmin(); }
+  try { db = await sessionDb(sessionId, body?.surveyDbId); }
   catch { return NextResponse.json({ error: "this runtime has no database configured" }, { status: 501 }); }
   const { data: existing } = await db
     .from("responses")

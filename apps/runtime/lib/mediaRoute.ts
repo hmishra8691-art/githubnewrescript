@@ -1,6 +1,6 @@
 import "server-only";
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import type { customerDb } from "@/lib/db";
 import { meteredSessionStt, type SessionBilling } from "@/lib/metering";
 import type { MediaDb, MeteredRun } from "@rescript/media";
 import { buildMediaStores } from "@rescript/media/server";
@@ -15,9 +15,11 @@ import { buildMediaStores } from "@rescript/media/server";
  * context differs, because a researcher's question is charged to the project
  * and a respondent's answer to the session.
  */
-export function mediaDb(): MediaDb {
+type Db = ReturnType<typeof customerDb>;
+
+/** the media pipeline on ONE client's database — the caller says which (surveyDb / sessionDb / keyDb, lib/db.ts) */
+export function mediaDb(admin: Db): MediaDb {
   /* the stores beside the handle — see `apps/studio/lib/mediaRoute.ts` and `@rescript/media/server` */
-  const admin = supabaseAdmin();
   return {
     from: (t: string) => admin.from(t),
     rpc: (fn: string, args: Record<string, unknown>) => admin.rpc(fn as never, args as never),
@@ -25,9 +27,9 @@ export function mediaDb(): MediaDb {
   } as unknown as MediaDb;
 }
 
-export function mediaDbOrResponse(): { db: MediaDb } | { response: NextResponse } {
+export async function mediaDbOrResponse(open: () => Promise<Db>): Promise<{ db: MediaDb } | { response: NextResponse }> {
   try {
-    return { db: mediaDb() };
+    return { db: mediaDb(await open()) };
   } catch (e) {
     return { response: NextResponse.json({ error: (e as Error).message }, { status: 501 }) };
   }

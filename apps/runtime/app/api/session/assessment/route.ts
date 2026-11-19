@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { sessionDb } from "@/lib/db";
 import { resolveRunDefinition } from "@rescript/quality/server";
 import { resultForSession } from "@/lib/assessmentPayload";
 
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as { sessionId?: unknown; build?: unknown } | null;
   const sessionId = typeof body?.sessionId === "string" ? body.sessionId : "";
   if (sessionId.length < 16 || sessionId.length > 200) return NextResponse.json({ error: "invalid session" }, { status: 400, headers: noStore });
-  const db = supabaseAdmin();
+  const db = await sessionDb(sessionId, (body as { surveyDbId?: unknown } | null)?.surveyDbId);
   const { data: row } = await db.from("responses").select("id, survey_id, version_id, status, is_test, answers, deleted_at").eq("session_id", sessionId).maybeSingle();
   if (!row || row.deleted_at) return NextResponse.json({ error: "unknown session" }, { status: 404, headers: noStore });
   if (row.status !== "complete") return NextResponse.json({ error: "results are available after the paper is submitted" }, { status: 409, headers: noStore });

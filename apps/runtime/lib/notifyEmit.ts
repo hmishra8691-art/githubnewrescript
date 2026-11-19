@@ -2,7 +2,7 @@ import "server-only";
 import { normaliseNotifyInput, responseEventData, RESPONSE_EVENT_OF, buildVariableDictionary, flattenVariables, type NotifyEmitInput } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import { aiProviderName, deriveKey, signedHeader } from "@rescript/ai";
-import { supabaseAdmin } from "@/lib/admin";
+import { surveyDb } from "./db";
 
 /**
  * ALERT EVENTS FROM THE RESPONDENT RUNTIME (2026-10-22, G3) — an AI interview's distress / abuse / injection flag,
@@ -33,7 +33,7 @@ export async function emitFromRuntime(input: NotifyEmitInput): Promise<void> {
     if (!dbConfigured()) return;
     const n = normaliseNotifyInput(input, Date.now());
     if ("error" in n) { console.warn("[rescript:notify] event refused", JSON.stringify({ type: input.type, error: n.error })); return; }
-    const db = supabaseAdmin();
+    const db = await surveyDb(input.surveyId);
     let customerId = input.customerId ?? null;
     if (!customerId) { const { data } = await db.from("surveys").select("customer_id, title").eq("id", input.surveyId).maybeSingle(); customerId = (data?.customer_id as string) ?? null; if (!n.payload.studyTitle) n.payload.studyTitle = (data?.title as string) ?? null; }
     const ins = await db.from("notify_events").insert({ idempotency_key: n.idempotencyKey, customer_id: customerId, survey_id: input.surveyId, type: n.type, ref: input.ref ?? null, payload: n.payload, source: "runtime", is_test: !!input.isTest }).select("id").single();
