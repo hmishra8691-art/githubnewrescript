@@ -303,3 +303,4 @@ export * from "./conjointFixed.js";
 export * from "./designBrief.js";
 export * from "./toolRegistry.js";
 export * from "./portalPolicy.js";
+export * from "./scorecard.js";
