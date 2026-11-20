@@ -18,7 +18,7 @@ const PAGE = 300;
 const missing = (m: string | undefined) => /portal_scorecards|portal_benchmarks|schema cache|does not exist/i.test(m ?? "");
 
 /** the version respondents are taking now — the one whose portal settings the portal applies */
-async function liveDefinition(ctx: ProjectContext): Promise<SurveyDefinition | null> {
+export async function liveDefinition(ctx: ProjectContext): Promise<SurveyDefinition | null> {
   const { data: deps } = await platformDb().from("deployments").select("version_id").eq("survey_id", ctx.surveyId).eq("mode", "live").eq("active", true).limit(1);
   const versionId = ((deps ?? []) as Row[])[0]?.version_id;
   if (typeof versionId !== "string") return null;

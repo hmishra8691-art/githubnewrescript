@@ -55,8 +55,9 @@ test("backward compatibility: every existing role answers every existing capabil
 test("backward compatibility: the two new capabilities go to exactly the roles that held responses.read", () => {
   for (const role of LEGACY_ROLES) {
     const newOnes = capabilitiesOf(role).filter((c) => !CAPABILITIES_BEFORE.includes(c));
-    assert.deepEqual(newOnes.sort(), BEFORE[role].includes("responses.read") ? [...NEW_CAPABILITIES].sort() : [],
-      `${role} gains only the split of a power it already had`);
+    /* 2026-11-20: opening ONE respondent's portal results is new, and no legacy role but the owner (who holds everything) gains it */
+    const expected = BEFORE[role].includes("responses.read") ? [...NEW_CAPABILITIES, ...(role === "owner" ? (["responses.read_individual"] as Capability[]) : [])].sort() : [];
+    assert.deepEqual(newOnes.sort(), expected, `${role} gains only the split of a power it already had`);
   }
   assert.deepEqual(BASELINE_ROLES, ["editor", "programmer", "reviewer", "viewer", "test_user", "deployment_manager"]);
   assert.deepEqual(GRANTABLE_ROLES.slice(0, 6), BASELINE_ROLES, "the old share dialog's roles, in the old order");
@@ -87,7 +88,7 @@ test("a bare role, a role with stray permissions and a non-expiring membership a
 /* ============================================================ every role */
 
 const PINNED: Partial<Record<ProjectRole, Capability[]>> = {
-  project_admin: ["project.read","project.read_activity","project.read_members","responses.read","responses.export","survey.edit","survey.save_version","responses.manage","deploy.manage","comment.create","comment.resolve","lock.acquire","lock.force_release","lock.request","project.share","project.manage_members","project.lock_settings","analytics.read","analytics.edit","analytics.publish","analytics.export","billing.read","billing.request_credits","project.clone","responses.read_pii","fieldwork.read"],
+  project_admin: ["project.read","project.read_activity","project.read_members","responses.read","responses.export","survey.edit","survey.save_version","responses.manage","deploy.manage","comment.create","comment.resolve","lock.acquire","lock.force_release","lock.request","project.share","project.manage_members","project.lock_settings","analytics.read","analytics.edit","analytics.publish","analytics.export","billing.read","billing.request_credits","project.clone","responses.read_pii","fieldwork.read","responses.read_individual"],
   viewer_data: ["project.read","project.read_members","responses.read","responses.export","analytics.read","analytics.export","responses.read_pii","fieldwork.read"],
   vendor: ["project.read","fieldwork.read"],
   interviewer: ["project.read","comment.create","fieldwork.read"],
@@ -317,11 +318,23 @@ test("copying a collaborator copies the access, not the expiry", () => {
   assert.equal(copyAccess({ role: "nonsense" }), null);
 });
 
+test("one respondent's portal results are their own permission: not part of reading data, a tick for a custom member", () => {
+  for (const r of ["editor", "programmer", "reviewer", "viewer", "deployment_manager"] as const) assert.equal(can(r, "responses.read_individual"), false, r);
+  assert.equal(can("owner", "responses.read_individual"), true); assert.equal(can("project_admin", "responses.read_individual"), true);
+  assert.equal(can(custom({ modules: { data: "manage" } }), "responses.read_individual"), false, "the highest data level does not include it");
+  const clinician = custom({ modules: { data: "view" }, add: ["responses.read_individual"] });
+  assert.equal(can(clinician, "responses.read_individual"), true);
+  assert.equal(can(clinician, "responses.export"), false); assert.equal(can(clinician, "responses.read_pii"), false, "it brings neither exports nor contact details");
+  /* the platform's rule for every advanced permission: it needs its module at View or above */
+  assert.equal(can(custom({ modules: { data: "none" }, add: ["responses.read_individual"] }), "responses.read_individual"), false);
+  assert.deepEqual(searchPermissions("clinician").map((h) => h.capability), ["responses.read_individual"]);
+});
+
 test("nobody grants what they do not hold", () => {
   assert.deepEqual(escalation("owner", { role: "project_admin" }), []);
   assert.deepEqual(escalation("editor", { role: "programmer" }), [], "an editor may invite a programmer, as before");
   for (const r of BASELINE_ROLES) assert.deepEqual(escalation("editor", { role: r }), [], `editor → ${r} keeps working`);
-  assert.deepEqual(escalation("editor", { role: "project_admin" }), ["lock.force_release", "project.manage_members", "project.lock_settings"]);
+  assert.deepEqual(escalation("editor", { role: "project_admin" }), ["lock.force_release", "project.manage_members", "project.lock_settings", "responses.read_individual"]);
   assert.deepEqual(escalation("editor", { role: "custom", permissions: { modules: { admin: "view" }, add: ["project.manage_members"] } }), ["project.manage_members"]);
   assert.deepEqual(escalation("project_admin", { role: "project_admin" }), []);
   assert.ok(escalation({ role: "editor", expiresAt: iso(T0 - 1) }, { role: "viewer" }, T0).length > 0, "an expired granter holds nothing");

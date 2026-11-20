@@ -52,6 +52,7 @@ export const CAPABILITY_LABEL: Record<Capability, string> = {
   "project.clone": "Clone the project",
   "responses.read_pii": "See respondent contact details (names, emails, IDs)",
   "fieldwork.read": "See fieldwork progress and live quota counts",
+  "responses.read_individual": "Open one respondent's portal results and history",
 };
 
 /** extra words a person might search with — "Export" must find every kind of export */
@@ -67,6 +68,7 @@ const KEYWORDS: Partial<Record<Capability, string>> = {
   "project.lock_settings": "freeze settings security collaboration",
   "lock.force_release": "lock unlock release",
   "fieldwork.read": "fieldwork progress quotas counts field",
+  "responses.read_individual": "individual person respondent results scores history portal clinician coach teacher patient",
   "comment.create": "notes comments",
   "comment.resolve": "notes comments",
   "project.read_activity": "activity history log audit",

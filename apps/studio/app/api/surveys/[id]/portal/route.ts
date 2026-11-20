@@ -38,7 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const offset = Math.max(0, Number(sp.get("offset")) || 0);
   try {
     const list = await portalList(ctx, { limit, offset, search: (sp.get("search") ?? "").slice(0, 100), showEmail: can(ctx.grant, "responses.read_pii") });
-    return json({ ok: true, ...list, canManage: can(ctx.grant, "deploy.manage") });
+    return json({ ok: true, ...list, canManage: can(ctx.grant, "deploy.manage"), canIndividual: can(ctx.grant, "responses.read_individual") });
   } catch (e) {
     return json({ error: (e as Error).message }, 500);
   }

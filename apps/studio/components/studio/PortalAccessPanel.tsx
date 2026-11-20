@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { PortalSettings } from "@rescript/schema";
+import { PortalPersonResults } from "./PortalPersonResults";
 import { PortalScorecardPanel } from "./PortalScorecardPanel";
 import { useStudio } from "./store";
 
@@ -38,6 +39,8 @@ export function PortalAccessPanel() {
   const [total, setTotal] = React.useState(0);
   const [state, setState] = React.useState<"loading" | "ready" | "unavailable" | "error">("loading");
   const [canManage, setCanManage] = React.useState(false);
+  const [canIndividual, setCanIndividual] = React.useState(false);
+  const [viewing, setViewing] = React.useState<string | null>(null);
   const [mail, setMail] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [picked, setPicked] = React.useState<Set<string>>(new Set());
@@ -55,7 +58,7 @@ export function PortalAccessPanel() {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { setState("error"); setNote({ text: j.error ?? `Could not load (${r.status})`, ok: false }); return; }
     if (!j.available) { setState("unavailable"); return; }
-    setRows(j.rows ?? []); setTotal(j.total ?? 0); setCanManage(!!j.canManage); setMail(!!j.mail); setState("ready");
+    setRows(j.rows ?? []); setTotal(j.total ?? 0); setCanManage(!!j.canManage); setCanIndividual(!!j.canIndividual); setMail(!!j.mail); setState("ready");
   }, [s.surveyDbId, search]);
   React.useEffect(() => { if (on) void load(); }, [on, load]);
 
@@ -176,6 +179,13 @@ export function PortalAccessPanel() {
             </div>
           )}
 
+          {state === "ready" && canIndividual && (
+            <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap", fontSize: 12.5 }}>
+              <button type="button" className="btn small" disabled={!one} onClick={() => setViewing(one!.id)} data-testid="portal-person-open">Open this person's results</button>
+              <span className="muted">Choose one person. Each opening is recorded in the audit log.</span>
+            </div>
+          )}
+          {viewing && <PortalPersonResults surveyId={s.surveyDbId!} respondent={viewing} onClose={() => setViewing(null)} />}
           {state === "ready" && (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }} data-testid="portal-table">

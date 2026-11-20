@@ -95,6 +95,7 @@ export function PortalScorecardPanel() {
         <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.scores} onChange={(e) => set((p) => { p.show.scores = e.target.checked; })} data-testid="portal-show-scores" /> Respondents can see their scores</label>
         <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={portal?.show.bands !== false} disabled={!portal?.show.scores} onChange={(e) => set((p) => { p.show.bands = e.target.checked; })} data-testid="portal-show-bands" /> …with the name of the range (Low, High)</label>
         <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.comparison && !!portal?.benchmark.enabled} disabled={!portal?.show.scores} onChange={(e) => set((p) => { p.show.comparison = e.target.checked; p.benchmark.enabled = e.target.checked; })} data-testid="portal-show-comparison" /> …and how they compare with others</label>
+        <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.trends} disabled={!portal?.show.scores} onChange={(e) => set((p) => { p.show.trends = e.target.checked; })} data-testid="portal-show-trends" /> …and how they have changed over time</label>
       </div>
       {portal?.show.scores && !dims.length && <div className="chip warn qd-note" style={{ marginTop: 8 }}>No scores are defined yet, so there is nothing to show. Add one below.</div>}
 
@@ -168,6 +169,9 @@ export function PortalScorecardPanel() {
                       </select>
                     </label>
                   </div>
+                  <label style={{ fontSize: 13 }}>Over time, a change smaller than this is "about the same" (optional)
+                    <input className="input" type="number" min={0} step="any" style={{ maxWidth: 140 }} placeholder="Any change counts" value={d.minChange ?? ""} onChange={(e) => setDim(i, (x) => { const n = numOrUndef(e.target.value); x.minChange = n !== undefined && n > 0 ? n : undefined; })} />
+                  </label>
                   <label style={{ fontSize: 13 }}>What this score means, in the respondent's words (optional)
                     <input className="input" maxLength={600} value={d.description ?? ""} onChange={(e) => setDim(i, (x) => { x.description = e.target.value || undefined; })} />
                   </label>
@@ -223,6 +227,32 @@ export function PortalScorecardPanel() {
           ))}
           <button type="button" className="btn small" style={{ marginTop: 6 }} disabled={portal.benchmark.groups.length >= 6} onClick={() => set((p) => { const label = `Group ${p.benchmark.groups.length + 1}`; p.benchmark.groups.push({ id: newScoreId(label, p.benchmark.groups.map((x) => x.id)), label, source: { kind: "question", ref: groupable[0]?.id ?? "" } }); })}>Add a group</button>
           {problems.filter((p) => portal.benchmark.groups.some((g) => g.id === p.dimension) && !dims.some((d) => d.id === p.dimension)).map((p, k) => <div key={k} className="chip warn qd-note" style={{ marginTop: 6 }}>{p.message}</div>)}
+        </div>
+      )}
+
+      {portal?.show.trends && (
+        <div style={{ marginTop: 12, fontSize: 13 }} data-testid="portal-series">
+          <label className="row" style={{ gap: 6 }}>
+            <input type="checkbox" checked={!!portal.series} onChange={(e) => set((p) => { p.series = e.target.checked ? { id: newScoreId(s.def.meta.title || "series", []), label: s.def.meta.title || "Series" } : undefined; })} data-testid="portal-series-on" />
+            This survey is one of a series, or is taken again at intervals
+          </label>
+          {portal.series && (
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", marginTop: 8 }}>
+              <label>Name of the series, as respondents see it
+                <input className="input" maxLength={120} value={portal.series.label} onChange={(e) => set((p) => { if (p.series) p.series.label = e.target.value || "Series"; })} />
+              </label>
+              <label>Series key (the same in every survey of the series)
+                <input className="input mono" maxLength={60} value={portal.series.id} onChange={(e) => set((p) => { const v = e.target.value.replace(/[^A-Za-z0-9_-]/g, ""); if (p.series && v) p.series.id = v; })} />
+              </label>
+              <label>What this survey is called in the series (optional)
+                <input className="input" maxLength={60} placeholder="2026, Spring term, Week 6" value={portal.series.period ?? ""} onChange={(e) => set((p) => { if (p.series) p.series.period = e.target.value || undefined; })} />
+              </label>
+              <label>Taken again every … days (optional)
+                <input className="input" type="number" min={1} max={1830} placeholder="Not repeated" value={portal.series.repeatEveryDays ?? ""} onChange={(e) => set((p) => { if (!p.series) return; const n = Math.floor(Number(e.target.value)); p.series.repeatEveryDays = n >= 1 && n <= 1830 ? n : undefined; })} />
+              </label>
+            </div>
+          )}
+          <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>Results are compared over time only when a score is made the same way: the same questions by code, the same scale and the same range. Taking it again also needs retakes allowed, or more than one attempt, in the settings above.</p>
         </div>
       )}
 

@@ -172,6 +172,13 @@ export const CAPABILITIES = [
    */
   "responses.read_pii",       // respondent contact details: the respondent list's names, emails and external ids
   "fieldwork.read",           // fieldwork progress and live quota counts — aggregates, never a response
+  /*
+   * Respondent portal, phase 3 (2026-11-20): open ONE named respondent's portal results and their history over
+   * time — what a clinician, coach or teacher needs for the people in their care. Deliberately not part of
+   * `responses.read`: reading a dataset is not a reason to open a person's results page. Held by the owner and
+   * the project admin; given to anyone else as its own tick. Every use is written to the audit log.
+   */
+  "responses.read_individual",
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -254,7 +261,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
    */
   project_admin: [
     "project.read", "project.read_activity", "project.read_members",
-    "responses.read", "responses.export", "responses.manage", ...READS_SPLIT,
+    "responses.read", "responses.export", "responses.manage", ...READS_SPLIT, "responses.read_individual",
     "survey.edit", "survey.save_version",
     "deploy.manage",
     "comment.create", "comment.resolve",
@@ -390,7 +397,7 @@ export const ACCESS_MODULES: AccessModuleSpec[] = [
   {
     id: "data", label: "Data",
     covers: ["Data", "Response Summary", "Data quality"],
-    description: "Response data and its quality checks. Exports and respondent contact details are separate permissions.",
+    description: "Response data and its quality checks. Exports, respondent contact details and one person's portal results are separate permissions.",
     allowsNone: true,
     defaultLevel: "none",
     levels: {
@@ -398,7 +405,7 @@ export const ACCESS_MODULES: AccessModuleSpec[] = [
       edit: ["responses.manage"],
       manage: ["responses.export", "responses.read_pii"],
     },
-    advanced: ["responses.manage", "responses.export", "responses.read_pii"],
+    advanced: ["responses.manage", "responses.export", "responses.read_pii", "responses.read_individual"],
   },
   {
     id: "analytics", label: "Data Analytics & Reports",
