@@ -13,6 +13,7 @@ import { QualStudy } from "./qualStudy.js";
 import { AlertSettings, PanelConfig } from "./integrations.js";
 import { AudienceSpecification } from "./recruitment.js";
 import { AssessmentSettings } from "./assessment.js";
+import { PortalSettings } from "./portal.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
@@ -1025,6 +1026,8 @@ export const SurveyDefinition = z.object({
   audience: AudienceSpecification.optional(),
   /** ASSESSMENT (2026-10-25, ported 2026-10-29, see assessment.ts): scoring, pass mark and the results report. Absent on every survey that is not a test. */
   assessment: AssessmentSettings.optional(),
+  /** RESPONDENT PORTAL (2026-11-20, see portal.ts): what signed-in respondents may see and change. Absent = no portal for this survey. */
+  portal: PortalSettings.optional(),
   /**
    * SECTION NAVIGATION (2026-10-30, engine sectionNav.ts): a built-in
    * navigator that jumps between sections (the flow's blocks). Absent = "off",

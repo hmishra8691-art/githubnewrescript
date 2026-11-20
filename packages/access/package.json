@@ -12,6 +12,10 @@
     "./mfa": {
       "types": "./dist/mfa.d.ts",
       "default": "./dist/mfa.js"
+    },
+    "./respondent": {
+      "types": "./dist/respondent.d.ts",
+      "default": "./dist/respondent.js"
     }
   },
   "scripts": {

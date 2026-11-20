@@ -21,3 +21,4 @@ export * from "./aiInterview.js";
 export * from "./integrations.js";
 export * from "./assessment.js";
 export * from "./recruitment.js";
+export * from "./portal.js";
