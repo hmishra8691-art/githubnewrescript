@@ -1,6 +1,7 @@
 import type { PortalScorecard, Question, ScoreBand, ScoreDimension, SurveyDefinition } from "@rescript/schema";
 import { isAssessment, scoreAssessment, type AssessmentResult } from "./assessment.js";
 import { portalSettings } from "./portalPolicy.js";
+import { migrateQuizKeys } from "./quizKey.js";
 import { htmlToText } from "./validate.js";
 
 /**
@@ -130,7 +131,9 @@ export function scorecardFingerprint(def: SurveyDefinition, assessment?: Assessm
 export function computeScorecard(def: SurveyDefinition, input: ScorecardInput): ScorecardResult | null {
   const sc = scorecardOf(def);
   if (!sc) return null;
-  const marked = usesTest(sc) && isAssessment(def) ? input.assessment ?? scoreAssessment(def, input.answers) : null;
+  /* a quiz keyed the older way is marked like every other test (the final save does the same) */
+  const keyed = usesTest(sc) ? migrateQuizKeys(def).def : def;
+  const marked = usesTest(sc) && isAssessment(keyed) ? input.assessment ?? scoreAssessment(keyed, input.answers) : null;
   const calculated = input.calculated ?? {};
   const codeToId = new Map(def.questions.map((q) => [q.code, q.id]));
 

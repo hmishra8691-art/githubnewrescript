@@ -10,7 +10,7 @@ document and this one differ, this one is right: it was written after the decisi
 | --- | --- | --- |
 | One identity per workspace, or shared? | Shared across workspaces, but a workspace only sees a person it enrolled | One global account (`portal_accounts`, platform data). Each survey's `respondents` row links to it by `account_id`. A workspace reads and changes only its own enrolments; it never lists another workspace's. The portal lives at `/portal`, not `/portal/<workspace>`. |
 | Who can sign up? | Invitation only; Respondent ID or email, with a password | No self-registration route exists. Sign-in takes `RSP-XXXXXXXX` or the email. |
-| Smallest group for a comparison | 10 or more | Recorded; used from Phase 3 (benchmarks). Nothing in Phase 1 compares people. |
+| Smallest group for a comparison | 10 or more | Recorded; used from Phase 2 (comparisons). Nothing in Phase 1 compares people. |
 | Report format | On-screen, printable, with a PDF option | The assessment page has a print layout and a "Print or save as PDF" button (the browser makes the PDF). A server-made PDF file is Phase 2. |
 | Patient portal | Build with the safeguards, no label yet | The safeguards are in (below). Nothing in the product says "patient", "clinical" or "HIPAA". |
 | HIPAA | Aim for it; hosting agreements and the rest come later | See "HIPAA" below. |
@@ -101,5 +101,6 @@ those exist, the portal should not hold protected health information.
 
 ## Next
 
-Phase 2 is the scoring and personal report engine (the 20 templates as configuration over one engine, the
-generated PDF). It starts when asked.
+Phase 2 is scores and comparisons: the scorecard, personal results, percentiles with the minimum group of ten,
+and the generated PDF. It is described in `RESPONDENT-PORTAL-PHASE2-STATUS-2026-11-20.md`. The 20 templates are
+Phase 4.
