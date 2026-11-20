@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { RESPONDENT_RETENTION_DAYS, RESPONDENT_RETENTION_SCOPE } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
+import { clientDb, registerKeyFor, type Db } from "@/lib/db";
 import { isFailure, requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
-  const db = supabaseAdmin();
+  /* the workspace's own projects, in its client database */
+  const db = clientDb(user.customerId);
 
   const { data, error } = await db
     .from("interview_projects")
@@ -68,10 +69,16 @@ export async function POST(req: NextRequest) {
   const name = String(body?.name ?? "").trim();
   if (!name) return NextResponse.json({ error: "A project needs a name." }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = clientDb(user.customerId);
   const code = await uniqueCode(db, user.customerId, body?.code ?? name);
+  /* tenancy: the directory row first (once routing is on), so the new project can always be found again */
+  const projectId = crypto.randomUUID();
+  if (!(await registerKeyFor("interview_project", projectId, user.customerId))) {
+    return NextResponse.json({ error: "We could not create that project just now. Please try again." }, { status: 503 });
+  }
 
   const { data, error } = await db.from("interview_projects").insert({
+    id: projectId,
     customer_id: user.customerId,
     owner_id: user.userId,
     created_by: user.userId,
@@ -112,7 +119,7 @@ const DEFAULT_CONSENT = [
   "By continuing you confirm that you are happy to be recorded for this purpose.",
 ].join("\n");
 
-async function uniqueCode(db: ReturnType<typeof supabaseAdmin>, customerId: string, from: string): Promise<string> {
+async function uniqueCode(db: Db, customerId: string, from: string): Promise<string> {
   const base = String(from).toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 16) || "PROJECT";
   for (let n = 0; n < 50; n++) {
     const code = n === 0 ? base : `${base}_${n + 1}`;

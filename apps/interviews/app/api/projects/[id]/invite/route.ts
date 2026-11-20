@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 import { mintInterviewToken } from "@/lib/candidate";
+import { registerInterview } from "@/lib/db";
 import { seedFor } from "@rescript/interviews";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
 
   const body = await req.json().catch(() => ({}));
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   /*
    * An interview with no questions is a link that opens onto nothing. Caught
@@ -54,6 +54,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const { token, hash, prefix } = mintInterviewToken();
   const id = crypto.randomUUID();
+  /* tenancy: the interview's and the link's directory rows first (once routing is on) */
+  if (!(await registerInterview(id, hash, gate.project.customer_id))) {
+    return NextResponse.json({ error: "We could not create that invitation just now. Please try again." }, { status: 503 });
+  }
   const expiresInDays = Number.isInteger(body?.expiresInDays) ? Math.max(1, body.expiresInDays) : 14;
 
   const { data, error } = await db.from("interviews").insert({

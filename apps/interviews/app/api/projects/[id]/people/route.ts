@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { findExistingPerson, isParticipantRole, type Person } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { can, isFailure, requireProject } from "@/lib/auth";
+import { platformDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const url = new URL(req.url);
   const forInterview = url.searchParams.get("interview");
 
-  const db = supabaseAdmin();
+  const db = ctx.db;
   const { data, error } = await db.from("interview_people")
     .select("id, display_name, email, user_id, kind, derived, interview_id, archived_at, created_at")
     .eq("project_id", params.id)
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
   }
 
-  const db = supabaseAdmin();
+  const db = ctx.db;
 
   /*
    * If this email belongs to a Rescript account in this workspace, attach it.
@@ -122,7 +122,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    */
   let userId: string | null = null;
   if (email) {
-    const { data: profile } = await db
+    /* people's accounts are platform data */
+    const { data: profile } = await platformDb()
       .from("profiles")
       .select("id")
       .eq("customer_id", ctx.project.customer_id)

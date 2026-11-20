@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { SESSION_COOKIE_NAME, projectPageGate } from "@/lib/auth";
-import { supabaseAdmin } from "@/lib/admin";
 import { ProjectWorkbench } from "@/components/ProjectWorkbench";
 import { INTERVIEW_SAY, analysisReadiness, readScorecard, type InterviewStatus } from "@rescript/interviews";
 import { readSelection } from "@/lib/candidate";
@@ -30,7 +29,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
     );
   }
 
-  const db = supabaseAdmin();
+  const db = gate.ctx.db;
   const [{ data: project }, { data: pools }, { data: questions }, { data: requirements }, { data: interviews }] = await Promise.all([
     db.from("interview_projects")
       .select("id, code, name, description, status, instructions, consent_text, retention_days, selection")

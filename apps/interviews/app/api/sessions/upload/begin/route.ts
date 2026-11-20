@@ -3,7 +3,7 @@ import { SESSION_MAX_SECONDS, blockingLimit, checkParticipants, expectedBytes } 
 import {
   PART_BYTES, UPLOAD_SECONDS, planUpload, responseMediaKey,
 } from "@rescript/storage";
-import { supabaseAdmin } from "@/lib/admin";
+import { interviewDb, registerKeyFor } from "@/lib/db";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/auth";
 import { setParticipants } from "@/lib/recordings";
 import { storageOrResponse } from "@/lib/storage";
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Which interview is this recording for?" }, { status: 400 });
   }
 
-  const db = supabaseAdmin();
+  const db = await interviewDb(interviewId);
   const { data: interview, error: ivError } = await db
     .from("interviews")
     .select("id, project_id, customer_id, status, deleted_at")
@@ -201,6 +201,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /* tenancy: the recording's directory row (once routing is on), so playback and transcription can find it */
+  if (!(await registerKeyFor("media", mediaId, interview.customer_id))) return NextResponse.json({ error: "The upload could not be started just now — please try again." }, { status: 503 });
   const { error: insertError } = await db.from("interview_media").insert({
     id: mediaId,
     customer_id: interview.customer_id,
@@ -234,7 +236,7 @@ export async function POST(req: NextRequest) {
    */
   let participantWarning: string | null = null;
   if (participants.length) {
-    const saved = await setParticipants(mediaId, participants, ctx.user.userId);
+    const saved = await setParticipants(ctx.db, mediaId, participants, ctx.user.userId);
     if (!saved.ok) participantWarning = "The recording started, but the participant list did not save.";
   }
 

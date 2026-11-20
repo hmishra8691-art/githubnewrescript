@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { enqueue } from "@/lib/runner";
 import { isFailure } from "@/lib/auth";
 import { assembleAndVerify, readClaimedParts, requireMedia } from "@/lib/recordings";
@@ -50,7 +49,7 @@ export async function POST(req: NextRequest) {
 
   const store = (await import("@/lib/storage")).storageOrResponse();
   if ("response" in store) return store.response;
-  const db = supabaseAdmin();
+  const db = ctx.db;
 
   const markFailed = async (reason: string) => {
     await db.from("interview_media")

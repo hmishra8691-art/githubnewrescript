@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { registerKeyFor } from "@/lib/db";
 import { PART_BYTES, UPLOAD_SECONDS, planUpload, remainingParts, safeKeySegment } from "@rescript/storage";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 import { assembleAndVerify, readClaimedParts } from "@/lib/recordings";
 import { enqueue } from "@/lib/runner";
@@ -52,7 +52,7 @@ export async function POST(
 
   const step = req.nextUrl.searchParams.get("step") ?? "begin";
   const body = await req.json().catch(() => ({}));
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const { data: question } = await db.from("interview_questions")
     .select("id, code, prompt_media_id")
@@ -110,6 +110,8 @@ export async function POST(
       );
     }
 
+    /* tenancy: the recording's directory row (once routing is on), so playback and transcription can find it */
+    if (!(await registerKeyFor("media", mediaId, gate.project.customer_id))) return NextResponse.json({ error: "The upload could not be started just now — please try again." }, { status: 503 });
     const { error } = await db.from("interview_media").insert({
       id: mediaId,
       customer_id: gate.project.customer_id,
@@ -231,7 +233,7 @@ export async function DELETE(
 ) {
   const gate = await requireProject(req, params.id, "questions.edit");
   if (isFailure(gate)) return gate.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: question } = await db.from("interview_questions")
     .select("id, prompt_media_id").eq("id", params.questionId).eq("project_id", params.id).maybeSingle();
   if (!question) return NextResponse.json({ error: "No such question." }, { status: 404 });

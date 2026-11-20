@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { analysisReadiness, checkProject, isProjectStatus } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 import { setRandomizePools } from "@/lib/pools";
 
@@ -26,7 +25,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const [{ data: project }, { data: questions }, { data: requirements }] = await Promise.all([
     db.from("interview_projects")
@@ -91,7 +90,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     patch.retention_days = Math.trunc(Number(draft.retentionDays));
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db.from("interview_projects")
     .update(patch)
     .eq("id", params.id)
@@ -103,7 +102,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!data) return NextResponse.json({ error: "No such project." }, { status: 404 });
 
   /* the order of the pools themselves — separate write, same column as the per-pool flags */
-  if (Object.hasOwn(body ?? {}, "randomizePools")) await setRandomizePools(params.id, body.randomizePools === true);
+  if (Object.hasOwn(body ?? {}, "randomizePools")) await setRandomizePools(gate.db, params.id, body.randomizePools === true);
 
   /*
    * Changing the consent text does NOT reach back into interviews already

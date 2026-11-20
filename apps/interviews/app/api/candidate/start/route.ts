@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import {
   candidateGate, candidateQuestions, ensureSequence, isCandidateFailure,
   recordTelemetry, touchInterview,
@@ -33,7 +32,7 @@ export async function POST(req: NextRequest) {
   const gate = await candidateGate(body?.token);
   if (isCandidateFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const sequence = await ensureSequence(gate);
   const questions = await candidateQuestions(gate, sequence);
 

@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { SESSION_COOKIE_NAME, projectPageGate } from "@/lib/auth";
-import { supabaseAdmin } from "@/lib/admin";
 import { readScorecard } from "@rescript/interviews";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +47,7 @@ export default async function DataViewPage({ params }: { params: { id: string } 
     );
   }
 
-  const db = supabaseAdmin();
+  const db = gate.ctx.db;
   const { data: interviews } = await db.from("interviews")
     .select("id, status, candidate_name, token_prefix, is_test, created_at, started_at, completed_at, last_seen_at, media_purged_at, deleted_at")
     .eq("project_id", params.id)

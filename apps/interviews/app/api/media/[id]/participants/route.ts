@@ -27,7 +27,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   /* names for everybody who may see the recording; addresses only with `identity.read` */
   const mayIdentify = can(ctx.role, "identity.read");
-  const participants = (await participantsOf(params.id)).map((p) => (mayIdentify ? p : { ...p, email: null }));
+  const participants = (await participantsOf(ctx.db, params.id)).map((p) => (mayIdentify ? p : { ...p, email: null }));
   return NextResponse.json(
     { ok: true, participants },
     { headers: { "cache-control": "no-store" } },
@@ -67,13 +67,13 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ error: errors[0].message, errors }, { status: 400 });
   }
 
-  const saved = await setParticipants(params.id, list, ctx.user.userId);
+  const saved = await setParticipants(ctx.db, params.id, list, ctx.user.userId);
   if (!saved.ok) return saved.response;
 
   return NextResponse.json({
     ok: true,
     count: saved.count,
     warnings,
-    participants: await participantsOf(params.id),
+    participants: await participantsOf(ctx.db, params.id),
   });
 }

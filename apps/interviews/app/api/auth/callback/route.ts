@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { safeNextPath } from "@rescript/access";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { isFailure, publicOrigin, setSessionCookie, userForSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -61,7 +61,8 @@ export async function GET(req: NextRequest) {
 
   const codeHash = createHash("sha256").update(code).digest("hex");
 
-  const { data, error } = await supabaseAdmin().rpc("rescript_auth_redeem_handoff", {
+  /* sign-in hand-off: platform data */
+  const { data, error } = await platformDb().rpc("rescript_auth_redeem_handoff", {
     p_code_hash: codeHash,
     p_origin: origin,
   });

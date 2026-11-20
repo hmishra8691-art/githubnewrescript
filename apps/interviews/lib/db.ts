@@ -1,6 +1,7 @@
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
 import { readTenancyConfig, resolveDatabase, describeTenancy, type TenantScope, type TenancyConfig } from "@rescript/storage/tenancy";
+import { makeTenantRouter, type DirectoryKind } from "@rescript/storage/routing";
 import { supabaseFetch } from "./supabaseFetch";
 
 /**
@@ -43,3 +44,45 @@ export const platformDb = () => dbFor({ kind: "platform" });
 export const customerDb = (customerId: string | null | undefined) => dbFor({ kind: "customer", customerId });
 
 export type { TenantScope };
+
+/* ----------------------------------------------------------------------------------------------------------------
+ * THE DIRECTORY (tenancy wiring, 2026-11-20). The interviews app reaches a project by its id, an interview by its id
+ * and a candidate by their link token — not by client id. `public.tenant_directory` (0101/0102, in the primary) says
+ * which client owns each; @rescript/storage/routing is the one implementation every app uses.
+ *
+ *   projectDb(projectId)        a project's data, before the project row is read (the access check reads it here)
+ *   interviewDb(interviewId)    a researcher's page about one interview
+ *   candidateDb(token)          a candidate's link (keyed by the token's SHA-256 — the hash interviews.token_hash keeps)
+ *   clientDb(customerId)        once the project row is in hand, its customer_id says it directly (no directory read)
+ *   everyDatabase()             sweeps and the job runner visit each database once
+ *
+ * While routing is inactive (today) nothing reads or writes the directory and every call returns the primary.
+ * -------------------------------------------------------------------------------------------------------------- */
+export const router = makeTenantRouter({
+  config: tenancyConfig,
+  customerDb,
+  readDirectory: async (kind, key) => {
+    const { data, error } = await platformDb().from("tenant_directory").select("customer_id").eq("kind", kind).eq("key", key).maybeSingle();
+    if (error) throw new Error(`tenant directory: ${error.message}`);
+    return (data?.customer_id as string | undefined) ?? null;
+  },
+  writeDirectory: async (row) => {
+    const { error } = await platformDb().from("tenant_directory").upsert(row, { onConflict: "kind,key", ignoreDuplicates: true });
+    if (error) throw new Error(error.message);
+  },
+});
+
+export type Db = ReturnType<typeof customerDb>;
+export const keyDb = (kind: DirectoryKind, key: string | null | undefined) => router.keyDb(kind, key);
+export const projectDb = (projectId: string | null | undefined) => keyDb("interview_project", projectId);
+export const interviewDb = (interviewId: string | null | undefined) => keyDb("interview", interviewId);
+export const candidateDb = (tokenHash: string | null | undefined) => keyDb("interview_candidate", tokenHash);
+export const clientDb = (customerId: string | null | undefined) => customerDb(customerId);
+export const everyDatabase = () => router.everyDatabase();
+/** a new key whose client the caller knows (a project created, a candidate invited); false = could not be recorded */
+export const registerKeyFor = (kind: DirectoryKind, key: string, customerId: string | null | undefined) => router.registerKeyFor(kind, key, customerId);
+
+/** a new interview: its id (researchers' pages) and its link's hash (the candidate) belong to the project's client */
+export async function registerInterview(interviewId: string, tokenHash: string, customerId: string | null | undefined): Promise<boolean> {
+  return (await registerKeyFor("interview", interviewId, customerId)) && (await registerKeyFor("interview_candidate", tokenHash, customerId));
+}

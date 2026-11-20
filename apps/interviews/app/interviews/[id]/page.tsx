@@ -4,7 +4,7 @@ import {
   INTERVIEW_SAY, TELEMETRY_SAY, isParticipantRole, summariseSignals,
   type Participant, type TranscriptSegment,
 } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
+import { interviewDb } from "@/lib/db";
 import { SESSION_COOKIE_NAME, can, projectPageGate, signInUrl } from "@/lib/auth";
 import {
   InterviewReview, type EvidenceView, type RecordingView,
@@ -34,7 +34,8 @@ export const dynamic = "force-dynamic";
  * that merely hides a button is a page somebody can call the API behind.
  */
 export default async function InterviewPage({ params }: { params: { id: string } }) {
-  const db = supabaseAdmin();
+  /* the interview's client database, found by its id (lib/db.ts) */
+  const db = await interviewDb(params.id);
 
   const { data: interview } = await db
     .from("interviews")

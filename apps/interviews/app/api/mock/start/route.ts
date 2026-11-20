@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   MOCK_RETENTION_HOURS, RESPONDENT_RETENTION_SCOPE, findMockTemplate, seedFor,
 } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
+import { clientDb, registerInterview, registerKeyFor } from "@/lib/db";
 import { isFailure, requireUser } from "@/lib/auth";
 import { mintInterviewToken } from "@/lib/candidate";
 
@@ -46,8 +46,11 @@ export async function POST(req: NextRequest) {
   const template = findMockTemplate(String(body?.template ?? ""));
   if (!template) return NextResponse.json({ error: "No such practice interview." }, { status: 404 });
 
-  const db = supabaseAdmin();
+  const db = clientDb(user.customerId);
   const projectId = crypto.randomUUID();
+  if (!(await registerKeyFor("interview_project", projectId, user.customerId))) {
+    return NextResponse.json({ error: "The practice interview could not be started just now. Please try again." }, { status: 503 });
+  }
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
 
   const { error: projectError } = await db.from("interview_projects").insert({
@@ -96,6 +99,9 @@ export async function POST(req: NextRequest) {
   /* the person is their own candidate */
   const { token, hash, prefix } = mintInterviewToken();
   const interviewId = crypto.randomUUID();
+  if (!(await registerInterview(interviewId, hash, user.customerId))) {
+    return NextResponse.json({ error: "The practice session could not be started just now. Please try again." }, { status: 503 });
+  }
   const { error: ivError } = await db.from("interviews").insert({
     id: interviewId,
     project_id: projectId,

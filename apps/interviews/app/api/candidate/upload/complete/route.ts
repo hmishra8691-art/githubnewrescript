@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assembleAndVerify, readClaimedParts } from "@/lib/recordings";
-import { supabaseAdmin } from "@/lib/admin";
 import { enqueue } from "@/lib/runner";
 import { candidateGate, isCandidateFailure, touchInterview } from "@/lib/candidate";
 import { storageOrResponse } from "@/lib/storage";
@@ -37,7 +36,7 @@ export async function POST(req: NextRequest) {
 
   const store = storageOrResponse();
   if ("response" in store) return store.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const { data: media } = await db
     .from("interview_media")

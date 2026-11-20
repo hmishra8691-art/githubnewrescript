@@ -2,7 +2,7 @@ import "server-only";
 import type { Condition, SkipRule } from "@rescript/schema";
 import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "./admin";
+import { candidateDb, clientDb, type Db } from "./db";
 import {
   readCodeSettings, type CodeSettings,
   drawSequence, linkVerdict, seedFor, recordingSeconds,
@@ -40,6 +40,8 @@ import {
  */
 
 export interface CandidateGate {
+  /** the interview's client database (tenancy): every read and write for this candidate goes through it */
+  db: Db;
   interview: {
     id: string;
     project_id: string;
@@ -98,7 +100,8 @@ export async function candidateGate(token: unknown): Promise<CandidateGate | Can
   if (t.length < 20) {
     return { response: NextResponse.json({ error: "This interview link is not valid." }, { status: 404 }) };
   }
-  const db = supabaseAdmin();
+  /* the link's hash finds the interview's client database (lib/db.ts), then the interview */
+  const db = await candidateDb(hashToken(t));
   const { data: interview, error } = await db
     .from("interviews")
     .select("id, project_id, customer_id, status, question_sequence, selection_seed, candidate_name, consent_given_at, expires_at, started_at, is_test, deleted_at")
@@ -145,6 +148,7 @@ export async function candidateGate(token: unknown): Promise<CandidateGate | Can
   }
 
   return {
+    db: clientDb(interview.customer_id as string),
     interview: interview as unknown as CandidateGate["interview"],
     project: project as unknown as CandidateGate["project"],
   };
@@ -201,7 +205,7 @@ export interface CandidateQuestion {
  * answer after a refresh, on another device, and in the dashboard.
  */
 export async function ensureSequence(gate: CandidateGate): Promise<DrawnQuestion[]> {
-  const db = supabaseAdmin();
+  const db = gate.db;
   if (Array.isArray(gate.interview.question_sequence) && gate.interview.question_sequence.length) {
     return gate.interview.question_sequence;
   }
@@ -266,7 +270,7 @@ export async function candidateQuestions(
   gate: CandidateGate, sequence: DrawnQuestion[],
 ): Promise<CandidateQuestion[]> {
   if (!sequence.length) return [];
-  const db = supabaseAdmin();
+  const db = gate.db;
   const ids = sequence.map((s) => s.questionId);
   const [{ data: questions }, { data: responses }] = await Promise.all([
     db.from("interview_questions")
@@ -361,7 +365,7 @@ export async function recordTelemetry(
     }));
   if (!rows.length) return 0;
   try {
-    await supabaseAdmin().from("interview_telemetry").insert(rows);
+    await gate.db.from("interview_telemetry").insert(rows);
     return rows.length;
   } catch {
     return 0;
@@ -371,7 +375,7 @@ export async function recordTelemetry(
 /** A heartbeat, so `isAbandoned` has something to measure against. */
 export async function touchInterview(gate: CandidateGate, patch: Record<string, unknown> = {}): Promise<void> {
   try {
-    await supabaseAdmin().from("interviews")
+    await gate.db.from("interviews")
       .update({ last_seen_at: new Date().toISOString(), ...patch })
       .eq("id", gate.interview.id);
   } catch { /* a heartbeat that fails is not a reason to stop an interview */ }

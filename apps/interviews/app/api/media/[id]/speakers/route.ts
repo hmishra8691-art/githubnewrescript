@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure } from "@/lib/auth";
 import { participantsOf, requireMedia } from "@/lib/recordings";
 
@@ -35,7 +34,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "Which person?" }, { status: 400 });
   }
 
-  const db = supabaseAdmin();
+  const db = ctx.db;
 
   /*
    * One label, one person. Without this a researcher correcting a mistake
@@ -73,5 +72,5 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
   }
 
-  return NextResponse.json({ ok: true, participants: await participantsOf(params.id) });
+  return NextResponse.json({ ok: true, participants: await participantsOf(ctx.db, params.id) });
 }

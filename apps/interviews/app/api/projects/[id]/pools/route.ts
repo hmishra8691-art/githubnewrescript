@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { nextCode, normaliseCode } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 import { readSelection } from "@/lib/candidate";
 import { drawOf, setRandomize } from "@/lib/pools";
@@ -32,7 +31,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
   const [{ data: pools }, { data: project }] = await Promise.all([
     db.from("interview_pools").select("id, code, name, description, draw, position").eq("project_id", params.id).order("position"),
     db.from("interview_projects").select("selection").eq("id", params.id).maybeSingle(),
@@ -54,7 +53,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const name = String(body?.name ?? "").trim().slice(0, 120);
   if (!name) return NextResponse.json({ error: "A pool needs a name." }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: existing } = await db.from("interview_pools").select("code, position").eq("project_id", params.id);
   const taken = (existing ?? []).map((p) => p.code as string);
   const wanted = normaliseCode(body?.code);
@@ -68,6 +67,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }).select("id, code, name, description, draw, position").maybeSingle();
   if (error || !data) return NextResponse.json({ error: "That pool could not be created." }, { status: 503 });
 
-  if (body?.randomize !== undefined) await setRandomize(params.id, data.id, body.randomize === true);
+  if (body?.randomize !== undefined) await setRandomize(gate.db, params.id, data.id, body.randomize === true);
   return NextResponse.json({ ok: true, pool: { ...data, randomize: body?.randomize === true } }, { status: 201 });
 }

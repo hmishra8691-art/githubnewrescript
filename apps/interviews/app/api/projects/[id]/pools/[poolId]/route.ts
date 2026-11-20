@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 import { drawOf, forgetPool, setRandomize } from "@/lib/pools";
 
@@ -9,7 +8,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const gate = await requireProject(req, params.id, "questions.edit");
   if (isFailure(gate)) return gate.response;
   const body = await req.json().catch(() => ({}));
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (Object.hasOwn(body ?? {}, "name")) {
@@ -26,7 +25,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (error) return NextResponse.json({ error: "That pool could not be saved." }, { status: 503 });
   if (!data) return NextResponse.json({ error: "No such pool." }, { status: 404 });
 
-  if (Object.hasOwn(body ?? {}, "randomize")) await setRandomize(params.id, params.poolId, body.randomize === true);
+  if (Object.hasOwn(body ?? {}, "randomize")) await setRandomize(gate.db, params.id, params.poolId, body.randomize === true);
   return NextResponse.json({ ok: true, pool: data });
 }
 
@@ -38,10 +37,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 export async function DELETE(req: NextRequest, { params }: { params: { id: string; poolId: string } }) {
   const gate = await requireProject(req, params.id, "questions.edit");
   if (isFailure(gate)) return gate.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
   await db.from("interview_questions").update({ pool_id: null }).eq("pool_id", params.poolId).eq("project_id", params.id);
   const { error } = await db.from("interview_pools").delete().eq("id", params.poolId).eq("project_id", params.id);
   if (error) return NextResponse.json({ error: "That pool could not be removed." }, { status: 503 });
-  await forgetPool(params.id, params.poolId);
+  await forgetPool(gate.db, params.id, params.poolId);
   return NextResponse.json({ ok: true });
 }

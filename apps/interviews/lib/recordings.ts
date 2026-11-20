@@ -5,7 +5,7 @@ import {
   isParticipantRole, type Participant, type ParticipantRole,
 } from "@rescript/interviews";
 import { PLAYBACK_SECONDS, type CompletedPart } from "@rescript/storage";
-import { supabaseAdmin } from "./admin";
+import { keyDb, type Db } from "./db";
 import {
   isFailure, requireProject, type GuardFailure, type InterviewCapability, type ProjectContext,
 } from "./auth";
@@ -56,8 +56,8 @@ export interface MediaContext extends ProjectContext {
 export async function requireMedia(
   req: NextRequest, mediaId: string, capability: InterviewCapability,
 ): Promise<MediaContext | GuardFailure> {
-  const db = supabaseAdmin();
-  const { data: media, error } = await db
+  /* the recording's client database, found through the directory by its id (written at upload) */
+  const { data: media, error } = await (await keyDb("media", mediaId))
     .from("interview_media")
     .select("id, customer_id, project_id, interview_id, response_id, question_id, kind, storage_provider, storage_key, mime_type, file_size, duration_seconds, upload_status, processing_status, multipart_upload_id, client_token, deleted_at, recorded_by, companion_of, created_at")
     .eq("id", mediaId)
@@ -257,8 +257,7 @@ export interface ParticipantRow {
 }
 
 /** Who is in one recording, in reading order, straight from the database function. */
-export async function participantsOf(mediaId: string): Promise<Participant[]> {
-  const db = supabaseAdmin();
+export async function participantsOf(db: Db, mediaId: string): Promise<Participant[]> {
   const { data } = await db.rpc("rescript_interview_recording_participants", { p_media: mediaId });
   const rows = (Array.isArray(data) ? data : []) as ParticipantRow[];
   return rows.map((r) => ({
@@ -282,11 +281,11 @@ export async function participantsOf(mediaId: string): Promise<Participant[]> {
  * function's job is to turn a refusal into an HTTP answer.
  */
 export async function setParticipants(
+  db: Db,
   mediaId: string,
   list: readonly { personId: string; role: string }[],
   actorUserId: string | null,
 ): Promise<{ ok: true; count: number } | { ok: false; response: NextResponse }> {
-  const db = supabaseAdmin();
   const { data, error } = await db.rpc("rescript_interview_set_participants", {
     p_media: mediaId,
     p_people: list.map((p) => p.personId),

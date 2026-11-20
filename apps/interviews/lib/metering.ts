@@ -4,7 +4,7 @@ import {
   type Environment, type MeterContext, type UsageSpec,
 } from "@rescript/billing";
 import { aiModelName, chatUsageUnits, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
-import { supabaseAdmin } from "./admin";
+import { platformDb } from "./db";
 
 /**
  * WHAT AN INTERVIEW COSTS, CHARGED TO THE RIGHT WALLET.
@@ -41,7 +41,7 @@ declare global {
 export function getMeter(): Meter {
   if (!globalThis.__rescriptInterviewsMeter) {
     globalThis.__rescriptInterviewsMeter = dbConfigured()
-      ? new Meter(new SupabaseMeterStore(supabaseAdmin()))
+      ? new Meter(new SupabaseMeterStore(platformDb()))
       : new Meter(new MemoryMeterStore(), {
           seedBalance: Number(process.env.BILLING_SANDBOX_CREDITS ?? "100") || 100,
           cacheMs: 0,

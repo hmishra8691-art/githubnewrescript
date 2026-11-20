@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "./admin";
+import type { Db } from "./db";
 import { readSelection } from "./candidate";
 
 /**
@@ -17,8 +17,7 @@ export function drawOf(v: unknown): number | null {
   return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
-export async function setRandomize(projectId: string, poolId: string, randomize: boolean): Promise<void> {
-  const db = supabaseAdmin();
+export async function setRandomize(db: Db, projectId: string, poolId: string, randomize: boolean): Promise<void> {
   const { data: project } = await db.from("interview_projects").select("selection").eq("id", projectId).maybeSingle();
   const sel = readSelection(project?.selection);
   const pools = sel.pools.filter((p) => p.id !== poolId);
@@ -28,8 +27,7 @@ export async function setRandomize(projectId: string, poolId: string, randomize:
     .eq("id", projectId);
 }
 
-export async function setRandomizePools(projectId: string, randomizePools: boolean): Promise<void> {
-  const db = supabaseAdmin();
+export async function setRandomizePools(db: Db, projectId: string, randomizePools: boolean): Promise<void> {
   const { data: project } = await db.from("interview_projects").select("selection").eq("id", projectId).maybeSingle();
   const sel = readSelection(project?.selection);
   await db.from("interview_projects")
@@ -37,8 +35,7 @@ export async function setRandomizePools(projectId: string, randomizePools: boole
     .eq("id", projectId);
 }
 
-export async function forgetPool(projectId: string, poolId: string): Promise<void> {
-  const db = supabaseAdmin();
+export async function forgetPool(db: Db, projectId: string, poolId: string): Promise<void> {
   const { data: project } = await db.from("interview_projects").select("selection").eq("id", projectId).maybeSingle();
   const sel = readSelection(project?.selection);
   await db.from("interview_projects")

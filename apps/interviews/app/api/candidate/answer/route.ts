@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CHOICE_KINDS, TYPED_KINDS, checkCodeAnswer, isFlowKind, readCodeSettings } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { candidateGate, candidateQuestions, isCandidateFailure, recordTelemetry, touchInterview } from "@/lib/candidate";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +42,7 @@ export async function POST(req: NextRequest) {
   const q = questions.find((x) => x.responseId === responseId);
   if (!q) return NextResponse.json({ error: "That question is not part of this interview." }, { status: 404 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const now = new Date().toISOString();
 
   /* ---------------------------------------------------------- watched */

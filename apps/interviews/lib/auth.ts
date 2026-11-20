@@ -1,7 +1,7 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { handoffStartUrl, normaliseOrigin } from "@rescript/access";
-import { supabaseAdmin } from "./admin";
+import { clientDb, platformDb, projectDb, type Db } from "./db";
 
 /**
  * WHO IS ASKING — THE SAME SESSION THE STUDIO ISSUED.
@@ -140,7 +140,8 @@ export function publicOrigin(): string {
  */
 export async function userForSession(sessionId: string | null): Promise<AuthedUser | GuardFailure> {
   if (!sessionId) return fail(401, "Not signed in.");
-  const db = supabaseAdmin();
+  /* sign-in sessions and profiles are platform data */
+  const db = platformDb();
 
   const { data, error } = await db.rpc("rescript_touch_session", {
     p_session: sessionId,
@@ -262,6 +263,8 @@ export interface ProjectContext {
   role: InterviewRole;
   /** `owner` · `member` · `workspace` — where the role came from, for the UI to explain. */
   source: "owner" | "member" | "workspace";
+  /** the project's client database (tenancy): every read and write about this project goes through it */
+  db: Db;
   project: {
     id: string;
     customer_id: string;
@@ -302,8 +305,8 @@ export async function requireProject(
 export async function requireProjectFor(
   user: AuthedUser, projectId: string, capability: InterviewCapability,
 ): Promise<ProjectContext | GuardFailure> {
-  const db = supabaseAdmin();
-  const { data: project, error } = await db
+  /* the project row lives in its client's database, found through the directory (lib/db.ts) */
+  const { data: project, error } = await (await projectDb(projectId))
     .from("interview_projects")
     .select("id, customer_id, owner_id, code, name, status, settings, retention_days, retention_scope, max_recording_seconds, max_storage_bytes, max_transcription_seconds, max_ai_analyses, deleted_at")
     .eq("id", projectId)
@@ -323,7 +326,8 @@ export async function requireProjectFor(
     role = "manager";
     source = "owner";
   } else {
-    const { data: member } = await db
+    /* project membership is platform data (supabase/tenancy/tables.json) */
+    const { data: member } = await platformDb()
       .from("interview_project_members")
       .select("role")
       .eq("project_id", projectId)
@@ -344,7 +348,7 @@ export async function requireProjectFor(
   }
 
   const { deleted_at: _deleted, ...rest } = project as Record<string, unknown> & { deleted_at: unknown };
-  return { user, projectId, role, source, project: rest as ProjectContext["project"] };
+  return { user, projectId, role, source, db: clientDb(project.customer_id as string), project: rest as ProjectContext["project"] };
 }
 
 /** For a server component: the same decision, without a NextRequest. */

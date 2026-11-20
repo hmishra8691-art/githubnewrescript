@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkRequirement, isRequirementCategory, nextCode, normaliseCode, weightOf } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +32,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const { data } = await supabaseAdmin()
+  const { data } = await gate.db
     .from("interview_requirements")
     .select("id, code, title, description, criteria, weight, category, position")
     .eq("project_id", params.id)
@@ -50,7 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
 
   const body = await req.json().catch(() => ({}));
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const { data: existing } = await db.from("interview_requirements")
     .select("code, position").eq("project_id", params.id);

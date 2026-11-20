@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkQuestion, codeSettingsPatch, isQuestionCategory, isQuestionKind, normaliseCode, normaliseOptions, readCodeSettings } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 import { readCondition, readSkipRules } from "@/lib/logic";
 
@@ -24,7 +23,7 @@ export async function PATCH(
   if (isFailure(gate)) return gate.response;
 
   const body = await req.json().catch(() => ({}));
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const { data: all } = await db.from("interview_questions")
     .select("id, code, prompt, kind, min_seconds, max_seconds, options, settings")
@@ -118,7 +117,7 @@ export async function DELETE(
   const gate = await requireProject(req, params.id, "questions.edit");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db.from("interview_questions")
     .update({ archived_at: new Date().toISOString() })
     .eq("id", params.questionId)

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { PLAYBACK_SECONDS } from "@rescript/storage";
 import { candidateGate, candidateQuestions, isCandidateFailure, recordTelemetry } from "@/lib/candidate";
 import { storageOrResponse } from "@/lib/storage";
-import { supabaseAdmin } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +38,7 @@ export async function POST(req: NextRequest) {
   const store = storageOrResponse();
   if ("response" in store) return store.response;
 
-  const { data: media } = await supabaseAdmin()
+  const { data: media } = await gate.db
     .from("interview_media")
     .select("id, storage_key, mime_type, upload_status, deleted_at")
     .eq("id", mediaId)

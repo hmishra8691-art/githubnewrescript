@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { SESSION_COOKIE_NAME, projectPageGate, signInUrl } from "@/lib/auth";
-import { supabaseAdmin } from "@/lib/admin";
+import { interviewDb } from "@/lib/db";
 import { SessionRecorder, type RecorderPerson } from "@/components/SessionRecorder";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +25,7 @@ export default async function RecordPage({
   params: { id: string };
   searchParams?: { question?: string };
 }) {
-  const db = supabaseAdmin();
+  const db = await interviewDb(params.id);
 
   const { data: interview } = await db
     .from("interviews")

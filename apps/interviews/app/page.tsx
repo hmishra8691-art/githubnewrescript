@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { SESSION_COOKIE_NAME, userForSession, isFailure, signInUrl, studioUrl } from "@/lib/auth";
-import { supabaseAdmin } from "@/lib/admin";
+import { clientDb } from "@/lib/db";
 import { NewProject } from "@/components/NewProject";
 
 export const dynamic = "force-dynamic";
@@ -68,7 +68,7 @@ export default async function Home({
     );
   }
 
-  const { data: projects } = await supabaseAdmin()
+  const { data: projects } = await clientDb(user.customerId)
     .from("interview_projects")
     .select("id, code, name, description, status, created_at, retention_days")
     .eq("customer_id", user.customerId ?? "")

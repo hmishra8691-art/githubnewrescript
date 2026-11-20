@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkRequirement, isRequirementCategory, normaliseCode, weightOf } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +19,7 @@ export async function PATCH(
   if (isFailure(gate)) return gate.response;
 
   const body = await req.json().catch(() => ({}));
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const { data: all } = await db.from("interview_requirements")
     .select("id, code").eq("project_id", params.id);
@@ -62,7 +61,7 @@ export async function DELETE(
   const gate = await requireProject(req, params.id, "requirements.edit");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   /*
    * EVIDENCE ALREADY WRITTEN AGAINST IT IS WHAT STOPS A DELETE.

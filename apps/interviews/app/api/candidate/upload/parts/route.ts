@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { candidateGate, isCandidateFailure } from "@/lib/candidate";
 import { storageOrResponse } from "@/lib/storage";
 import { UPLOAD_SECONDS, planUpload, PART_BYTES } from "@rescript/storage";
@@ -31,7 +30,7 @@ export async function POST(req: NextRequest) {
   const store = storageOrResponse();
   if ("response" in store) return store.response;
 
-  const { data: media } = await supabaseAdmin()
+  const { data: media } = await gate.db
     .from("interview_media")
     .select("id, storage_key, multipart_upload_id, upload_status, file_size")
     .eq("id", String(body?.mediaId ?? ""))

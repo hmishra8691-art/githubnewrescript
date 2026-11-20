@@ -4,7 +4,7 @@ import {
   orphanSweepIsSane, retentionPlan,
 } from "@rescript/interviews";
 import { organizationPrefix, type MediaStorageProvider } from "@rescript/storage";
-import { supabaseAdmin } from "./admin";
+import { clientDb, everyDatabase, type Db } from "./db";
 import { storageOrResponse } from "./storage";
 
 /**
@@ -118,8 +118,12 @@ interface DueRow {
  * Order, unchanged: keys → objects → rows. `media_purged_at` is written LAST so
  * a failure anywhere above leaves the interview due and the next pass finishes.
  */
+/* tenancy: each sweep visits every client database once (one today, the primary) */
 export async function sweepRetention(report: SweepReport, limit = 25): Promise<void> {
-  const db = supabaseAdmin();
+  for (const { db } of everyDatabase()) await sweepRetentionIn(db, report, limit);
+}
+
+async function sweepRetentionIn(db: Db, report: SweepReport, limit: number): Promise<void> {
   const store = storageOrResponse();
   if ("response" in store) {
     report.warnings.push("storage is not configured, so retention could not run");
@@ -245,7 +249,10 @@ export async function sweepRetention(report: SweepReport, limit = 25): Promise<v
  * upload is in progress for ever.
  */
 export async function sweepAbandonedUploads(report: SweepReport, limit = 50): Promise<void> {
-  const db = supabaseAdmin();
+  for (const { db } of everyDatabase()) await sweepAbandonedUploadsIn(db, report, limit);
+}
+
+async function sweepAbandonedUploadsIn(db: Db, report: SweepReport, limit: number): Promise<void> {
   const store = storageOrResponse();
   if ("response" in store) return;
 
@@ -299,7 +306,7 @@ export async function sweepAbandonedUploads(report: SweepReport, limit = 50): Pr
 export async function sweepOrphans(
   report: SweepReport, customerId: string, limit = 200,
 ): Promise<void> {
-  const db = supabaseAdmin();
+  const db = clientDb(customerId);
   const store = storageOrResponse();
   if ("response" in store) return;
 
@@ -373,11 +380,12 @@ export async function sweepOrphans(
  * expected is exactly the condition `orphanSweepIsSane` refuses on.
  */
 export async function sweepOrphansEverywhere(report: SweepReport, hasTime: () => boolean): Promise<void> {
-  const db = supabaseAdmin();
-  const { data, error } = await db.rpc("rescript_interview_customers");
-  if (error) { report.warnings.push(`could not list organizations for the orphan sweep: ${error.message}`); return; }
-  for (const row of (data ?? []) as { customer_id: string }[]) {
-    if (!hasTime()) { report.warnings.push("orphan sweep stopped early: the window was spent"); return; }
-    await sweepOrphans(report, row.customer_id);
+  for (const { db } of everyDatabase()) {
+    const { data, error } = await db.rpc("rescript_interview_customers");
+    if (error) { report.warnings.push(`could not list organizations for the orphan sweep: ${error.message}`); continue; }
+    for (const row of (data ?? []) as { customer_id: string }[]) {
+      if (!hasTime()) { report.warnings.push("orphan sweep stopped early: the window was spent"); return; }
+      await sweepOrphans(report, row.customer_id);
+    }
   }
 }

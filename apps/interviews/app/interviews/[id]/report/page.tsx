@@ -5,7 +5,7 @@ import {
   type RequirementCategory, type Scorecard as ScorecardData, type Verdict,
   CODE_LANGUAGE_SAY, codeAnswerLanguage,
 } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
+import { interviewDb } from "@/lib/db";
 import { SESSION_COOKIE_NAME, can, projectPageGate, signInUrl } from "@/lib/auth";
 import { PrintButton } from "@/components/PrintButton";
 
@@ -39,7 +39,7 @@ export const dynamic = "force-dynamic";
  * bare number this product refuses to emit.
  */
 export default async function ReportPage({ params }: { params: { id: string } }) {
-  const db = supabaseAdmin();
+  const db = await interviewDb(params.id);
   const { data: interview } = await db
     .from("interviews")
     .select("id, project_id, customer_id, candidate_name, candidate_email, status, is_test, created_at, completed_at, deleted_at, question_sequence")

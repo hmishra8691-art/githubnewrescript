@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { candidateGate, isCandidateFailure, recordTelemetry } from "@/lib/candidate";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +32,7 @@ export async function POST(req: NextRequest) {
   }
 
   const now = new Date().toISOString();
-  const { error } = await supabaseAdmin().from("interviews").update({
+  const { error } = await gate.db.from("interviews").update({
     consent_given_at: now,
     consent_text_snapshot: gate.project.consent_text ?? "",
     status: "in_progress",

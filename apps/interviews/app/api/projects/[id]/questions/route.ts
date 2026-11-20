@@ -3,7 +3,6 @@ import {
   analysisReadiness, checkQuestion, codeSettingsPatch, isQuestionCategory, isQuestionKind, nextCode, readCodeSettings,
   normaliseCode, normaliseOptions, positionsFor,
 } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 import { readCondition, readSkipRules } from "@/lib/logic";
 
@@ -12,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const [{ data: pools }, { data: questions }, { data: requirements }] = await Promise.all([
     db.from("interview_pools").select("*").eq("project_id", params.id).order("position"),
@@ -40,7 +39,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const body = await req.json().catch(() => ({}));
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: existing } = await db.from("interview_questions")
     .select("code, position").eq("project_id", params.id).is("archived_at", null);
 
@@ -108,7 +107,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const ordered = Array.isArray(body?.order) ? body.order.filter((x: unknown) => typeof x === "string") : [];
   if (!ordered.length) return NextResponse.json({ error: "Send the questions in the order you want them." }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: all } = await db.from("interview_questions")
     .select("id, position").eq("project_id", params.id).is("archived_at", null);
 

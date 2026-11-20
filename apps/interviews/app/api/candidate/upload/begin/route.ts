@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { registerKeyFor } from "@/lib/db";
 import { candidateGate, isCandidateFailure, touchInterview } from "@/lib/candidate";
 import { storageOrResponse } from "@/lib/storage";
 import {
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
 
   const store = storageOrResponse();
   if ("response" in store) return store.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   const responseId = String(body?.responseId ?? "");
   const clientToken = String(body?.clientToken ?? "").slice(0, 64) || null;
@@ -164,6 +164,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /* tenancy: the recording's directory row (once routing is on), so playback and transcription can find it */
+  if (!(await registerKeyFor("media", mediaId, gate.interview.customer_id))) return NextResponse.json({ error: "The upload could not be started just now — please try again." }, { status: 503 });
   const { error: insertError } = await db.from("interview_media").insert({
     id: mediaId,
     customer_id: gate.interview.customer_id,

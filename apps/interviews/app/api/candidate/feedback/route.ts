@@ -3,7 +3,6 @@ import {
   PLAYBACK_SECONDS,
 } from "@rescript/storage";
 import { buildFeedback, readScorecard, suggestPractice } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import { candidateGate, isCandidateFailure } from "@/lib/candidate";
 import { storageOrResponse } from "@/lib/storage";
 
@@ -32,7 +31,7 @@ export async function POST(req: NextRequest) {
   const gate = await candidateGate(body?.token);
   if (isCandidateFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: project } = await db.from("interview_projects")
     .select("mode, template_key, retention_hours, retention_days")
     .eq("id", gate.project.id).maybeSingle();

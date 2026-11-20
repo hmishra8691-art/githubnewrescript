@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isShown, outstandingQuestions, toResponseState, toSurveyDefinition } from "@rescript/interviews";
-import { supabaseAdmin } from "@/lib/admin";
 import {
   candidateGate, candidateQuestions, isCandidateFailure, recordTelemetry,
 } from "@/lib/candidate";
@@ -25,7 +24,7 @@ export async function POST(req: NextRequest) {
   const gate = await candidateGate(body?.token);
   if (isCandidateFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const questions = await candidateQuestions(gate, gate.interview.question_sequence ?? []);
 
   /*

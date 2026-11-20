@@ -6,7 +6,7 @@ import {
   type DrainBudget, type DrainReport, type Job, type JobDecision, type JobKind,
 } from "@rescript/interviews";
 import { completeJson, transcribe } from "@rescript/ai";
-import { supabaseAdmin } from "./admin";
+import { clientDb, everyDatabase, type Db } from "./db";
 import { meteredAnalysis, meteredTranscription } from "./metering";
 import { storageOrResponse } from "./storage";
 
@@ -97,7 +97,8 @@ export async function enqueue(args: {
   priority?: number;
   attempt?: number;
 }): Promise<{ queued: boolean }> {
-  const db = supabaseAdmin();
+  /* the job queue is per client database: the runner drains each one (everyDatabase) */
+  const db = clientDb(args.customerId);
   const { error } = await db.from("interview_jobs").insert({
     customer_id: args.customerId,
     project_id: args.projectId,
@@ -125,10 +126,11 @@ export async function drain(
   kinds: JobKind[] = ["transcription"],
   now: () => number = Date.now,
 ): Promise<DrainReport> {
-  const db = supabaseAdmin();
   const report = emptyReport();
   const startedAt = now();
 
+  /* tenancy: every client database keeps its own queue — one database today (the primary) */
+  for (const { db } of everyDatabase())
   for (const kind of kinds) {
     while (shouldClaimAnother(BUDGET, report.claimed, now() - startedAt, LONGEST_JOB_MS)) {
       const { data, error } = await db.rpc("rescript_interview_claim_job", {
@@ -147,7 +149,7 @@ export async function drain(
       const clock: RunClock = { remainingMs: () => Math.max(0, BUDGET.msAvailable - (now() - startedAt)) };
       const decision = await runOne(row, clock);
       noteDecision(report, decision);
-      await finish(row.id, decision);
+      await finish(db, row.id, decision);
       await afterDecision(row, decision);
     }
   }
@@ -214,7 +216,7 @@ async function runOne(row: JobRow, clock: RunClock = { remainingMs: () => LONGES
 async function afterDecision(row: JobRow, decision: JobDecision): Promise<void> {
   if (!isTerminalFailure(decision)) return;
   try {
-    const db = supabaseAdmin();
+    const db = clientDb(row.customer_id);
     if (row.kind === "transcription" && row.subject_id) {
       const now = new Date().toISOString();
       await db.from("interview_transcripts")
@@ -224,7 +226,7 @@ async function afterDecision(row: JobRow, decision: JobDecision): Promise<void> 
       await db.from("interview_media")
         .update({ processing_status: "failed", error: decision.reason.slice(0, 500) })
         .eq("id", row.subject_id);
-      if (row.interview_id) await maybeQueueAnalysis(row.interview_id);
+      if (row.interview_id) await maybeQueueAnalysis(db, row.interview_id);
     }
     if (row.kind === "analysis" && row.subject_id) {
       /* the interview goes back to `completed`, so a later run — or a person — can try again */
@@ -241,8 +243,7 @@ async function afterDecision(row: JobRow, decision: JobDecision): Promise<void> 
   }
 }
 
-async function finish(jobId: string, decision: JobDecision): Promise<void> {
-  const db = supabaseAdmin();
+async function finish(db: Db, jobId: string, decision: JobDecision): Promise<void> {
   await db.rpc("rescript_interview_finish_job", {
     p_job: jobId,
     /*
@@ -274,7 +275,7 @@ async function finish(jobId: string, decision: JobDecision): Promise<void> {
  * between "try again in a minute" and "this file will never work".
  */
 const transcription: Handler = async (job, row, clock) => {
-  const db = supabaseAdmin();
+  const db = clientDb(row.customer_id);
   const mediaId = job.subjectId;
   if (!mediaId) throw new Error("the job names no recording");
 
@@ -426,7 +427,7 @@ const transcription: Handler = async (job, row, clock) => {
    * last one to finish queues the analysis, and the idempotency key means the
    * other five that finish at almost the same moment queue nothing.
    */
-  if (media.interview_id) await maybeQueueAnalysis(media.interview_id);
+  if (media.interview_id) await maybeQueueAnalysis(db, media.interview_id);
 
   void project;
 };
@@ -438,9 +439,8 @@ const transcription: Handler = async (job, row, clock) => {
  * transcription marked failed because the FOLLOW-UP could not be queued is a
  * recording transcribed twice for no reason.
  */
-async function maybeQueueAnalysis(interviewId: string): Promise<void> {
+async function maybeQueueAnalysis(db: Db, interviewId: string): Promise<void> {
   try {
-    const db = supabaseAdmin();
 
     const { data: interview } = await db
       .from("interviews")
@@ -500,7 +500,7 @@ async function maybeQueueAnalysis(interviewId: string): Promise<void> {
  * finding — it reaches them as "not enough evidence", which is true.
  */
 const analysis: Handler = async (job, row, clock) => {
-  const db = supabaseAdmin();
+  const db = clientDb(row.customer_id);
   const interviewId = job.subjectId;
   if (!interviewId) throw new Error("the job names no interview");
 
