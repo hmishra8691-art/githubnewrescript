@@ -1,7 +1,7 @@
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
 import { readTenancyConfig, resolveDatabase, describeTenancy, type TenantScope, type TenancyConfig } from "@rescript/storage/tenancy";
-import { makeDirectory, routingActive } from "@rescript/storage/directory";
+import { makeTenantRouter, type DirectoryKind } from "@rescript/storage/routing";
 import { supabaseFetch } from "./supabaseFetch";
 
 /**
@@ -62,27 +62,24 @@ export type { TenantScope };
  * A key with no directory row also resolves to the primary: a client not yet moved.
  * -------------------------------------------------------------------------------------------------------------- */
 /** keyed by an id, or — for bearer links — by the SHA-256 of the token (the token itself is never stored) */
-export const DIRECTORY_KINDS = ["survey", "session", "group", "media", "interview_project", "ai_interview_study", "ai_interview_session", "live_invite", "live_member"] as const;
-export type DirectoryKind = (typeof DIRECTORY_KINDS)[number];
+export { DIRECTORY_KINDS, type DirectoryKind } from "@rescript/storage/routing";
 
-const lookup = (kind: DirectoryKind) => async (key: string) => {
-  const { data, error } = await platformDb().from("tenant_directory").select("customer_id").eq("kind", kind).eq("key", key).maybeSingle();
-  if (error) throw new Error(`tenant directory: ${error.message}`);
-  return (data?.customer_id as string | undefined) ?? null;
-};
-const directory = makeDirectory<DirectoryKind>({
-  lookups: Object.fromEntries(DIRECTORY_KINDS.map((k) => [k, lookup(k)])) as Record<DirectoryKind, (key: string) => Promise<string | null>>,
+export const router = makeTenantRouter({
+  config: tenancyConfig,
+  customerDb,
+  readDirectory: async (kind, key) => {
+    const { data, error } = await platformDb().from("tenant_directory").select("customer_id").eq("kind", kind).eq("key", key).maybeSingle();
+    if (error) throw new Error(`tenant directory: ${error.message}`);
+    return (data?.customer_id as string | undefined) ?? null;
+  },
+  writeDirectory: async (row) => {
+    const { error } = await platformDb().from("tenant_directory").upsert(row, { onConflict: "kind,key", ignoreDuplicates: true });
+    if (error) throw new Error(error.message);
+  },
 });
 
-export async function customerOf(kind: DirectoryKind, key: string | null | undefined): Promise<string | null> {
-  if (!key || !routingActive(tenancyConfig())) return null;
-  return directory.customerOf(kind, key);
-}
-
-export async function keyDb(kind: DirectoryKind, key: string | null | undefined) {
-  return customerDb(await customerOf(kind, key));
-}
-
+export const customerOf = (kind: DirectoryKind, key: string | null | undefined) => router.customerOf(kind, key);
+export const keyDb = (kind: DirectoryKind, key: string | null | undefined) => router.keyDb(kind, key);
 export const surveyDb = (surveyId: string | null | undefined) => keyDb("survey", surveyId);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -96,21 +93,8 @@ export async function sessionDb(sessionId: string, surveyId?: unknown) {
  * row could not be written, and a caller whose later requests depend on it (a new session) should refuse rather than
  * create something that cannot be found again.
  */
-export async function registerKey(kind: Exclude<DirectoryKind, "survey">, key: string, surveyId: string): Promise<boolean> {
-  return registerKeyLike(kind, key, "survey", surveyId, surveyId);
-}
+export const registerKey = (kind: Exclude<DirectoryKind, "survey">, key: string, surveyId: string) => router.registerKeyLike(kind, key, "survey", surveyId, surveyId);
 
 /** the same, owned by whoever owns another key — a live member by its invite, an AI interview session by its study link */
-export async function registerKeyLike(kind: Exclude<DirectoryKind, "survey">, key: string, ownerKind: DirectoryKind, ownerKey: string, surveyId: string | null = null): Promise<boolean> {
-  if (!routingActive(tenancyConfig())) return true;
-  try {
-    const customerId = await customerOf(ownerKind, ownerKey);
-    if (!customerId) return true; // a client on the primary needs no row
-    const { error } = await platformDb().from("tenant_directory").upsert({ kind, key, customer_id: customerId, survey_id: surveyId }, { onConflict: "kind,key", ignoreDuplicates: true });
-    if (error) throw new Error(error.message);
-    return true;
-  } catch (e) {
-    console.error("[rescript:tenancy] directory row not written", JSON.stringify({ kind, error: (e as Error).message }));
-    return false;
-  }
-}
+export const registerKeyLike = (kind: Exclude<DirectoryKind, "survey">, key: string, ownerKind: DirectoryKind, ownerKey: string, surveyId: string | null = null) =>
+  router.registerKeyLike(kind, key, ownerKind, ownerKey, surveyId);

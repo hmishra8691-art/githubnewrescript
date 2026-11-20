@@ -32,6 +32,10 @@
     "./directory": {
       "types": "./dist/directory.d.ts",
       "default": "./dist/directory.js"
+    },
+    "./routing": {
+      "types": "./dist/routing.d.ts",
+      "default": "./dist/routing.js"
     }
   },
   "scripts": {
