@@ -10,6 +10,7 @@
     "test": "node --experimental-strip-types --no-warnings --test \"lib/**/*.test.ts\""
   },
   "dependencies": {
+    "@rescript/access": "workspace:*",
     "@rescript/ai": "workspace:*",
     "@rescript/analytics": "workspace:*",
     "@rescript/billing": "workspace:*",

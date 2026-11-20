@@ -1,0 +1,53 @@
+"use client";
+import React from "react";
+import { begin, portalApi, when } from "@/components/portal/api";
+import { Note, Shell } from "@/components/portal/Shell";
+
+interface Card { id: string; title: string; state: string; canStart: boolean; canResume: boolean; attemptsLeft: number | null; reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean }
+interface Me { account: { respondentId: string; name: string | null }; assessments: Card[] }
+
+const LABEL: Record<string, string> = { open: "To do", in_progress: "In progress", upcoming: "Opens soon", completed: "Completed", closed: "Closed", suspended: "Paused" };
+
+function Tile({ c, onError }: { c: Card; onError: (m: string) => void }) {
+  const [busy, setBusy] = React.useState(false);
+  const go = async () => { setBusy(true); await begin(c.id, onError); setBusy(false); };
+  return (
+    <article className="pt-card pt-tile" data-testid={`pt-card-${c.state}`}>
+      <span className={`pt-chip is-${c.state}`}>{LABEL[c.state] ?? c.state}</span>
+      <h3>{c.title}</h3>
+      <div className="pt-meta">
+        {c.state === "upcoming" && c.opensAt && <div>Opens {when(c.opensAt, true)}</div>}
+        {(c.state === "open" || c.state === "in_progress") && c.closesAt && <div>Open until {when(c.closesAt, true)}</div>}
+        {c.lastCompletedAt && <div>Completed {when(c.lastCompletedAt)}</div>}
+        {c.attempts > 1 && <div>{c.attempts} attempts</div>}
+        {c.canStart && c.attempts > 0 && c.attemptsLeft !== null && <div>{c.attemptsLeft} {c.attemptsLeft === 1 ? "attempt" : "attempts"} left</div>}
+        {c.reason && <div>{c.reason}</div>}
+      </div>
+      <div className="pt-actions">
+        {c.canResume && <button type="button" className="pt-btn is-primary" onClick={go} disabled={busy} data-testid="pt-resume">Continue</button>}
+        {c.canStart && <button type="button" className="pt-btn is-primary" onClick={go} disabled={busy} data-testid="pt-start">{c.attempts > 0 ? "Take it again" : "Start"}</button>}
+        {c.attempts > 0 && <a className="pt-btn" href={`/portal/assessments/${c.id}`} data-testid="pt-view">{c.canViewAnswers ? "View my answers" : "Details"}</a>}
+      </div>
+    </article>
+  );
+}
+
+export default function PortalOverview() {
+  const [me, setMe] = React.useState<Me | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => { void portalApi<Me>("me").then((r) => (r.ok ? setMe(r.data) : r.error.status !== 401 && setError(r.error.error))); }, []);
+
+  const todo = (me?.assessments ?? []).filter((c) => ["open", "in_progress", "upcoming"].includes(c.state));
+  const done = (me?.assessments ?? []).filter((c) => !["open", "in_progress", "upcoming"].includes(c.state));
+  return (
+    <Shell current="overview" who={me?.account}>
+      <h1>{me?.account.name ? `Welcome, ${me.account.name}` : "Welcome"}</h1>
+      <p className="pt-lead">Your assessments, and what you have completed.</p>
+      {error && <Note kind="bad">{error}</Note>}
+      {!me && !error && <p className="pt-empty">Loading…</p>}
+      {me && !me.assessments.length && <div className="pt-card pt-empty" data-testid="pt-none">You have no assessments at the moment. When one is assigned to you it will appear here.</div>}
+      {todo.length > 0 && (<><h2>To do</h2><div className="pt-grid">{todo.map((c) => <Tile key={c.id} c={c} onError={setError} />)}</div></>)}
+      {done.length > 0 && (<><h2>Completed and closed</h2><div className="pt-grid">{done.map((c) => <Tile key={c.id} c={c} onError={setError} />)}</div></>)}
+    </Shell>
+  );
+}

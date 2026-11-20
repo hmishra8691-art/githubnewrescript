@@ -4,14 +4,16 @@ import { SlidingWindowLimiter, readLimits, DEFAULT_LIMITS } from "./rateLimit.ts
 
 test("limits read from the environment: defaults, overrides, off", () => {
   assert.deepEqual(readLimits({}), DEFAULT_LIMITS);
-  assert.deepEqual(readLimits({ RUNTIME_RATE_LIMIT: "start=10, save=50" }), { start: 10, save: 50, entry: DEFAULT_LIMITS.entry });
+  assert.deepEqual(readLimits({ RUNTIME_RATE_LIMIT: "start=10, save=50" }), { ...DEFAULT_LIMITS, start: 10, save: 50 });
   assert.deepEqual(readLimits({ RUNTIME_RATE_LIMIT: "start=abc,bogus=3" }), DEFAULT_LIMITS, "nonsense keeps the defaults");
+  assert.equal(readLimits({ RUNTIME_RATE_LIMIT: "portal_auth=5" })!.portal_auth, 5);
+  assert.equal(DEFAULT_LIMITS.portal_auth, 20, "sign-in attempts are limited far below the survey routes");
   assert.equal(readLimits({ RUNTIME_RATE_LIMIT: "off" }), null);
 });
 
 test("a flood from one address is refused with a retry time; other addresses and routes are untouched; the window slides", () => {
   let now = 1_000_000;
-  const l = new SlidingWindowLimiter({ start: 3, save: 5, entry: 3 }, () => now);
+  const l = new SlidingWindowLimiter({ start: 3, save: 5, entry: 3, portal_auth: 3, portal: 3 }, () => now);
   for (let i = 0; i < 3; i++) assert.equal(l.check("start", "1.1.1.1").ok, true);
   const r = l.check("start", "1.1.1.1");
   assert.equal(r.ok, false);
@@ -23,7 +25,7 @@ test("a flood from one address is refused with a retry time; other addresses and
 });
 
 test("memory stays bounded however many addresses arrive", () => {
-  const l = new SlidingWindowLimiter({ start: 1, save: 1, entry: 1 });
+  const l = new SlidingWindowLimiter({ start: 1, save: 1, entry: 1, portal_auth: 3, portal: 3 });
   for (let i = 0; i < 25_000; i++) l.check("start", `10.0.${i >> 8}.${i & 255}-${i}`);
   assert.ok(l.size <= 20_000);
 });

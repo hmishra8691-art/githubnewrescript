@@ -21,8 +21,9 @@
  *   RUNTIME_RATE_LIMIT=start=60,save=600,entry=120 per-minute limits (any subset; the rest keep their defaults)
  */
 
-export type LimitedRoute = "start" | "save" | "entry";
-export const DEFAULT_LIMITS: Record<LimitedRoute, number> = { start: 60, save: 600, entry: 120 };
+/* `portal_auth`: sign-in, invitation and reset attempts of the respondent portal — far below the survey routes, because nobody types a password 60 times a minute */
+export type LimitedRoute = "start" | "save" | "entry" | "portal_auth" | "portal";
+export const DEFAULT_LIMITS: Record<LimitedRoute, number> = { start: 60, save: 600, entry: 120, portal_auth: 20, portal: 240 };
 const WINDOW_MS = 60_000;
 /* a bound on memory: past it the oldest addresses are forgotten (an attacker rotating addresses gains nothing from that) */
 const MAX_KEYS = 20_000;
@@ -32,7 +33,7 @@ export function readLimits(env: Record<string, string | undefined>): Record<Limi
   if (raw === "off" || raw === "0" || raw === "false") return null;
   const out = { ...DEFAULT_LIMITS };
   for (const part of raw.split(/[\s,]+/).filter(Boolean)) {
-    const m = /^(start|save|entry)\s*=\s*(\d{1,6})$/.exec(part);
+    const m = /^(start|save|entry|portal_auth|portal)\s*=\s*(\d{1,6})$/.exec(part);
     if (m && Number(m[2]) > 0) out[m[1] as LimitedRoute] = Number(m[2]);
   }
   return out;

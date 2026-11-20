@@ -145,25 +145,34 @@ export async function createSession(
      * when they arrive. `is_test` defaults to false, so a database on which
      * 0013 has not run keeps behaving exactly as it did.
      */
-    let lookup = await db
-      .from("respondents")
-      .select("id, status, embedded")
-      .eq("survey_id", dep.surveyId)
-      .eq("token", opts.respondentToken)
-      .eq("is_test", opts.isTest)
-      .maybeSingle();
+    /*
+     * RESPONDENT PORTAL (0103): an enrolment may carry its own access window, a pause and a number of attempts. They
+     * are read with the row; a database without 0103 has no such columns, so that read is retried without them and
+     * the respondent is treated exactly as before.
+     */
+    const PORTAL_COLUMNS = ", access_from, access_until, max_attempts, portal_suspended";
+    const find = (columns: string, env: boolean) => {
+      const q = db.from("respondents").select(columns).eq("survey_id", dep.surveyId).eq("token", opts.respondentToken!);
+      return (env ? q.eq("is_test", opts.isTest) : q).maybeSingle();
+    };
+    let lookup = await find(`id, status, embedded${PORTAL_COLUMNS}`, true);
+    if (lookup.error && /access_from|access_until|max_attempts|portal_suspended/.test(lookup.error.message ?? "")) lookup = await find("id, status, embedded", true);
     if (lookup.error && /is_test/.test(lookup.error.message ?? "")) {
       // pre-0013: no environment column to match on
-      lookup = await db
-        .from("respondents")
-        .select("id, status, embedded")
-        .eq("survey_id", dep.surveyId)
-        .eq("token", opts.respondentToken)
-        .maybeSingle();
+      lookup = await find("id, status, embedded", false);
     }
-    const r = lookup.data;
+    const r = lookup.data as unknown as { id: string; status: string; embedded?: unknown; access_from?: string | null; access_until?: string | null; max_attempts?: number | null; portal_suspended?: boolean } | null;
     if (!r) return { error: "Invalid invitation link." };
-    if (!access.allowRetake && ["complete", "screened", "quota_full", "terminated"].includes(r.status))
+    const nowMs = Date.now();
+    if (r.portal_suspended) return { error: "Your access to this survey has been paused. Please contact the organiser." };
+    if (r.access_from && Date.parse(r.access_from) > nowMs) return { error: "This survey has not opened for you yet." };
+    if (r.access_until && Date.parse(r.access_until) <= nowMs) return { error: "The time to take this survey has ended." };
+    if (r.max_attempts != null) {
+      /* the researcher set a number of attempts for this person: that, not the survey-wide retake switch, decides */
+      const { count } = await db.from("responses").select("id", { count: "exact", head: true })
+        .eq("respondent_id", r.id).eq("is_test", opts.isTest).in("status", ["complete", "screened", "quota_full", "terminated"]).is("deleted_at", null);
+      if ((count ?? 0) >= r.max_attempts) return { error: r.max_attempts === 1 ? "This invitation link has already been used." : "You have used all your attempts for this survey." };
+    } else if (!access.allowRetake && ["complete", "screened", "quota_full", "terminated"].includes(r.status))
       return { error: "This invitation link has already been used." };
     respondentId = r.id;
     const fromList = (r as { embedded?: unknown }).embedded;

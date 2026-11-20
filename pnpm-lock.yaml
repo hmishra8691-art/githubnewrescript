@@ -105,6 +105,9 @@ importers:
 
   apps/runtime:
     dependencies:
+      '@rescript/access':
+        specifier: workspace:*
+        version: link:../../packages/access
       '@rescript/ai':
         specifier: workspace:*
         version: link:../../packages/ai

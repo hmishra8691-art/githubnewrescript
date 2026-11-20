@@ -421,6 +421,22 @@
       "class": "platform",
       "why": "sign-in"
     },
+    "portal_accounts": {
+      "class": "platform",
+      "why": "a respondent's portal identity \u2014 one person wherever the client's data lives; holds no answers and names no survey"
+    },
+    "portal_credentials": {
+      "class": "platform",
+      "why": "portal sign-in secrets (hashes only) \u2014 credentials are platform data"
+    },
+    "portal_events": {
+      "class": "platform",
+      "why": "the portal's access log: sign-ins, views, edits, researcher actions"
+    },
+    "portal_sessions": {
+      "class": "platform",
+      "why": "portal sign-in sessions"
+    },
     "profiles": {
       "class": "platform",
       "why": "people and which workspace they belong to"
