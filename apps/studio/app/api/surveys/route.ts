@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { clientDb, platformDb, registerKeyFor, type Db } from "@/lib/db";
 import { newSurveyDefinition } from "@/lib/defaults";
 import { loadDashboardStats } from "@/lib/dashboard";
 import { SurveyDefinition } from "@rescript/schema";
@@ -26,9 +26,14 @@ export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
 
-  let db: ReturnType<typeof supabaseAdmin>;
+  /*
+   * The project list spans workspaces (a member's shares) and joins people with surveys
+   * (rescript_my_projects): it is read on the primary. With clients on their own databases this list needs a
+   * per-database read and a merge — docs/TENANCY, "still open".
+   */
+  let db: Db;
   try {
-    db = supabaseAdmin();
+    db = platformDb();
   } catch (e) {
     // Missing env vars: answer with a readable message instead of a 500 page.
     return NextResponse.json(
@@ -160,7 +165,8 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const title = String(body.title ?? "Untitled survey").slice(0, 200);
   const code = String(body.code ?? `SURVEY_${Date.now().toString(36).toUpperCase()}`).slice(0, 60);
-  const db = supabaseAdmin();
+  /* a new project lives in its workspace's client database */
+  const db = clientDb(user.customerId);
 
   /*
    * STRICT: an imported questionnaire (and anything else that says so) must
@@ -185,10 +191,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /* tenancy: the directory row first (once routing is on), so the new project can always be found again */
+  const newId = crypto.randomUUID();
+  if (!(await registerKeyFor("survey", newId, user.customerId, newId))) {
+    return NextResponse.json({ error: "The project could not be created just now. Please try again." }, { status: 503 });
+  }
   const { data: survey, error } = await db
     .from("surveys")
     /* the project's choice of whose AI it uses, made at creation (the owner can change it later): "platform", "user", or none — each person's own setting decides */
-    .insert({ customer_id: user.customerId, code, title, owner_id: user.userId, created_by: user.userId, ...(body.aiSource === "platform" || body.aiSource === "user" ? { settings: { ai: { source: body.aiSource } } } : {}) })
+    .insert({ id: newId, customer_id: user.customerId, code, title, owner_id: user.userId, created_by: user.userId, ...(body.aiSource === "platform" || body.aiSource === "user" ? { settings: { ai: { source: body.aiSource } } } : {}) })
     .select("id")
     .single();
   if (error) {

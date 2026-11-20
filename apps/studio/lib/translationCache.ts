@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { sourceHash, memoryCache, type CacheEntry, type TranslationCache } from "@rescript/ai";
 
 /**
@@ -14,7 +14,7 @@ export class DatabaseTranslationCache implements TranslationCache {
   async get(keys: string[]): Promise<Record<string, CacheEntry>> {
     if (!keys.length) return {};
     try {
-      const db = supabaseAdmin();
+      const db = platformDb();
       const { data, error } = await db.from("translation_cache").select("cache_key, provider, source_language, target_language, source_text, translated_text, approved").eq("customer_id", this.customerId).in("cache_key", keys);
       if (error || !data) return {};
       const out: Record<string, CacheEntry> = {};
@@ -28,7 +28,7 @@ export class DatabaseTranslationCache implements TranslationCache {
   async set(entries: CacheEntry[]): Promise<void> {
     if (!entries.length) return;
     try {
-      const db = supabaseAdmin();
+      const db = platformDb();
       const keys = entries.map((e) => e.key);
       const existing = await db.from("translation_cache").select("cache_key, approved").eq("customer_id", this.customerId).in("cache_key", keys);
       const approvedKeys = new Set((existing.data ?? []).filter((r) => r.approved).map((r) => r.cache_key));

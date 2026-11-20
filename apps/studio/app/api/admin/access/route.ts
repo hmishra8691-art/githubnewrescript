@@ -1,3 +1,4 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import {
   ACCESS_FIELDS, DEFAULT_SESSION_POLICY, DEFAULT_THROTTLE,
@@ -68,7 +69,7 @@ export async function GET(req: NextRequest) {
   const gate = await requireAdmin(req);
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseService();
+  const db = platformDb();
   const customerId = gate.customerId;
 
   /*
@@ -148,7 +149,7 @@ export async function PUT(req: NextRequest) {
   }
   const next = draft.policy;
 
-  const db = supabaseService();
+  const db = platformDb();
   const { error } = await db.from("access_settings").upsert({
     customer_id: gate.customerId,
     policy: next,

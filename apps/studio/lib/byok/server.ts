@@ -1,6 +1,6 @@
 import "server-only";
+import { platformDb } from "@/lib/db";
 import { NextResponse, type NextRequest } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import type { AuthedUser } from "@/lib/guard";
 import { memoryStore, type Deps } from "./service";
 import { AiStoreUnavailable, SupabaseAiStore, type AiStore } from "./store";
@@ -20,14 +20,14 @@ const dbConfigured = () => !!process.env.SUPABASE_URL && !!process.env.SUPABASE_
 
 export function aiStore(): AiStore {
   if (!dbConfigured()) return memoryStore();
-  return (globalThis.__rescriptAiDbStore ??= new SupabaseAiStore(supabaseAdmin()));
+  return (globalThis.__rescriptAiDbStore ??= new SupabaseAiStore(platformDb()));
 }
 
 /** the workspace's `ai_byok_allowed`; true when there is no workspace, no database, or the column is not there yet (migration 0054 not applied) */
 export async function workspaceAllowsByok(customerId: string | null | undefined): Promise<boolean> {
   if (!customerId || !dbConfigured()) return true;
   try {
-    const { data, error } = await supabaseAdmin().from("customers").select("ai_byok_allowed").eq("id", customerId).maybeSingle();
+    const { data, error } = await platformDb().from("customers").select("ai_byok_allowed").eq("id", customerId).maybeSingle();
     if (error) return true;
     return (data as { ai_byok_allowed?: boolean } | null)?.ai_byok_allowed !== false;
   } catch { return true; }

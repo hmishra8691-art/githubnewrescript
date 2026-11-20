@@ -1,5 +1,5 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, publicUser, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
 
-  const db = supabaseService();
+  const db = platformDb();
   const [{ data: profile }, { count }] = await Promise.all([
     db.from("profiles")
       .select("organization, job_title, created_at, last_login_at, status")

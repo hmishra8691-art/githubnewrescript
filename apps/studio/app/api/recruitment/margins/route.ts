@@ -1,7 +1,7 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest } from "next/server";
 import { validateMarginBps, sellingPrice, equivalentMarkupBps, TARGET_MARGIN_BAND } from "@rescript/recruitment";
 import { audit, isFailure, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { noStore, recruitmentActor, refuseVendorVisibility } from "@/lib/recruitment/access";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   if (isFailure(actor)) return actor.response;
   if (!actor.canSeeVendors) return refuseVendorVisibility();
 
-  const db = supabaseService();
+  const db = platformDb();
   const [rules, applications] = await Promise.all([
     db.from("commercial_margins")
       .select("id, scope, margin_bps, market, recruitment_type, recruitment_project_id, note, effective_from, effective_to, created_at")
@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
     return noStore({ error: "An override needs a note. An exception nobody can explain later is a mistake made permanent." }, 400);
   }
 
-  const db = supabaseService();
+  const db = platformDb();
   const market = str(body.market)?.toUpperCase() ?? null;
   const projectId = str(body.recruitmentProjectId);
   const recruitmentType = str(body.recruitmentType);
@@ -146,7 +146,7 @@ export async function DELETE(req: NextRequest) {
    * Ended, not deleted. A margin rule is the reason a price was what it was, and a deleted one leaves a
    * margin_applications row pointing at nothing — which is exactly the question an auditor asks.
    */
-  const { error } = await supabaseService().from("commercial_margins")
+  const { error } = await platformDb().from("commercial_margins")
     .update({ effective_to: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("id", id).eq("customer_id", actor.customerId).is("effective_to", null);
   if (error) return noStore({ error: error.message }, 400);

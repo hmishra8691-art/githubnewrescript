@@ -1,3 +1,4 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStatus, type SessionRecord } from "@rescript/access";
 import { clearSessionCookie, loadPolicies, sessionIdFrom, supabaseService } from "@/lib/authServer";
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
   const sessionId = sessionIdFrom(req);
   if (!sessionId) return NextResponse.json({ status: "none", alive: false }, { status: 401 });
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data: row, error } = await db
     .from("user_sessions")
     .select("id, user_id, status, created_at, last_seen_at, expires_at, ended_reason")

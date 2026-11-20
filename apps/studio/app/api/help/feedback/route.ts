@@ -1,6 +1,6 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { isFailure, requireUser } from "@/lib/guard";
-import { supabaseAdmin } from "@/lib/admin";
 import { dbConfigured } from "@/lib/copilot/durable";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
   const id = typeof body.messageId === "string" && /^[0-9a-f-]{36}$/i.test(body.messageId) ? body.messageId : null;
   if (!id || typeof body.solved !== "boolean") return json({ error: "messageId and solved are required" }, 400);
-  const db = supabaseAdmin();
+  const db = platformDb();
   const { data: msg } = await db.from("help_messages").select("id, role, content, conversation_id").eq("id", id).maybeSingle();
   if (!msg || msg.role !== "assistant") return json({ error: "No such answer." }, 404);
   const { data: conv } = await db.from("help_conversations").select("id").eq("id", msg.conversation_id).eq("user_id", user.userId).is("deleted_at", null).maybeSingle();

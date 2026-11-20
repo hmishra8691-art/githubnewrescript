@@ -1,3 +1,4 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -114,7 +115,7 @@ export async function GET(req: NextRequest) {
   const code = randomBytes(32).toString("base64url");
   const codeHash = createHash("sha256").update(code).digest("hex");
 
-  const { error } = await supabaseService().rpc("rescript_auth_issue_handoff", {
+  const { error } = await platformDb().rpc("rescript_auth_issue_handoff", {
     p_code_hash: codeHash,
     p_session: user.sessionId,
     p_user: user.userId,

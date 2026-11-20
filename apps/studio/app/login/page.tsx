@@ -1,3 +1,4 @@
+import { platformDb } from "@/lib/db";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { sessionAuthorizes, type SessionRecord } from "@rescript/access";
@@ -56,7 +57,7 @@ export default async function LoginPage({
 
   if (sessionId && sessionId.length >= 32) {
     try {
-      const db = supabaseService();
+      const db = platformDb();
       const { data: row } = await db
         .from("user_sessions")
         .select("id, user_id, status, created_at, last_seen_at, expires_at, device_label")

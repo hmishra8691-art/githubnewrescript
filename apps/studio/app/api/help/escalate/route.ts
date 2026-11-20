@@ -1,3 +1,4 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { supabaseAdmin } from "@/lib/admin";
@@ -59,7 +60,7 @@ export async function GET(req: NextRequest) {
   let turns = 0, attempts = 0, hasDiagnostics = false;
   const id = req.nextUrl.searchParams.get("conversationId");
   if (!isFailure(user) && dbConfigured() && id && /^[0-9a-f-]{36}$/i.test(id)) {
-    const c = await conversationTurns(supabaseAdmin(), user.userId, id);
+    const c = await conversationTurns(platformDb(), user.userId, id);
     if (c) { const d = draftTicket(c.turns); turns = d.transcript.length; attempts = d.attempts.length; hasDiagnostics = !!d.diagnostics; }
   }
   return json({ ok: true, available, ...(available ? {} : { note: "Support hand-off isn't set up on this installation: there is no database to keep tickets in and no support e-mail address (SUPPORT_EMAIL) to send them to." }), shared: turns ? sharedSummary({ turns, attempts, hasDiagnostics, hasContext: true }) : null });
@@ -74,7 +75,7 @@ export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
 
-  const db = dbConfigured() ? supabaseAdmin() : null;
+  const db = dbConfigured() ? platformDb() : null;
   const conversationId = str(body.conversationId, 64) || null;
   let turns: StoredTurn[] = [];
   let surveyId: string | null = str(body.surveyId, 64) || null;

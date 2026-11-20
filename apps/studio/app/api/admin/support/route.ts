@@ -1,6 +1,6 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { audit, isFailure, requireAdmin } from "@/lib/guard";
-import { supabaseAdmin } from "@/lib/admin";
 import { helpUsage, type UsageRow } from "@/lib/help/usage";
 import { cacheStats } from "@/lib/help/cache";
 
@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
   const admin = await requireAdmin(req);
   if (isFailure(admin)) return admin.response;
   if (noDb()) return json({ error: "There is no database on this installation to read tickets from.", code: "no_database" }, 501);
-  const db = supabaseAdmin();
+  const db = platformDb();
   const status = req.nextUrl.searchParams.get("status") ?? "open";
   const days = Math.max(1, Math.min(365, Number(req.nextUrl.searchParams.get("days") ?? 30) || 30));
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
@@ -58,7 +58,7 @@ export async function PATCH(req: NextRequest) {
     patch.resolved_at = body.status === "resolved" || body.status === "closed" ? new Date().toISOString() : null;
   }
   if (body.resolution !== undefined) patch.resolution = typeof body.resolution === "string" ? body.resolution.slice(0, 4000) : null;
-  const { data, error } = await supabaseAdmin().from("support_tickets").update(patch).eq("id", id).select("reference, status").maybeSingle();
+  const { data, error } = await platformDb().from("support_tickets").update(patch).eq("id", id).select("reference, status").maybeSingle();
   if (error) return json({ error: error.message }, 500);
   if (!data) return json({ error: "No such ticket." }, 404);
   await audit({ action: "support.ticket_updated", userId: admin.userId, entity: "support_ticket", entityId: data.reference, detail: { reference: data.reference, status: data.status } });

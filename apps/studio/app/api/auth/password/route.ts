@@ -1,3 +1,4 @@
+import { platformDb } from "@/lib/db";
 import { createHash, randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { parseIdentifier } from "@rescript/access";
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
     /* the same-answer contract holds here: a configuration problem is the
      * operator's to see in the log, never the caller's to infer from a
      * different response */
-    const db = supabaseService();
+    const db = platformDb();
 
     /*
      * A per-account throttle, on top of whatever fronts the endpoint. Without
@@ -165,7 +166,7 @@ export async function PUT(req: NextRequest) {
   /*
    * The database, or an honest 503.
    *
-   * `supabaseService()` throws when the instance is not configured, and an
+   * `platformDb()` throws when the instance is not configured, and an
    * uncaught throw here is a bare 500 on the one screen where a person is
    * already anxious and has no other route in. Every other read path in the
    * platform turns this into a 503 with a hint (see `api/surveys/route.ts`);
@@ -173,7 +174,7 @@ export async function PUT(req: NextRequest) {
    */
   let db: ReturnType<typeof supabaseService>;
   try {
-    db = supabaseService();
+    db = platformDb();
   } catch {
     console.error("[rescript:auth] a reset was attempted on an instance with no database configured");
     return NextResponse.json({

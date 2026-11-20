@@ -1,6 +1,6 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { isFailure, requireUser } from "@/lib/guard";
-import { supabaseAdmin } from "@/lib/admin";
 import { dbConfigured } from "@/lib/copilot/durable";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return dbConfigured() ? user.response : json(NOT_STORED);
   if (!dbConfigured()) return json(NOT_STORED);
-  const db = supabaseAdmin();
+  const db = platformDb();
   const id = req.nextUrl.searchParams.get("id");
   if (id) {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "id" }, 400);
@@ -43,7 +43,7 @@ export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id") ?? "";
   if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "id" }, 400);
   if (!dbConfigured()) return json({ ok: true });
-  const { data, error } = await supabaseAdmin().from("help_conversations").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", user.userId).is("deleted_at", null).select("id").maybeSingle();
+  const { data, error } = await platformDb().from("help_conversations").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", user.userId).is("deleted_at", null).select("id").maybeSingle();
   if (error) return missingTable(error.message) ? json({ ok: true }) : json({ error: error.message }, 500);
   if (!data) return json({ error: "No such conversation." }, 404);
   return json({ ok: true });

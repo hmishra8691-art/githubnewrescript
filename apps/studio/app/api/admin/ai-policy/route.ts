@@ -1,5 +1,5 @@
+import { platformDb } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { audit, isFailure, requireAdmin } from "@/lib/guard";
 import { readJson } from "@/lib/byok/server";
 
@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin(req);
   if (isFailure(admin)) return admin.response;
-  const { data, error } = await supabaseAdmin().from("customers").select("id, name, slug, ai_byok_allowed").order("name").limit(500);
+  const { data, error } = await platformDb().from("customers").select("id, name, slug, ai_byok_allowed").order("name").limit(500);
   if (error) {
     const missing = /ai_byok_allowed|column .* does not exist|schema cache/i.test(error.message);
     return NextResponse.json({ error: missing ? "User-managed AI is not enabled on this installation yet (migration 0054)." : "Workspaces could not be read.", code: missing ? "byok_unavailable" : "read_failed" }, { status: missing ? 501 : 500 });
@@ -35,7 +35,7 @@ export async function PATCH(req: NextRequest) {
   const body = await readJson(req);
   const customerId = typeof body?.customerId === "string" ? body.customerId : "";
   if (!/^[0-9a-f-]{36}$/i.test(customerId) || typeof body?.allowed !== "boolean") return NextResponse.json({ error: "Send { customerId, allowed } with allowed true or false." }, { status: 400 });
-  const { data, error } = await supabaseAdmin().from("customers").update({ ai_byok_allowed: body.allowed }).eq("id", customerId).select("id, name, ai_byok_allowed").maybeSingle();
+  const { data, error } = await platformDb().from("customers").update({ ai_byok_allowed: body.allowed }).eq("id", customerId).select("id, name, ai_byok_allowed").maybeSingle();
   if (error) return NextResponse.json({ error: "The setting could not be saved." }, { status: 500 });
   if (!data) return NextResponse.json({ error: "That workspace was not found." }, { status: 404 });
   await audit({ action: "workspace.ai_byok_policy_changed", userId: admin.userId, sessionId: admin.sessionId, customerId: customerId, entity: "customer", entityId: customerId, detail: { allowed: body.allowed, workspace: data.name } });
