@@ -1,4 +1,6 @@
 import type { AccountStatus } from "@rescript/access/respondent";
+import type { BenchmarkSnapshot, StoredScore } from "@rescript/analytics/benchmark";
+import type { ScorecardResult } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 
 /**
@@ -110,5 +112,22 @@ export interface PortalStore {
   /** atomic: refuses when the row moved on (`conflict`) */
   writeEdit(e: EnrolmentRec, w: { responseId: string; expectedRevision: number; answers: Record<string, unknown>; calculated: Record<string, unknown> | null; changes: Record<string, { from: unknown; to: unknown }>; by: string }): Promise<{ ok: true; revision: number } | { ok: false; conflict: boolean; error: string }>;
 
+  /* phase 2 — scores. All four fail soft: before migration 0104 there are simply no comparisons. */
+  saveScorecard(e: EnrolmentRec, s: StoredScorecard): Promise<void>;
+  /** stored scores of the survey's completed live interviews that share this key */
+  scoreRows(e: EnrolmentRec, key: string): Promise<StoredScore[]>;
+  benchmark(e: EnrolmentRec): Promise<{ snapshot: BenchmarkSnapshot; computedAt: string } | null>;
+  saveBenchmark(e: EnrolmentRec, snapshot: BenchmarkSnapshot, now: string): Promise<void>;
+
   log(e: PortalEvent): Promise<void>;
+}
+
+export interface StoredScorecard {
+  responseId: string;
+  /** engine `benchmarkKey`: the scoring and the grouping these scores were made with */
+  key: string;
+  scores: Record<string, number | null>;
+  cohort: Record<string, string | null>;
+  result: ScorecardResult;
+  completedAt: string | null;
 }

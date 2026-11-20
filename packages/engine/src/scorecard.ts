@@ -180,6 +180,15 @@ export function scorecardValues(r: ScorecardResult): Record<string, number | nul
   return out;
 }
 
+/**
+ * What stored scores must share to be compared: the scoring AND the way people are split into groups. A stored row
+ * and a benchmark snapshot carry it; a row with another key is left out until it is scored again.
+ */
+export function benchmarkKey(def: SurveyDefinition, fingerprint: string): string {
+  const groups = portalSettings(def)?.benchmark.groups ?? [];
+  return groups.length ? `${fingerprint}.${fnv1a(JSON.stringify(groups.map((g) => [g.id, g.source])))}` : fingerprint;
+}
+
 /** which comparison group this interview belongs to, per grouping (null = no answer, so no group) */
 export function cohortValues(def: SurveyDefinition, state: { answers: Record<string, unknown>; embedded?: Record<string, unknown> | null }): Record<string, string | null> {
   const out: Record<string, string | null> = {};

@@ -86,3 +86,23 @@ textarea.pt-input { min-height: 96px; resize: vertical; }
   .pt-card { border: 0; padding: 0; }
   .pt-main { padding: 0; max-width: none; }
 }
+
+/* phase 2: scores */
+.pt-scores > li { padding: 16px 0; }
+.pt-score-head { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; }
+.pt-score-value { margin: 0; font-weight: 700; font-size: 18px; white-space: nowrap; }
+.pt-score-value small { font-weight: 500; font-size: 13px; color: var(--pt-muted); }
+.pt-score-value.is-big { font-size: 30px; }
+.pt-bar { position: relative; height: 12px; border-radius: 999px; background: #e7eaf0; margin: 8px 0 6px; }
+.pt-bar-fill { height: 100%; border-radius: 999px; background: var(--pt-brand); min-width: 4px; }
+.pt-bar-mark { position: absolute; top: -4px; width: 3px; height: 20px; margin-left: -1px; border-radius: 2px; background: var(--pt-ink); }
+.pt-bar-mark.is-key { position: static; display: inline-block; height: 12px; margin: 0 6px -2px 0; }
+.pt-band { margin: 6px 0 0; font-size: 14.5px; }
+.pt-compare { list-style: none; margin: 8px 0 0; padding: 0; font-size: 14px; color: #33404f; }
+.pt-compare li { padding: 2px 0; }
+.pt-overall { padding: 4px 0 16px; border-bottom: 1px solid var(--pt-line); }
+.pt-legend { margin-top: 10px; }
+@media print {
+  .pt-bar, .pt-bar-fill, .pt-bar-mark { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .pt-scores > li { break-inside: avoid; }
+}

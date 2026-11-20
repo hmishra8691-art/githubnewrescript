@@ -15,7 +15,6 @@
  * Pure: rows in, snapshot out. The portal stores the snapshot and reads comparisons from it.
  */
 export const BENCHMARK_FLOOR = 10;
-export const OVERALL_KEY = "__overall";
 
 export interface BenchmarkRow {
   /** dimension id → raw score (null = not scored) */
@@ -111,5 +110,19 @@ export function compare(snap: BenchmarkSnapshot | null, values: Record<string, n
     }
     out.push({ dimension, everyone: see(all), groups, note: null });
   }
+  return out;
+}
+
+/** a stored score with who it belongs to: a person who took the survey twice counts once, with their latest */
+export interface StoredScore extends BenchmarkRow { person: string | null; at: string | null }
+export function onePerPerson(rows: StoredScore[]): BenchmarkRow[] {
+  const latest = new Map<string, StoredScore>();
+  const out: BenchmarkRow[] = [];
+  for (const r of rows) {
+    if (!r.person) { out.push({ values: r.values, cohort: r.cohort }); continue; }
+    const had = latest.get(r.person);
+    if (!had || String(r.at ?? "") >= String(had.at ?? "")) latest.set(r.person, r);
+  }
+  for (const r of latest.values()) out.push({ values: r.values, cohort: r.cohort });
   return out;
 }

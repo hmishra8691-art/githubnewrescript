@@ -2,7 +2,7 @@
  * THE RESPONDENT PORTAL IN A REAL BROWSER (Respondent Intelligence Engine, phase 1 — runtime only, sandbox store).
  *
  * The runtime with no database and the stand-in provider serves the portal from its seeded in-memory store
- * (apps/runtime/lib/portal/sandbox.ts): Ana (three assessments), Ben (one), Cara (invited, no password yet).
+ * (apps/runtime/lib/portal/sandbox.ts): Ana (four assessments), Ben (one), Cara (invited, no password yet).
  *
  *   1. signed out: the dashboard goes to sign-in; a wrong password and an unknown login read the same
  *   2. sign in with the Respondent ID → the dashboard: to do / in progress / completed, Ana's only; the session
@@ -16,6 +16,8 @@
  *   8. invitation link: shows the Respondent ID, sets a password, lands signed in; the link then no longer works
  *   9. forgotten password: the same answer for a real and an unknown login
  *  10. the pages work at a phone's width without sideways scrolling
+ *  11. (phase 2) my results: each score with its range name and bar; the comparison with everyone and with my own
+ *      team only; no other team, no person and no cut point reaches the browser; the print layout keeps the results
  */
 import assert from "node:assert/strict";
 import { chromium } from "./lib/playwright.mjs";
@@ -63,7 +65,7 @@ console.log("\n2 — sign in, the dashboard");
   await page.waitForFunction(() => /Welcome, Ana Silva/.test(document.querySelector("h1")?.textContent ?? ""));
   assert.match(await page.textContent('[data-testid="pt-who"]'), /RSP-SANDB0X1/);
   const titles = await page.$$eval(".pt-tile h3", (els) => els.map((e) => e.textContent));
-  assert.deepEqual(titles.sort(), ["Onboarding questionnaire", "Sleep diary", "Weekly wellbeing check"]);
+  assert.deepEqual(titles.sort(), ["Onboarding questionnaire", "Sleep diary", "Weekly wellbeing check", "Workplace wellbeing index"]);
   assert.equal(await page.locator('[data-testid="pt-card-in_progress"] [data-testid="pt-resume"]').count(), 1);
   assert.equal(await page.locator('[data-testid="pt-card-open"] [data-testid="pt-start"]').count(), 1);
   assert.ok(!(await page.content()).includes("Ben"), "nothing of another respondent is on the page");
@@ -72,7 +74,7 @@ console.log("\n2 — sign in, the dashboard");
   const c = cookies.find((x) => x.name === "rescript_portal");
   assert.ok(c && c.httpOnly && c.sameSite === "Lax", JSON.stringify(c));
   assert.equal(await page.evaluate(() => document.cookie.includes("rescript_portal")), false);
-  ok("the dashboard lists Ana's three assessments by state; the session cookie is httpOnly and SameSite=Lax");
+  ok("the dashboard lists Ana's four assessments by state; the session cookie is httpOnly and SameSite=Lax");
 }
 
 console.log("\n3 — start and continue");
@@ -88,7 +90,7 @@ console.log("\n3 — start and continue");
 
 console.log("\n4 — my answers, and changing one");
 {
-  await page.click('[data-testid="pt-card-completed"] [data-testid="pt-view"]');
+  await page.click('[data-testid="pt-card-completed"] a[href="/portal/assessments/e-done"]');
   await page.waitForSelector('[data-testid="pt-answers"]');
   const answers = await page.$$eval(".pt-answers .pt-a", (els) => els.map((e) => e.textContent));
   assert.deepEqual(answers, ["Well", "Went for a walk, Saw friends", "A calm week."]);
@@ -110,6 +112,52 @@ console.log("\n4 — my answers, and changing one");
   assert.equal(stale.status, 409); assert.equal(stale.body.code, "revision_conflict");
   assert.equal(await page.locator('[data-testid="pt-print"]').count(), 1);
   ok("answers are shown as words; a locked answer cannot be changed (page or API); allowed changes are saved and survive a reload; a stale window is refused");
+}
+
+console.log("\n4b — my results (phase 2)");
+{
+  await page.goto("/portal");
+  await page.waitForSelector('[data-testid="pt-card-completed"]');
+  assert.match(await page.textContent('[data-testid="pt-card-completed"] a[href="/portal/assessments/e-index"]'), /View my results/);
+  await page.goto("/portal/assessments/e-index");
+  await page.waitForSelector('[data-testid="pt-scores"]');
+  const text = async (id) => (await page.textContent(`[data-testid="${id}"]`)).replace(/\s+/g, " ");
+  assert.match(await text("pt-overall"), /Wellbeing index\s*75 of 100/);
+  const energy = await text("pt-score-energy");
+  assert.match(energy, /Energy\s*9 of 10/); assert.match(energy, /High You usually have energy to spare\./);
+  assert.match(energy, /Everyone: Higher than \d+% of 23 people\. Average [\d.]+\./);
+  assert.match(energy, /Team: North\. (Higher than \d+% of 12 people|The same as the 12 people compared)\. Average [\d.]+\./);
+  const pressure = await text("pt-score-pressure");
+  assert.match(pressure, /Pressure\s*5 of 10/); assert.match(pressure, /Everyone: Lower than \d+% of 23 people/, "less is better: worded from the good end");
+  assert.ok(!(await text("pt-scores")).includes("South"), "no figure about another team");
+  assert.match(await text("pt-scores"), /groups of at least ten people/); assert.match(await text("pt-scores"), /not a diagnosis/);
+  /* the bar: a filled part, and the line for everyone's average */
+  const bar = await page.$eval('[data-testid="pt-score-energy"] .pt-bar-fill', (el) => el.style.width);
+  assert.equal(bar, "87.5%");
+  assert.equal(await page.locator('[data-testid="pt-score-energy"] .pt-bar-mark').count(), 1);
+  assert.match(await page.getAttribute('[data-testid="pt-score-energy"] .pt-bar', "aria-label"), /Energy: 9 of 10; average of everyone/);
+  /* what the server sent: groups only */
+  const raw = await api("assessments/e-index");
+  const sent = JSON.stringify(raw.body);
+  assert.equal(raw.status, 200);
+  assert.ok(!sent.includes("cuts"), "no cut points");
+  assert.ok(!sent.includes("peer-"), "no other person");
+  assert.ok(!/"group":"South"/.test(sent), "no other team's figures");
+  /* print: the results stay, the buttons go */
+  await page.emulateMedia({ media: "print" });
+  assert.equal(await page.locator('[data-testid="pt-scores"]').isVisible(), true);
+  assert.equal(await page.locator('[data-testid="pt-print"]').isVisible(), false);
+  await page.emulateMedia({ media: "screen" });
+  if (process.env.PORTAL_SHOTS) {
+    await page.screenshot({ path: `${process.env.PORTAL_SHOTS}/results-desktop.png`, fullPage: true });
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.screenshot({ path: `${process.env.PORTAL_SHOTS}/results-phone.png`, fullPage: true });
+  }
+  await page.setViewportSize({ width: 375, height: 800 });
+  await page.waitForTimeout(300);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 1, "the results fit a 375px screen");
+  await page.setViewportSize({ width: 1280, height: 720 });
+  ok("my results: scores, range names, bars, the comparison with everyone and my own team only; nothing about another person or team is sent; prints");
 }
 
 console.log("\n5 — somebody else's assessment");

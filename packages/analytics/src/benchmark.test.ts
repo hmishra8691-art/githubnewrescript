@@ -73,3 +73,12 @@ test("no comparison across different scorings, and a plain reason when there is 
   assert.match(compare(snap, { work: 3 }, {}, "f")[0]!.note!, /at least 10 people/);
   assert.deepEqual(compare(snap, { calm: null }, {}, "f"), [], "no score, nothing to compare");
 });
+
+test("a person who took it twice counts once, with their latest; people without an identity each count", async () => {
+  const { onePerPerson } = await import("./benchmark.js");
+  const rows = onePerPerson([
+    { person: "a", at: "2026-01-01", values: { calm: 1 }, cohort: {} }, { person: "a", at: "2026-03-01", values: { calm: 9 }, cohort: {} },
+    { person: "b", at: null, values: { calm: 5 }, cohort: {} }, { person: null, at: null, values: { calm: 2 }, cohort: {} }, { person: null, at: null, values: { calm: 3 }, cohort: {} },
+  ]);
+  assert.deepEqual(rows.map((r) => r.values.calm).sort(), [2, 3, 5, 9]);
+});

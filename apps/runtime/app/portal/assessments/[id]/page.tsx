@@ -1,13 +1,14 @@
 "use client";
 import React from "react";
 import { begin, portalApi, when } from "@/components/portal/api";
+import { Scores, type Comparison, type Scorecard } from "@/components/portal/Scores";
 import { Note, Shell } from "@/components/portal/Shell";
 
 type Option = { code: string | number; label: string };
 type Input = { kind: "single"; options: Option[]; value: string | number | null } | { kind: "multi"; options: Option[]; value: (string | number)[] } | { kind: "text"; long: boolean; value: string } | { kind: "number"; value: number | null };
 interface Line { questionId: string; code: string; text: string; answer: string; edit: { allowed: boolean; reason?: string }; input: Input | null }
-interface Attempt { id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: Line[] | null; editableUntil: string | null; editable: boolean; editNote: string | null }
-interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null }; attempts: Attempt[] }
+interface Attempt { id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: Line[] | null; editableUntil: string | null; editable: boolean; editNote: string | null; scores: Scorecard | null; comparison: Comparison[] | null }
+interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; scoredTest: boolean }; attempts: Attempt[] }
 
 const STATUS: Record<string, string> = { complete: "Completed", in_progress: "In progress", screened: "Ended early", quota_full: "Ended early", terminated: "Ended early" };
 
@@ -60,7 +61,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
     await load();
   };
 
-  const shown = d?.attempts.find((a) => a.answers);
+  const shown = d?.attempts.find((a) => a.answers || a.scores);
   return (
     <Shell current="assessment">
       <p className="pt-noprint"><a href="/portal">← Overview</a></p>
@@ -87,6 +88,13 @@ export default function PortalAssessment({ params }: { params: { id: string } })
             )}
           </div>
 
+          {d.attempts.filter((a) => a.scores).map((a, i) => (
+            <section key={`s-${a.id}`}>
+              <h2>{i === 0 ? "My results" : `Results from ${when(a.completedAt)}`}</h2>
+              <Scores scores={a.scores!} comparison={a.comparison} scoredTest={d.assessment.scoredTest} />
+            </section>
+          ))}
+
           {d.attempts.filter((a) => a.answers).map((a, i) => (
             <section key={a.id} data-testid="pt-answers">
               <h2>{i === 0 ? "My answers" : `Answers from ${when(a.completedAt)}`}</h2>
@@ -112,7 +120,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
               </div>
             </section>
           ))}
-          {d.attempts.some((a) => a.status === "complete") && !shown && <p className="pt-why" style={{ marginTop: 16 }}>The organiser of this assessment has not made submitted answers available to view.</p>}
+          {d.attempts.some((a) => a.status === "complete") && !d.attempts.some((a) => a.answers) && <p className="pt-why" style={{ marginTop: 16 }}>The organiser of this assessment has not made submitted answers available to view.</p>}
         </>
       )}
     </Shell>

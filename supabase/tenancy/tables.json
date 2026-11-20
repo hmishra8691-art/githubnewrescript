@@ -429,9 +429,17 @@
       "class": "platform",
       "why": "portal sign-in secrets (hashes only) \u2014 credentials are platform data"
     },
+    "portal_benchmarks": {
+      "class": "customer",
+      "why": "the comparison snapshot of one survey's scores (groups, never a person)"
+    },
     "portal_events": {
       "class": "platform",
       "why": "the portal's access log: sign-ins, views, edits, researcher actions"
+    },
+    "portal_scorecards": {
+      "class": "customer",
+      "why": "one respondent's scores for one completed interview"
     },
     "portal_sessions": {
       "class": "platform",

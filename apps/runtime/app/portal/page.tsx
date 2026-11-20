@@ -3,7 +3,7 @@ import React from "react";
 import { begin, portalApi, when } from "@/components/portal/api";
 import { Note, Shell } from "@/components/portal/Shell";
 
-interface Card { id: string; title: string; state: string; canStart: boolean; canResume: boolean; attemptsLeft: number | null; reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean }
+interface Card { id: string; title: string; state: string; canStart: boolean; canResume: boolean; attemptsLeft: number | null; reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores?: boolean }
 interface Me { account: { respondentId: string; name: string | null }; assessments: Card[] }
 
 const LABEL: Record<string, string> = { open: "To do", in_progress: "In progress", upcoming: "Opens soon", completed: "Completed", closed: "Closed", suspended: "Paused" };
@@ -26,7 +26,7 @@ function Tile({ c, onError }: { c: Card; onError: (m: string) => void }) {
       <div className="pt-actions">
         {c.canResume && <button type="button" className="pt-btn is-primary" onClick={go} disabled={busy} data-testid="pt-resume">Continue</button>}
         {c.canStart && <button type="button" className="pt-btn is-primary" onClick={go} disabled={busy} data-testid="pt-start">{c.attempts > 0 ? "Take it again" : "Start"}</button>}
-        {c.attempts > 0 && <a className="pt-btn" href={`/portal/assessments/${c.id}`} data-testid="pt-view">{c.canViewAnswers ? "View my answers" : "Details"}</a>}
+        {c.attempts > 0 && <a className="pt-btn" href={`/portal/assessments/${c.id}`} data-testid="pt-view">{c.canViewScores ? "View my results" : c.canViewAnswers ? "View my answers" : "Details"}</a>}
       </div>
     </article>
   );

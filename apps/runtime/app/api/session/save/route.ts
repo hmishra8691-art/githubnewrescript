@@ -20,6 +20,7 @@ import { sampleRate, shouldReplay } from "@/lib/replayScope";
 const questionTypes = (d: any): Record<string, string> => Object.fromEntries(((d?.questions ?? []) as { id: string; type: string }[]).map((q) => [q.id, q.type]));
 import { assessmentResultRow, scoreForSubmission } from "@/lib/assessmentPayload";
 import type { RespondentAssessmentReport } from "@rescript/engine";
+import { scoreInterview, scorecardRow } from "@/lib/portal/scorecardRow";
 
 export const dynamic = "force-dynamic";
 
@@ -356,6 +357,22 @@ export const POST = observed(async function POST(req: NextRequest) {
         }
       } catch (e) {
         console.error("[rescript:assessment] scoring failed (answers saved)", { sessionId: sessionId.slice(0, 8), error: (e as Error).message });
+      }
+    }
+    /*
+     * THE PORTAL'S SCORECARD (phase 2, 2026-11-20 — migration 0104): a survey that defines one (def.portal.scorecard)
+     * has the completed interview's scores stored, so a respondent's comparison with their group never rescans
+     * every answer. Never fails the save: the scores are recomputable from the answers (Studio, "Score again").
+     */
+    if (newStatus === "complete" && def?.portal?.enabled && def.portal.scorecard?.dimensions.length) {
+      try {
+        const scored = scoreInterview(def, { answers: (update.answers as Record<string, unknown>) ?? answers ?? {}, calculated: (update.calculated as Record<string, unknown>) ?? calculated ?? {}, embedded: (update.embedded as Record<string, unknown>) ?? embedded ?? {} });
+        if (scored) {
+          const { error: scErr } = await db.from("portal_scorecards").upsert(scorecardRow(existing, scored, new Date().toISOString()), { onConflict: "response_id" });
+          if (scErr) console.warn("[rescript:portal] scorecard not stored (answers saved)", JSON.stringify({ sessionId: sessionId.slice(0, 8), error: scErr.message }));
+        }
+      } catch (e) {
+        console.error("[rescript:portal] scorecard failed (answers saved)", { sessionId: sessionId.slice(0, 8), error: (e as Error).message });
       }
     }
     /* G3 2026-10-22: survey fieldwork alerts — a quota-full end, completes milestones (never blocks the save) */

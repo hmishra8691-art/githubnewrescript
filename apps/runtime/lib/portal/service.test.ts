@@ -274,3 +274,142 @@ test("profile: the name can be corrected; an empty one is refused", async () => 
   assert.equal((await updateProfile(r.d, ana, { name: "  Ana   Silva " })).name, "Ana Silva");
   await fails(updateProfile(r.d, ana, { name: " " }), 400);
 });
+
+/* ------------------------------------------------------------------ phase 2: scores and comparisons */
+
+const five = () => [1, 2, 3, 4, 5].map((n) => ({ code: n, label: `Point ${n}` }));
+const indexDef = (portal: Record<string, unknown>) => SurveyDefinition.parse({
+  meta: { id: "s", code: "S", title: "Index", version: "1", schemaVersion: 1, status: "live" },
+  questions: [
+    { id: "e1", code: "E1", variableName: "E1", type: "single_select", text: "Energy one", options: five() },
+    { id: "e2", code: "E2", variableName: "E2", type: "single_select", text: "Energy two", options: five() },
+    { id: "team", code: "TEAM", variableName: "TEAM", type: "single_select", text: "Team", options: [{ code: "n", label: "North" }, { code: "s", label: "South" }] },
+  ],
+  flow: [{ type: "page", id: "p1", questionIds: ["e1", "e2", "team"] }, { type: "end", id: "e", status: "complete" }],
+  deployment: { access: { mode: "unique_links", allowRetake: true } },
+  portal: {
+    enabled: true,
+    scorecard: { dimensions: [{ id: "energy", label: "Energy", source: { kind: "items", items: [{ question: "e1" }, { question: "e2" }] }, bands: [{ upTo: 5, label: "Low" }, { upTo: 10, label: "High" }] }] },
+    benchmark: { enabled: true, groups: [{ id: "team", label: "Team", source: { kind: "question", ref: "TEAM" } }] },
+    ...portal,
+  },
+});
+const { scoreInterview } = await import("./scorecardRow.ts");
+const peers = (r: Rig, e: EnrolmentRec, def: SurveyDefinition, n: number, team: string, from = 0) => {
+  for (let i = 0; i < n; i++) {
+    const sc = scoreInterview(def, { answers: { e1: 1 + (i % 5), e2: 1 + ((i * 2) % 5), team } })!;
+    r.m.scorecards.set(e.surveyId, [...(r.m.scorecards.get(e.surveyId) ?? []), { responseId: `p${from + i}`, key: sc.key, person: `peer-${from + i}`, at: null, values: sc.scores, cohort: sc.cohort }]);
+  }
+};
+
+test("scores are shown only with the permission; the band only when bands are on; never for an unfinished attempt", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = enrol(r, "e1", r.ana.id);
+  attempt(r, e, "r1", { answers: { e1: 4, e2: 5, team: "n" } });
+  r.m.definitions.set("v1", indexDef({}));
+  let d = await assessmentDetail(r.d, ctx, "e1");
+  assert.equal(d.attempts[0]!.scores, null); assert.equal(d.assessment.canViewScores, false); assert.equal(d.attempts[0]!.answers, null);
+
+  r.m.definitions.set("v1", indexDef({ show: { scores: true } }));
+  d = await assessmentDetail(r.d, ctx, "e1");
+  assert.deepEqual([d.attempts[0]!.scores!.dimensions[0]!.score, d.attempts[0]!.scores!.dimensions[0]!.band?.label], [9, "High"]);
+  assert.equal(d.attempts[0]!.comparison, null, "comparison needs its own permission");
+  assert.equal(d.attempts[0]!.answers, null, "scores do not open the answers");
+  assert.equal(d.assessment.canViewScores, true);
+
+  r.m.definitions.set("v1", indexDef({ show: { scores: true, bands: false } }));
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.scores!.dimensions[0]!.band, null);
+
+  r.m.attempts.get("e1")![0]!.status = "in_progress";
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.scores, null);
+});
+
+test("comparison: with everyone and the person's own group; nothing below ten people; the snapshot is kept and names nobody", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const def = indexDef({ show: { scores: true, comparison: true } });
+  r.m.definitions.set("v1", def);
+  const e = enrol(r, "e1", r.ana.id);
+  attempt(r, e, "r1", { answers: { e1: 4, e2: 5, team: "n" } });
+
+  peers(r, e, def, 8, "n");
+  let c = (await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.comparison!;
+  assert.equal(c[0]!.everyone, null); assert.match(c[0]!.note!, /at least 10 people/);
+
+  peers(r, e, def, 4, "n", 8); peers(r, e, def, 11, "s", 12);
+  r.clock.now += 16 * 60_000; // the kept snapshot has aged out
+  c = (await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.comparison!;
+  assert.equal(c[0]!.everyone!.n, 23);
+  assert.deepEqual(c[0]!.groups.map((g) => [g.grouping, g.group, g.n]), [["Team", "North", 12]], "her own team, by its label — not South");
+  assert.ok(c[0]!.everyone!.below > 50, "9 of 10 is above most");
+  const kept = r.m.benchmarks.get(e.surveyId)!;
+  assert.ok(!JSON.stringify(kept.snapshot).includes("peer-"), "the snapshot names no person");
+
+  /* within fifteen minutes the kept snapshot is used: new scores do not change the figure yet */
+  peers(r, e, def, 5, "n", 30);
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.comparison![0]!.everyone!.n, 23);
+
+  /* the researcher switches comparison off: it is gone at once */
+  r.m.definitions.set("v1", indexDef({ show: { scores: true, comparison: true }, benchmark: { enabled: false } }));
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.comparison, null);
+});
+
+test("a small group next to a large one: neither group is shown, so the few cannot be worked out by subtraction", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const def = indexDef({ show: { scores: true, comparison: true } });
+  r.m.definitions.set("v1", def);
+  const e = enrol(r, "e1", r.ana.id);
+  attempt(r, e, "r1", { answers: { e1: 4, e2: 5, team: "n" } });
+  peers(r, e, def, 20, "n"); peers(r, e, def, 3, "s", 20);
+  const c = (await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.comparison!;
+  assert.equal(c[0]!.everyone!.n, 23); assert.deepEqual(c[0]!.groups, []);
+});
+
+test("scores made with another scoring are not compared; a failing store means no comparison, never an error", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const def = indexDef({ show: { scores: true, comparison: true } });
+  r.m.definitions.set("v1", def);
+  const e = enrol(r, "e1", r.ana.id);
+  attempt(r, e, "r1", { answers: { e1: 4, e2: 5, team: "n" } });
+  peers(r, e, def, 15, "n");
+  for (const row of r.m.scorecards.get(e.surveyId)!) row.key = "an-older-scoring";
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.comparison![0]!.everyone, null);
+  r.m.store.scoreRows = async () => { throw new Error("relation portal_scorecards does not exist"); };
+  r.m.store.benchmark = async () => { throw new Error("relation portal_benchmarks does not exist"); };
+  const d = await assessmentDetail(r.d, ctx, "e1");
+  assert.equal(d.attempts[0]!.scores!.dimensions[0]!.score, 9, "her own score is still shown");
+  assert.match(d.attempts[0]!.comparison![0]!.note!, /not available/);
+});
+
+test("changing an answer updates the stored scores; an earlier attempt's scores need history on and are never compared", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const def = indexDef({ show: { scores: true, answers: true, comparison: true }, editing: { mode: "until_locked" } });
+  r.m.definitions.set("v1", def);
+  const e = enrol(r, "e1", r.ana.id);
+  attempt(r, e, "r0", { answers: { e1: 1, e2: 1, team: "n" }, startedAt: new Date(T0 - 90_000_000).toISOString(), completedAt: new Date(T0 - 86_400_000).toISOString() });
+  attempt(r, e, "r1", { answers: { e1: 4, e2: 5, team: "n" } });
+  let d = await assessmentDetail(r.d, ctx, "e1");
+  assert.deepEqual(d.attempts.map((a) => a.scores?.dimensions[0]!.score ?? null), [9, null]);
+
+  await editAnswer(r.d, ctx, { enrolmentId: "e1", responseId: "r1", questionId: "e1", value: 2, revision: 0 });
+  const stored = r.m.scorecards.get(e.surveyId)!.find((x) => x.responseId === "r1")!;
+  assert.deepEqual([stored.values.energy, stored.cohort.team, stored.person], [7, "North", "e1"]);
+
+  r.m.definitions.set("v1", indexDef({ show: { scores: true, history: true, comparison: true } }));
+  d = await assessmentDetail(r.d, ctx, "e1");
+  assert.deepEqual(d.attempts.map((a) => a.scores?.dimensions[0]!.score ?? null), [7, 2]);
+  assert.equal(d.attempts[1]!.comparison, null);
+});
+
+test("nobody reads another person's scores: someone else's assessment is 'not found'", async () => {
+  const r = await rig();
+  const ben = await signedIn(r, r.ben);
+  r.m.definitions.set("v1", indexDef({ show: { scores: true, comparison: true } }));
+  const e = enrol(r, "e1", r.ana.id);
+  attempt(r, e, "r1", { answers: { e1: 4, e2: 5, team: "n" } });
+  await fails(assessmentDetail(r.d, ben, "e1"), 404, "not_found");
+});

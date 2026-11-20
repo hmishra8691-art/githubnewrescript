@@ -2,8 +2,10 @@ import {
   PORTAL_POLICY, accountVerdict, enrolmentAccess, failuresAfterWrong, hashPassword, hashToken, lockoutVerdict, mintToken, normaliseLogin,
   passwordProblems, sessionVerdict, verifyPassword, TOKEN, type EnrolmentAccess, type PortalPolicy,
 } from "@rescript/access/respondent";
-import { checkSubmission, editDecision, editWindow, portalAnswerLines, portalSettings, type PortalAnswerLine } from "@rescript/engine";
+import { buildBenchmark, compare, onePerPerson, type BenchmarkSnapshot, type Comparison } from "@rescript/analytics/benchmark";
+import { checkSubmission, editDecision, editWindow, isAssessment, portalAnswerLines, portalSettings, respondentScorecard, scorecardOf, type PortalAnswerLine, type ScorecardResult } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
+import { scoreInterview, type ScoredInterview } from "./scorecardRow.ts";
 import type { AccountRec, AttemptRec, EnrolmentRec, PortalStore, SessionRec } from "./types.ts";
 
 /**
@@ -229,7 +231,7 @@ async function facts(d: PortalDeps, e: EnrolmentRec) {
 
 export interface AssessmentCard {
   id: string; title: string; state: EnrolmentAccess["state"]; canStart: boolean; canResume: boolean; attemptsLeft: number | null;
-  reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean;
+  reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores: boolean;
 }
 
 function card(e: EnrolmentRec, f: Awaited<ReturnType<typeof facts>>): AssessmentCard {
@@ -239,6 +241,7 @@ function card(e: EnrolmentRec, f: Awaited<ReturnType<typeof facts>>): Assessment
     id: e.id, title: e.title, state: f.access.state, canStart: f.access.canStart, canResume: f.access.canResume, attemptsLeft: f.access.attemptsLeft,
     reason: f.access.reason, opensAt: e.accessFrom, closesAt: e.accessUntil, attempts: f.attempts.filter((a) => FINISHED.has(a.status)).length,
     lastCompletedAt: done.at(-1) ?? null, canViewAnswers: !!portal?.show.answers && done.length > 0,
+    canViewScores: !!portal?.show.scores && !!f.live && !!scorecardOf(f.live) && done.length > 0,
   };
 }
 
@@ -260,7 +263,36 @@ async function own(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown): Pro
 
 const policyDef = (attemptDef: SurveyDefinition, live: SurveyDefinition | null): SurveyDefinition => ({ ...attemptDef, portal: live?.portal ?? attemptDef.portal });
 
-export interface AttemptView { id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: PortalAnswerLine[] | null; editableUntil: string | null; editable: boolean; editNote: string | null }
+export interface AttemptView {
+  id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: PortalAnswerLine[] | null; editableUntil: string | null; editable: boolean; editNote: string | null;
+  /** phase 2: this attempt's scores, when the researcher shows them */
+  scores: ScorecardResult | null;
+  /** how the latest attempt's scores sit among everyone's and the person's own group's — groups only, never a person */
+  comparison: Comparison[] | null;
+}
+
+/** a snapshot is rebuilt when it is older than this, or was made for another scoring, grouping or minimum */
+export const BENCHMARK_MAX_AGE_MS = 15 * 60_000;
+
+async function benchmarkFor(d: PortalDeps, e: EnrolmentRec, pd: SurveyDefinition, key: string): Promise<BenchmarkSnapshot | null> {
+  const b = portalSettings(pd)!.benchmark;
+  try {
+    const stored = await d.store.benchmark(e);
+    if (stored && stored.snapshot.fingerprint === key && stored.snapshot.minCohort === b.minCohort && d.now() - Date.parse(stored.computedAt) < BENCHMARK_MAX_AGE_MS) return stored.snapshot;
+    const snapshot = buildBenchmark(onePerPerson(await d.store.scoreRows(e, key)), { fingerprint: key, minCohort: b.minCohort, groupings: b.groups.map((g) => g.id) });
+    await d.store.saveBenchmark(e, snapshot, new Date(d.now()).toISOString());
+    return snapshot;
+  } catch (err) {
+    console.warn("[rescript:portal] no benchmark", JSON.stringify({ surveyId: e.surveyId, error: (err as Error).message }));
+    return null;
+  }
+}
+
+/** the comparison a respondent may see: only dimensions they have a score for, only their own groups, labelled */
+function comparisonView(pd: SurveyDefinition, scored: ScoredInterview, snapshot: BenchmarkSnapshot | null): Comparison[] {
+  const label = new Map(portalSettings(pd)!.benchmark.groups.map((g) => [g.id, g.label]));
+  return compare(snapshot, scored.scores, scored.cohort, scored.key).map((c) => ({ ...c, groups: c.groups.map((g) => ({ ...g, grouping: label.get(g.grouping) ?? g.grouping })) }));
+}
 
 export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown) {
   const e = await own(d, ctx, enrolmentId);
@@ -271,26 +303,37 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
   const now = d.now();
   const views: AttemptView[] = [];
   for (const a of ordered) {
-    const may = !!portal?.show.answers && a.status === "complete" && (a.id === latestComplete?.id || portal.show.history);
+    const visible = a.status === "complete" && (a.id === latestComplete?.id || !!portal?.show.history);
+    const may = !!portal?.show.answers && visible;
+    const mayScore = !!portal?.show.scores && visible && !!f.live && !!scorecardOf(f.live);
     let answers: PortalAnswerLine[] | null = null, editableUntil: string | null = null, editable = false, editNote: string | null = null;
-    if (may && a.versionId) {
+    let scores: ScorecardResult | null = null, comparison: Comparison[] | null = null;
+    if ((may || mayScore) && a.versionId) {
       const data = await d.store.attempt(e, a.id);
       const def = await d.store.definition(e, a.versionId);
       if (data && def) {
         const pd = policyDef(def, f.live);
-        const enrol = { lockedAt: e.lockedAt, reopenedUntil: e.reopenedUntil };
-        /* only the latest completed attempt can be changed: an earlier one is history */
-        const window = a.id === latestComplete?.id ? editWindow(pd, a, enrol, now) : { allowed: false as const, code: "not_completed" as const, reason: "An earlier attempt cannot be changed." };
-        answers = portalAnswerLines(pd, data.answers, a, enrol, now).map((l) => (window.allowed ? l : { ...l, edit: window }));
-        editable = window.allowed && answers.some((l) => l.edit.allowed);
-        editableUntil = window.allowed ? window.until : null;
-        editNote = window.allowed ? null : window.code === "editing_off" || window.code === "no_portal" ? null : window.reason;
+        if (may) {
+          const enrol = { lockedAt: e.lockedAt, reopenedUntil: e.reopenedUntil };
+          /* only the latest completed attempt can be changed: an earlier one is history */
+          const window = a.id === latestComplete?.id ? editWindow(pd, a, enrol, now) : { allowed: false as const, code: "not_completed" as const, reason: "An earlier attempt cannot be changed." };
+          answers = portalAnswerLines(pd, data.answers, a, enrol, now).map((l) => (window.allowed ? l : { ...l, edit: window }));
+          editable = window.allowed && answers.some((l) => l.edit.allowed);
+          editableUntil = window.allowed ? window.until : null;
+          editNote = window.allowed ? null : window.code === "editing_off" || window.code === "no_portal" ? null : window.reason;
+        }
+        if (mayScore) {
+          /* a person's own scores are always worked out from their answers, never read from a stored row */
+          const scored = scoreInterview(pd, data);
+          scores = scored ? respondentScorecard(pd, scored.result) : null;
+          if (scored && scores && a.id === latestComplete?.id && portal!.show.comparison && portal!.benchmark.enabled) comparison = comparisonView(pd, scored, await benchmarkFor(d, e, pd, scored.key));
+        }
       }
     }
-    views.push({ id: a.id, status: a.status, startedAt: a.startedAt, completedAt: a.completedAt, revision: a.revision, answers, editableUntil, editable, editNote });
+    views.push({ id: a.id, status: a.status, startedAt: a.startedAt, completedAt: a.completedAt, revision: a.revision, answers, editableUntil, editable, editNote, scores, comparison });
   }
   await d.store.log({ accountId: ctx.account.id, event: "assessment_viewed", surveyId: e.surveyId, customerId: e.customerId });
-  return { assessment: card(e, f), attempts: views };
+  return { assessment: { ...card(e, f), scoredTest: !!f.live && isAssessment(f.live) }, attempts: views };
 }
 
 /** where to send the browser to take (or continue) the assessment */
@@ -366,6 +409,13 @@ export async function editAnswer(d: PortalDeps, ctx: PortalContext, body: { enro
   if (!w.ok) {
     if (w.conflict) throw new PortalError(409, "revision_conflict", "Your answers changed in another window. Reload the page to see the latest, then try again.");
     throw new PortalError(503, "not_saved", "Your change could not be saved. Please try again.");
+  }
+  /* the stored scores follow the answers (the comparison reads them); never fails the edit */
+  try {
+    const scored = scoreInterview(pd, { answers, calculated: calculated ?? data.calculated, embedded: data.embedded });
+    if (scored) await d.store.saveScorecard(e, { responseId: data.id, ...scored, completedAt: data.completedAt });
+  } catch (err) {
+    console.warn("[rescript:portal] scores not updated after an edit", JSON.stringify({ surveyId: e.surveyId, error: (err as Error).message }));
   }
   await d.store.log({ accountId: ctx.account.id, event: "answer_edited", surveyId: e.surveyId, customerId: e.customerId, detail: { questionId: body.questionId, revision: w.revision, reopened: decision.reopened } });
   return { revision: w.revision, changed: true };

@@ -1,6 +1,7 @@
 import "server-only";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { platformDb, router, surveyDb, type customerDb } from "@/lib/db";
+import type { BenchmarkSnapshot, StoredScore } from "@rescript/analytics/benchmark";
 import type { AccountRec, AttemptData, AttemptRec, CredentialRec, EnrolmentRec, PortalStore, SessionRec } from "./types";
 
 /**
@@ -132,6 +133,35 @@ export function supabasePortalStore(): PortalStore {
       if (error) return { ok: false, conflict: /REVISION_CONFLICT/.test(error.message), error: error.message };
       const row = (Array.isArray(data) ? data[0] : data) as { new_revision?: number } | null;
       return { ok: true, revision: Number(row?.new_revision ?? w.expectedRevision + 1) };
+    },
+
+    /* phase 2. Before migration 0104 the tables are missing: writes are skipped and reads are empty, so the portal
+       shows a person's own scores and says a comparison is not available yet. */
+    async saveScorecard(e, sc) {
+      const { error } = await (await dbOf(e)).from("portal_scorecards").upsert({ response_id: sc.responseId, survey_id: e.surveyId, respondent_id: e.id, is_test: false, fingerprint: sc.key, scores: sc.scores, cohort: sc.cohort, result: sc.result, completed_at: sc.completedAt, updated_at: new Date().toISOString() }, { onConflict: "response_id" });
+      if (error) throw new Error(`portal store (save scorecard): ${error.message}`);
+    },
+    async scoreRows(e, key) {
+      const out: StoredScore[] = [];
+      const db = await dbOf(e);
+      for (let from = 0; from < 50_000; from += 1000) {
+        const rows = must(await db.from("portal_scorecards").select("respondent_id, completed_at, scores, cohort, responses!inner(status, deleted_at)")
+          .eq("survey_id", e.surveyId).eq("is_test", false).eq("fingerprint", key).eq("responses.status", "complete").is("responses.deleted_at", null)
+          .order("response_id", { ascending: true }).range(from, from + 999), "score rows") as unknown as Row[] | null;
+        for (const r of rows ?? []) out.push({ person: str(r.respondent_id), at: str(r.completed_at), values: obj(r.scores) as Record<string, number | null>, cohort: obj(r.cohort) as Record<string, string | null> });
+        if ((rows ?? []).length < 1000) break;
+      }
+      return out;
+    },
+    async benchmark(e) {
+      const { data, error } = await (await dbOf(e)).from("portal_benchmarks").select("snapshot, computed_at").eq("survey_id", e.surveyId).maybeSingle();
+      if (error || !data) return null;
+      const row = data as Row;
+      return { snapshot: row.snapshot as BenchmarkSnapshot, computedAt: String(row.computed_at) };
+    },
+    async saveBenchmark(e, snapshot, now) {
+      const { error } = await (await dbOf(e)).from("portal_benchmarks").upsert({ survey_id: e.surveyId, fingerprint: snapshot.fingerprint, people: snapshot.n, snapshot, computed_at: now }, { onConflict: "survey_id" });
+      if (error) console.warn("[rescript:portal] benchmark not stored", JSON.stringify({ surveyId: e.surveyId, error: error.message }));
     },
 
     async log(ev) {
