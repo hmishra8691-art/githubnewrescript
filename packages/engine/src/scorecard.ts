@@ -31,6 +31,8 @@ export interface DimensionScore {
   higherIsBetter: boolean;
   /** why there is no score */
   reason?: string;
+  /** how THIS score was made (its source, items, range, direction): two results are comparable over time only when equal */
+  sig?: string;
 }
 export interface ScorecardResult {
   v: 1;
@@ -71,7 +73,7 @@ export function bandFor(bands: ScoreBand[], score: number): { label: string; not
 
 type Coded = { code: string | number; value?: string | number };
 /** the numbers an item can take: the option values, else the rating's own range */
-function itemRange(q: Question): { lo: number; hi: number; valueOf: (code: unknown) => number | null } | null {
+export function itemRange(q: Question): { lo: number; hi: number; valueOf: (code: unknown) => number | null } | null {
   /* a single-choice question and a single-choice grid both keep their scale points in `options` */
   const opts = (q.options ?? []) as Coded[];
   if (opts.length) {
@@ -113,6 +115,22 @@ function scoreItems(def: SurveyDefinition, d: ScoreDimension, answers: Record<st
 }
 
 /* ------------------------------------------------------------------ the scorecard */
+
+/**
+ * The signature of one score's making. Unlike the scorecard's fingerprint it is per score, and it is built from
+ * question CODES and scale ends rather than ids — so the same scale programmed again in next year's survey has the
+ * same signature, and a scale with an item added, removed, reversed or re-scaled does not.
+ */
+export function dimensionSignature(def: SurveyDefinition, d: ScoreDimension, testKey = ""): string {
+  const src = d.source;
+  let made: unknown;
+  if (src.kind === "items") {
+    const byId = new Map(def.questions.map((q) => [q.id, q]));
+    made = [src.method, src.items.map((it) => { const q = byId.get(it.question); const r = q ? itemRange(q) : null; return [q?.code ?? it.question, it.row ?? null, !!it.reverse, r?.lo ?? null, r?.hi ?? null]; })];
+  } else if (src.kind === "variable") made = [src.name];
+  else made = [src.kind === "test_topic" ? src.topic : "", testKey];
+  return fnv1a(JSON.stringify([d.id, src.kind, made, d.min ?? null, d.max ?? null, d.higherIsBetter]));
+}
 
 export interface ScorecardInput {
   answers: Record<string, unknown>;
@@ -160,7 +178,7 @@ export function computeScorecard(def: SurveyDefinition, input: ScorecardInput): 
     if (d.min !== undefined) min = d.min;
     if (d.max !== undefined) max = d.max;
     const percent = score !== null && min !== null && max !== null && max > min ? r2(Math.min(100, Math.max(0, ((score - min) / (max - min)) * 100))) : null;
-    const out: DimensionScore = { id: d.id, label: htmlToText(d.label), score, min, max, percent, band: score === null ? null : bandFor(d.bands, score), higherIsBetter: d.higherIsBetter };
+    const out: DimensionScore = { id: d.id, label: htmlToText(d.label), score, min, max, percent, band: score === null ? null : bandFor(d.bands, score), higherIsBetter: d.higherIsBetter, sig: dimensionSignature(keyed, d, marked?.keyFingerprint ?? "") };
     if (d.description) out.description = d.description;
     if (score === null && reason) out.reason = reason;
     return out;

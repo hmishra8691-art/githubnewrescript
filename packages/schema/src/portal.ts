@@ -78,6 +78,8 @@ export const ScoreDimension = z.object({
   /** false for a score where less is better (stress, errors): comparisons are worded the other way round */
   higherIsBetter: z.boolean().default(true),
   bands: z.array(ScoreBand).max(12).default([]),
+  /** phase 3: a change over time smaller than this is worded "about the same" (absent: any change counts) */
+  minChange: z.number().positive().optional(),
 });
 export type ScoreDimension = z.infer<typeof ScoreDimension>;
 
@@ -110,6 +112,21 @@ export const PortalBenchmark = z.object({
 });
 export type PortalBenchmark = z.infer<typeof PortalBenchmark>;
 
+/**
+ * RESULTS OVER TIME (phase 3). A person's history is every completed attempt of this survey, and — when surveys of
+ * one workspace carry the same series `id` — the attempts of those surveys too (a yearly survey programmed anew
+ * each year). Scores are compared across time only when they were scored the same way (engine history.ts).
+ */
+export const PortalSeries = z.object({
+  id: z.string().min(1).max(60).regex(/^[A-Za-z0-9_-]+$/),
+  label: z.string().min(1).max(120),
+  /** what this survey is called within the series: "2026", "Spring term", "Week 6" */
+  period: z.string().max(60).optional(),
+  /** the assessment is meant to be repeated: the portal shows when the next one is due */
+  repeatEveryDays: z.number().int().min(1).max(1830).optional(),
+});
+export type PortalSeries = z.infer<typeof PortalSeries>;
+
 export const PortalSettings = z.object({
   enabled: z.boolean().default(false),
   /**
@@ -129,7 +146,10 @@ export const PortalSettings = z.object({
     bands: z.boolean().default(true),
     /** how their scores compare with everyone's and with their own group's */
     comparison: z.boolean().default(false),
+    /** phase 3: how their scores have changed across attempts and across the surveys of a series */
+    trends: z.boolean().default(false),
   }).default({}),
+  series: PortalSeries.optional(),
   /** phase 2: what is scored, and how it is compared. Absent = this survey shows no scores in the portal. */
   scorecard: PortalScorecard.optional(),
   benchmark: PortalBenchmark.default({}),
