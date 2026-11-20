@@ -15,6 +15,7 @@
     "@rescript/analytics": "workspace:*",
     "@rescript/billing": "workspace:*",
     "@rescript/engine": "workspace:*",
+    "@rescript/exporters": "workspace:*",
     "@rescript/identity": "workspace:*",
     "@rescript/media": "workspace:*",
     "@rescript/quality": "workspace:*",

@@ -336,6 +336,23 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
   return { assessment: { ...card(e, f), scoredTest: !!f.live && isAssessment(f.live) }, attempts: views };
 }
 
+/**
+ * What a personal report may contain: the latest attempt the person may see, exactly as the results page shows it
+ * (the same call decides both). Nothing to show is "not found", so a report can never say more than the page.
+ */
+export async function personalReport(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown) {
+  const detail = await assessmentDetail(d, ctx, enrolmentId);
+  const a = detail.attempts.find((x) => x.scores || x.answers?.length);
+  if (!a) throw new PortalError(404, "no_report", "There is nothing to put in a report yet.");
+  const e = await own(d, ctx, enrolmentId);
+  await d.store.log({ accountId: ctx.account.id, event: "report_downloaded", surveyId: e.surveyId, customerId: e.customerId });
+  return {
+    title: detail.assessment.title, person: { name: ctx.account.name, respondentId: ctx.account.respondentId }, completedAt: a.completedAt,
+    generatedAt: new Date(d.now()).toISOString(), scoredTest: detail.assessment.scoredTest, scores: a.scores, comparison: a.comparison,
+    answers: a.answers?.length ? a.answers.map((l) => ({ code: l.code, text: l.text, answer: l.answer })) : null,
+  };
+}
+
 /** where to send the browser to take (or continue) the assessment */
 export async function startLink(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown): Promise<{ url: string; resumed: boolean }> {
   const e = await own(d, ctx, enrolmentId);

@@ -61,6 +61,22 @@ export default function PortalAssessment({ params }: { params: { id: string } })
     await load();
   };
 
+  /* the same report as a file, made by the server; when it cannot be made (a script the file cannot carry) the
+     server says so and the print button beside it does the job */
+  const download = async () => {
+    setBusy(true); setError(null); setSaved(null);
+    try {
+      const r = await fetch(`/api/portal/assessments/${params.id}/report`, { cache: "no-store", credentials: "same-origin" });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); if (r.status === 401) window.location.assign("/portal/login"); else setError(String(j.error ?? "The report could not be made. Please try again.")); return; }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url; a.download = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? "personal-report.pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch { setError("You appear to be offline. Check your connection and try again."); }
+    finally { setBusy(false); }
+  };
+
   const shown = d?.attempts.find((a) => a.answers || a.scores);
   return (
     <Shell current="assessment">
@@ -75,7 +91,8 @@ export default function PortalAssessment({ params }: { params: { id: string } })
           <div className="pt-row pt-noprint" style={{ margin: "12px 0 4px" }}>
             {d.assessment.canResume && <button type="button" className="pt-btn is-primary" onClick={() => begin(params.id, setError)} data-testid="pt-resume">Continue</button>}
             {d.assessment.canStart && <button type="button" className="pt-btn is-primary" onClick={() => begin(params.id, setError)} data-testid="pt-start">{d.attempts.length ? "Take it again" : "Start"}</button>}
-            {shown && <button type="button" className="pt-btn" onClick={() => window.print()} data-testid="pt-print">Print or save as PDF</button>}
+            {shown && <button type="button" className="pt-btn" onClick={download} disabled={busy} data-testid="pt-download">Download PDF</button>}
+            {shown && <button type="button" className="pt-btn" onClick={() => window.print()} data-testid="pt-print">Print</button>}
           </div>
 
           <h2>History</h2>

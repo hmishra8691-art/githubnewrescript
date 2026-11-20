@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { NOTE_GROUPS, NOTE_NOT_ADVICE, fmtScore as fmt, placeOn as place, standingText, type Standing } from "@/lib/portal/words";
 
 /**
  * ONE ATTEMPT'S SCORES (phase 2, 2026-11-20). Everything drawn here was decided on the server: which scores the
@@ -7,19 +8,8 @@ import React from "react";
  * (everyone, or the person's own group) of at least ten people; when there is none, the reason is said instead.
  */
 export interface Dimension { id: string; label: string; description?: string; score: number | null; min: number | null; max: number | null; percent: number | null; band: { label: string; note?: string } | null; higherIsBetter: boolean; reason?: string }
-export interface Standing { n: number; mean: number; median: number; below: number; above: number }
 export interface Comparison { dimension: string; everyone: Standing | null; groups: (Standing & { grouping: string; group: string })[]; note: string | null }
 export interface Scorecard { dimensions: Dimension[]; overall: { label: string; percent: number } | null }
-
-const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(Math.abs(n) < 10 ? 2 : 1).replace(/0+$/, "").replace(/\.$/, ""));
-const place = (v: number, min: number | null, max: number | null) => (min !== null && max !== null && max > min ? Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100)) : null);
-
-/** "Higher than 62% of 143 people" — worded from the good end for a score where less is better */
-export function standingText(s: Standing, higherIsBetter: boolean): string {
-  const share = higherIsBetter ? s.below : s.above;
-  if (s.below === 0 && s.above === 0) return `The same as the ${s.n} people compared`;
-  return `${higherIsBetter ? "Higher" : "Lower"} than ${share}% of ${s.n} people`;
-}
 
 function Bar({ percent, mark, label }: { percent: number; mark: number | null; label: string }) {
   return (
@@ -69,8 +59,8 @@ export function Scores({ scores, comparison, scoredTest }: { scores: Scorecard; 
       )}
       <ul className="pt-answers pt-scores">{scores.dimensions.map((d) => <Row key={d.id} d={d} c={of(d.id)} />)}</ul>
       {anyMark && <p className="pt-why pt-legend"><span className="pt-bar-mark is-key" /> The line on a bar is the average of everyone compared.</p>}
-      {comparison && <p className="pt-why">Comparisons are with groups of at least ten people. Nobody's individual result is shown to anyone else.</p>}
-      {!scoredTest && <p className="pt-why">Scores describe the answers you gave. They are not a diagnosis or professional advice.</p>}
+      {comparison && <p className="pt-why">{NOTE_GROUPS}</p>}
+      {!scoredTest && <p className="pt-why">{NOTE_NOT_ADVICE}</p>}
     </div>
   );
 }

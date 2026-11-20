@@ -148,6 +148,23 @@ console.log("\n4b — my results (phase 2)");
   assert.equal(await page.locator('[data-testid="pt-scores"]').isVisible(), true);
   assert.equal(await page.locator('[data-testid="pt-print"]').isVisible(), false);
   await page.emulateMedia({ media: "screen" });
+  /* the same report as a file: a real PDF, downloaded by the button; nobody else's, and nothing without a session */
+  const file = await page.evaluate(async () => {
+    const r = await fetch("/api/portal/assessments/e-index/report");
+    const b = new Uint8Array(await r.arrayBuffer());
+    return { status: r.status, type: r.headers.get("content-type"), name: r.headers.get("content-disposition"), cache: r.headers.get("cache-control"), head: String.fromCharCode(...b.slice(0, 8)), size: b.length };
+  });
+  assert.deepEqual([file.status, file.type, file.head.startsWith("%PDF-1.4"), file.cache], [200, "application/pdf", true, "no-store"]);
+  assert.match(file.name, /attachment; filename="Workplace-wellbeing-index-personal-report\.pdf"/); assert.ok(file.size > 1500);
+  const [download] = await Promise.all([page.waitForEvent("download"), page.click('[data-testid="pt-download"]')]);
+  assert.equal(download.suggestedFilename(), "Workplace-wellbeing-index-personal-report.pdf");
+  assert.equal((await page.evaluate(async () => (await fetch("/api/portal/assessments/e-ben/report")).status)), 404, "another person's report is not found");
+  assert.equal((await page.evaluate(async () => (await fetch("/api/portal/assessments/e-open/report")).status)), 404, "nothing to report before it is taken");
+  {
+    const anon = await browser.newContext({ baseURL: RUNTIME });
+    const r = await anon.request.get("/api/portal/assessments/e-index/report");
+    assert.equal(r.status(), 401); await anon.close();
+  }
   if (process.env.PORTAL_SHOTS) {
     await page.screenshot({ path: `${process.env.PORTAL_SHOTS}/results-desktop.png`, fullPage: true });
     await page.setViewportSize({ width: 375, height: 800 });
@@ -157,7 +174,7 @@ console.log("\n4b — my results (phase 2)");
   await page.waitForTimeout(300);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 1, "the results fit a 375px screen");
   await page.setViewportSize({ width: 1280, height: 720 });
-  ok("my results: scores, range names, bars, the comparison with everyone and my own team only; nothing about another person or team is sent; prints");
+  ok("my results: scores, range names, bars, the comparison with everyone and my own team only; nothing about another person or team is sent; prints; downloads as a PDF only for its owner");
 }
 
 console.log("\n5 — somebody else's assessment");

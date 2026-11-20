@@ -120,6 +120,9 @@ importers:
       '@rescript/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@rescript/exporters':
+        specifier: workspace:*
+        version: link:../../packages/exporters
       '@rescript/identity':
         specifier: workspace:*
         version: link:../../packages/identity
