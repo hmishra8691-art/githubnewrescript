@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { PanelConfig, PANEL_OUTCOMES, type PanelOutcome, type PanelTarget } from "@rescript/schema";
 import { panelRedirect, panelReconciliationCsv, panelOutcomeCounts, panelConfigProblems } from "@rescript/engine";
 import { attachPanelSession, enterPanel, exitPanel } from "@rescript/analytics";
@@ -108,7 +109,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const hint = clear ? null : maskSecretUrl(secret);
     if (sandbox) { const st = sandboxPanelState(); if (sealed) st.secrets[`sandbox|${key}`] = sealed.sealed; else delete st.secrets[`sandbox|${key}`]; persistSandbox(); }
     else {
-      const db = supabaseService();
+      const db = await surveyDb(params.id);
       const { error } = sealed ? await db.from("panel_secrets").upsert({ survey_id: params.id, panel_key: key, secret_sealed: sealed.sealed, secret_key_id: sealed.keyId, hint, updated_by: userId, updated_at: new Date().toISOString() }) : await db.from("panel_secrets").delete().eq("survey_id", params.id).eq("panel_key", key);
       if (error) return noStore({ error: /panel_secrets|does not exist|schema cache/i.test(error.message) ? "Panel secrets need migration 0072." : error.message }, /panel_secrets|does not exist|schema cache/i.test(error.message) ? 503 : 500);
       await audit({ action: "panel.secret_changed", userId, customerId, surveyId: params.id, entity: "panel", entityId: params.id, detail: { panel: key, cleared: clear } }).catch(() => {});

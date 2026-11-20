@@ -2,7 +2,6 @@ import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { analysisReadiness, CHUNKED_KINDS, type AnalysisDefinition } from "@rescript/analytics";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject } from "@/lib/guard";
 import { buildFor, loadDefinition, modelInputKey, resolveSaved, type LoadedContext } from "@/lib/analytics";
 import { cachePut } from "@/lib/resultCache";
@@ -37,7 +36,7 @@ export function jobDepsFor(db: SupabaseClient, surveyId: string, loaded: LoadedC
 async function depsFor(req: NextRequest, surveyId: string): Promise<{ deps: JobDeps } | { response: NextResponse }> {
   const ctx = await requireProject(req, surveyId, "analytics.read");
   if (isFailure(ctx)) return { response: ctx.response as NextResponse };
-  const db = supabaseService();
+  const db = ctx.db;
   const loaded = await loadDefinition(db, surveyId);
   if ("error" in loaded) return { response: json({ error: loaded.error }, loaded.status) };
   return { deps: jobDepsFor(db, surveyId, loaded, ctx.user.userId) };

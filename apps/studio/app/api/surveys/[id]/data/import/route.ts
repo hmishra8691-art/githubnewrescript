@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { parseDelimited, suggestMapping, validateImportRows, type ColumnMapping, type ImportMode, type PreparedRow } from "@rescript/engine";
 import { parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
@@ -42,7 +41,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const mode: ImportMode = body?.mode === "create" ? "create" : body?.mode === "update" ? "update" : "upsert";
   const isTest = environment === "TEST";
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
   const def = loaded.def;

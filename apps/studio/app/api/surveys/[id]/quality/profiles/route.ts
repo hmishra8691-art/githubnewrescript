@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { QualityConfig } from "@rescript/schema";
 import { BUILTIN_PROFILES } from "@rescript/quality";
@@ -17,7 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   const customerId = "def" in loaded ? loaded.customerId : null;
   let saved: any[] = [];
@@ -42,7 +41,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
   const parsed = QualityConfig.safeParse(body?.config ?? {});
   if (!parsed.success) return NextResponse.json({ error: "config invalid", issues: parsed.error.issues.slice(0, 5) }, { status: 400 });
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   const customerId = "def" in loaded ? loaded.customerId : null;
   const { data, error } = await db.from("quality_profiles")
@@ -61,7 +60,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 
   const id = req.nextUrl.searchParams.get("profileId");
   if (!id) return NextResponse.json({ error: "profileId required" }, { status: 400 });
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   /*
    * Scoped to the caller's own workspace. This used to delete by id alone,

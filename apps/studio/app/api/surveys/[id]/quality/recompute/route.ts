@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { recomputeSurvey } from "@rescript/quality/server";
 import { enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
@@ -24,7 +23,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let body: any = {};
   try { body = await req.json(); } catch { /* optional */ }
   const include = body?.include === "test" ? "test" : body?.include === "all" ? "all" : "live";
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id, body?.source === "version" ? "version" : "draft");
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
   const summary = summarizeConfig(loaded.def);

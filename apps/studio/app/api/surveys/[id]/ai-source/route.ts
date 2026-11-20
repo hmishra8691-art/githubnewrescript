@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { audit, isFailure, requireProject } from "@/lib/guard";
-import { supabaseAdmin } from "@/lib/admin";
 import { aiSettingsOf } from "@/lib/aiPolicy";
 import { connectionFor } from "@/lib/byok/connect";
 import { viewOfResolution } from "@/lib/byok/resolve";
@@ -26,7 +25,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
-  const { data } = await supabaseAdmin().from("surveys").select("settings").eq("id", params.id).maybeSingle();
+  const { data } = await gate.db.from("surveys").select("settings").eq("id", params.id).maybeSingle();
   const source = aiSettingsOf((data as { settings?: unknown } | null)?.settings).source ?? null;
   const you = viewOfResolution(await connectionFor({ userId: gate.user.userId, customerId: gate.survey.customer_id ?? gate.user.customerId, surveyId: params.id, operation: "copilot_turn", source: source ?? undefined, sourceKnown: true }));
   return NextResponse.json({ source, canChange: gate.role === "owner" || gate.viaAdmin, youWouldUse: you }, { headers: { "cache-control": "no-store" } });
@@ -39,7 +38,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const body = await req.json().catch(() => null) as { source?: unknown } | null;
   const next = body?.source === "platform" || body?.source === "user" ? body.source : body?.source === null ? null : undefined;
   if (next === undefined) return NextResponse.json({ error: "Choose \"platform\", \"user\", or null to follow each person's own setting." }, { status: 422 });
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db.from("surveys").select("settings").eq("id", params.id).maybeSingle();
   if (error) return NextResponse.json({ error: "The project's settings could not be read." }, { status: 500 });
   const settings = (data?.settings && typeof data.settings === "object" ? data.settings : {}) as Record<string, unknown>;

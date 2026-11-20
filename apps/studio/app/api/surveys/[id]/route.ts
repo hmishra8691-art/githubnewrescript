@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { SURVEY_STATUSES, isSurveyStatus } from "@/lib/status";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { purgeSurveyUploads, type StorageDb } from "@/lib/surveyUploads";
@@ -11,7 +11,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: survey, error } = await db
     .from("surveys")
     .select("id, code, title, status, current_version_id, created_at, updated_at")
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .eq("id", survey.current_version_id).single()
     : { data: null };
 
-  const { data: deployments } = await db
+  const { data: deployments } = await platformDb()
     .from("deployments")
     .select("id, client_slug, study_slug, mode, active, version_id, created_at")
     .eq("survey_id", params.id);
@@ -45,7 +45,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       { status: 400 },
     );
   }
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: survey } = await db
     .from("surveys")
     .select("id, customer_id, status")
@@ -77,7 +77,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const gate = await requireProject(req, params.id, "project.delete");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   /*
    * Read the name BEFORE the row goes: after the delete there is nothing left
    * to describe it with, and "someone deleted project 4f2c…" is not an audit

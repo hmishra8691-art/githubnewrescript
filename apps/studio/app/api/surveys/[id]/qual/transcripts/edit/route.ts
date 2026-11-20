@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { checkCorrection, editSegmentExcerpts, type EditOutcome } from "@rescript/analytics";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { codingState, correctedSegment, type StoredSegment } from "@/lib/qual/qualWorkspace";
 import { checkRow, hasPii, json, loadWorkspace, recordEvents, refuse, saveCoding, storeFailure, transcriptRow, UUID } from "@/lib/qual/qualStore";
@@ -33,11 +32,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const tid = req.nextUrl.searchParams.get("transcriptId") ?? "";
   if (!UUID.test(tid)) return json({ error: "which transcript (transcriptId)" }, 400);
   try {
-    const r = await supabaseService().from("qual_transcript_revisions").select("revision, segment_id, before_text, after_text, outcomes, actor_label, created_at").eq("survey_id", params.id).eq("transcript_id", tid).order("revision", { ascending: false }).limit(200);
+    const r = await gate.db.from("qual_transcript_revisions").select("revision, segment_id, before_text, after_text, outcomes, actor_label, created_at").eq("survey_id", params.id).eq("transcript_id", tid).order("revision", { ascending: false }).limit(200);
     if (r.error && missingSynthesisMigration(r.error.message)) return json({ error: SYNTHESIS_MIGRATION_MESSAGE, code: "migration_required" }, 503);
     const rows = checkRow(r, "revisions") as { revision: number; segment_id: string; before_text: string; after_text: string; outcomes: EditOutcome[]; actor_label: string | null; created_at: string }[];
     const pii = hasPii(gate);
-    const cur = checkRow(await supabaseService().from("qual_transcripts").select("revision").eq("survey_id", params.id).eq("id", tid).maybeSingle(), "transcript") as { revision: number } | null;
+    const cur = checkRow(await gate.db.from("qual_transcripts").select("revision").eq("survey_id", params.id).eq("id", tid).maybeSingle(), "transcript") as { revision: number } | null;
     if (!cur) return json({ error: "no such transcript" }, 404);
     return json({ ok: true, revision: cur.revision ?? 0, revisions: (rows ?? []).map((x) => ({ revision: x.revision, segmentId: x.segment_id, ...(pii ? { before: x.before_text, after: x.after_text } : {}), outcomes: (x.outcomes ?? []).map((o) => ({ excerptId: o.excerptId, outcome: o.outcome })), actor: x.actor_label, at: x.created_at })) });
   } catch (e) { return storeFailure(e); }
@@ -53,7 +52,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!p.ok) return json({ error: p.error }, 400);
   const { transcriptId, segmentId, text, revision } = p.value;
   if (!UUID.test(transcriptId)) return json({ error: "no such transcript" }, 404);
-  const db = supabaseService();
+  const db = gate.db;
   try {
     const row = await transcriptRow(db, params.id, transcriptId);
     if (!row) return json({ error: "no such transcript" }, 404);

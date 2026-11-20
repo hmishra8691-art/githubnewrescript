@@ -218,6 +218,8 @@ async function viaFallback(
 export async function loadDashboardStats(
   db: SupabaseClient,
   surveys: { id: string; current_version_id: string | null; created_by?: string | null }[],
+  /** where people's names live (platform data, tenancy) — the same client when not given */
+  central: SupabaseClient = db,
 ): Promise<DashboardPayload> {
   const warnings: string[] = [];
   const ids = surveys.map((s) => s.id);
@@ -245,7 +247,7 @@ export async function loadDashboardStats(
   const contributors: Record<string, Contributor> = {};
   if (everyone.length) {
     try {
-      const { data } = await db
+      const { data } = await central
         .from("profiles")
         .select("id, full_name, email")
         .in("id", everyone);

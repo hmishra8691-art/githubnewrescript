@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AuditEvent, Capability } from "@rescript/access";
 import { checkStoryForPublish, storyPlayerHtml, type DesignConfig, type DesignPatch, type StoryOp, type BrandInput } from "@rescript/analytics/story";
-import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
 import { downloadName } from "@/lib/storyCore";
 import { assertNotReadOnly, getMeter, projectLookup } from "@/lib/metering";
@@ -60,7 +59,7 @@ const gate = (req: NextRequest, surveyId: string, cap: Capability) => requirePro
 export async function GET(req: NextRequest, { params }: { params: { id: string; path?: string[] } }) {
   const ctx = await requireProject(req, params.id, "analytics.read"); if (isFailure(ctx)) return ctx.response;
   const [storyId, sub, a, b] = params.path ?? [];
-  const db = supabaseService();
+  const db = ctx.db;
   const deps = storyDeps(db, { userId: ctx.user.userId, surveyId: params.id });
   if (!storyId) return json({ stories: await listStories(db, params.id) });
   if (storyId === "themes") return json({ themes: await listThemes(db, params.id, ctx.user.customerId ?? ctx.survey.customer_id ?? null) });
@@ -94,7 +93,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
 export async function POST(req: NextRequest, { params }: { params: { id: string; path?: string[] } }) {
   const ctx = await requireProject(req, params.id, "analytics.read"); if (isFailure(ctx)) return ctx.response;
   const [storyId, sub, renderId, action] = params.path ?? [];
-  const db = supabaseService();
+  const db = ctx.db;
   const deps = storyDeps(db, { userId: ctx.user.userId, surveyId: params.id });
   const needs = async (cap: Capability) => { const g = await gate(req, params.id, cap); return isFailure(g) ? g.response : null; };
 
@@ -215,7 +214,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
   const ctx = await requireProject(req, params.id, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
   const [storyId] = params.path ?? [];
   if (!isId(storyId)) return bad("Unknown report.", 404);
-  const db = supabaseService();
+  const db = ctx.db;
   const deps = storyDeps(db, { userId: ctx.user.userId, surveyId: params.id });
   const row = await loadStory(db, params.id, storyId); if (!row) return bad("Unknown report.", 404);
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -229,7 +228,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const ctx = await requireProject(req, params.id, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
   const [storyId] = params.path ?? [];
   if (!isId(storyId)) return bad("Unknown report.", 404);
-  const db = supabaseService();
+  const db = ctx.db;
   const row = await loadStory(db, params.id, storyId); if (!row) return bad("Unknown report.", 404);
   await db.from("analytics_story_renders").update({ status: "cancelled", lease_until: null }).eq("story_id", row.id).in("status", ["queued", "rendering", "verifying"]);
   await db.from("analytics_story_reports").update({ deleted_at: new Date().toISOString() }).eq("id", row.id);

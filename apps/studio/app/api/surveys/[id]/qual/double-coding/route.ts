@@ -5,7 +5,6 @@ import {
   redactText, type CodingAssignment, type CoderSet, type QualExcerpt, type CodingRead,
 } from "@rescript/analytics";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { hasPii, json, recordEvents, refuse, saveCoding, storeFailure, UUID } from "@/lib/qual/qualStore";
 import { parseAssignmentCreate, parseCoderOp } from "@/lib/qual/synthesisWorkspace";
@@ -43,7 +42,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const refused = refuse(gate, "code");
   if (refused) return refused;
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const ctx = await synthesisContext(db, params.id);
     const me = gate.user.userId;
     const red = hasPii(gate) ? (x: QualExcerpt) => x : (x: QualExcerpt) => ({ ...x, quote: redactText(x.quote, { names: ctx.names }).text });
@@ -67,7 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!body) return json({ error: "expected a JSON body" }, 400);
   const action = String(body.action ?? "");
   const me = gate.user.userId;
-  const db = supabaseService();
+  const db = gate.db;
   try {
     const ctx = await synthesisContext(db, params.id);
     if (action === "create") {

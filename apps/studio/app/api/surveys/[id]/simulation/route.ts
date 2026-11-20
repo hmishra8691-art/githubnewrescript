@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
@@ -31,7 +30,7 @@ const json = (b: unknown, status = 200) => NextResponse.json(b, { status, header
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "responses.read");
   if (isFailure(gate)) return gate.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db.from("responses").select("respondent_code, status, created_at").eq("survey_id", params.id).eq("is_test", true).is("deleted_at", null).like("respondent_code", "SIM-%").limit(20000);
   if (error) return missingResponseMigration(error.message) ? json({ error: RESPONSE_MIGRATION_MESSAGE, migration: "0006" }, 503) : json({ error: error.message }, 500);
   const runs = new Map<string, { runId: string; respondents: number; complete: number; at: string | null }>();
@@ -50,7 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
   let body: { action?: unknown; config?: unknown; runId?: unknown };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
-  const db = supabaseAdmin();
+  const db = gate.db;
   const by = gate.user.fullName || gate.user.userCode;
 
   if (body.action === "clear") {

@@ -7,6 +7,7 @@ import {
 } from "@rescript/access";
 import { clearSessionCookie, loadPolicies, sessionIdFrom, supabaseService, type AccessPolicies } from "./authServer";
 import { decideProjectGate, type AccessRow, type MemberRow } from "./projectAccess";
+import { clientDb, surveyDb, type Db } from "./db";
 
 /**
  * THE GATE. Every authenticated request in the Studio passes through here.
@@ -209,6 +210,8 @@ export interface ProjectContext {
   grant: AccessSubject;
   /** when this membership ends (null = no expiry, or not a membership) */
   expiresAt: string | null;
+  /** the survey's client database (tenancy): the route's reads and writes of this survey's data go through it */
+  db: Db;
   survey: { id: string; code: string; title: string; status: string; owner_id: string | null; customer_id: string | null; locked: boolean };
 }
 
@@ -241,8 +244,9 @@ export async function requireProjectFor(
   if (!surveyId || !/^[0-9a-f-]{36}$/i.test(surveyId)) {
     return fail({ error: "Unknown project." }, 404);
   }
+  /* sign-in data and memberships are platform data; the survey row lives in its client's database (lib/db.ts) */
   const db = supabaseService();
-  const { data: survey } = await db
+  const { data: survey } = await (await surveyDb(surveyId))
     .from("surveys")
     .select("id, code, title, status, owner_id, customer_id, locked")
     .eq("id", surveyId)
@@ -286,6 +290,7 @@ export async function requireProjectFor(
 
   return {
     user, surveyId, role, roleSource, viaAdmin: gate.viaAdmin, grant: gate.grant, expiresAt: gate.expiresAt,
+    db: clientDb(survey.customer_id as string | null),
     survey: survey as ProjectContext["survey"],
   };
 }

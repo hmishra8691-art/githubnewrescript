@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
 import { isFailure, requireProject } from "@/lib/guard";
 
@@ -28,7 +27,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const environment = parseEnvironment(req.nextUrl.searchParams.get("environment") ?? "LIVE");
   if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   let q = db
     .from("listfill_counts")
     .select("list_fill_id, option_code, allocated_count, completed_count, is_test")
@@ -79,7 +78,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (body?.action && body.action !== "recount")
     return NextResponse.json({ error: `unknown action "${body.action}"` }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const envs = environment === "ALL" ? [true, false] : [environment === "TEST"];
   const results: Record<string, number> = {};
   for (const isTest of envs) {

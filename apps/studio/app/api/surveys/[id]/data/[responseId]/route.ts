@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { flattenVariables, rowToState, validateQuestion } from "@rescript/engine";
 import { missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
@@ -28,7 +27,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   const gate = await requireProject(req, params.id, "responses.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
 
@@ -77,7 +76,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "answers must be an object keyed by question id" }, { status: 400 });
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
   const def = loaded.def;
@@ -168,7 +167,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const gate = await requireProject(req, params.id, "responses.manage");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const purge = req.nextUrl.searchParams.get("purge") === "1";
   const restore = req.nextUrl.searchParams.get("restore") === "1";
   const reason = req.nextUrl.searchParams.get("reason");

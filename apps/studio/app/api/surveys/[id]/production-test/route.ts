@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { productionTest, type QuotaFill } from "@rescript/templates";
 import type { QuotaCounts } from "@rescript/engine";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/guard";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { publishGate } from "@/lib/publishGate";
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     })
     : [];
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if ("error" in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
   const def = loaded.def;
@@ -51,7 +51,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     links = n ?? 0;
   }
   /* the same conditions for a person: the test link with the live counters and the simulated full cells */
-  const { data: testDep } = await db.from("deployments").select("client_slug, study_slug").eq("survey_id", params.id).eq("mode", "test").eq("active", true).order("created_at", { ascending: false }).limit(1).maybeSingle();
+  const { data: testDep } = await platformDb().from("deployments").select("client_slug, study_slug").eq("survey_id", params.id).eq("mode", "test").eq("active", true).order("created_at", { ascending: false }).limit(1).maybeSingle();
   const fullCells = def.quotas.flatMap((q) => q.cells.filter((c) => fill.some((f) => f.share >= 1 && (f.cell ? f.cell.toLowerCase() === c.label.toLowerCase() || f.cell === c.id : f.quota.toLowerCase() === q.name.toLowerCase() || f.quota.toLowerCase() === c.label.toLowerCase()))).map((c) => c.id));
   const testLink = testDep ? `${surveyBaseUrl(def.deployment.customDomain)}/t/${testDep.client_slug}/${testDep.study_slug}?counts=live${fullCells.length ? `&full=${encodeURIComponent(fullCells.join(","))}` : ""}` : null;
   const verdict = publishGate(def);

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import {
@@ -73,7 +72,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const limit = Math.min(500, Math.max(1, Number(sp.get("limit") ?? 100)));
   const offset = Math.max(0, Number(sp.get("offset") ?? 0));
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   let q = db
     .from("respondents")
     .select("id, token, name, email, external_id, status, list_name, sent_at, invited_at, embedded", { count: "exact" })
@@ -226,7 +225,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "there is nobody to invite in that file" }, { status: 422 });
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   /*
    * Inserted in chunks, and `token` is left out of every row so the database
    * generates it. A partial failure leaves the rows that landed — which is
@@ -300,7 +299,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   const action = body?.action === "mark_unsent" ? "mark_unsent" : "mark_sent";
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   let q = db
     .from("respondents")
     .update({ sent_at: action === "mark_sent" ? new Date().toISOString() : null })
@@ -339,7 +338,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     return NextResponse.json({ error: "environment must be TEST or LIVE" }, { status: 400 });
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   let q = db.from("respondents").delete()
     .eq("survey_id", params.id)
     .eq("is_test", environment === "TEST");

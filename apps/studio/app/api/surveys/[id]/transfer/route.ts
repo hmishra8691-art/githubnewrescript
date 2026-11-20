@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseService } from "@/lib/authServer";
+import { platformDb } from "@/lib/db";
 import { audit, isFailure, notifyProject, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -25,10 +25,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!targetId) return NextResponse.json({ error: "Who should own this project?" }, { status: 400 });
   if (targetId === ctx.survey.owner_id) return NextResponse.json({ ok: true, unchanged: true });
 
-  const db = supabaseService();
+  const db = ctx.db;
   const [{ data: person }, { data: membership }] = await Promise.all([
-    db.from("profiles").select("id, full_name, user_code, status, customer_id").eq("id", targetId).maybeSingle(),
-    db.from("project_members").select("role").eq("survey_id", params.id).eq("user_id", targetId).maybeSingle(),
+    platformDb().from("profiles").select("id, full_name, user_code, status, customer_id").eq("id", targetId).maybeSingle(),
+    platformDb().from("project_members").select("role").eq("survey_id", params.id).eq("user_id", targetId).maybeSingle(),
   ]);
   if (!person) return NextResponse.json({ error: "Unknown account." }, { status: 404 });
   if (person.status !== "active") return NextResponse.json({ error: "That account is disabled." }, { status: 409 });
@@ -45,10 +45,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // a column on the survey, and leaving both would give one person two roles
   const { error: e1 } = await db.from("surveys").update({ owner_id: targetId }).eq("id", params.id);
   if (e1) return NextResponse.json({ error: e1.message }, { status: 500 });
-  await db.from("project_members").delete().eq("survey_id", params.id).eq("user_id", targetId);
+  await platformDb().from("project_members").delete().eq("survey_id", params.id).eq("user_id", targetId);
 
   if (previousOwner) {
-    await db.from("project_members").upsert(
+    await platformDb().from("project_members").upsert(
       { survey_id: params.id, user_id: previousOwner, role: "editor", added_by: ctx.user.userId, updated_at: new Date().toISOString() },
       { onConflict: "survey_id,user_id" },
     );

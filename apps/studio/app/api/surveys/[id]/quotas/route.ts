@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
 import { isFailure, requireProject } from "@/lib/guard";
 
@@ -21,7 +20,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const environment = parseEnvironment(req.nextUrl.searchParams.get("environment") ?? "LIVE");
   if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
-  const db = supabaseAdmin();
+  const db = gate.db;
   type Row = { quota_id: string; cell_id: string; count: number; updated_at?: string | null };
   const select = async (cols: string) => {
     let q = db.from("quota_counts").select(cols).eq("survey_id", params.id);

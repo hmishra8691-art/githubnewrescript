@@ -4,7 +4,6 @@ import { corpusFromHistory, replayCorpus, type LanguageCorpus } from "@rescript/
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { operationStoreFor } from "@/lib/copilot/operationsStore";
 import { loadDefinition } from "@/lib/analytics";
-import { supabaseService } from "@/lib/authServer";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +39,7 @@ export async function POST(req: NextRequest) {
   } else {
     const ctx = await requireProjectFor(user as Exclude<typeof user, { response: unknown }>, surveyId, "project.read");
     if (isFailure(ctx)) return ctx.response;
-    const loaded = await loadDefinition(supabaseService(), surveyId);
+    const loaded = await loadDefinition(ctx.db, surveyId);
     if ("error" in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
     def = loaded.def as SurveyDefinition;
     title = String(def.meta.title ?? surveyId);

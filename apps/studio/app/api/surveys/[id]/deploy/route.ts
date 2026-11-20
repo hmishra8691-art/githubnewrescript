@@ -1,6 +1,6 @@
 import { launchReadiness } from "@rescript/engine";
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { SurveyDefinition } from "@rescript/schema";
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!slugRe.test(clientSlug) || !slugRe.test(studySlug))
     return NextResponse.json({ error: "slugs must be lowercase letters/digits/hyphens" }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   /*
    * R10 — the definition, not just its id.
    *
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: `Not launched: ${launchBlockers.map((b) => b.message).join(" ")}`, blockers: launchBlockers, warnings: readiness!.checks.filter((c) => !c.ok && c.level === "warning") }, { status: 422 });
   }
 
-  const { data: existing } = await db
+  const { data: existing } = await platformDb()
     .from("deployments")
     .select("id, survey_id")
     .eq("client_slug", clientSlug)
@@ -112,8 +112,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "that client/study URL is used by another survey" }, { status: 409 });
 
   const { error } = existing
-    ? await db.from("deployments").update({ version_id: versionId, active: true }).eq("id", existing.id)
-    : await db.from("deployments").insert({
+    ? await platformDb().from("deployments").update({ version_id: versionId, active: true }).eq("id", existing.id)
+    : await platformDb().from("deployments").insert({
         survey_id: params.id, version_id: versionId,
         client_slug: clientSlug, study_slug: studySlug, mode, active: true,
       });

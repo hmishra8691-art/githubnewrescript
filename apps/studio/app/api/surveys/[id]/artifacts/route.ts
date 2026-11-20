@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { can, type Capability } from "@rescript/access";
 import type { SurveyDefinition } from "@rescript/schema";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition } from "@/lib/analytics";
 import { ARTIFACT_LABEL, artifactCapability, artifactFingerprint, artifactState, type ArtifactType } from "@/lib/artifacts/core";
 import { listArtifacts } from "@/lib/artifacts/service";
@@ -33,7 +32,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const listed = await listArtifacts(deps, { surveyId: params.id, userId: ctx.user.userId, may });
   if (!listed.ok) return listed.code === "artifacts_unavailable" ? json({ lines: [], unavailable: listed.error }) : json({ error: listed.error, code: listed.code }, listed.status);
   /* what each line would be made from now — only for the lines that exist (nothing to compare otherwise) */
-  const db = supabaseService();
+  const db = ctx.db;
   const loaded = listed.lines.length ? await loadDefinition(db, params.id) : null;
   const def = loaded && !("error" in loaded) ? (loaded.def as SurveyDefinition) : null;
   const look = await documentLook(db, { surveyId: params.id, customerId: ctx.user.customerId ?? null, userId: ctx.user.userId }).catch(() => ({ theme: null, structure: null, logo: null }));

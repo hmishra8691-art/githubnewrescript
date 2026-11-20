@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runSuite, runTestCase, describeSuite, type TestCase } from "@rescript/templates";
-import { supabaseAdmin } from "@/lib/admin";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 
@@ -72,7 +71,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "responses.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const caseId = req.nextUrl.searchParams.get("caseId");
 
   /* one case's history — the "has this been flaky" view */
@@ -152,7 +151,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const action = String(body?.action ?? "");
 
   /* ------------------------------------------------------------- editing */

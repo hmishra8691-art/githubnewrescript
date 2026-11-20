@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject, audit } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import {
@@ -31,7 +30,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: survey } = await db
     .from("surveys")
     .select("media_delivery_email, media_delivery_enabled")
@@ -95,7 +94,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * came from the caller, and `requireProject` proved their right to this
    * survey — not to whatever row they named.
    */
-  const admin = supabaseAdmin();
+  const admin = gate.db;
   const { data: row } = await admin
     .from("media_deliveries")
     .select("id, survey_id, status")

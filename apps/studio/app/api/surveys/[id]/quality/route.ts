@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { SurveyDefinition } from "@rescript/schema";
 import { summarizeConfig, type QualityAssessment, type QualityConfigSummary } from "@rescript/quality";
@@ -89,7 +89,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "responses.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const include = req.nextUrl.searchParams.get("include") ?? "live";
   const isTest = include === "test";
 
@@ -100,7 +100,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   // what the live link actually runs — the published version, which may be
   // behind the saved settings until the programmer publishes
   let live: QualityPayload["live"] = null;
-  const { data: dep } = await db.from("deployments").select("version_id, survey_versions(version, definition)").eq("survey_id", params.id).eq("mode", "live").eq("active", true).maybeSingle();
+  const { data: dep } = await platformDb().from("deployments").select("version_id, survey_versions(version, definition)").eq("survey_id", params.id).eq("mode", "live").eq("active", true).maybeSingle();
   if (dep?.version_id) {
     const ver = Array.isArray(dep.survey_versions) ? dep.survey_versions[0] : (dep.survey_versions as { version?: string; definition?: unknown } | null);
     const parsed = ver?.definition ? SurveyDefinition.safeParse(ver.definition) : null;

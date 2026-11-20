@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { parseEnvironment } from "@/lib/responseData";
 import { can } from "@rescript/access";
 import { audit, isFailure, requireProject } from "@/lib/guard";
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const isTest = environment === "TEST";
   const format = sp.get("format") === "csv" ? "csv" : "xlsx";
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: survey } = await db
     .from("surveys").select("title, code").eq("id", params.id).maybeSingle();
 
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * deployment there is no link to give out, and saying so is the only honest
    * answer.
    */
-  const { data: dep } = await db
+  const { data: dep } = await platformDb()
     .from("deployments")
     .select("client_slug, study_slug, mode, active")
     .eq("survey_id", params.id)

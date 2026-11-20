@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { isFailure, requireProject } from "@/lib/guard";
 
@@ -16,7 +15,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   let body: any = {};
   try { body = await req.json(); } catch { /* optional */ }
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   const configured = "def" in loaded ? loaded.def.quality.privacy.telemetryRetentionDays : 0;
   const days = Number.isFinite(Number(body?.days)) && Number(body?.days) >= 0 ? Number(body.days) : configured;

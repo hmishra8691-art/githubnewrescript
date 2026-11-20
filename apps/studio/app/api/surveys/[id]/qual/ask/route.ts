@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { aiProviderName } from "@rescript/ai";
 import { retrieveForQuestion, askPrompt, readAskReply, fakeAskReply, noEvidenceAnswer, ASK_SYSTEM, ASK_SCHEMA, ASK_MAX_TOKENS, redactText, type QualSegment, type QualState, type SourceMeta, type AskAnswer } from "@rescript/analytics";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { hasPii, json, recordEvents, refuse, storeFailure } from "@/lib/qual/qualStore";
 import { parseAskRequest } from "@/lib/qual/synthesisWorkspace";
@@ -59,7 +58,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (refused) return refused;
   if (!q.ok) return json({ error: q.error }, 400);
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const ctx = await synthesisContext(db, params.id);
     const redact = hasPii(gate) ? (t: string) => t : (t: string) => redactText(t, { names: ctx.names }).text;
     const r = retrieveForQuestion(q.value.question, ctx.state, ctx.segments, { sources: ctx.sources, redact: { names: ctx.names } });

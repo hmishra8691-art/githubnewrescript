@@ -4,7 +4,6 @@ import { can } from "@rescript/access";
 import { isAssessment, type AssessmentAnalytics } from "@rescript/engine";
 import { exportAssessmentDocx } from "@rescript/exporters";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition } from "@/lib/analytics";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
 import { dbConfigured } from "@/lib/copilot/durable";
@@ -64,7 +63,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProjectFor(authed, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
   if (!can(gate.grant, "responses.read")) return json({ error: "Your role on this project does not include reading responses, and assessment scores are response data." }, 403);
-  const db = supabaseService();
+  const db = gate.db;
   const loaded = await loadDefinition(db, params.id);
   if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
   const def = loaded.def;

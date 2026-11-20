@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { sttPrecheck } from "@/lib/byok/connect";
 import { qualAbilities, qualGuardCapability } from "@/lib/qual/qualAccess";
 import { json, loadWorkspace, refuse, QualStoreError, storeFailure } from "@/lib/qual/qualStore";
@@ -27,7 +26,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const stt = await sttPrecheck(gate.user, params.id, "qual_transcription").catch(() => null);
   const sttView = stt?.ok ? { ready: true, via: stt.via } : { ready: false, reason: stt && !stt.ok ? stt.error : "Speech-to-text could not be checked." };
   try {
-    const ws = await loadWorkspace(supabaseService(), gate);
+    const ws = await loadWorkspace(gate.db, gate);
     return json({ ok: true, available: true, can, stt: sttView, ...ws });
   } catch (e) {
     if (e instanceof QualStoreError && e.code === "migration_required") return json({ ok: true, available: false, note: e.message, can, stt: sttView });

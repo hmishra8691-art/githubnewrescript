@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { codesOfTheme, emergingThemes, emotionPrompt, emotionSummary, gateEmotions, EMOTION_SYSTEM, redactText } from "@rescript/analytics";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { hasPii, json, recordEvents, refuse, storeFailure } from "@/lib/qual/qualStore";
 import { modelRunner } from "@/lib/qual/synthesisStore";
@@ -32,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return json({ error: "expected a JSON body" }, 400);
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const ctx = await synthesisContext(db, params.id);
     if (body.action === "emerging") {
       const since = typeof body.since === "string" && !Number.isNaN(Date.parse(body.since)) ? Date.parse(body.since) : null;

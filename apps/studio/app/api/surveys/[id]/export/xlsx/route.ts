@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { exportVariableDictionaryXlsx } from "@rescript/exporters";
 import { audit, isFailure, requireProject } from "@/lib/guard";
@@ -11,7 +10,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "responses.export");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const versionId = req.nextUrl.searchParams.get("versionId");
 
   let q = db.from("survey_versions").select("id, version, definition").eq("survey_id", params.id);

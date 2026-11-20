@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cleaningImpact, type ImpactRow } from "@rescript/quality";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/guard";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 
@@ -22,7 +21,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "responses.read");
   if (isFailure(gate)) return gate.response;
   const isTest = req.nextUrl.searchParams.get("environment") === "TEST";
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if ("error" in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
   const rows: ImpactRow[] = [];

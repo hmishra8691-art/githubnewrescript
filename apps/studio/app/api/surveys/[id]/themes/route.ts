@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { Branding } from "@rescript/schema";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
@@ -30,7 +29,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db
     .from("themes")
     .select("id, name, branding, created_at")
@@ -71,7 +70,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }, { status: 422 });
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   /* a name is a handle: saving over one replaces it rather than making a twin */
   const { data: existing } = await db
     .from("themes").select("id").eq("customer_id", gate.user.customerId).eq("name", name).maybeSingle();
@@ -99,7 +98,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const themeId = req.nextUrl.searchParams.get("themeId");
   if (!themeId) return NextResponse.json({ error: "themeId is required" }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   /* scoped to the workspace, so one customer can never delete another's */
   const { error } = await db.from("themes").delete()
     .eq("id", themeId).eq("customer_id", gate.user.customerId);

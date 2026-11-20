@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { confirmUpload, MediaError, stageLogger } from "@rescript/media";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { json, loadWorkspace, recordEvents, refuse, UUID } from "@/lib/qual/qualStore";
@@ -31,7 +30,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const parts = Array.isArray(body?.parts) ? (body!.parts as { partNumber?: unknown; etag?: unknown }[]).map((p) => ({ partNumber: Number(p?.partNumber), etag: String(p?.etag ?? "").replace(/"/g, "") })).filter((p) => Number.isInteger(p.partNumber) && p.partNumber > 0 && !!p.etag) : [];
     const stored = await confirmUpload(handle.db, mediaId, { bytes: Number(body?.bytes) || null, durationSeconds: Number(body?.durationSeconds) || null }, parts);
     stageLogger(`survey:${params.id}`)("storage_confirmed", { mediaId, kind: "qual_recording", bytes: stored.bytes });
-    const db = supabaseService();
+    const db = gate.db;
     await db.from("qual_sessions").update({ recording_media_id: mediaId, updated_by: gate.user.userId }).eq("survey_id", params.id).eq("id", sessionId);
     await recordEvents(db, gate, [{ actor: gate.user.userId, action: "recording.uploaded", detail: `Uploaded a recording (${Math.max(1, Math.round((stored.bytes ?? 0) / 1024 / 1024))} MB${stored.fileName ? `, ${stored.fileName}` : ""}) to a session`, ids: [sessionId, mediaId] }]);
     return json({ ok: true, mediaId, bytes: stored.bytes, workspace: await loadWorkspace(db, gate) });

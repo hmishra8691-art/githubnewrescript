@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
@@ -39,7 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const environment = parseEnvironment(req.nextUrl.searchParams.get("environment") ?? "LIVE");
   if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const declared = await db
     .from("sample_sources")
     .select("id, code, label, target_completes, cost_per_complete, notes, created_at")
@@ -155,7 +154,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const cost = num(body?.costPerComplete, "The cost per complete");
   if (cost && typeof cost === "object") return NextResponse.json(cost, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   /*
    * Matched case-insensitively, exactly as the unique index and the stats
    * join do. Without that, declaring "CINT" over "cint" would hit the index
@@ -210,7 +209,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const code = req.nextUrl.searchParams.get("code");
   if (!code) return NextResponse.json({ error: "code is required" }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { error } = await db.from("sample_sources").delete()
     .eq("survey_id", params.id).ilike("code", code);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

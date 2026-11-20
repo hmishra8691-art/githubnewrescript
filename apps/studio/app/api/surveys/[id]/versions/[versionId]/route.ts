@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { nextVersion } from "@rescript/engine";
 import { shouldSnapshotDraft } from "@/lib/draftSnapshot";
@@ -13,7 +12,7 @@ export async function GET(
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db
     .from("survey_versions")
     .select("id, version, definition, label, notes, created_at")
@@ -32,7 +31,7 @@ export async function POST(
   const gate = await requireEditRight(req, params.id, "survey.save_version");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db
     .from("survey_versions")
     .select("id, version")

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import {
   accessLabel, avatarHue, can, diffAccess, GRANTABLE_ROLES, initialsOf, ROLE_DESCRIPTION, ROLE_LABEL,
   type AuditRow, type MemberGrant,
@@ -23,27 +24,27 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const ctx = await requireProject(req, params.id, "project.read_members");
   if (isFailure(ctx)) return ctx.response;
-  const db = supabaseService();
+  const db = ctx.db;
 
   const now = Date.now();
   const [{ data: members }, { data: invitations }, { data: grants }] = await Promise.all([
-    db.rpc("rescript_project_members", {
+    platformDb().rpc("rescript_project_members", {
       p_survey: params.id,
       p_present_within_seconds: ctx.user.policies.presence.presentWithinSeconds,
     }),
     /* the 0062 columns, read soft: a database without them answers as before */
-    db.from("project_invitations")
+    platformDb().from("project_invitations")
       .select("id, email, user_code, role, created_at, expires_at, permissions, access_expires_at, resent_at, resend_count")
       .eq("survey_id", params.id).is("accepted_at", null).is("revoked_at", null)
       .order("created_at", { ascending: false })
       .then(async (r) => (r.error
-        ? db.from("project_invitations")
+        ? platformDb().from("project_invitations")
             .select("id, email, user_code, role, created_at, expires_at")
             .eq("survey_id", params.id).is("accepted_at", null).is("revoked_at", null)
             .order("created_at", { ascending: false })
         : r)),
     /* each membership's permissions and expiry (migration 0062) — and who granted it */
-    db.from("project_members").select("user_id, permissions, expires_at, added_by")
+    platformDb().from("project_members").select("user_id, permissions, expires_at, added_by")
       .eq("survey_id", params.id).is("revoked_at", null)
       .then((r) => (r.error ? { data: [] as { user_id: string; permissions: unknown; expires_at: string | null; added_by: string | null }[] } : r)),
   ]);
@@ -124,7 +125,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 /** the audit rows about who has access to this project, as sentences */
 async function membershipHistory(surveyId: string, expired: { userId: string; name: string | null; expiresAt: string }[], now: number) {
   const db = supabaseService();
-  const { data } = await db.from("audit_logs")
+  const { data } = await platformDb().from("audit_logs")
     .select("id, action, entity, entity_id, user_id, detail, created_at")
     .eq("survey_id", surveyId).like("action", "project.%")
     .order("created_at", { ascending: false }).limit(200);
@@ -132,7 +133,7 @@ async function membershipHistory(surveyId: string, expired: { userId: string; na
   const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))] as string[];
   const names = new Map<string, string>();
   if (ids.length) {
-    const { data: people } = await db.from("profiles").select("id, full_name").in("id", ids);
+    const { data: people } = await platformDb().from("profiles").select("id, full_name").in("id", ids);
     for (const p of people ?? []) names.set(p.id, p.full_name ?? "");
   }
   const audits: AuditRow[] = rows.map((r) => ({
@@ -165,14 +166,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "You cannot change your own access. Ask the owner or another admin." }, { status: 409 });
   }
 
-  const db = supabaseService();
-  const { data: person } = await db.from("profiles").select("full_name, user_code").eq("id", targetId).maybeSingle();
+  const db = ctx.db;
+  const { data: person } = await platformDb().from("profiles").select("full_name, user_code").eq("id", targetId).maybeSingle();
   /* 0062 columns read soft, so this route still changes roles on a database without them */
   type Existing = { role: string; permissions?: unknown; expires_at?: string | null };
-  const read = await db.from("project_members").select("role, permissions, expires_at")
+  const read = await platformDb().from("project_members").select("role, permissions, expires_at")
     .eq("survey_id", params.id).eq("user_id", targetId).is("revoked_at", null).maybeSingle();
   const existing = (read.error
-    ? (await db.from("project_members").select("role")
+    ? (await platformDb().from("project_members").select("role")
         .eq("survey_id", params.id).eq("user_id", targetId).is("revoked_at", null).maybeSingle()).data
     : read.data) as Existing | null;
   if (!existing) return NextResponse.json({ error: "That person is not a collaborator on this project." }, { status: 404 });
@@ -198,7 +199,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const update: Record<string, unknown> = { role, revoked_at: null, revoked_by: null, updated_at: new Date().toISOString() };
   const touches0062 = role === "custom" || before.role === "custom" || (after.expiresAt ?? null) !== (before.expiresAt ?? null) || "permissions" in existing;
   if (touches0062) { update.permissions = after.permissions ?? null; update.expires_at = after.expiresAt ?? null; }
-  const { error } = await db
+  const { error } = await platformDb()
     .from("project_members")
     .update(update)
     .eq("survey_id", params.id).eq("user_id", targetId);
@@ -217,7 +218,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       .from("project_edit_locks").select("locked_by_user_id, status")
       .eq("survey_id", params.id).maybeSingle();
     if (lock?.status === "held" && lock.locked_by_user_id === targetId) {
-      await db.rpc("rescript_force_release_lock", {
+      await platformDb().rpc("rescript_force_release_lock", {
         p_survey: params.id, p_by: ctx.user.userId, p_reason: "role_changed",
       });
       lockReleased = true;
@@ -258,14 +259,14 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     );
   }
 
-  const db = supabaseService();
-  const { data: person } = await db.from("profiles").select("full_name, user_code").eq("id", targetId).maybeSingle();
+  const db = ctx.db;
+  const { data: person } = await platformDb().from("profiles").select("full_name, user_code").eq("id", targetId).maybeSingle();
 
   // whatever they were holding goes back the moment their access does
   const { data: lock } = await db
     .from("project_edit_locks").select("locked_by_user_id, status").eq("survey_id", params.id).maybeSingle();
   if (lock?.status === "held" && lock.locked_by_user_id === targetId) {
-    await db.rpc("rescript_force_release_lock", { p_survey: params.id, p_by: ctx.user.userId, p_reason: "access_removed" });
+    await platformDb().rpc("rescript_force_release_lock", { p_survey: params.id, p_by: ctx.user.userId, p_reason: "access_removed" });
   }
   await db.from("project_presence").delete().eq("survey_id", params.id).eq("user_id", targetId);
 
@@ -286,16 +287,16 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
    * workspace baseline exactly as an explicit share does. Re-sharing the same
    * person clears the mark (see `share`).
    */
-  const { data: member } = await db
+  const { data: member } = await platformDb()
     .from("project_members").select("user_id")
     .eq("survey_id", params.id).eq("user_id", targetId).maybeSingle();
   const { error } = member
-    ? await db.from("project_members")
+    ? await platformDb().from("project_members")
         .update({ revoked_at: new Date().toISOString(), revoked_by: ctx.user.userId, updated_at: new Date().toISOString() })
         .eq("survey_id", params.id).eq("user_id", targetId)
     : /* no row at all: they hold the workspace baseline, and removing them
          means writing the revocation the baseline has to yield to */
-      await db.from("project_members")
+      await platformDb().from("project_members")
         .insert({
           survey_id: params.id, user_id: targetId, role: "viewer", added_by: ctx.user.userId,
           revoked_at: new Date().toISOString(), revoked_by: ctx.user.userId,
@@ -305,9 +306,9 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   /* a pending invitation is a standing offer of access; leaving one open would
      let the person being removed walk back in by accepting it */
   {
-    const { data: profile } = await db.from("profiles").select("email, user_code").eq("id", targetId).maybeSingle();
+    const { data: profile } = await platformDb().from("profiles").select("email, user_code").eq("id", targetId).maybeSingle();
     const revoke = async (column: "email" | "user_code", value: string) => {
-      await db.from("project_invitations")
+      await platformDb().from("project_invitations")
         .update({ revoked_at: new Date().toISOString() })
         .eq("survey_id", params.id).is("accepted_at", null).is("revoked_at", null)
         .eq(column, value);

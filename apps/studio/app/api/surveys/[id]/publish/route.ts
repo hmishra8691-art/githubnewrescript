@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +18,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
-  const { data, error } = await db
+  const db = gate.db;
+  const { data, error } = await platformDb()
     .from("deployments")
     .select("mode, version_id, client_slug, study_slug, active, survey_versions(version)")
     .eq("survey_id", params.id)

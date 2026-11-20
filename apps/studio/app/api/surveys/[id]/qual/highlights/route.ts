@@ -3,7 +3,6 @@ import { freshUrl, MediaError } from "@rescript/media";
 import { applyReelOp, reelItemStates, excerptClip, redactText, type HighlightReel } from "@rescript/analytics";
 import { liveClip } from "@rescript/analytics/live";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { qualGuardCapability, qualRefusal } from "@/lib/qual/qualAccess";
 import { hasPii, json, recordEvents, refuse, storeFailure, UUID } from "@/lib/qual/qualStore";
@@ -37,7 +36,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (isFailure(gate)) return gate.response;
   const refused = refuse(gate, clip ? "playback" : "read");
   if (refused) return refused;
-  const db = supabaseService();
+  const db = gate.db;
   try {
     const ctx = await synthesisContext(db, params.id);
     const mediaOf = (sourceId: string) => { const t = ctx.full.transcripts.find((x) => x.id === sourceId); return t?.mediaId ?? ctx.full.sessions.find((s) => s.id === t?.sessionId)?.recordingMediaId ?? null; };
@@ -85,7 +84,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
   const refused = refuse(gate, op);
   if (refused) return refused;
-  const db = supabaseService();
+  const db = gate.db;
   try {
     const ctx = await synthesisContext(db, params.id);
     const reels = await listReels(db, params.id);

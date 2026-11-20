@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { qualGuardCapability, qualRefusal } from "@/lib/qual/qualAccess";
 import { json, recordEvents, refuse, saveSettings, storeFailure, UUID, loadSettings } from "@/lib/qual/qualStore";
 import { parseAutoCodeSettings } from "@/lib/qual/synthesisWorkspace";
@@ -29,7 +28,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const refused = refuse(gate, "code");
   if (refused) return refused;
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const cod = await db.from("qual_codings").select("settings").eq("survey_id", params.id).maybeSingle();
     const settings = autoCodeSettingsOf((cod.data as { settings?: unknown } | null)?.settings);
     const queued = settings.enabled ? await enqueuePending(db, params.id, gate.user.userId) : 0;
@@ -45,7 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return json({ error: "expected a JSON body" }, 400);
   const action = String(body.action ?? "");
-  const db = supabaseService();
+  const db = gate.db;
   try {
     if (action === "settings") {
       if (qualRefusal(gate.grant, "manage")) return json({ error: "Turning automatic coding on or off needs Data: Edit as well — it decides what is spent on new sources.", code: "insufficient_role" }, 403);

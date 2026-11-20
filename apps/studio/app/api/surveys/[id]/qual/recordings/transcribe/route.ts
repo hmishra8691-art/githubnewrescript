@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { transcribe } from "@rescript/ai";
 import { readObject, STT_MAX_BYTES } from "@rescript/media";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { sttPrecheck } from "@/lib/byok/connect";
 import { billingProjectFor, meteredSttCall, refusalResponse } from "@/lib/metering";
@@ -43,7 +42,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const sessionId = String(body?.sessionId ?? "");
   if (!UUID.test(sessionId)) return json({ error: "which session (sessionId)" }, 400);
   const language = typeof body?.language === "string" ? body.language.trim().slice(0, 12) : "";
-  const db = supabaseService();
+  const db = gate.db;
   try {
     const session = await sessionRow(db, params.id, sessionId);
     if (!session) return json({ error: "no such session" }, 404);

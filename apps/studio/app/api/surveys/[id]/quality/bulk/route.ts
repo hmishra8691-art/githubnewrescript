@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { Db } from "@/lib/db";
 import { randomUUID } from "node:crypto";
 import { cleaningProposal, type CleaningCriteria, type CleaningRow } from "@rescript/quality";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/guard";
 import { missingMigration } from "@/lib/qualityDef";
 
@@ -40,7 +40,7 @@ function criteriaOf(raw: unknown): CleaningCriteria | string {
   return c;
 }
 
-async function rowsOf(db: ReturnType<typeof supabaseAdmin>, surveyId: string, isTest: boolean): Promise<CleaningRow[] | { error: string }> {
+async function rowsOf(db: Db, surveyId: string, isTest: boolean): Promise<CleaningRow[] | { error: string }> {
   const out: CleaningRow[] = [];
   let after: string | null = null;
   for (let page = 0; page < 200; page++) {
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const manage = await requireProject(req, params.id, "responses.manage");
     if (isFailure(manage)) return manage.response;
   }
-  const db = supabaseAdmin();
+  const db = gate.db;
   const isTest = body.environment === "TEST";
   const by = gate.user.fullName || gate.user.userCode;
   const now = new Date().toISOString();

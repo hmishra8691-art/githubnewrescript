@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { auditCategory, describeEvent } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -25,8 +25,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const category = url.searchParams.get("category");
   const before = url.searchParams.get("before");
 
-  const db = supabaseService();
-  let q = db
+  const db = ctx.db;
+  let q = platformDb()
     .from("audit_logs")
     .select("id, action, entity, entity_id, user_id, detail, created_at")
     .eq("survey_id", params.id)
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const userIds = [...new Set((data ?? []).map((r) => r.user_id).filter(Boolean))] as string[];
   const people = new Map<string, { name: string; code: string }>();
   if (userIds.length) {
-    const { data: profiles } = await db.from("profiles").select("id, full_name, user_code").in("id", userIds);
+    const { data: profiles } = await platformDb().from("profiles").select("id, full_name, user_code").in("id", userIds);
     for (const p of profiles ?? []) people.set(p.id, { name: p.full_name ?? "", code: p.user_code ?? "" });
   }
 

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { Condition } from "@rescript/schema";
 import { matchingResponseIds, parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
@@ -40,7 +39,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const by = gate.user.fullName || gate.user.userCode;
   const reason = typeof body?.reason === "string" ? body.reason.slice(0, 1000) : null;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   let ids: string[] = [];
   let codes: string[] = [];
 

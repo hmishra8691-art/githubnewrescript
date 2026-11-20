@@ -42,6 +42,8 @@ export async function guardLiveData(
   db: Db, surveyId: string, incoming: SurveyDefinition,
   /** what the row holds now, when the caller has already read it; `undefined` = read it here */
   preImage?: SurveyDefinition | null,
+  /** where the deployment directory lives (platform data, tenancy) — the same client when not given */
+  central: Db = db,
 ): Promise<LiveDataGuardResult> {
   let liveResponses = 0;
   try { liveResponses = await liveResponseTotal(db, surveyId); } catch { liveResponses = 0; }
@@ -50,7 +52,7 @@ export async function guardLiveData(
   const baselines: SurveyDefinition[] = [];
   const parse = (raw: unknown) => { const p = SurveyDefinition.safeParse(raw); if (p.success) baselines.push(p.data); };
   try {
-    const { data: deps } = await db.from("deployments").select("version_id").eq("survey_id", surveyId).eq("mode", "live").eq("active", true);
+    const { data: deps } = await central.from("deployments").select("version_id").eq("survey_id", surveyId).eq("mode", "live").eq("active", true);
     for (const d of (deps ?? []) as { version_id: string }[]) {
       const { data: v } = await db.from("survey_versions").select("definition").eq("id", d.version_id).single();
       if (v?.definition) parse(v.definition);

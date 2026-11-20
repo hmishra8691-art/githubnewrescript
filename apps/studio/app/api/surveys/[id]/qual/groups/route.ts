@@ -11,7 +11,6 @@ import {
   type GroupStore, type GroupRow, type GroupSession, type GroupPrompt, type ModeratorOp,
 } from "@rescript/analytics";
 import { isFailure, requireProjectFor, requireUser, type AuthedUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition } from "@/lib/analytics";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { checkRow, hasPii, json, loadSettings, recordEvents, refuse, storeFailure, UUID } from "@/lib/qual/qualStore";
@@ -163,7 +162,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const refused = refuse(gate, "read");
   if (refused) return refused;
   try {
-    const db = supabaseService();
+    const db = gate.db;
     if (!id) return json({ ok: true, sessions: (await listGroups(db, params.id)).map((r) => ({ id: r.id, title: r.state.title, status: r.state.status, mode: r.state.mode, phase: r.state.phase, joinCode: r.joinCode, transcriptId: r.transcriptId ?? null, createdAt: r.createdAt })) });
     if (!UUID.test(id)) return json({ error: "no such group session" }, 404);
     let row = await getGroup(db, params.id, id);
@@ -222,7 +221,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
   const refused = refuse(gate, "manage");
   if (refused) return refused;
-  const db = supabaseService();
+  const db = gate.db;
   try {
     const loaded = await loadDefinition(db, params.id).catch(() => null);
     const def = loaded && !("error" in loaded) ? loaded.def : null;

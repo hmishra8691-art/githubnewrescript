@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { SurveyDefinition } from "@rescript/schema";
 import { SCRIPT_AUDIT_ACTIONS } from "@rescript/engine";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { dbConfigured } from "@/lib/copilot/durable";
 import { recordSandboxDefinition, sandboxScriptAudit, scriptAuditEntry } from "@/lib/scriptAuditLog";
 
@@ -32,15 +32,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (isFailure(authed)) return authed.response;
   const gate = await requireProjectFor(authed, params.id, "project.read_activity");
   if (isFailure(gate)) return gate.response;
-  const db = supabaseService();
-  const { data, error } = await db.from("audit_logs").select("id, action, user_id, detail, created_at")
+  const db = gate.db;
+  const { data, error } = await platformDb().from("audit_logs").select("id, action, user_id, detail, created_at")
     .eq("survey_id", params.id).in("action", [...SCRIPT_AUDIT_ACTIONS])
     .order("created_at", { ascending: false }).limit(200);
   if (error) return json({ error: "the audit log could not be read" }, 500);
   const ids = [...new Set((data ?? []).map((r) => r.user_id).filter(Boolean))] as string[];
   const people = new Map<string, string>();
   if (ids.length) {
-    const { data: profiles } = await db.from("profiles").select("id, full_name, user_code").in("id", ids);
+    const { data: profiles } = await platformDb().from("profiles").select("id, full_name, user_code").in("id", ids);
     for (const p of profiles ?? []) people.set(p.id, p.full_name || p.user_code || "A user");
   }
   const entries = (data ?? []).map((r) => scriptAuditEntry({

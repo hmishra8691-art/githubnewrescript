@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
 import { isFailure, requireProject } from "@/lib/guard";
 import { chooseBucket, fieldPace, summariseSeries } from "@rescript/analytics";
@@ -105,7 +104,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const activeSeconds = Math.min(Math.max(Math.floor(num(q.get("activeSeconds"), 900)), 60), 86_400);
   const windowMinutes = Math.min(Math.max(Math.floor(num(q.get("windowMinutes"), 60)), 5), 1440);
 
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   /* ------------------------------------------------------------ the pulse */
 

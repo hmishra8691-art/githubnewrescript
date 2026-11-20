@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { Condition } from "@rescript/schema";
 import {
@@ -32,7 +31,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const environment = parseEnvironment(sp.get("environment"));
   if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
 
@@ -82,7 +81,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     filter = parsed.data;
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
 

@@ -3,7 +3,6 @@ import { aiProviderName } from "@rescript/ai";
 import { Condition, SurveyDefinition } from "@rescript/schema";
 import type { DataQuery } from "@rescript/engine";
 import { answerDataQuery, buildDataset, type AnalyticsRow } from "@rescript/analytics";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser } from "@/lib/guard";
 import { buildFor, loadDefinition } from "@/lib/analytics";
 
@@ -65,7 +64,7 @@ export async function POST(req: NextRequest) {
 
   const ctx = await requireProject(req, surveyId, "analytics.read");
   if (isFailure(ctx)) return ctx.response;
-  const db = supabaseService();
+  const db = ctx.db;
   const loaded = await loadDefinition(db, surveyId);
   if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
   const environment = body.environment === "TEST" || body.environment === "ALL" ? body.environment : "LIVE";

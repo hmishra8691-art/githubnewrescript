@@ -1,6 +1,7 @@
 import { infographicDashboard } from "@rescript/analytics";
 import { shareView } from "@/lib/shareView";
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { assertNotReadOnly, getMeter, projectContext, projectLookup, recordUsage } from "@/lib/metering";
 import type { Environment } from "@rescript/billing";
 import type { AuditEvent, Capability } from "@rescript/access";
@@ -958,7 +959,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       const permission = body.permission === "download" ? "download" : "viewer";
       const emails = Array.isArray(body.emails) ? (body.emails as string[]).map((e) => e.trim().toLowerCase()).filter((e) => /.+@.+\..+/.test(e)) : [];
       let userIds: string[] = Array.isArray(body.userIds) ? (body.userIds as string[]).filter(isUuid) : [];
-      if (emails.length) { const { data: profiles } = await db.from("profiles").select("id, email").in("email", emails); userIds = [...new Set([...userIds, ...(profiles ?? []).map((p) => p.id as string)])]; }
+      if (emails.length) { const { data: profiles } = await platformDb().from("profiles").select("id, email").in("email", emails); userIds = [...new Set([...userIds, ...(profiles ?? []).map((p) => p.id as string)])]; }
       row = { survey_id: surveyId, report_id: reportId, token: newToken(), access, permission, report_version: body.pinVersion ? r.published_version : null, password_hash: typeof body.password === "string" && body.password ? await hashPassword(body.password) : null, expires_at: body.expiresAt ?? null, allowed_user_ids: userIds, allowed_emails: emails, label: body.label ?? null, created_by: ctx.user.userId };
     }
     const { data, error } = await db.from(coll.table).insert(row).select("*").single();
@@ -989,7 +990,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
    */
   if (head === "plan" && !itemId) {
     const gateEdit = await requireEditRight(req, surveyId, "survey.edit"); if (isFailure(gateEdit)) return gateEdit.response;
-    const db = supabaseService();
+    const db = gateEdit.db;
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     const r = await editPlan(db, surveyId, loaded, { actions: body.actions, baseRevision: typeof body.baseRevision === "number" ? body.baseRevision : null, userId: gateEdit.user.userId });
@@ -1000,7 +1001,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
   if (!head || !(head in COLLECTIONS) || !itemId || !isUuid(itemId) || head === "shares") return bad("Unknown analytics endpoint.", 404);
   const coll = COLLECTIONS[head as Collection];
   const ctx = await gate(req, surveyId, coll.write); if (isFailure(ctx)) return ctx.response;
-  const db = supabaseService();
+  const db = ctx.db;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const { data: cur } = await db.from(coll.table).select("*").eq("id", itemId).is("deleted_at", null).maybeSingle();
   /*
@@ -1098,7 +1099,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (body.password !== undefined) patch.password_hash = body.password ? await hashPassword(String(body.password)) : null;
     if (Array.isArray(body.emails)) {
       const emails = (body.emails as string[]).map((e) => e.trim().toLowerCase()).filter((e) => /.+@.+\..+/.test(e));
-      const { data: profiles } = emails.length ? await db.from("profiles").select("id, email").in("email", emails) : { data: [] };
+      const { data: profiles } = emails.length ? await platformDb().from("profiles").select("id, email").in("email", emails) : { data: [] };
       patch.allowed_emails = emails; patch.allowed_user_ids = [...new Set([...(Array.isArray(body.userIds) ? (body.userIds as string[]).filter(isUuid) : []), ...(profiles ?? []).map((p) => p.id as string)])];
     }
     if (body.label !== undefined) patch.label = body.label;

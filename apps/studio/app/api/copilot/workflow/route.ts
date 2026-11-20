@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { aiConfigured, aiModelName, aiProviderName } from "@rescript/ai";
 import { SurveyDefinition } from "@rescript/schema";
 import { modelSteps, researchWorkflow, type ExecutionMode, type ResearchWorkflow } from "@rescript/engine";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, estimateAi } from "@/lib/metering";
 import { aiReadyFor } from "@/lib/byok/connect";
@@ -77,7 +76,7 @@ export async function POST(req: NextRequest) {
   } else {
     const ctx = await requireProject(req, surveyId, setMode ? "survey.edit" : "project.read");
     if (isFailure(ctx)) return ctx.response;
-    const db = supabaseService();
+    const db = ctx.db;
     const loaded = await loadDefinition(db, surveyId);
     if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
     def = loaded.def as SurveyDefinition;

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { avatarHue, can, initialsOf } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, notifyProject, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const includeResolved = url.searchParams.get("resolved") === "1";
   const questionId = url.searchParams.get("questionId");
 
-  const db = supabaseService();
+  const db = ctx.db;
   let q = db
     .from("project_comments")
     .select("id, parent_id, author_id, body, target, mentions, resolved_at, resolved_by, created_at, updated_at")
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const ids = [...new Set(rows.flatMap((r) => [r.author_id, r.resolved_by]).filter(Boolean))] as string[];
   const people = new Map<string, { name: string; code: string }>();
   if (ids.length) {
-    const { data: profiles } = await db.from("profiles").select("id, full_name, user_code").in("id", ids);
+    const { data: profiles } = await platformDb().from("profiles").select("id, full_name, user_code").in("id", ids);
     for (const p of profiles ?? []) people.set(p.id, { name: p.full_name ?? "", code: p.user_code ?? "" });
   }
 
@@ -111,7 +111,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const parentId = body?.parentId ? String(body.parentId) : null;
   const target = body?.target && typeof body.target === "object" ? body.target : {};
 
-  const db = supabaseService();
+  const db = ctx.db;
   if (parentId) {
     const { data: parent } = await db
       .from("project_comments").select("id, survey_id, parent_id").eq("id", parentId).maybeSingle();
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    */
   let mentions: string[] = [];
   if (Array.isArray(body?.mentions) && body.mentions.length) {
-    const { data: members } = await db.rpc("rescript_project_members", { p_survey: params.id, p_present_within_seconds: 60 });
+    const { data: members } = await platformDb().rpc("rescript_project_members", { p_survey: params.id, p_present_within_seconds: 60 });
     const allowed = new Set(((members ?? []) as { user_id: string }[]).map((m) => m.user_id));
     mentions = body.mentions.map(String).filter((id: string) => allowed.has(id)).slice(0, 20);
   }
@@ -167,7 +167,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const commentId = String(body?.commentId ?? "");
   if (!commentId) return NextResponse.json({ error: "Which note?" }, { status: 400 });
 
-  const db = supabaseService();
+  const db = ctx.db;
   const { data: comment } = await db
     .from("project_comments").select("id, survey_id, author_id, resolved_at").eq("id", commentId).maybeSingle();
   if (!comment || comment.survey_id !== params.id) return NextResponse.json({ error: "Unknown note." }, { status: 404 });

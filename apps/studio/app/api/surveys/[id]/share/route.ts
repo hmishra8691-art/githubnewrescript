@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { accessLabel, can, diffAccess, parseIdentifier, type MemberGrant } from "@rescript/access";
 import { newInvitationToken, supabaseService } from "@/lib/authServer";
 import { audit, isFailure, notifyProject, requireProject } from "@/lib/guard";
@@ -42,8 +43,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     });
   }
 
-  const db = supabaseService();
-  const q = db.from("profiles").select("id, user_code, full_name, email, organization, status");
+  const db = ctx.db;
+  const q = platformDb().from("profiles").select("id, user_code, full_name, email, organization, status");
   const { data: person } = identifier.kind === "email"
     ? await q.eq("email", identifier.value.toLowerCase()).maybeSingle()
     : await q.eq("user_code", identifier.value).maybeSingle();
@@ -62,8 +63,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   // already in? say so rather than letting the owner "share" a second time
   const [{ data: existing }, { data: theirWorkspace }] = await Promise.all([
     /* a revoked row is history, not access — the panel must not say "already has access" for it */
-    db.from("project_members").select("role").eq("survey_id", params.id).eq("user_id", person.id).is("revoked_at", null).maybeSingle(),
-    db.from("profiles").select("customer_id").eq("id", person.id).maybeSingle(),
+    platformDb().from("project_members").select("role").eq("survey_id", params.id).eq("user_id", person.id).is("revoked_at", null).maybeSingle(),
+    platformDb().from("profiles").select("customer_id").eq("id", person.id).maybeSingle(),
   ]);
   const isOwner = ctx.survey.owner_id === person.id;
 
@@ -117,8 +118,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "That is not an email address or a User ID." }, { status: 400 });
   }
 
-  const db = supabaseService();
-  const sel = db.from("profiles").select("id, user_code, full_name, email, status");
+  const db = ctx.db;
+  const sel = platformDb().from("profiles").select("id, user_code, full_name, email, status");
   const { data: person } = identifier.kind === "email"
     ? await sel.eq("email", identifier.value).maybeSingle()
     : await sel.eq("user_code", identifier.value).maybeSingle();
@@ -148,10 +149,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      */
     /* the 0062 columns read soft: a database without them answers as before */
     type Existing = { role: string; revoked_at: string | null; permissions?: unknown; expires_at?: string | null };
-    const read = await db.from("project_members").select("role, revoked_at, permissions, expires_at")
+    const read = await platformDb().from("project_members").select("role, revoked_at, permissions, expires_at")
       .eq("survey_id", params.id).eq("user_id", person.id).maybeSingle();
     const existingRow = (read.error
-      ? (await db.from("project_members").select("role, revoked_at").eq("survey_id", params.id).eq("user_id", person.id).maybeSingle()).data
+      ? (await platformDb().from("project_members").select("role, revoked_at").eq("survey_id", params.id).eq("user_id", person.id).maybeSingle()).data
       : read.data) as Existing | null;
     /* a revoked row is history, not a collaborator: re-sharing that person is
        a grant, not a role change (see the `revoked_at` note in `members`);
@@ -183,11 +184,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const carries0062 = role === "custom" || !!effective.expiresAt || !!existingRow?.expires_at || existingRow?.permissions != null;
     const extra = carries0062 ? { permissions: effective.permissions ?? null, expires_at: effective.expiresAt ?? null } : {};
     const { error } = existingRow
-      ? await db
+      ? await platformDb()
           .from("project_members")
           .update({ role, revoked_at: null, revoked_by: null, updated_at: new Date().toISOString(), ...extra })
           .eq("survey_id", params.id).eq("user_id", person.id)
-      : await db
+      : await platformDb()
           .from("project_members")
           .insert({ survey_id: params.id, user_id: person.id, role, added_by: user.userId, updated_at: new Date().toISOString(), ...extra });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -279,7 +280,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      an ordinary character in an address */
   const wanted = identifier.value.toLowerCase();
   type Live = { id: string; email: string | null; expires_at: string; permissions?: unknown; access_expires_at?: string | null };
-  const liveRead = await db
+  const liveRead = await platformDb()
     .from("project_invitations")
     .select("id, email, expires_at, permissions, access_expires_at")
     .eq("survey_id", params.id)
@@ -287,7 +288,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .is("revoked_at", null);
   /* the 0062 columns read soft: a database without them answers as before */
   const live = (liveRead.error
-    ? (await db.from("project_invitations").select("id, email, expires_at")
+    ? (await platformDb().from("project_invitations").select("id, email, expires_at")
         .eq("survey_id", params.id).is("accepted_at", null).is("revoked_at", null)).data
     : liveRead.data) as Live[] | null;
   const pending = (live ?? []).find((i) => (i.email ?? "").toLowerCase() === wanted) ?? null;
@@ -318,14 +319,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
        one (project, email) still means one invitation and one email; see
        `dedupeKey` below. `expires_at` is left alone, exactly as the upsert
        left it, so re-sending a link cannot extend its life indefinitely. */
-    ({ data: invitation, error } = await db
+    ({ data: invitation, error } = await platformDb()
       .from("project_invitations")
       .update(row)
       .eq("id", pending.id)
       .select("id, expires_at")
       .maybeSingle());
   } else {
-    ({ data: invitation, error } = await db
+    ({ data: invitation, error } = await platformDb()
       .from("project_invitations")
       .insert(row)
       .select("id, expires_at")
@@ -428,14 +429,14 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const invitationId = String(body?.invitationId ?? "");
   if (!invitationId) return NextResponse.json({ error: "Which invitation?" }, { status: 400 });
 
-  const db = supabaseService();
-  const { data: inv } = await db
+  const db = ctx.db;
+  const { data: inv } = await platformDb()
     .from("project_invitations").select("id, email, survey_id, accepted_at")
     .eq("id", invitationId).maybeSingle();
   if (!inv || inv.survey_id !== params.id) return NextResponse.json({ error: "Unknown invitation." }, { status: 404 });
   if (inv.accepted_at) return NextResponse.json({ error: "That invitation was already accepted. Remove their access instead." }, { status: 409 });
 
-  await db.from("project_invitations").update({ revoked_at: new Date().toISOString() }).eq("id", invitationId);
+  await platformDb().from("project_invitations").update({ revoked_at: new Date().toISOString() }).eq("id", invitationId);
   await audit({
     action: "project.invitation_revoked", userId: ctx.user.userId, sessionId: ctx.user.sessionId,
     surveyId: params.id, customerId: ctx.user.customerId, detail: { targetEmail: inv.email },
@@ -460,8 +461,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const invitationId = String(body?.invitationId ?? "");
   if (body?.action !== "resend" || !invitationId) return NextResponse.json({ error: "Which invitation, and what to do with it?" }, { status: 400 });
 
-  const db = supabaseService();
-  const { data: inv } = await db
+  const db = ctx.db;
+  const { data: inv } = await platformDb()
     .from("project_invitations").select("id, email, role, survey_id, accepted_at, revoked_at, expires_at, resend_count")
     .eq("id", invitationId).maybeSingle();
   if (!inv || inv.survey_id !== params.id) return NextResponse.json({ error: "Unknown invitation." }, { status: 404 });
@@ -475,7 +476,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const token = newInvitationToken();
   const tokenHash = createHash("sha256").update(token).digest("hex");
   const count = Number(inv.resend_count ?? 0) + 1;
-  const { error } = await db.from("project_invitations")
+  const { error } = await platformDb().from("project_invitations")
     .update({ token_hash: tokenHash, token: null, resent_at: new Date().toISOString(), resend_count: count })
     .eq("id", inv.id).is("accepted_at", null).is("revoked_at", null);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

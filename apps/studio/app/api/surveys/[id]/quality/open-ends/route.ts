@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "node:crypto";
 import { aiModelName, completeJson } from "@rescript/ai";
 import { gateJudgements, judgementFlag, openEndPrompt, type OpenEndItem, type QualityAssessment } from "@rescript/quality";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/guard";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { aiAllowed } from "@/lib/aiPolicy";
@@ -36,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const allowed = await aiAllowed(params.id, operation);
   if (!allowed.allowed) return NextResponse.json({ error: allowed.message ?? "AI is off for this project." }, { status: 403 });
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if ("error" in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
   const openQs = loaded.def.questions.filter((q) => q.type === "open_text" || q.type === "long_text");

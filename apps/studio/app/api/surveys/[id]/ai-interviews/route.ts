@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition } from "@/lib/analytics";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
 import { qualAbilities, qualGuardCapability } from "@/lib/qual/qualAccess";
@@ -38,7 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProjectFor(authed, params.id, qualGuardCapability("read"));
   if (isFailure(gate)) return gate.response;
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const study = await currentStudy(db, params.id);
     const view = liveView(study, study ? await sessionsOf(db, study.id) : [], runtimeBaseUrl());
     return json({ ...view, can: qualAbilities(gate.grant) });
@@ -66,7 +65,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const refused = refuse(gate, "manage");
   if (refused) return refused;
   try {
-    const db = supabaseService();
+    const db = gate.db;
     if (action === "launch") {
       const loaded = await loadDefinition(db, params.id);
       if ("error" in loaded) return json({ error: loaded.error }, loaded.status);

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { DataExportPreset } from "@rescript/schema";
 import { BUILT_IN_EXPORT_PRESETS } from "@rescript/exporters";
 import { audit, isFailure, requireProject } from "@/lib/guard";
@@ -50,7 +49,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "responses.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db
     .from("data_export_presets")
     .select("id, name, description, config")
@@ -89,7 +88,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   const { id: _ignored, name: _n, description, ...config } = parsed.data;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db
     .from("data_export_presets")
     .insert({
@@ -132,7 +131,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     return bad("The built-in presets cannot be deleted. Save your own alongside them.", 400);
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   /*
    * Soft delete, matching every other workspace object here: a preset a
    * colleague was using should be recoverable, and the unique index on the

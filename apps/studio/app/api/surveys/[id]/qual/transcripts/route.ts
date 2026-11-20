@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
+import type { Db } from "@/lib/db";
 import { measurementOf } from "@rescript/engine";
 import { readDocxText } from "@rescript/analytics/export";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition } from "@/lib/analytics";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { codingState, importTranscript, openEndsTranscript, parseSpeakerEdit, sessionView, speakerMap, type TranscriptFields } from "@/lib/qual/qualWorkspace";
@@ -27,7 +27,7 @@ export const runtime = "nodejs";
  */
 const MAX_FILE = 10 * 1024 * 1024;
 
-async function insert(db: ReturnType<typeof supabaseService>, surveyId: string, userId: string, t: TranscriptFields): Promise<string> {
+async function insert(db: Db, surveyId: string, userId: string, t: TranscriptFields): Promise<string> {
   const row = checkRow(await db.from("qual_transcripts").insert({ survey_id: surveyId, session_id: t.session_id ?? null, title: t.title, source: t.source, format: t.format, language: t.language ?? null, segments: t.segments, speakers: t.speakers, char_count: t.char_count, meta: t.meta, status: "ready", created_by: userId }).select("id").single(), "transcript") as { id: string };
   return row.id;
 }
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
   const refused = refuse(gate, "manage");
   if (refused) return refused;
-  const db = supabaseService();
+  const db = gate.db;
   try {
     let input: { text: string; title?: string; fileName?: string; format?: string; fromDocx?: boolean; sessionId?: string | null };
     if ((req.headers.get("content-type") ?? "").includes("multipart/form-data")) {
@@ -98,7 +98,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const id = String(body?.id ?? "");
   if (!UUID.test(id)) return json({ error: "which transcript (id)" }, 400);
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const row = await transcriptRow(db, params.id, id);
     if (!row) return json({ error: "no such transcript" }, 404);
     const patch: Record<string, unknown> = {};
@@ -120,7 +120,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const id = req.nextUrl.searchParams.get("id") ?? "";
   if (!UUID.test(id)) return json({ error: "which transcript (id)" }, 400);
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const row = await transcriptRow(db, params.id, id);
     if (!row) return json({ error: "no such transcript" }, 404);
     /* the excerpts coded from it go with it — an evidence link to nothing is not evidence (two tries: another coder may be saving) */

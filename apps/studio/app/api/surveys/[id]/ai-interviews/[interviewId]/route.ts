@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { hasPii, json, loadSettings, refuse, UUID } from "@/lib/qual/qualStore";
 import { excerptsCiting, parseInterviewAction, turnsView } from "@/lib/aiInterviews/view";
@@ -35,7 +34,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   if (isFailure(gate)) return gate.response;
   if (!UUID.test(params.interviewId)) return json({ error: "which interview" }, 400);
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const pii = hasPii(gate);
     const names = pii ? [] : (await loadSettings(db, params.id).catch(() => ({ redactNames: [] as string[] }))).redactNames;
     return json({ ok: true, id: params.interviewId, pii, turns: turnsView(await turnsOf(db, params.id, params.interviewId), { pii, names }) });
@@ -58,7 +57,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   if (refused) return refused;
   if (!UUID.test(params.interviewId)) return json({ error: "which interview" }, 400);
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const label = gate.user.fullName || gate.user.email;
     if (a.action === "end") {
       const r = await endInterview(db, params.id, params.interviewId, gate.user.userId);

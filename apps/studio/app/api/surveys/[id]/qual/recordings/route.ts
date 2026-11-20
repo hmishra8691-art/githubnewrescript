@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { freshUrl, MediaError } from "@rescript/media";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { json, recordEvents, refuse } from "@/lib/qual/qualStore";
@@ -30,7 +29,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const { data: owned } = await handle.db.from("media_objects").select("id, survey_id, kind").eq("id", mediaId).maybeSingle();
     if (!owned || owned.survey_id !== params.id || owned.kind !== "qual_recording") return json({ error: "no such recording" }, 404);
     const { url } = await freshUrl(handle.db, mediaId, { download, seconds: 15 * 60 });
-    await recordEvents(supabaseService(), gate, [{ actor: gate.user.userId, action: download ? "recording.downloaded" : "recording.played", detail: `${download ? "Downloaded" : "Played"} a session recording`, ids: [mediaId] }]);
+    await recordEvents(gate.db, gate, [{ actor: gate.user.userId, action: download ? "recording.downloaded" : "recording.played", detail: `${download ? "Downloaded" : "Played"} a session recording`, ids: [mediaId] }]);
     return json({ ok: true, url, expiresInSeconds: 15 * 60 });
   } catch (e) {
     if (e instanceof MediaError) return json({ error: e.message }, e.status);

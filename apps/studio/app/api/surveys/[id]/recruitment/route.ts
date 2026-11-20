@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { platformDb } from "@/lib/db";
 import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
@@ -145,7 +146,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (isFailure(actor)) return actor.response;
 
   const store = recruitmentStore();
-  const db = supabaseService();
+  const db = gate.db;
   const project = await store.project(params.id);
   const audienceFor = project
     ? { ...project, audience: await loadAudience(project.audience_spec_id as string | null) }
@@ -400,7 +401,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const gate = await requireProjectFor(authed, params.id, spending ? "deploy.manage" : "fieldwork.read");
   if (isFailure(gate)) return spending ? refuseSpend() : gate.response;
 
-  const db = supabaseService();
+  const db = gate.db;
   const store = recruitmentStore();
 
   try {
@@ -618,7 +619,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         if (!verdict.ok) return noStore({ error: verdict.reason, code: "over_budget" }, 409);
       }
 
-      const { data, error } = await db.from("recruitment_orders").insert({
+      const { data, error } = await platformDb().from("recruitment_orders").insert({
         recruitment_project_id: projectId, integration_id: integrationId,
         ordered_completes: Math.round(completes), agreed_cpi: cpi, currency: integ.currency,
         status: "placed", placed_at: new Date().toISOString(), placed_by: actor.userId,

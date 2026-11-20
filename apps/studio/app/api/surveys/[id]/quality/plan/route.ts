@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { buildCleaningPlanDocx } from "@rescript/exporters";
 import { isFailure, requireProject } from "@/lib/guard";
@@ -20,7 +19,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const source = req.nextUrl.searchParams.get("source") === "version" ? "version" : "draft";
   const loaded = await loadQualityDefinition(db, params.id, source);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });

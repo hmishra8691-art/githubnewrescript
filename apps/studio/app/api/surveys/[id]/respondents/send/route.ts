@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
-import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { mailConfig, sendMany, summariseSend, type MailMessage } from "@/lib/mail";
@@ -68,10 +68,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }, { status: 503 });
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   /* the link's base has to come from the DEPLOYMENT: a draft slug is a 404 sent to everybody */
-  const { data: dep } = await db
+  const { data: dep } = await platformDb()
     .from("deployments")
     .select("client_slug, study_slug")
     .eq("survey_id", params.id)

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { isFailure, requireProject } from "@/lib/guard";
 import { surveyQrSvg, surveyQrPng } from "@rescript/exporters";
 import { surveyBaseUrl } from "@/lib/runtime-url";
@@ -33,8 +33,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const isTest = (sp.get("environment") ?? "LIVE").toUpperCase() === "TEST";
   const format = sp.get("format") === "png" ? "png" : "svg";
 
-  const db = supabaseAdmin();
-  const { data: dep } = await db
+  const db = gate.db;
+  const { data: dep } = await platformDb()
     .from("deployments")
     .select("client_slug, study_slug")
     .eq("survey_id", params.id)

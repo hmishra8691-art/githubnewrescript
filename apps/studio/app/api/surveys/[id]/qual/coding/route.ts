@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import type { Db } from "@/lib/db";
 import { aiProviderName, completeJson } from "@rescript/ai";
 import {
   applyQualOp, coerceQualOp, codingBatches, codingEstimate, codingPrompt, fakeCodingReply, mergeCoding, readCodingReply, redactionSummary, selectSegments, QualOpError,
@@ -7,7 +8,6 @@ import {
 } from "@rescript/analytics";
 import { isFailure, requireProjectFor, requireUser, type AuthedUser } from "@/lib/guard";
 import { loadDefinition } from "@/lib/analytics";
-import { supabaseService } from "@/lib/authServer";
 import { aiReadyFor } from "@/lib/byok/connect";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
   const refused = refuse(gate, opName);
   if (refused) return refused;
-  const db = supabaseService();
+  const db = gate.db;
   try {
     if (action === "settings") {
       const s = readSettings(body);
@@ -140,7 +140,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 }
 
 /** the study's objectives, for the model's context (the guide's, else the research design's) */
-async function objectivesOf(db: ReturnType<typeof supabaseService>, surveyId: string): Promise<string[]> {
+async function objectivesOf(db: Db, surveyId: string): Promise<string[]> {
   const loaded = await loadDefinition(db, surveyId).catch(() => null);
   const def = loaded && !("error" in loaded) ? loaded.def : null;
   const out = def?.qualStudy?.objectives?.length ? def.qualStudy.objectives : [def?.research?.objective, ...(def?.research?.researchQuestions ?? [])].filter((x): x is string => typeof x === "string" && !!x);

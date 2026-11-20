@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { transcribe, sttProviderName } from "@rescript/ai";
 import { readWav, mergeChunkTranscripts, CHUNK_SAMPLE_RATE, type ChunkTranscript } from "@rescript/media";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { sttPrecheck } from "@/lib/byok/connect";
 import { billingProjectFor, meteredSttCall, refusalResponse } from "@/lib/metering";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
@@ -91,8 +90,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   /* ------------------------------------------------ a saved project: kept in a job, merged into one transcript */
-  const db = supabaseService();
   const g = gate!;
+  const db = g.db;
   try {
     const sessionId = h.get("x-session-id") ?? "";
     if (!UUID.test(sessionId)) return json({ error: "which session (x-session-id)" }, 400);

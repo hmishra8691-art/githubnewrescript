@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mediaDb } from "@/lib/mediaRoute";
+import { clientDb, registerKeyFor } from "@/lib/db";
 import { copyMedia } from "@rescript/media";
 import { SurveyDefinition } from "@rescript/schema";
 import { cloneSurveyDefinition, slugForCode } from "@rescript/engine";
-import { supabaseAdmin } from "@/lib/admin";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const body = await req.json().catch(() => ({}));
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   /* The source: the working draft when there is one, else the current
      version — the same precedence the Studio itself opens with, so a clone
@@ -79,18 +79,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * invent a name, the second copy is _COPY2 — but only up to a point, after
    * which the collision is real and they are told.
    */
+  /* tenancy: the source is read from its client's database; the copy is made in the cloner's workspace */
+  const dest = clientDb(user.customerId);
   let code = wanted;
   for (let attempt = 2; attempt <= 30; attempt += 1) {
-    const { data: clash } = await db.from("surveys").select("id").eq("customer_id", user.customerId).eq("code", code).maybeSingle();
+    const { data: clash } = await dest.from("surveys").select("id").eq("customer_id", user.customerId).eq("code", code).maybeSingle();
     if (!clash) break;
     code = `${wanted.replace(/\d+$/, "")}${attempt}`.slice(0, 60);
     if (attempt === 30) return NextResponse.json({ error: `Too many projects are already called ${wanted}. Give the copy a code of its own.` }, { status: 409 });
   }
 
-  /* the row first: the clone needs the new project's id inside its own definition */
-  const { data: created, error: insErr } = await db
+  /* the row first: the clone needs the new project's id inside its own definition; its directory row before that */
+  const newId = crypto.randomUUID();
+  if (!(await registerKeyFor("survey", newId, user.customerId, newId))) {
+    return NextResponse.json({ error: "The copy could not be made just now. Please try again." }, { status: 503 });
+  }
+  const { data: created, error: insErr } = await dest
     .from("surveys")
-    .insert({ customer_id: user.customerId, code, title, owner_id: user.userId, created_by: user.userId })
+    .insert({ id: newId, customer_id: user.customerId, code, title, owner_id: user.userId, created_by: user.userId })
     .select("id")
     .single();
   if (insErr || !created) {
@@ -107,7 +113,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (result.stowaways.length) {
     /* Nothing may be saved: this copy would point back at the original. */
-    await db.from("surveys").delete().eq("id", created.id);
+    await dest.from("surveys").delete().eq("id", created.id);
     return NextResponse.json({
       error: "The copy could not be made cleanly — some of the original project's identifiers would have been shared with it. Nothing was created.",
       code: "clone_incomplete",
@@ -141,16 +147,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     mediaWarnings.push(`media could not be copied: ${(e as Error).message}`);
   }
 
-  const { data: ver, error: verErr } = await db
+  const { data: ver, error: verErr } = await dest
     .from("survey_versions")
     .insert({ survey_id: created.id, version: "1.0", definition: result.def, label: `Cloned from ${src.code}`, created_by: user.userId })
     .select("id")
     .single();
   if (verErr || !ver) {
-    await db.from("surveys").delete().eq("id", created.id);
+    await dest.from("surveys").delete().eq("id", created.id);
     return NextResponse.json({ error: verErr?.message ?? "could not save the copy" }, { status: 500 });
   }
-  await db.from("surveys").update({ current_version_id: ver.id }).eq("id", created.id);
+  await dest.from("surveys").update({ current_version_id: ver.id }).eq("id", created.id);
 
   /* Two records: one on the original saying it was copied, one on the copy
      saying how it began. Either alone is still a true sentence. */

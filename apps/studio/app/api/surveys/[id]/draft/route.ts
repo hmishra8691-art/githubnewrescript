@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { observed } from "@rescript/storage/observe";
-import { supabaseAdmin } from "@/lib/admin";
 import { guardLiveData } from "@/lib/liveDataGuard";
 import { SurveyDefinition, normalizeAsParsed } from "@rescript/schema";
 import { droppedFieldPaths, ensureElementIds } from "@rescript/engine";
@@ -101,14 +101,14 @@ export const PUT = observed(async function PUT(req: NextRequest, { params }: { p
    */
   const withIds = ensureElementIds(parsed.data);
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   /*
    * DELETION PROTECTION, SERVER SIDE (2026-11-15, lib/liveDataGuard.ts). Once the survey has a live response, a
    * question, option, row or column that holds data is never dropped by a save: it is stored hidden instead, and
    * the reply says what was kept so the editor can show it. The editor applies the same rule before it sends —
    * this is for the editor that did not (a tab older than the first response, a direct call).
    */
-  const guarded = await guardLiveData(db, params.id, withIds.def).catch(() => null);
+  const guarded = await guardLiveData(db, params.id, withIds.def, undefined, platformDb()).catch(() => null);
   const definition = guarded?.definition ?? withIds.def;
   const baseRevision = Number.isFinite(body?.baseRevision) ? Number(body.baseRevision) : null;
 
@@ -190,7 +190,7 @@ export const PUT = observed(async function PUT(req: NextRequest, { params }: { p
        * eleven hundred identical rows in between is not.
        */
       void (async () => {
-        const { count } = await db
+        const { count } = await platformDb()
           .from("audit_logs")
           .select("id", { count: "exact", head: true })
           .eq("survey_id", params.id)
@@ -255,7 +255,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const full = await db
     .from("surveys")
     .select("draft_definition, draft_updated_at, draft_base_version_id, current_version_id, revision")
@@ -283,7 +283,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const gate = await requireEditRight(req, params.id, "survey.edit");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { error } = await db
     .from("surveys")
     .update({ draft_definition: null, draft_updated_at: null, draft_base_version_id: null })

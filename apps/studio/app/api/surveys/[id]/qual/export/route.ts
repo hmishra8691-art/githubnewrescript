@@ -9,7 +9,6 @@ import { synthesisRows, listAssignments, coderSets, listReels } from "@/lib/qual
 import { synthesisWorkspace } from "@/lib/qual/synthesisWorkspace";
 import { studyOf } from "@/lib/qual/synthesisContext";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition } from "@/lib/analytics";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { allSegments, readSettings, toWorkspace, type QualWorkspace } from "@/lib/qual/qualWorkspace";
@@ -100,7 +99,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
   const refused = refuse(gate, op);
   if (refused) return refused;
-  const db = supabaseService();
+  const db = gate.db;
   try {
     const loaded = await loadDefinition(db, params.id);
     if ("error" in loaded) return json({ error: loaded.error }, loaded.status);

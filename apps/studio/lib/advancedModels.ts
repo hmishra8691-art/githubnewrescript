@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SurveyDefinition } from "@rescript/schema";
 import { advancedNarrative, failedResult, narrativeMarkdown, plannedAnalyses, plannedIdOf, semPathDiagramSvg, type AnalysisDefinition, type AnalysisResult, type DatasetSpec, type ReportBrief } from "@rescript/analytics";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject } from "@/lib/guard";
 import { compute, latestRun, loadDefinition, modelInputKey, runPlanFor, type LoadedContext } from "@/lib/analytics";
 import { cacheGet } from "@/lib/resultCache";
@@ -126,7 +125,7 @@ export async function advancedInterpretationsFor(user: Parameters<typeof modelIn
 export async function advancedGET(req: NextRequest, surveyId: string): Promise<NextResponse> {
   const ctx = await requireProject(req, surveyId, "analytics.read");
   if (isFailure(ctx)) return ctx.response as NextResponse;
-  const db = supabaseService();
+  const db = ctx.db;
   const loaded = await loadDefinition(db, surveyId);
   if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
   const spec = specOf(req.nextUrl.searchParams.get("environment"), req.nextUrl.searchParams.get("dataset"));
@@ -139,7 +138,7 @@ export async function advancedPOST(req: NextRequest, surveyId: string, sub: stri
     /* the model's part is metered and needs the right to write analytics (as the report builder's interpretation does) */
     const ctx = await requireProject(req, surveyId, wantModel ? "analytics.edit" : "analytics.read");
     if (isFailure(ctx)) return ctx.response as NextResponse;
-    const db = supabaseService();
+    const db = ctx.db;
     const loaded = await loadDefinition(db, surveyId);
     if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
     const spec = specOf(body.environment, body.dataset);
@@ -167,7 +166,7 @@ export async function advancedPOST(req: NextRequest, surveyId: string, sub: stri
   if (sub === "rerun") {
     const ctx = await requireProject(req, surveyId, "analytics.edit");
     if (isFailure(ctx)) return ctx.response as NextResponse;
-    const db = supabaseService();
+    const db = ctx.db;
     const loaded = await loadDefinition(db, surveyId);
     if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
     const r = await rerunAdvanced(db, surveyId, loaded, specOf(body.environment, body.dataset), ctx.user.userId);

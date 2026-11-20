@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { observed } from "@rescript/storage/observe";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
-import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { choiceDataToCSV, maxdiffChoiceCSV, timingLongCSV, responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, buildExportExtra, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
@@ -47,7 +46,7 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
   const withTiming = req.nextUrl.searchParams.get("timing") === "1";
   const needTelemetry = withTiming || format === "timing";
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   // include=live|test|all ("test=1" kept for backwards compatibility)
   const include =
     req.nextUrl.searchParams.get("include") ??

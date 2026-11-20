@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { SurveyDefinition } from "@rescript/schema";
 import { buildVariableDictionary, nextVersion, normaliseQuestionOrder } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db
     .from("survey_versions")
     .select("id, version, label, notes, created_at")
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   /* deletion protection (lib/liveDataGuard.ts): a version cut while live responses exist keeps every data-bearing
      question and code of the live version — hidden if the editor had removed it */
-  const guarded = await guardLiveData(supabaseAdmin(), params.id, parsed.data).catch(() => null);
+  const guarded = await guardLiveData(gate.db, params.id, parsed.data, undefined, platformDb()).catch(() => null);
   const def = guarded?.definition ?? parsed.data;
   /*
    * A version is what the runtime and every export read, so it is the last
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json(gateRefusal(gateVerdict, "saved as a version"), { status: 422 });
   }
 
-  const db = supabaseAdmin();
+  const db = gate.db;
 
   /*
    * The revision the editor is working on top of, when it can tell us.

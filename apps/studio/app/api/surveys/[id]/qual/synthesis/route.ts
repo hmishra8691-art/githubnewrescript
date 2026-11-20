@@ -5,7 +5,6 @@ import {
   type QualSegment, type QualState, type SourceMeta, type StudyContext, type ThemeSynthesis, type StudyInsights,
 } from "@rescript/analytics";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { hasPii, json, recordEvents, refuse, storeFailure } from "@/lib/qual/qualStore";
 import { parseSynthesisRequest, synthesisWorkspace } from "@/lib/qual/synthesisWorkspace";
@@ -46,7 +45,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const refused = refuse(gate, "read");
   if (refused) return refused;
   try {
-    const db = supabaseService();
+    const db = gate.db;
     const [ctx, rows] = await Promise.all([synthesisContext(db, params.id), synthesisRows(db, params.id)]);
     return json({ ok: true, ...synthesisWorkspace(rows, ctx.state, ctx.segments, ctx.study, { pii: hasPii(gate), names: ctx.names }), study: { objectives: ctx.study.objectives, hypotheses: ctx.study.hypotheses } });
   } catch (e) { return storeFailure(e); }
@@ -93,7 +92,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (refused) return refused;
   if (!parsed.ok) return json({ error: parsed.error }, 400);
   const v = parsed.value;
-  const db = supabaseService();
+  const db = gate.db;
   try {
     const ctx = await synthesisContext(db, params.id);
     const existing = await synthesisRows(db, params.id);

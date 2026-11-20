@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { can, lockStatus, roleSourceNote, sessionStatus, type SessionRecord } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, loadLock, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -55,11 +55,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     );
   }
 
-  const db = supabaseService();
+  const db = gate.db;
   const now = Date.now();
 
   const [sessionRes, surveyRes, lock, mySessionsRes] = await Promise.all([
-    db.from("user_sessions")
+    platformDb().from("user_sessions")
       .select("id, status, created_at, last_seen_at, expires_at, ended_at, ended_reason, device_label")
       .eq("id", user.sessionId).maybeSingle(),
     db.from("surveys")
@@ -72,7 +72,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * was rather than as a mystery. Capped and ordered so this cannot become
      * an accidental full-table read.
      */
-    db.from("user_sessions")
+    platformDb().from("user_sessions")
       .select("id, status, created_at, last_seen_at, ended_at, ended_reason, device_label")
       .eq("user_id", user.userId)
       .order("created_at", { ascending: false })

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { WAVE_LIMITS } from "@rescript/analytics";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
@@ -26,7 +25,7 @@ const json = (b: unknown, status = 200) => NextResponse.json(b, { status, header
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "analytics.read");
   if (isFailure(gate)) return gate.response;
-  const db = supabaseAdmin();
+  const db = gate.db;
   const [w, c] = await Promise.all([
     db.from("tracker_waves").select("id, label, wave_order, source, file_name, columns, rows, row_count, notes, created_at").eq("survey_id", params.id).is("deleted_at", null).order("wave_order"),
     db.from("wave_trackers").select("config, updated_at").eq("survey_id", params.id).maybeSingle(),
@@ -43,7 +42,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
   let body: { action?: unknown; wave?: any; waveId?: unknown; config?: unknown };
   try { body = await req.json(); } catch { return json({ error: "bad json" }, 400); }
-  const db = supabaseAdmin();
+  const db = gate.db;
   const who = { userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId: params.id, customerId: gate.user.customerId };
 
   if (body.action === "add_wave") {

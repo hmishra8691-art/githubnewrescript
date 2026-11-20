@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { accessLabel, auditCategory, capabilitiesOf, describeEvent, describeExpiry } from "@rescript/access";
 import type { SurveyDefinition } from "@rescript/schema";
 import { isFailure, requireProject } from "@/lib/guard";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadDefinition } from "@/lib/analytics";
 import { loadDashboardStats } from "@/lib/dashboard";
 import { getMeter, SANDBOX_CUSTOMER } from "@/lib/metering";
@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const ctx = await requireProject(req, params.id, "project.read");
   if (isFailure(ctx)) return ctx.response;
-  const db = supabaseAdmin();
+  const db = ctx.db;
   const surveyId = params.id;
   const warnings: string[] = [];
   const soft = async <T,>(what: string, p: PromiseLike<T>, fallback: T): Promise<T> => { try { return await p; } catch (e) { warnings.push(`${what}: ${(e as Error).message}`); return fallback; } };
@@ -34,15 +34,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const [survey, deployments, quotaRows, reports, analyses, latestRun, sampleSources, stats, meterView, activity, applied] = await Promise.all([
     db.from("surveys").select("id, code, title, status, current_version_id, draft_updated_at, revision, updated_at, created_at, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, locked").eq("id", surveyId).maybeSingle().then((r) => r.data ?? null),
-    soft("deployments", db.from("deployments").select("mode, active, version_id").eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { mode: string; active: boolean; version_id: string | null }[]),
+    soft("deployments", platformDb().from("deployments").select("mode, active, version_id").eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { mode: string; active: boolean; version_id: string | null }[]),
     soft("quota counts", db.from("quota_counts").select("quota_id, cell_id, count, is_test").eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { quota_id: string; cell_id: string; count: number; is_test: boolean | null }[]),
     soft("reports", db.from("analytics_reports").select("id, kind").eq("survey_id", surveyId).is("deleted_at", null).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { id: string; kind: string }[]),
     soft("analyses", db.from("analytics_analyses").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).is("deleted_at", null).then((r) => { if (r.error) throw new Error(r.error.message); return r.count ?? 0; }), 0),
     soft("runs", db.from("analytics_runs").select("computed_at, n, trigger").eq("survey_id", surveyId).order("computed_at", { ascending: false }).limit(1).maybeSingle().then((r) => { if (r.error) throw new Error(r.error.message); return r.data ? { computedAt: String(r.data.computed_at), n: Number(r.data.n ?? 0), trigger: String(r.data.trigger) } : null; }), null),
     soft("sample sources", db.from("sample_sources").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.count ?? 0; }), 0),
-    soft("statistics", loadDashboardStats(db, [{ id: surveyId, current_version_id: null }]).then((p) => p.stats[surveyId] ?? null), null),
+    soft("statistics", loadDashboardStats(db, [{ id: surveyId, current_version_id: null }], platformDb()).then((p) => p.stats[surveyId] ?? null), null),
     soft("usage", (async () => { const meter = getMeter(); return projectMeterView(meter, { customerId: ctx.survey.customer_id ?? ctx.user.customerId ?? SANDBOX_CUSTOMER, surveyId }, { recent: 0 }); })(), null),
-    soft("activity", db.from("audit_logs").select("id, action, entity, entity_id, user_id, detail, created_at").eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(8).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { id: string; action: string; entity: string | null; entity_id: string | null; user_id: string | null; detail: unknown; created_at: string }[]),
+    soft("activity", platformDb().from("audit_logs").select("id, action, entity, entity_id, user_id, detail, created_at").eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(8).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { id: string; action: string; entity: string | null; entity_id: string | null; user_id: string | null; detail: unknown; created_at: string }[]),
     soft("plan applies", latestApply(db, surveyId), { apply: null, available: false }),
   ]);
   if (!survey) return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -58,7 +58,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const userIds = [...new Set(activity.map((r) => r.user_id).filter(Boolean))] as string[];
   const people = new Map<string, string>();
-  if (userIds.length) { const { data } = await db.from("profiles").select("id, full_name").in("id", userIds); for (const p of data ?? []) people.set(p.id, p.full_name ?? ""); }
+  if (userIds.length) { const { data } = await platformDb().from("profiles").select("id, full_name").in("id", userIds); for (const p of data ?? []) people.set(p.id, p.full_name ?? ""); }
   const events = activity.map((r) => { const row = { id: r.id, action: r.action, entity: r.entity, entityId: r.entity_id, surveyId, userId: r.user_id, actorName: r.user_id ? people.get(r.user_id) ?? null : null, actorUserCode: null, detail: (r.detail as Record<string, unknown> | null) ?? null, createdAt: r.created_at }; return { id: r.id, text: describeEvent(row), category: auditCategory(r.action), at: r.created_at, actorName: row.actorName }; });
 
   return NextResponse.json({

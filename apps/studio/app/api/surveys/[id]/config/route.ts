@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { surveyDb } from "@/lib/db";
 import { can } from "@rescript/access";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { isEmail } from "@rescript/mail";
@@ -64,7 +64,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data, error } = await db
     .from("surveys")
     .select("id, code, title, status, owner_id, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, cost_centre, notes, locked, collaboration, settings, media_delivery_email, media_delivery_enabled, created_at, updated_at")
@@ -230,7 +230,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "nothing to change" }, { status: 400 });
   }
 
-  const db = supabaseAdmin();
+  const db = await surveyDb(params.id);
   const { data: before } = await db
     .from("surveys")
     .select("id, code, customer_id, locked, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, cost_centre")

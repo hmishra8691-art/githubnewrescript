@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { flattenVariables } from "@rescript/engine";
 import { RESPONSE_COLUMNS, assessAndStore } from "@rescript/quality/server";
@@ -18,7 +17,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   const gate = await requireProject(req, params.id, "responses.read");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: row, error } = (await db.from("responses").select(RESPONSE_COLUMNS + ", survey_id, seed").eq("survey_id", params.id).eq("session_id", params.sessionId).maybeSingle()) as { data: any; error: { message: string } | null };
   if (error) {
     if (missingMigration(error.message)) return NextResponse.json({ error: "apply migration 0005", migration: "0005" }, { status: 503 });
@@ -69,7 +68,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // the signed-in reviewer, not a literal: §25 needs the log to name a person
   const by = gate.user.fullName || gate.user.userCode;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const { data: row } = await db.from("responses").select("id, quality").eq("survey_id", params.id).eq("session_id", params.sessionId).maybeSingle();
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
 
@@ -96,7 +95,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const gate = await requireProject(req, params.id, "responses.manage");
   if (isFailure(gate)) return gate.response;
 
-  const db = supabaseAdmin();
+  const db = gate.db;
   const loaded = await loadQualityDefinition(db, params.id);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
   const { data: row } = (await db.from("responses").select(RESPONSE_COLUMNS + ", survey_id").eq("survey_id", params.id).eq("session_id", params.sessionId).maybeSingle()) as { data: any };

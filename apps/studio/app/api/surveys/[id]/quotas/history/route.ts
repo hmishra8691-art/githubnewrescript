@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { describeEvent } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -17,8 +17,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (!quotaId) return NextResponse.json({ error: "quotaId is required" }, { status: 400 });
   const limit = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 50), 1), 200);
 
-  const db = supabaseService();
-  const { data, error } = await db
+  const db = gate.db;
+  const { data, error } = await platformDb()
     .from("audit_logs")
     .select("id, action, entity, entity_id, user_id, detail, created_at")
     .eq("survey_id", params.id)
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const userIds = [...new Set((data ?? []).map((r) => r.user_id).filter(Boolean))] as string[];
   const people = new Map<string, { name: string; code: string }>();
   if (userIds.length) {
-    const { data: profiles } = await db.from("profiles").select("id, full_name, user_code").in("id", userIds);
+    const { data: profiles } = await platformDb().from("profiles").select("id, full_name, user_code").in("id", userIds);
     for (const p of profiles ?? []) people.set(p.id, { name: p.full_name ?? "", code: p.user_code ?? "" });
   }
   const events = (data ?? []).map((r) => {

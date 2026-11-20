@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { can } from "@rescript/access";
 import { aggregateScriptHealth, type ScriptHealthRow } from "@rescript/engine";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
 import { dbConfigured } from "@/lib/copilot/durable";
 
@@ -47,7 +46,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (isFailure(gate)) return gate.response;
   if (!can(gate.grant, "responses.read")) return json({ error: "Your role on this project does not include reading responses, and script health is read out of them." }, 403);
   const isTest = req.nextUrl.searchParams.get("env") === "test";
-  const db = supabaseService();
+  const db = gate.db;
   // only the scriptHealth key of the telemetry jsonb (PostgREST json path), never the behavioural telemetry
   const { data, error } = await db.from("responses").select("last_saved_at, started_at, script_health:telemetry->scriptHealth")
     .eq("survey_id", params.id).eq("is_test", isTest).is("deleted_at", null).not("last_saved_at", "is", null)

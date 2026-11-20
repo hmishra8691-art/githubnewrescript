@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { can, lockBanner, lockStatus, type LockRecord } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, loadLock, notifyProject, requireProject, requireProjectFor, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -94,13 +94,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const ctx = await requireProjectFor(who, params.id, needed as never);
   if (isFailure(ctx)) return ctx.response;
 
-  const db = supabaseService();
+  const db = ctx.db;
   const { user, role } = ctx;
   const policy = user.policies.lock;
 
   /* ------------------------------------------------------------ acquire */
   if (action === "acquire") {
-    const { data, error } = await db.rpc("rescript_acquire_lock", {
+    const { data, error } = await platformDb().rpc("rescript_acquire_lock", {
       p_survey: params.id,
       p_user: user.userId,
       p_session: user.sessionId,
@@ -211,7 +211,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         { status: 403 },
       );
     }
-    const { data, error } = await db.rpc("rescript_force_release_lock", {
+    const { data, error } = await platformDb().rpc("rescript_force_release_lock", {
       p_survey: params.id, p_by: user.userId, p_reason: String(body?.reason ?? "force_released"),
     });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
