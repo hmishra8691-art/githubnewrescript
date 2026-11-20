@@ -3,7 +3,7 @@ import {
   passwordProblems, sessionVerdict, verifyPassword, TOKEN, type EnrolmentAccess, type PortalPolicy,
 } from "@rescript/access/respondent";
 import { buildBenchmark, compare, onePerPerson, type BenchmarkSnapshot, type Comparison } from "@rescript/analytics/benchmark";
-import { checkSubmission, editDecision, editWindow, isAssessment, portalAnswerLines, portalDefinition, portalSettings, respondentScorecard, scorecardOf, type PortalAnswerLine, type ScorecardResult } from "@rescript/engine";
+import { buildTrends, checkSubmission, editDecision, editWindow, isAssessment, minChanges, nextDue, portalAnswerLines, portalDefinition, portalSettings, respondentScorecard, scorecardOf, seriesOf, OVERALL_ID, type DimensionTrend, type HistoryPoint, type PortalAnswerLine, type ScorecardResult } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import { scoreInterview, type ScoredInterview } from "./scorecardRow.ts";
 import type { AccountRec, AttemptRec, EnrolmentRec, PortalStore, SessionRec } from "./types.ts";
@@ -226,12 +226,17 @@ async function facts(d: PortalDeps, e: EnrolmentRec) {
     finished: attempts.filter((a) => FINISHED.has(a.status)).length,
     inProgress: attempts.some((a) => a.status === "in_progress"),
   }, d.now());
-  return { attempts, live, access };
+  return { attempts, live, access, at: new Date(d.now()).toISOString() };
 }
+
+/** results over time are shown only with BOTH permissions (scores, and their history) and a scorecard to score by */
+const mayTrend = (live: SurveyDefinition | null): boolean => { const p = live ? portalSettings(live) : null; return !!p?.show.scores && !!p.show.trends && !!live && !!scorecardOf(live); };
 
 export interface AssessmentCard {
   id: string; title: string; state: EnrolmentAccess["state"]; canStart: boolean; canResume: boolean; attemptsLeft: number | null;
   reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores: boolean;
+  /** phase 3: results over time may be seen; when a repeated assessment is next due */
+  canViewTrends: boolean; nextDue: { at: string; overdue: boolean } | null;
 }
 
 function card(e: EnrolmentRec, f: Awaited<ReturnType<typeof facts>>): AssessmentCard {
@@ -242,6 +247,8 @@ function card(e: EnrolmentRec, f: Awaited<ReturnType<typeof facts>>): Assessment
     reason: f.access.reason, opensAt: e.accessFrom, closesAt: e.accessUntil, attempts: f.attempts.filter((a) => FINISHED.has(a.status)).length,
     lastCompletedAt: done.at(-1) ?? null, canViewAnswers: !!portal?.show.answers && done.length > 0,
     canViewScores: !!portal?.show.scores && !!f.live && !!scorecardOf(f.live) && done.length > 0,
+    canViewTrends: mayTrend(f.live) && done.length > 0,
+    nextDue: f.access.state === "suspended" || f.access.state === "closed" ? null : nextDue(f.live, done.at(-1) ?? null, Date.parse(f.at)),
   };
 }
 
@@ -334,6 +341,80 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
   }
   await d.store.log({ accountId: ctx.account.id, event: "assessment_viewed", surveyId: e.surveyId, customerId: e.customerId });
   return { assessment: { ...card(e, f), scoredTest: !!f.live && isAssessment(f.live) }, attempts: views };
+}
+
+/* ------------------------------------------------------------------ phase 3: results over time */
+
+/** the most recent completed attempts of one assessment that are read for a history */
+export const HISTORY_ATTEMPTS = 24;
+
+export interface ProgressTrack {
+  /** the series, or the one assessment when it belongs to none */
+  title: string;
+  series: boolean;
+  assessments: { id: string; title: string; period: string | null }[];
+  results: number;
+  trends: DimensionTrend[];
+  nextDue: { at: string; overdue: boolean; assessmentId: string } | null;
+}
+
+/**
+ * MY PROGRESS: the person's own scores over time. One track per series (surveys of the SAME workspace that carry
+ * the same series id) and one per assessment that is in no series. Only assessments whose researcher shows scores
+ * and their history take part; every score is worked out again from the person's own answers; the comparability
+ * rule is the engine's (history.ts). A group average accompanies the latest result of an assessment only where
+ * the comparison is permitted and a group of the minimum size exists — it is the average of everyone, never a person.
+ */
+export async function progress(d: PortalDeps, ctx: PortalContext): Promise<{ tracks: ProgressTrack[] }> {
+  const groups = new Map<string, { title: string; series: boolean; members: { e: EnrolmentRec; live: SurveyDefinition; period: string | null; last: string | null }[]; points: HistoryPoint[] }>();
+  for (const e of await d.store.enrolments(ctx.account.id)) {
+    const f = await facts(d, e);
+    if (!f.live || !mayTrend(f.live)) continue;
+    const portal = portalSettings(f.live)!;
+    const series = seriesOf(f.live);
+    /* a series never crosses workspaces: the key carries the customer */
+    const key = series ? `series|${e.customerId ?? ""}|${series.id}` : `one|${e.id}`;
+    const g = groups.get(key) ?? groups.set(key, { title: series?.label ?? e.title, series: !!series, members: [], points: [] }).get(key)!;
+    const done = f.attempts.filter((a) => a.status === "complete" && a.completedAt && a.versionId).sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt))).slice(-HISTORY_ATTEMPTS);
+    g.members.push({ e, live: f.live, period: series?.period ?? null, last: done.at(-1)?.completedAt ?? null });
+    let latest: { point: HistoryPoint; pd: SurveyDefinition; key: string } | null = null;
+    for (const a of done) {
+      const data = await d.store.attempt(e, a.id);
+      const def = await d.store.definition(e, a.versionId!);
+      if (!data || !def) continue;
+      const pd = portalDefinition(def, f.live);
+      const scored = scoreInterview(pd, data);
+      const shown = scored ? respondentScorecard(pd, scored.result) : null;
+      if (!scored || !shown) continue;
+      const point: HistoryPoint = { at: a.completedAt!, wave: series?.period ?? "", surveyId: e.surveyId, responseId: a.id, result: shown };
+      g.points.push(point);
+      latest = { point, pd, key: scored.key };
+    }
+    if (latest && portal.show.comparison && portal.benchmark.enabled) {
+      const snap = await benchmarkFor(d, e, latest.pd, latest.key);
+      if (snap && snap.fingerprint === latest.key) {
+        const group: NonNullable<HistoryPoint["group"]> = {};
+        for (const [id, dist] of Object.entries(snap.all)) group[id === "__overall" ? OVERALL_ID : id] = { mean: dist.mean, n: dist.n };
+        latest.point.group = group;
+      }
+    }
+  }
+  const tracks: ProgressTrack[] = [];
+  for (const g of groups.values()) {
+    if (!g.points.length) continue;
+    /* the settings of the assessment answered most recently decide what "about the same" means and what is due */
+    const newest = [...g.members].sort((a, b) => String(b.last ?? "").localeCompare(String(a.last ?? "")))[0]!;
+    const due = nextDue(newest.live, newest.last, d.now());
+    tracks.push({
+      title: g.title, series: g.series, results: g.points.length,
+      assessments: g.members.map((m) => ({ id: m.e.id, title: m.e.title, period: m.period })),
+      trends: buildTrends(g.points, minChanges(newest.live)),
+      nextDue: due && !newest.e.suspended ? { ...due, assessmentId: newest.e.id } : null,
+    });
+  }
+  tracks.sort((a, b) => a.title.localeCompare(b.title));
+  await d.store.log({ accountId: ctx.account.id, event: "progress_viewed" });
+  return { tracks };
 }
 
 /**

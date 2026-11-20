@@ -39,9 +39,10 @@ const indexSurvey = () => SurveyDefinition.parse({
     { id: "team", code: "TEAM", variableName: "TEAM", type: "single_select", text: "Which team are you in?", options: [{ code: "n", label: "North" }, { code: "s", label: "South" }] },
   ],
   flow: [{ type: "page", id: "p1", questionIds: ["e1", "e2", "s1", "s2", "team"] }, { type: "end", id: "e", status: "complete" }],
-  deployment: { access: { mode: "unique_links" } },
+  deployment: { access: { mode: "unique_links", allowRetake: true } },
   portal: {
-    enabled: true, show: { answers: true, scores: true, comparison: true },
+    enabled: true, show: { answers: true, scores: true, comparison: true, trends: true },
+    series: { id: "workplace-wellbeing", label: "Workplace wellbeing index", repeatEveryDays: 90 },
     scorecard: {
       overall: { label: "Wellbeing index" },
       dimensions: [
@@ -89,7 +90,12 @@ async function seed(): Promise<MemoryPortal> {
   m.definitions.set("v-index", idx);
   enrol("e-index", "sbx-1", "Workplace wellbeing index", "v-index");
   const mine = { e1: 4, e2: 5, s1: 2, s2: 3, team: "n" };
-  m.attempts.set("e-index", [row("r-index", { versionId: "v-index", answers: mine })]);
+  /* three results over time: the page "My progress" has something to draw */
+  m.attempts.set("e-index", [
+    row("r-index-1", { versionId: "v-index", answers: { e1: 2, e2: 3, s1: 4, s2: 4, team: "n" }, startedAt: ago(200 * 24 + 1), completedAt: ago(200 * 24) }),
+    row("r-index-2", { versionId: "v-index", answers: { e1: 3, e2: 4, s1: 3, s2: 3, team: "n" }, startedAt: ago(100 * 24 + 1), completedAt: ago(100 * 24) }),
+    row("r-index", { versionId: "v-index", answers: mine }),
+  ]);
   const surveyId = "sandbox-e-index";
   const stored = (person: string, responseId: string, answers: Record<string, unknown>) => {
     const sc = scoreInterview(idx, { answers })!;

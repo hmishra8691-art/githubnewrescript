@@ -413,3 +413,118 @@ test("nobody reads another person's scores: someone else's assessment is 'not fo
   attempt(r, e, "r1", { answers: { e1: 4, e2: 5, team: "n" } });
   await fails(assessmentDetail(r.d, ben, "e1"), 404, "not_found");
 });
+
+/* ------------------------------------------------------------------ phase 3: results over time */
+
+const { progress, HISTORY_ATTEMPTS } = await import("./service.ts");
+const at = (days: number) => new Date(T0 - days * 86_400_000).toISOString();
+const trendDef = (portal: Record<string, unknown> = {}) => indexDef({ show: { scores: true, trends: true }, ...portal });
+/** an enrolment on its own version of the definition */
+const wave = (r: Rig, id: string, accountId: string, def: SurveyDefinition, over: Partial<EnrolmentRec> = {}) => {
+  r.m.definitions.set(`v-${id}`, def);
+  return enrol(r, id, accountId, { link: { clientSlug: "c", studySlug: id, versionId: `v-${id}` }, ...over });
+};
+const took = (r: Rig, e: EnrolmentRec, id: string, daysAgo: number, e1: number, e2: number, over: Partial<AttemptData> = {}) =>
+  attempt(r, e, id, { versionId: e.link!.versionId, answers: { e1, e2, team: "n" }, startedAt: at(daysAgo + 0.01), completedAt: at(daysAgo), ...over });
+
+test("progress needs both permissions — scores and their history; without them there is no track and no hint of one", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, indexDef({ show: { scores: true } }));
+  took(r, e, "r1", 60, 1, 2); took(r, e, "r2", 5, 4, 5);
+  assert.deepEqual((await progress(r.d, ctx)).tracks, []);
+  assert.equal((await overview(r.d, ctx)).assessments[0]!.canViewTrends, false);
+  r.m.definitions.set("v-e1", indexDef({ show: { trends: true } }));
+  assert.deepEqual((await progress(r.d, ctx)).tracks, [], "history without scores shows nothing");
+  r.m.definitions.set("v-e1", trendDef());
+  assert.equal((await overview(r.d, ctx)).assessments[0]!.canViewTrends, true);
+  assert.equal((await progress(r.d, ctx)).tracks.length, 1);
+});
+
+test("one assessment taken again: a track of its own, oldest first, with the change; unfinished attempts are not results", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, trendDef());
+  took(r, e, "r2", 30, 3, 4); took(r, e, "r1", 90, 1, 2); took(r, e, "r3", 2, 4, 5);
+  took(r, e, "r4", 1, 5, 5, { status: "in_progress", completedAt: null });
+  const { tracks } = await progress(r.d, ctx);
+  assert.equal(tracks.length, 1);
+  const [t] = tracks;
+  assert.deepEqual([t!.title, t!.series, t!.results], ["Assessment e1", false, 3]);
+  const energy = t!.trends.find((x) => x.id === "energy")!;
+  assert.deepEqual(energy.points.map((p) => [p.score, p.band, p.comparable]), [[3, "Low", true], [7, "High", true], [9, "High", true]]);
+  assert.equal(energy.change!.text, "Up 2 (from 7 to 9)"); assert.equal(energy.sinceFirst!.text, "Up 6 (from 3 to 9)");
+  assert.equal(r.m.events.at(-1)!.event, "progress_viewed");
+});
+
+test("a series joins the assessments of ONE workspace; the same series id in another workspace is another track", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const series = (period: string) => ({ series: { id: "wellbeing", label: "Wellbeing check", period } });
+  const y1 = wave(r, "y25", r.ana.id, trendDef(series("2025")), { title: "Wellbeing 2025" });
+  const y2 = wave(r, "y26", r.ana.id, trendDef(series("2026")), { title: "Wellbeing 2026" });
+  const other = wave(r, "x26", r.ana.id, trendDef(series("2026")), { title: "Somebody else's wellbeing", customerId: "cust-2" });
+  took(r, y1, "a", 370, 2, 2); took(r, y2, "b", 3, 4, 5); took(r, other, "c", 10, 1, 1);
+  const { tracks } = await progress(r.d, ctx);
+  assert.equal(tracks.length, 2);
+  const mine = tracks.find((t) => t.assessments.length === 2)!;
+  assert.deepEqual([mine.title, mine.series], ["Wellbeing check", true]);
+  assert.deepEqual(mine.assessments.map((a) => [a.title, a.period]), [["Wellbeing 2025", "2025"], ["Wellbeing 2026", "2026"]]);
+  const energy = mine.trends.find((x) => x.id === "energy")!;
+  assert.deepEqual(energy.points.map((p) => [p.wave, p.score]), [["2025", 4], ["2026", 9]]);
+  assert.equal(energy.change!.text, "Up 5 (from 4 to 9)");
+  assert.deepEqual(tracks.find((t) => t.assessments.length === 1)!.trends.find((x) => x.id === "energy")!.points.map((p) => p.score), [2], "the other workspace's result is not joined in");
+});
+
+test("a year's survey scored differently is shown apart and not compared", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const series = { series: { id: "w", label: "Wellbeing" } };
+  const changed = SurveyDefinition.parse({ ...trendDef(series), portal: { ...trendDef(series).portal, scorecard: { dimensions: [{ id: "energy", label: "Energy", source: { kind: "items", items: [{ question: "e1" }] } }] } } });
+  const y1 = wave(r, "y25", r.ana.id, changed), y2 = wave(r, "y26", r.ana.id, trendDef(series));
+  took(r, y1, "a", 370, 2, 2); took(r, y2, "b", 3, 4, 5);
+  const energy = (await progress(r.d, ctx)).tracks[0]!.trends.find((x) => x.id === "energy")!;
+  assert.deepEqual(energy.points.map((p) => [p.score, p.comparable]), [[2, false], [9, true]]);
+  assert.equal(energy.change, null); assert.match(energy.note!, /scored differently/);
+});
+
+test("the group's average: only with the comparison permitted and ten people, and only beside the latest result", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const def = trendDef({ show: { scores: true, trends: true, comparison: true } });
+  const e = wave(r, "e1", r.ana.id, def);
+  took(r, e, "r1", 40, 1, 2); took(r, e, "r2", 2, 4, 5);
+  const energyOf = async () => (await progress(r.d, ctx)).tracks[0]!.trends.find((x) => x.id === "energy")!;
+  assert.deepEqual((await energyOf()).points.map((p) => p.groupMean), [null, null], "nobody to compare with yet");
+  peers(r, e, def, 12, "n"); r.clock.now += 16 * 60_000;
+  const pts = (await energyOf()).points;
+  assert.equal(pts[0]!.groupMean, null); assert.ok(typeof pts[1]!.groupMean === "number"); assert.equal(pts[1]!.groupN, 12);
+  r.m.definitions.set("v-e1", trendDef());
+  assert.deepEqual((await energyOf()).points.map((p) => p.groupMean), [null, null], "comparison switched off");
+});
+
+test("range names follow their own switch; a repeated assessment says when it is next due, unless it is paused", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, trendDef({ show: { scores: true, trends: true, bands: false }, series: { id: "m", label: "Monthly check", repeatEveryDays: 30 } }));
+  took(r, e, "r1", 10, 4, 5);
+  let [t] = (await progress(r.d, ctx)).tracks;
+  assert.equal(t!.trends[0]!.points[0]!.band, null);
+  assert.deepEqual(t!.nextDue, { at: at(-20), overdue: false, assessmentId: "e1" });
+  assert.deepEqual((await overview(r.d, ctx)).assessments[0]!.nextDue, { at: at(-20), overdue: false });
+  r.clock.now += 25 * 86_400_000;
+  assert.equal((await progress(r.d, await signedIn(r, r.ana))).tracks[0]!.nextDue!.overdue, true);
+  r.m.enrolments[0]!.suspended = true;
+  [t] = (await progress(r.d, await signedIn(r, r.ana))).tracks;
+  assert.equal(t!.nextDue, null);
+});
+
+test("nobody's progress but one's own; and a very long history reads the most recent results only", async () => {
+  const r = await rig();
+  const e = wave(r, "e1", r.ana.id, trendDef());
+  for (let i = 0; i < HISTORY_ATTEMPTS + 6; i++) took(r, e, `r${i}`, 200 - i, 1 + (i % 5), 3);
+  assert.deepEqual((await progress(r.d, await signedIn(r, r.ben))).tracks, []);
+  const [t] = (await progress(r.d, await signedIn(r, r.ana))).tracks;
+  assert.equal(t!.results, HISTORY_ATTEMPTS);
+  assert.equal(t!.trends[0]!.points.at(-1)!.responseId, `r${HISTORY_ATTEMPTS + 5}`, "the newest is kept");
+});

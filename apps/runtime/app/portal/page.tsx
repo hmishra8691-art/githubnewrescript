@@ -3,7 +3,7 @@ import React from "react";
 import { begin, portalApi, when } from "@/components/portal/api";
 import { Note, Shell } from "@/components/portal/Shell";
 
-interface Card { id: string; title: string; state: string; canStart: boolean; canResume: boolean; attemptsLeft: number | null; reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores?: boolean }
+interface Card { id: string; title: string; state: string; canStart: boolean; canResume: boolean; attemptsLeft: number | null; reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores?: boolean; canViewTrends?: boolean; nextDue?: { at: string; overdue: boolean } | null }
 interface Me { account: { respondentId: string; name: string | null }; assessments: Card[] }
 
 const LABEL: Record<string, string> = { open: "To do", in_progress: "In progress", upcoming: "Opens soon", completed: "Completed", closed: "Closed", suspended: "Paused" };
@@ -21,6 +21,7 @@ function Tile({ c, onError }: { c: Card; onError: (m: string) => void }) {
         {c.lastCompletedAt && <div>Completed {when(c.lastCompletedAt)}</div>}
         {c.attempts > 1 && <div>{c.attempts} attempts</div>}
         {c.canStart && c.attempts > 0 && c.attemptsLeft !== null && <div>{c.attemptsLeft} {c.attemptsLeft === 1 ? "attempt" : "attempts"} left</div>}
+        {c.nextDue && <div data-testid="pt-next-due">{c.nextDue.overdue ? "The next one is due now" : `Next one due ${when(c.nextDue.at)}`}</div>}
         {c.reason && <div>{c.reason}</div>}
       </div>
       <div className="pt-actions">
@@ -43,6 +44,7 @@ export default function PortalOverview() {
     <Shell current="overview" who={me?.account}>
       <h1>{me?.account.name ? `Welcome, ${me.account.name}` : "Welcome"}</h1>
       <p className="pt-lead">Your assessments, and what you have completed.</p>
+      {me?.assessments.some((c) => c.canViewTrends) && <p><a className="pt-btn" href="/portal/progress" data-testid="pt-progress">My progress over time</a></p>}
       {error && <Note kind="bad">{error}</Note>}
       {!me && !error && <p className="pt-empty">Loading…</p>}
       {me && !me.assessments.length && <div className="pt-card pt-empty" data-testid="pt-none">You have no assessments at the moment. When one is assigned to you it will appear here.</div>}

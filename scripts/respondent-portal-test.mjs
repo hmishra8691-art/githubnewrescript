@@ -16,6 +16,9 @@
  *   8. invitation link: shows the Respondent ID, sets a password, lands signed in; the link then no longer works
  *   9. forgotten password: the same answer for a real and an unknown login
  *  10. the pages work at a phone's width without sideways scrolling
+ *  12. (phase 3) my progress: the person's own results over time as a chart and a table, the change against the
+ *      previous result and since the first, the average of everyone beside the latest result only, when the next
+ *      one is due; nothing about anybody else
  *  11. (phase 2) my results: each score with its range name and bar; the comparison with everyone and with my own
  *      team only; no other team, no person and no cut point reaches the browser; the print layout keeps the results
  */
@@ -175,6 +178,51 @@ console.log("\n4b — my results (phase 2)");
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 1, "the results fit a 375px screen");
   await page.setViewportSize({ width: 1280, height: 720 });
   ok("my results: scores, range names, bars, the comparison with everyone and my own team only; nothing about another person or team is sent; prints; downloads as a PDF only for its owner");
+}
+
+console.log("\n4c — my progress (phase 3)");
+{
+  await page.goto("/portal");
+  await page.waitForSelector('[data-testid="pt-progress"]');
+  assert.match(await page.textContent('[data-testid="pt-card-completed"]:has(a[href="/portal/assessments/e-index"]) [data-testid="pt-next-due"]'), /Next one due /);
+  await page.click('[data-testid="pt-progress"]');
+  await page.waitForSelector('[data-testid="pt-track"]');
+  const text = async (id) => (await page.textContent(`[data-testid="${id}"]`)).replace(/\s+/g, " ");
+  assert.equal(await page.locator('[data-testid="pt-track"]').count(), 1, "only the assessment that shares its history");
+  const track = await text("pt-track");
+  assert.match(track, /Workplace wellbeing index/); assert.match(track, /3 results\./); assert.match(track, /The next one is due /);
+  assert.equal(await page.locator('[data-testid="pt-due-start"]').count(), 0, "not due yet: no button");
+  /* energy 5 → 7 → 9; pressure 8 → 6 → 5 (less is better) */
+  assert.match(await text("pt-change-energy"), /Up 2 \(from 7 to 9\)/);
+  assert.match(await page.getAttribute('[data-testid="pt-change-energy"]', "class"), /is-better/);
+  const energy = await text("pt-trend-energy");
+  assert.match(energy, /Compared with your previous result, since /); assert.match(energy, /Since your first result: Up 4 \(from 5 to 9\)/);
+  assert.match(await text("pt-change-pressure"), /Down 1 \(from 6 to 5\)/);
+  assert.match(await page.getAttribute('[data-testid="pt-change-pressure"]', "class"), /is-better/, "down is better for pressure");
+  assert.match(await text("pt-trend-pressure"), /lower is better/);
+  assert.equal(await page.locator('[data-testid^="pt-trend-"]').first().getAttribute("data-testid"), "pt-trend-__overall", "the headline first");
+  /* the chart: three like results joined by one line; everyone's average beside the latest only */
+  const chart = page.locator('[data-testid="pt-chart-energy"]');
+  assert.equal(await chart.locator("circle").count(), 3); assert.equal(await chart.locator("polyline").count(), 1);
+  assert.equal(await chart.locator(".pt-trend-dot.is-apart").count(), 0); assert.equal(await chart.locator(".pt-trend-group").count(), 1);
+  assert.match(await chart.getAttribute("aria-label"), /Energy over time: .* 5, .* 7, .* 9/);
+  const rows = await page.$$eval('[data-testid="pt-trend-energy"] tbody tr', (trs) => trs.map((tr) => tr.textContent.replace(/\s+/g, " ")));
+  assert.equal(rows.length, 3); assert.match(rows[0], /5 of 10Moderate—/); assert.match(rows[2], /9 of 10High[\d.]+ \(23 people\)/);
+  assert.match(await page.textContent("main"), /only between results that were scored the same way/);
+  const raw = await api("progress");
+  const sent = JSON.stringify(raw.body);
+  assert.equal(raw.status, 200); assert.equal(raw.body.tracks.length, 1);
+  assert.ok(!sent.includes("cuts") && !sent.includes("peer-") && !sent.includes("sandbox-token-"), "no cut points, no other person, no link token");
+  if (process.env.PORTAL_SHOTS) await page.screenshot({ path: `${process.env.PORTAL_SHOTS}/progress-desktop.png`, fullPage: true });
+  await page.setViewportSize({ width: 375, height: 800 });
+  await page.waitForTimeout(300);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 1, "my progress fits a 375px screen");
+  if (process.env.PORTAL_SHOTS) await page.screenshot({ path: `${process.env.PORTAL_SHOTS}/progress-phone.png`, fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/portal/assessments/e-index"); await page.waitForSelector('[data-testid="pt-progress"]');
+  await page.goto("/portal/assessments/e-done"); await page.waitForSelector('[data-testid="pt-answers"]');
+  assert.equal(await page.locator('[data-testid="pt-progress"]').count(), 0, "an assessment that shares no history has no link to it");
+  ok("my progress: results over time as a chart and a table, like-for-like changes, everyone's average beside the latest only, the next due date; nothing about anyone else");
 }
 
 console.log("\n5 — somebody else's assessment");

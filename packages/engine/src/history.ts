@@ -50,7 +50,8 @@ export interface DimensionTrend {
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
-const show = (n: number) => String(r2(n));
+/* in a sentence one decimal is enough; the exact figures are in `from`, `to` and `delta` */
+const show = (n: number) => String(Math.round(n * 10) / 10);
 const DAY = 86_400_000;
 
 export function describeScoreChange(from: number, to: number, higherIsBetter: boolean, minChange: number | undefined): { delta: number; direction: Direction; text: string } {

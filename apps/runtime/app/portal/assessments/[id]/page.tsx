@@ -8,7 +8,7 @@ type Option = { code: string | number; label: string };
 type Input = { kind: "single"; options: Option[]; value: string | number | null } | { kind: "multi"; options: Option[]; value: (string | number)[] } | { kind: "text"; long: boolean; value: string } | { kind: "number"; value: number | null };
 interface Line { questionId: string; code: string; text: string; answer: string; edit: { allowed: boolean; reason?: string }; input: Input | null }
 interface Attempt { id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: Line[] | null; editableUntil: string | null; editable: boolean; editNote: string | null; scores: Scorecard | null; comparison: Comparison[] | null }
-interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; scoredTest: boolean }; attempts: Attempt[] }
+interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; scoredTest: boolean; canViewTrends?: boolean }; attempts: Attempt[] }
 
 const STATUS: Record<string, string> = { complete: "Completed", in_progress: "In progress", screened: "Ended early", quota_full: "Ended early", terminated: "Ended early" };
 
@@ -91,6 +91,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
           <div className="pt-row pt-noprint" style={{ margin: "12px 0 4px" }}>
             {d.assessment.canResume && <button type="button" className="pt-btn is-primary" onClick={() => begin(params.id, setError)} data-testid="pt-resume">Continue</button>}
             {d.assessment.canStart && <button type="button" className="pt-btn is-primary" onClick={() => begin(params.id, setError)} data-testid="pt-start">{d.attempts.length ? "Take it again" : "Start"}</button>}
+            {d.assessment.canViewTrends && <a className="pt-btn" href="/portal/progress" data-testid="pt-progress">My progress over time</a>}
             {shown && <button type="button" className="pt-btn" onClick={download} disabled={busy} data-testid="pt-download">Download PDF</button>}
             {shown && <button type="button" className="pt-btn" onClick={() => window.print()} data-testid="pt-print">Print</button>}
           </div>

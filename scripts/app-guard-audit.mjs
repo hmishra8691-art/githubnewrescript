@@ -91,6 +91,7 @@ const RUNTIME_CREDENTIALS = {
   "portal/invitation/route.ts": { by: "the invitation link's token (32 random bytes, stored as SHA-256, single use, time-limited)", evidence: /invitationInfo\(deps[\s\S]*acceptInvitation\(deps/ },
   "portal/reset/route.ts": { by: "none to ask (answers the same for any login); the emailed reset token (SHA-256 stored, single use, one hour) to set a password", evidence: /requestReset\(deps[\s\S]*|confirmReset\(deps/ },
   "portal/me/route.ts": { by: "the portal session cookie (httpOnly; token stored as SHA-256; idle and absolute expiry)", evidence: /signedIn\(req, deps\)/ },
+  "portal/progress/route.ts": { by: "the portal session cookie; only the signed-in account's own enrolments are read", evidence: /progress\(deps, await signedIn\(req, deps\)\)/ },
   "portal/assessments/[id]/report/route.ts": { by: "the portal session cookie; the enrolment must belong to the signed-in account or it is 404; the file holds only what the results page shows that person", evidence: /personalReport\(deps, await signedIn\(req, deps\)/ },
   "portal/assessments/[id]/route.ts": { by: "the portal session cookie; the enrolment must belong to the signed-in account or it is 404", evidence: /signedIn\(req, deps\)/ },
   "ai-interview/begin/route.ts": { by: "the study's participant token (aiInterviewDeps → the service checks it)", evidence: /aiInterviewDeps\(/ },

@@ -106,3 +106,20 @@ textarea.pt-input { min-height: 96px; resize: vertical; }
   .pt-bar, .pt-bar-fill, .pt-bar-mark { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .pt-scores > li { break-inside: avoid; }
 }
+
+/* phase 3: results over time */
+.pt-trend { width: 100%; height: auto; max-height: 210px; margin: 6px 0 2px; display: block; }
+.pt-trend-grid { stroke: #dfe3ea; stroke-width: 1; }
+.pt-trend-axis { font-size: 11px; fill: var(--pt-muted); }
+.pt-trend-value { font-size: 12px; font-weight: 700; fill: var(--pt-ink); }
+.pt-trend-line { fill: none; stroke: var(--pt-brand); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.pt-trend-dot { fill: var(--pt-brand); stroke: #fff; stroke-width: 2; }
+.pt-trend-dot.is-apart { fill: #fff; stroke: var(--pt-muted); stroke-dasharray: 3 2; }
+.pt-trend-group { stroke: var(--pt-ink); stroke-width: 2.5; stroke-linecap: round; }
+.pt-change { margin: 0; font-weight: 700; font-size: 14.5px; white-space: nowrap; }
+.pt-change.is-better { color: var(--pt-ok); }
+.pt-change.is-worse { color: var(--pt-warn); }
+.pt-change.is-same { color: var(--pt-muted); }
+.pt-trend-table { font-size: 13.5px; margin-top: 6px; }
+@media (max-width: 560px) { .pt-score-head { flex-wrap: wrap; } .pt-change { white-space: normal; } }
+@media print { .pt-trend * { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
