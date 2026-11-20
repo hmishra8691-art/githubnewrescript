@@ -61,7 +61,10 @@ export type MailKind =
   | "live_session_invite"
   | "live_session_reminder"
   /* 2026-11-10: a Help conversation handed to the support team (0095 widens the log's kinds) */
-  | "support_escalation";
+  | "support_escalation"
+  /* 2026-11-20: the respondent portal — an invitation to set a password, and a self-service password reset (0103 widens the log's kinds) */
+  | "portal_invitation"
+  | "portal_reset";
 
 export interface MailMessage {
   to: string;

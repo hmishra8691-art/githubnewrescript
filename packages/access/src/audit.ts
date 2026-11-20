@@ -146,6 +146,8 @@ export const AUDIT_EVENTS = [
   "responses.export_preset_deleted",
   "responses.purged",
   "privacy.erasure",
+  /* respondent portal (phase 1, 2026-11-20): what a researcher did to respondents' portal access — never what a respondent answered */
+  "portal.access_changed",
   "api_key.created",
   "tool.called",
   "fieldwork.proposal_decided",
@@ -392,6 +394,7 @@ export function describeEvent(r: AuditRow): string {
     case "tool.called": return `${d.caller && typeof d.caller === "object" && (d.caller as { kind?: string }).kind === "agent" ? `An agent (for ${who})` : who} ${d.phase === "dry_run" ? "dry-ran" : d.phase === "executed" ? "ran" : d.phase === "failed" ? "tried and failed to run" : "was refused"} the tool ${str(d.tool)}`;
     case "api_key.created": return `${who} created the API key “${str(d.name)}” (${str(d.prefix)}…)`;
     case "api_key.revoked": return `${who} revoked the API key “${str(d.name)}”`;
+    case "portal.access_changed": return `${who} ${str(d.summary) || "changed respondent portal access"}${d.count ? ` (${str(d.count)} ${Number(d.count) === 1 ? "respondent" : "respondents"})` : ""}`;
     case "privacy.erasure": return `${who} erased a respondent (by ${str(d.identifierKind).replace("_", " ")})${d.verified === false ? " — NOT fully verified" : ""}`;
     case "responses.purged": return `${who} permanently purged response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "survey.exported": return `${who} exported the survey${d.format ? ` as ${str(d.format).toUpperCase()}` : ""}`;

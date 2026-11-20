@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { useStudio } from "./store";
+import { PortalAccessPanel } from "./PortalAccessPanel";
 
 type Env = "TEST" | "LIVE";
 type Field = "email" | "external_id" | "name" | "embedded";
@@ -640,6 +641,7 @@ Send anyway?`)) return;
         credential for one person, and a screen that displays 4 000 of them is a screenshot away from being a leak.
         Download the list to distribute it.
       </p>
+      <PortalAccessPanel />
     </div>
   );
 }
