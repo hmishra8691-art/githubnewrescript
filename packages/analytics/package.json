@@ -9,6 +9,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./benchmark": {
+      "types": "./dist/benchmark.d.ts",
+      "default": "./dist/benchmark.js"
+    },
     "./export": {
       "types": "./dist/export/index.d.ts",
       "default": "./dist/export/index.js"
