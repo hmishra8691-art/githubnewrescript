@@ -3,7 +3,7 @@ import {
   passwordProblems, sessionVerdict, verifyPassword, TOKEN, type EnrolmentAccess, type PortalPolicy,
 } from "@rescript/access/respondent";
 import { buildBenchmark, compare, onePerPerson, type BenchmarkSnapshot, type Comparison } from "@rescript/analytics/benchmark";
-import { checkSubmission, editDecision, editWindow, isAssessment, portalAnswerLines, portalSettings, respondentScorecard, scorecardOf, type PortalAnswerLine, type ScorecardResult } from "@rescript/engine";
+import { checkSubmission, editDecision, editWindow, isAssessment, portalAnswerLines, portalDefinition, portalSettings, respondentScorecard, scorecardOf, type PortalAnswerLine, type ScorecardResult } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import { scoreInterview, type ScoredInterview } from "./scorecardRow.ts";
 import type { AccountRec, AttemptRec, EnrolmentRec, PortalStore, SessionRec } from "./types.ts";
@@ -261,7 +261,7 @@ async function own(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown): Pro
   return e;
 }
 
-const policyDef = (attemptDef: SurveyDefinition, live: SurveyDefinition | null): SurveyDefinition => ({ ...attemptDef, portal: live?.portal ?? attemptDef.portal });
+const policyDef = portalDefinition;
 
 export interface AttemptView {
   id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: PortalAnswerLine[] | null; editableUntil: string | null; editable: boolean; editNote: string | null;

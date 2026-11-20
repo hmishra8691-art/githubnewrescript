@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import type { PortalSettings } from "@rescript/schema";
+import { PortalSettings } from "@rescript/schema";
+import { PortalScorecardPanel } from "./PortalScorecardPanel";
 import { useStudio } from "./store";
 
 /**
@@ -21,7 +22,7 @@ interface Row {
 interface HandOver { id: string; respondentId: string; name: string | null; link?: string; password?: string }
 type Editing = PortalSettings["editing"];
 
-const DEFAULTS: PortalSettings = { enabled: true, identity: "persistent", show: { answers: false, history: false }, editing: { mode: "none", lockedQuestions: [], lockedSections: [] } };
+const DEFAULTS: PortalSettings = PortalSettings.parse({ enabled: true });
 const local = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : "");
 const toInput = (iso: string | null | undefined) => { if (!iso) return ""; const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16); };
 const fromInput = (v: string) => (v ? new Date(v).toISOString() : null);
@@ -127,6 +128,8 @@ export function PortalAccessPanel() {
           {editing.mode !== "none" && !portal?.show.answers && <div className="chip warn qd-note" style={{ marginTop: 8 }}>Answers can only be changed when respondents can see them. Turn that on too.</div>}
           {s.def.assessment?.enabled && editing.mode !== "none" && <div className="chip warn qd-note" style={{ marginTop: 8 }}>This is a scored test: answers are final once submitted, whatever is chosen here.</div>}
           <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>These settings are saved with the survey and apply once it is published. The switches in the list below apply immediately.</p>
+
+          <PortalScorecardPanel />
 
           <div className="row" style={{ gap: 8, margin: "16px 0 8px", flexWrap: "wrap" }}>
             <strong style={{ fontSize: 13.5 }}>People</strong>
