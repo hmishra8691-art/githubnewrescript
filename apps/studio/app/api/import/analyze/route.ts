@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
   let session: { id: string; expiresAt: string; keepsSource: boolean; keepsPrior: boolean; store: string } | null = null;
   let sessionNote: string | undefined;
   try {
-    const store = importSessionStore();
+    const store = importSessionStore(isFailure(authed) ? null : authed.customerId);
     const kept = bounded(canonical);
     const prior = into === "merge" ? bounded(existing) : null;
     const notes = [kept === null ? "the reconstructed model was too large to keep" : "", into === "merge" && prior === null ? "the survey before the import was too large to keep, so a rollback must use the version history" : ""].filter(Boolean);

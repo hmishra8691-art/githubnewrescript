@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { platformDb } from "@/lib/db";
+import { platformDb, surveyDb, type Db } from "@/lib/db";
 import { randomUUID } from "node:crypto";
 import { AudienceSpecification, canTransition, type AllocationStrategy, type FeasibilityEstimate, type RecruitmentProjectStatus } from "@rescript/schema";
 import {
@@ -12,7 +12,6 @@ import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { liveRegistry, LIVE_FEASIBILITY_MS } from "@/lib/recruitment/live";
 import { researcherPlan } from "@/lib/recruitment/abstraction";
 import { openCredentials } from "@/lib/recruitment/credentials";
-import { supabaseService } from "@/lib/authServer";
 import { noStore, recruitmentActor, refuseSpend, refuseVendorVisibility } from "@/lib/recruitment/access";
 import { recruitmentStore } from "@/lib/recruitment/store";
 
@@ -149,7 +148,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const db = gate.db;
   const project = await store.project(params.id);
   const audienceFor = project
-    ? { ...project, audience: await loadAudience(project.audience_spec_id as string | null) }
+    ? { ...project, audience: await loadAudience(project.audience_spec_id as string | null, params.id) }
     : null;
   const { rows, source, vendorNames } = await comparisonFor(actor.customerId, audienceFor);
 
@@ -348,7 +347,7 @@ function latestPlanned(allocations: Record<string, unknown>[]): number | null {
  * syncing it would put the mistake in front of every arriving respondent instead.
  */
 async function syncQuotaCells(
-  db: ReturnType<typeof supabaseService>, projectId: string, spec: unknown, requiredCompletes: number,
+  db: Db, projectId: string, spec: unknown, requiredCompletes: number,
 ): Promise<{ cells: number; ok: boolean; statement: string; warning: string | null }> {
   const cells = Array.isArray((spec as { quotas?: unknown[] } | null)?.quotas)
     ? (spec as { quotas: never[] }).quotas : [];
@@ -380,9 +379,10 @@ async function syncQuotaCells(
   return { cells: plan.cells.length, ok: true, statement: plan.statement, warning };
 }
 
-async function loadAudience(specId: string | null): Promise<unknown> {
+async function loadAudience(specId: string | null, surveyId: string): Promise<unknown> {
   if (!specId) return null;
-  const { data } = await supabaseService().from("audience_specifications").select("spec").eq("id", specId).maybeSingle();
+  /* the audience belongs to the survey's client (tenancy) */
+  const { data } = await (await surveyDb(surveyId)).from("audience_specifications").select("spec").eq("id", specId).maybeSingle();
   return data?.spec ?? null;
 }
 
@@ -457,7 +457,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
        */
       const quotas = await syncQuotaCells(
         db, projectId,
-        specId ? parsedAudience : await loadAudience((existing?.audience_spec_id as string | null) ?? null),
+        specId ? parsedAudience : await loadAudience((existing?.audience_spec_id as string | null) ?? null, params.id),
         Math.round(requiredCompletes),
       );
       return noStore({ ok: true, projectId, quotas });
@@ -517,7 +517,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     if (action === "compare") {
-      const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null) };
+      const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null, params.id) };
       const { rows, source } = await comparisonFor(actor.customerId, withAudience);
       await store.recordEvent(projectId, "VendorFeasibilityReceived", `feas:${projectId}:${Date.now()}`,
         { vendors: rows.length, rankable: rows.filter((r) => r.rankable).length, source }, actor.userId);
@@ -723,7 +723,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (!completes || !budget) return noStore({ error: "requiredCompletes and budget are needed to plan." }, 400);
       if (!askedMarkets.length) return noStore({ error: "At least one market with a completes target is needed." }, 400);
 
-      const withAudience = { ...(project ?? {}), audience: await loadAudience((project?.audience_spec_id as string | null) ?? null) };
+      const withAudience = { ...(project ?? {}), audience: await loadAudience((project?.audience_spec_id as string | null) ?? null, params.id) };
       const { integrations, vendorNames } = await comparisonFor(actor.customerId, withAudience);
       const [pricing, capacity] = await Promise.all([
         store.pricing(actor.customerId), store.capacity(actor.customerId),
@@ -864,7 +864,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         }));
 
       const markets = [...new Set(observed.map((o) => o.market))].filter((m) => /^[A-Z]{2}$/.test(m));
-      const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null) };
+      const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null, params.id) };
       const { integrations, vendorNames } = await comparisonFor(actor.customerId, withAudience);
       const [pricing, capacity, history] = await Promise.all([
         store.pricing(actor.customerId), store.capacity(actor.customerId),
@@ -945,7 +945,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     if (action === "optimise") {
       const strategy = String(body.strategy ?? project.strategy ?? "balanced") as AllocationStrategy;
-      const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null) };
+      const withAudience = { ...project, audience: await loadAudience(project.audience_spec_id as string | null, params.id) };
       const { integrations, vendorNames } = await comparisonFor(actor.customerId, withAudience);
       const [pricing, capacity, markets] = await Promise.all([
         store.pricing(actor.customerId), store.capacity(actor.customerId), store.markets(projectId),

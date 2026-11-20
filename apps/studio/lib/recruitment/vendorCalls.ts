@@ -1,6 +1,6 @@
 import "server-only";
 import type { BreakerState, CallRecord } from "@rescript/recruitment";
-import { supabaseAdmin } from "@/lib/admin";
+import { clientDb, everyDatabase, platformDb } from "@/lib/db";
 
 /**
  * THE OTHER HALF OF vendorFetch (platform audit 2026-11-05, finding 2).
@@ -32,12 +32,13 @@ function customerFor(integrationId: string): Promise<string | null> {
   let p = customerOf.get(integrationId);
   if (!p) {
     p = (async () => {
-      const { data, error } = await supabaseAdmin().from("vendor_integrations").select("customer_id").eq("id", integrationId).maybeSingle();
-      if (error || !data) {
-        customerOf.delete(integrationId); // try again next call rather than caching a transient miss
-        return null;
+      /* tenancy: an integration is a client's row; the call names only its id, so each client database is asked */
+      for (const t of everyDatabase()) {
+        const { data, error } = await t.db.from("vendor_integrations").select("customer_id").eq("id", integrationId).maybeSingle();
+        if (!error && data) return (data as { customer_id: string }).customer_id;
       }
-      return (data as { customer_id: string }).customer_id;
+      customerOf.delete(integrationId); // try again next call rather than caching a transient miss
+      return null;
     })();
     customerOf.set(integrationId, p);
   }
@@ -52,7 +53,8 @@ export async function recordVendorCall(row: CallRecord): Promise<void> {
       console.warn(`[recruitment] vendor call not logged: integration ${row.integrationId} has no customer`);
       return;
     }
-    const { error } = await supabaseAdmin().from("vendor_api_calls").insert({
+    /* the call log is the client's, beside its integration */
+    const { error } = await clientDb(customer).from("vendor_api_calls").insert({
       customer_id: customer,
       integration_id: row.integrationId,
       operation: row.operation.slice(0, 60),
@@ -75,7 +77,7 @@ export const durableBreakerState: BreakerState = {
   async get(key) {
     const id = key.startsWith("breaker:") ? key.slice("breaker:".length) : key;
     try {
-      const { data, error } = await supabaseAdmin().from("vendor_circuit_state").select("consecutive_failures, opened_at").eq("integration_id", id).maybeSingle();
+      const { data, error } = await platformDb().from("vendor_circuit_state").select("consecutive_failures, opened_at").eq("integration_id", id).maybeSingle();
       if (error || !data) return null;
       const row = data as { consecutive_failures: number; opened_at: string | null };
       return { failures: row.consecutive_failures, openedAt: row.opened_at ? new Date(row.opened_at).getTime() : null };
@@ -86,7 +88,7 @@ export const durableBreakerState: BreakerState = {
   async set(key, value) {
     const id = key.startsWith("breaker:") ? key.slice("breaker:".length) : key;
     try {
-      const { error } = await supabaseAdmin().from("vendor_circuit_state").upsert({
+      const { error } = await platformDb().from("vendor_circuit_state").upsert({
         integration_id: id,
         consecutive_failures: value.failures,
         opened_at: value.openedAt === null ? null : new Date(value.openedAt).toISOString(),

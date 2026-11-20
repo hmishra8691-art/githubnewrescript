@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { MediaError } from "@rescript/media";
 import { chunkAction } from "@rescript/analytics/live";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     if (isSandbox(params.id)) {
       if (!sandboxReady()) return isFailure(authed) ? authed.response : json({ error: "the sandbox runs live sessions only against the fake provider" }, 403);
       const viaRuntime = body.via === "runtime";
-      const r = await chunkAction(storeFor(params.id), params.action, body, liveDeps, sandboxChunkOps(`/api/surveys/sandbox/qual/live/media/blob`), { allowRoles: viaRuntime ? ["participant"] : ["moderator"], surveyId: "sandbox" });
+      const r = await chunkAction((await storeFor(params.id)), params.action, body, liveDeps, sandboxChunkOps(`/api/surveys/sandbox/qual/live/media/blob`), { allowRoles: viaRuntime ? ["participant"] : ["moderator"], surveyId: "sandbox" });
       return json(r.body, r.status);
     }
     if (isFailure(authed)) return authed.response;
@@ -38,10 +39,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     if (isFailure(gate)) return gate.response;
     const refused = refuse(gate, "read");
     if (refused) return refused;
-    const handle = mediaDbOrResponse();
+    const handle = await mediaDbOrResponse(() => surveyDb(params.id));
     if ("response" in handle) return handle.response;
     /* only the moderator records from the Studio (observers are never recorded; participants upload from the respondent app) */
-    const r = await chunkAction(storeFor(params.id), params.action, body, liveDeps, mediaChunkOps(handle.db, authed.userId), { allowRoles: ["moderator"], surveyId: params.id });
+    const r = await chunkAction((await storeFor(params.id)), params.action, body, liveDeps, mediaChunkOps(handle.db, authed.userId), { allowRoles: ["moderator"], surveyId: params.id });
     return json(r.body, r.status);
   } catch (e) {
     if (e instanceof MediaError) return json({ error: e.message }, e.status);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb, surveysAcross } from "@/lib/db";
 import { describeEvent } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data } = await db
     .from("notifications")
     .select("id, survey_id, action, detail, created_at, read_at")
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
   const ids = [...new Set((data ?? []).map((n) => n.survey_id).filter(Boolean))] as string[];
   const titles = new Map<string, string>();
   if (ids.length) {
-    const { data: surveys } = await db.from("surveys").select("id, code, title").in("id", ids);
+    const { data: surveys } = await surveysAcross<{ id: string; code: string; title: string }>("id, code, title", (q) => q.in("id", ids));
     for (const s of surveys ?? []) titles.set(s.id, `${s.code} — ${s.title}`);
   }
 
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
 
   let body: any = {};
   try { body = await req.json(); } catch { /* optional */ }
-  const db = supabaseService();
+  const db = platformDb();
   let q = db.from("notifications").update({ read_at: new Date().toISOString() }).eq("user_id", user.userId).is("read_at", null);
   if (Array.isArray(body?.ids) && body.ids.length) q = q.in("id", body.ids.slice(0, 200));
   const { error } = await q;

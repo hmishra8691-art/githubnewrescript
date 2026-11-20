@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "@/lib/admin";
+import { surveyDb } from "@/lib/db";
 import { dbConfigured, memoryOf, storeWithFallback } from "./durable";
 import { MemoryResearchContextStore, type ResearchContext, type ResearchContextStore, type StoredResearchContext, type WorkflowTotals } from "./researchContext";
 
@@ -21,20 +21,21 @@ const TABLE = "copilot_research_context";
 
 class SupabaseResearchContextStore implements ResearchContextStore {
   durable = true;
-  private db = supabaseAdmin();
+  /** the survey's client database (tenancy): each method routes by its survey */
+  private on = (surveyId: string) => surveyDb(surveyId);
   async probe(surveyId: string) {
-    const { error } = await this.db.from(TABLE).select("survey_id").eq("survey_id", surveyId).limit(1);
+    const { error } = await (await this.on(surveyId)).from(TABLE).select("survey_id").eq("survey_id", surveyId).limit(1);
     if (error) throw error;
   }
   async get(surveyId: string, owner: string): Promise<StoredResearchContext | null> {
-    const { data, error } = await this.db.from(TABLE).select("survey_id, owner_key, context, brief, workflow, updated_at").eq("survey_id", surveyId).eq("owner_key", owner).maybeSingle();
+    const { data, error } = await (await this.on(surveyId)).from(TABLE).select("survey_id, owner_key, context, brief, workflow, updated_at").eq("survey_id", surveyId).eq("owner_key", owner).maybeSingle();
     if (error) throw new Error(error.message);
     if (!data) return null;
     return { surveyId: data.survey_id, owner: data.owner_key, context: data.context as ResearchContext, brief: data.brief as string, workflow: (data.workflow ?? null) as WorkflowTotals | null, updatedAt: data.updated_at as string };
   }
   async put(rec: Omit<StoredResearchContext, "updatedAt">, meta: { userId?: string | null } = {}): Promise<StoredResearchContext> {
     const updatedAt = new Date().toISOString();
-    const { error } = await this.db.from(TABLE).upsert({
+    const { error } = await (await this.on(rec.surveyId)).from(TABLE).upsert({
       survey_id: rec.surveyId, owner_key: rec.owner, version: rec.context.version, status: rec.context.status,
       context: rec.context, brief: rec.brief, brief_sha256: rec.context.fingerprint.brief, workflow: rec.workflow ?? null,
       created_by: meta.userId ?? null, updated_at: updatedAt,

@@ -1,5 +1,6 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { timingSafeEqual } from "node:crypto";
 import { detectClusters, DEFAULT_CLUSTER_CONFIG, type ClusterIdentity, type SignalKind } from "@rescript/quality";
 import { forecast } from "@rescript/recruitment";
@@ -81,7 +82,8 @@ interface CustomerResult {
 
 async function run(req: Request): Promise<NextResponse> {
   if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 });
-  const db = supabaseService();
+  /* tenancy: its functions (rescript_cluster_upsert, rescript_model_evaluate, rescript_vendor_quality_recompute) join the shared fraud and trust tables with each client's cases and orders, so it runs on the primary until that is split (docs/TENANCY, step 4) */
+  const db = platformDb();
   const startedAt = Date.now();
 
   /*

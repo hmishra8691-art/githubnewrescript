@@ -4,7 +4,6 @@ import { PanelConfig, PANEL_OUTCOMES, type PanelOutcome, type PanelTarget } from
 import { panelRedirect, panelReconciliationCsv, panelOutcomeCounts, panelConfigProblems } from "@rescript/engine";
 import { attachPanelSession, enterPanel, exitPanel } from "@rescript/analytics";
 import { audit, isFailure, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { noStore } from "@/lib/notify/access";
 import { maskSecretUrl, notifySandbox, panelAad, panelHasher, panelStore, persistSandbox, sandboxPanelState, sealSecret, secretsStatus } from "@/lib/notify/server";
 
@@ -39,7 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const gate = await requireProjectFor(authed, params.id, "responses.read");
     if (isFailure(gate)) return gate.response;
   }
-  const store = panelStore();
+  const store = panelStore(sandbox ? undefined : await surveyDb(params.id));
   const [panels, entries] = await Promise.all([store.panels(params.id).catch(() => []), store.list(params.id, 5000).catch(() => [])]);
   if (req.nextUrl.searchParams.get("export") === "reconciliation") {
     const live = req.nextUrl.searchParams.get("include") === "test" ? entries : entries.filter((e) => !e.isTest);
@@ -60,7 +59,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 async function secretInfo(surveyId: string, keys: string[], sandbox: boolean): Promise<Record<string, { set: boolean; hint: string | null }>> {
   const out: Record<string, { set: boolean; hint: string | null }> = {};
   if (sandbox) { const st = sandboxPanelState(); for (const k of keys) out[k] = { set: !!st.secrets[`${surveyId}|${k}`], hint: st.secrets[`${surveyId}|${k}`] ? "••••••••" : null }; return out; }
-  const { data } = await supabaseService().from("panel_secrets").select("panel_key, hint").eq("survey_id", surveyId);
+  const { data } = await (await surveyDb(surveyId)).from("panel_secrets").select("panel_key, hint").eq("survey_id", surveyId);
   for (const k of keys) { const r = (data ?? []).find((x) => x.panel_key === k); out[k] = { set: !!r, hint: (r?.hint as string) ?? null }; }
   return out;
 }
@@ -77,7 +76,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (isFailure(gate)) return gate.response;
     userId = authed.userId; customerId = authed.customerId;
   }
-  const store = panelStore();
+  const store = panelStore(sandbox ? undefined : await surveyDb(params.id));
 
   /* ---------------------------------------------------- the sandbox: the runtime's calls and the browser's definition */
   if (sandbox && body.role === "runtime") {

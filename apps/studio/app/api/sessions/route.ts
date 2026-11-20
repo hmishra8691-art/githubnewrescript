@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { sessionStatus, sessionStatusHint, type SessionRecord } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data } = await db
     .from("user_sessions")
     .select("id, status, created_at, last_seen_at, expires_at, ended_at, ended_reason, device_label, user_agent")
@@ -79,7 +79,7 @@ export async function DELETE(req: NextRequest) {
   const target = String(body?.sessionId ?? "");
   if (!target) return NextResponse.json({ error: "Which session?" }, { status: 400 });
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data: row } = await db.from("user_sessions").select("id, user_id").eq("id", target).maybeSingle();
   if (!row || row.user_id !== user.userId) {
     return NextResponse.json({ error: "Unknown session." }, { status: 404 });

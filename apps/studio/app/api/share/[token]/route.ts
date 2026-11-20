@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientDb, everyDatabase, platformDb, type Db } from "@/lib/db";
 import { createHash } from "node:crypto";
 import { buildPptx, buildXlsx, buildStoryPptx, ExportUnsupportedError } from "@rescript/analytics/export";
 import { composeReport, type StoryReport } from "@rescript/analytics/story";
 import { loadReportFonts } from "@rescript/reportvideo";
 import { join } from "node:path";
 import { DEFAULT_THEME, type AnalysisResult, type ReportDefinition, type ReportTheme } from "@rescript/analytics";
-import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 import { verifyPassword, hashPassword } from "@/lib/analytics";
 import { assertNotReadOnly, getMeter } from "@/lib/metering";
@@ -42,11 +42,17 @@ const noStore = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollo
 const deny = (message: string, status: number, extra: Record<string, unknown> = {}) => NextResponse.json({ error: message, ...extra }, { status, headers: noStore });
 
 async function resolve(req: NextRequest, token: string, password: string | null) {
-  const db = supabaseService();
   if (!token || token.length < 16 || token.length > 128) return { denied: deny("This link is not valid.", 404) };
-  const { data, error } = await db.rpc("rescript_resolve_share", { p_token: token });
-  if (error) return { denied: deny("The shared report could not be loaded.", 500) };
-  const r = (data as Resolved[] | null)?.[0];
+  /* tenancy: a share link names no client, so each client database is asked for the token (the primary alone today) */
+  let db: Db = clientDb(null);
+  let r: Resolved | undefined;
+  for (const target of everyDatabase()) {
+    const { data, error } = await target.db.rpc("rescript_resolve_share", { p_token: token });
+    if (error) return { denied: deny("The shared report could not be loaded.", 500) };
+    const hit = (data as Resolved[] | null)?.[0];
+    if (hit && hit.status !== "missing") { r = hit; db = target.db; break; }
+    r ??= hit;
+  }
   if (!r) return { denied: deny("This link is not valid.", 404) };
   const record = async (event: "view" | "download_pptx" | "download_xlsx" | "denied", user: { userId: string; email: string } | null) => {
     const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "";
@@ -62,7 +68,7 @@ async function resolve(req: NextRequest, token: string, password: string | null)
     const u = await requireUser(req);
     if (isFailure(u)) return { denied: deny("Sign in to view this report.", 401, { status: "sign_in", reportName: r.report_name }) };
     user = { userId: u.userId, email: u.email };
-    const { data: role } = await db.rpc("rescript_project_role", { p_user: u.userId, p_survey: r.survey_id });
+    const { data: role } = await platformDb().rpc("rescript_project_role", { p_user: u.userId, p_survey: r.survey_id });
     if (!role) { await record("denied", user); return { denied: deny("This report is shared with the project's members only.", 403, { status: "private", reportName: r.report_name }) }; }
   } else if (r.access === "users") {
     const u = await requireUser(req);

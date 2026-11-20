@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientDb } from "@/lib/db";
 import { can } from "@rescript/access";
 import { aiProviderName, completeJson } from "@rescript/ai";
 import {
@@ -7,7 +8,6 @@ import {
 } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition } from "@/lib/analytics";
 import { aiAllowed } from "@/lib/aiPolicy";
 import { aiReadyFor } from "@/lib/byok/connect";
@@ -40,7 +40,8 @@ export const maxDuration = 300; // 2026-11-07: 5× the old limit — no AI reque
 const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
 
 async function context(ctx: ProjectContext) {
-  const db = supabaseService();
+  /* a workspace's saved themes live in that workspace's client database */
+  const db = clientDb(ctx.user.customerId);
   const saved = await savedThemes(db as never, { customerId: ctx.user.customerId ?? null, userId: ctx.user.userId });
   return { ctx, db, saved };
 }

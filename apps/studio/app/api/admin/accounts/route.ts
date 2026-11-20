@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { sessionStatus, type SessionRecord } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireAdmin } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const search = url.searchParams.get("q")?.trim().toLowerCase() ?? "";
 
-  const db = supabaseService();
+  const db = platformDb();
   let q = db
     .from("profiles")
     .select("id, user_code, email, full_name, organization, job_title, role, status, created_at, last_login_at, locked_until, customer_id")
@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
   const action = String(body?.action ?? "");
   if (!userId || !action) return NextResponse.json({ error: "Name a user and an action." }, { status: 400 });
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data: person } = await db
     .from("profiles").select("id, full_name, user_code, role, status, customer_id").eq("id", userId).maybeSingle();
   if (!person) return NextResponse.json({ error: "Unknown account." }, { status: 404 });

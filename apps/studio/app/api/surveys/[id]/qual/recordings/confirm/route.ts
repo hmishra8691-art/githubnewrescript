@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { confirmUpload, MediaError, stageLogger } from "@rescript/media";
 import { isFailure, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const mediaId = String(body?.mediaId ?? "").trim();
   const sessionId = String(body?.sessionId ?? "");
   if (!mediaId || !UUID.test(sessionId)) return json({ error: "mediaId and sessionId required" }, 400);
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   try {
     const { data: owned } = await handle.db.from("media_objects").select("id, survey_id, kind, session_id").eq("id", mediaId).maybeSingle();

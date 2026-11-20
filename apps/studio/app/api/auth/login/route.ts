@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import {
   decideLogin, decideThrottle, parseIdentifier, requestedTakeover, sessionStatus,
   type SessionRecord,
 } from "@rescript/access";
 import {
   deviceOf, findAccount, ipHashOf, loadPolicies, recordAttempt,
-  setSessionCookie, supabaseService, verifyPassword,
+  setSessionCookie, verifyPassword,
 } from "@/lib/authServer";
 import { audit } from "@/lib/guard";
 import { secondFactor } from "@/lib/mfa";
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest) {
   const throttleKey = account?.email ? account.email.toLowerCase() : rawIdentifier;
 
   /* ---------------------------------------------------------- 1. throttle */
-  const db = supabaseService();
+  const db = platformDb();
   const { data: failures } = await db.rpc("rescript_login_failures", {
     p_identifier: throttleKey,
     p_ip_hash: ipHash,

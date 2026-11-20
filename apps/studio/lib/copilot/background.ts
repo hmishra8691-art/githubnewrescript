@@ -260,7 +260,7 @@ export type BackgroundResolution =
   | { kind: "refused" };
 
 export interface BackgroundDeps {
-  /** the service-role client; the real one is `supabaseService()` */
+  /** the service-role client; the real one is the platform client from lib/authServer */
   db?: () => BackgroundDb | Promise<BackgroundDb>;
   /** whose AI this operation uses; the real one is `connectionFor` */
   connectionFor?: (ask: { userId: string; customerId: string | null; surveyId: string; operation: string }) => Promise<BackgroundResolution>;

@@ -5,9 +5,9 @@ import {
   type AccessSubject, type Actor, type Capability, type LockRecord, type ProjectRole, type RoleSource,
   type SessionRecord, type AuditEvent,
 } from "@rescript/access";
-import { clearSessionCookie, loadPolicies, sessionIdFrom, supabaseService, type AccessPolicies } from "./authServer";
+import { clearSessionCookie, loadPolicies, sessionIdFrom, type AccessPolicies } from "./authServer";
 import { decideProjectGate, type AccessRow, type MemberRow } from "./projectAccess";
-import { clientDb, surveyDb, type Db } from "./db";
+import { clientDb, platformDb, surveyDb, type Db } from "./db";
 
 /**
  * THE GATE. Every authenticated request in the Studio passes through here.
@@ -109,7 +109,7 @@ export async function requireUser(req: NextRequest): Promise<AuthedUser | GuardF
 export async function userForSession(sessionId: string | null): Promise<AuthedUser | GuardFailure> {
   if (!sessionId) return fail({ error: "Not signed in.", code: "no_session" }, 401);
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data: row, error } = await db
     .from("user_sessions")
     .select("id, user_id, status, created_at, last_seen_at, expires_at, device_label, ended_reason")
@@ -245,7 +245,7 @@ export async function requireProjectFor(
     return fail({ error: "Unknown project." }, 404);
   }
   /* sign-in data and memberships are platform data; the survey row lives in its client's database (lib/db.ts) */
-  const db = supabaseService();
+  const db = platformDb();
   const { data: survey } = await (await surveyDb(surveyId))
     .from("surveys")
     .select("id, code, title, status, owner_id, customer_id, locked")
@@ -367,7 +367,7 @@ export async function requireEditRight(
  * version fetched with a second query on every single poll.
  */
 export async function loadLock(surveyId: string): Promise<LockRecord | null> {
-  const db = supabaseService();
+  const db = platformDb();
   const { data } = await db.rpc("rescript_lock_for", { p_survey: surveyId });
   const row = (Array.isArray(data) ? data[0] : data) as
     | {
@@ -472,7 +472,7 @@ export async function audit(args: {
   detail?: Record<string, unknown>;
 }): Promise<void> {
   try {
-    const db = supabaseService();
+    const db = platformDb();
     await db.from("audit_logs").insert({
       customer_id: args.customerId ?? null,
       user_id: args.userId,
@@ -504,7 +504,7 @@ export async function notifyProject(args: {
   detail?: Record<string, unknown>;
 }): Promise<void> {
   try {
-    const db = supabaseService();
+    const db = platformDb();
     let recipients: string[];
     if (args.onlyUserIds) {
       recipients = args.onlyUserIds;

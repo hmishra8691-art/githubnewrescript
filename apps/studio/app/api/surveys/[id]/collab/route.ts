@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import {
   accessLabel, activePresence, activityFor, avatarHue, can, capabilitiesOf, describeExpiry, initialsOf,
   lockBanner, lockStatus, roleSourceNote, roleSummary,
   type PresenceEntry,
 } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, loadLock, requireProject, type ProjectContext } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -52,7 +52,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
   const surveyId = ctx.surveyId;
   const { user, role } = ctx;
-  const db = supabaseService();
+  /* presence, the lock row and comments are the survey's (client) data; the lock and presence functions that also
+     read sign-in sessions and profiles stay on the platform database (docs/TENANCY, "still open") */
+  const db = ctx.db;
 
   const url = new URL(req.url);
   const section = url.searchParams.get("section")?.slice(0, 80) ?? null;
@@ -98,7 +100,7 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
        *     and the client goes read-only naming them, in this same response.
        */
       if (!alive && can(ctx.grant, "survey.edit")) {
-        await db.rpc("rescript_acquire_lock", {
+        await platformDb().rpc("rescript_acquire_lock", {
           p_survey: surveyId,
           p_user: user.userId,
           p_session: user.sessionId,
@@ -111,7 +113,7 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
     // opportunistic cleanup: whoever looks at the project tidies up the locks
     // the clock — or a sign-out — has ended, so a lock nobody is behind needs
     // no scheduler to disappear
-    await db.rpc("rescript_expire_locks", { p_stale_seconds: user.policies.lock.staleAfterSeconds });
+    await platformDb().rpc("rescript_expire_locks", { p_stale_seconds: user.policies.lock.staleAfterSeconds });
   }
 
   /*
@@ -124,7 +126,7 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
    */
   const [lock, presenceRes, commentRes] = await Promise.all([
     loadLock(surveyId),
-    db.rpc("rescript_project_presence", {
+    platformDb().rpc("rescript_project_presence", {
       p_survey: surveyId, p_within_seconds: user.policies.presence.presentWithinSeconds,
     }),
     db.from("project_comments")

@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { readObject } from "@rescript/media";
 import {
   readScheduleInput, newRoomState, joinProblems, joinStaff, mergeLiveTranscript, applyRoomOp, LiveError,
@@ -6,7 +7,6 @@ import {
 } from "@rescript/analytics/live";
 import { livekitConfig } from "@rescript/analytics/live/server";
 import { isFailure, requireProjectFor, requireUser, type AuthedUser, type ProjectContext } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition } from "@/lib/analytics";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { sttPrecheck } from "@/lib/byok/connect";
@@ -108,7 +108,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const w = await who(req, params.id, authed, "read");
   if ("response" in w) return w.response;
   try {
-    const store = storeFor(params.id);
+    const store = await storeFor(params.id);
     const mail = mailConfig();
     const base = { ok: true, transport: transportInfo(), mail: { configured: !w.sandbox && mail.configured }, can: { manage: w.manage, pii: w.pii }, sandbox: w.sandbox };
     const id = req.nextUrl.searchParams.get("id");
@@ -138,8 +138,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const action = String(body.action ?? "");
   const w = await who(req, params.id, authed, action === "join" && body.role === "observer" ? "read" : "manage");
   if ("response" in w) return w.response;
-  const store = storeFor(params.id);
-  const db = w.sandbox ? null : supabaseService();
+  const store = await storeFor(params.id);
+  const db = w.sandbox ? null : (w.gate?.db ?? await surveyDb(params.id));
   const actorName = w.user ? (w.user.fullName || w.user.email || "Moderator") : "You (sandbox)";
   const event = async (a: string, detail: string, ids: string[]) => { if (db && w.gate) await recordEvents(db, w.gate, [{ actor: w.gate.user.userId, action: a, detail, ids }]); };
   try {
@@ -297,7 +297,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         if ("response" in billing) return billing.response;
         meter = async (seconds, fn) => { const m = await meteredSttCall(billing.meter, billing.ctx, "qual_live_transcription", seconds, fn); return m.ok ? { ok: true, value: m.value } : { ok: false, refusal: m }; };
       }
-      const handle = w.sandbox ? null : mediaDbOrResponse();
+      const handle = w.sandbox ? null : await mediaDbOrResponse(() => surveyDb(params.id));
       if (handle && "response" in handle) return handle.response;
       const readBytes = async (t: LiveTrack) => {
         if (!t.mediaId) return null;

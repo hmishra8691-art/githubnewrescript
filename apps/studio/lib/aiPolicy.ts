@@ -64,8 +64,8 @@ export function setAiSettingsLoader(l: Loader | null): void { loader = l; }
 
 async function defaultLoader(surveyId: string): Promise<AiSettings | null> {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return { mode: "cloud", disabled: [] };
-  const { supabaseAdmin } = await import("./admin");
-  const { data, error } = await supabaseAdmin().from("surveys").select("settings").eq("id", surveyId).maybeSingle();
+  const { surveyDb } = await import("./db");
+  const { data, error } = await (await surveyDb(surveyId)).from("surveys").select("settings").eq("id", surveyId).maybeSingle();
   if (error) return null;
   return aiSettingsOf((data as { settings?: unknown } | null)?.settings);
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { isFailure, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { findDuplicateAsset, MediaError } from "@rescript/media";
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try { body = await req.json(); } catch { return NextResponse.json({ error: "expected a JSON body" }, { status: 400 }); }
   const sha256 = String(body.sha256 ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(sha256)) return NextResponse.json({ error: "sha256 must be 64 hex characters" }, { status: 400 });
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   try {
     const asset = await findDuplicateAsset(handle.db, {

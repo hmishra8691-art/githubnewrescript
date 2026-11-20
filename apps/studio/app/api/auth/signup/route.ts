@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { createAccount, deviceOf, ipHashOf, loadPolicies, setSessionCookie, supabaseService } from "@/lib/authServer";
+import { platformDb } from "@/lib/db";
+import { createAccount, deviceOf, ipHashOf, loadPolicies, setSessionCookie } from "@/lib/authServer";
 import { audit } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data: profile } = await db
     .from("profiles")
     .select("id, email, full_name, user_code, customer_id, role, organization, created_at")

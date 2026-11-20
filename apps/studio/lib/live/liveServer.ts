@@ -1,4 +1,5 @@
 import "server-only";
+import { surveyDb } from "@/lib/db";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,6 @@ import {
 } from "@rescript/analytics/live";
 import { iceServersFor, livekitConfig, livekitToken, inviteToken, linkSecret, sha256Hex, newMemberToken, turnStatus, TURN_WARNING } from "@rescript/analytics/live/server";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
-import { supabaseService } from "@/lib/authServer";
 
 /**
  * LIVE SESSIONS — THE STUDIO'S SERVER HALF (2026-10-22, G2). The room logic is `@rescript/analytics/live`
@@ -71,8 +71,9 @@ export const sandboxBlobExists = (mediaId: string) => existsSync(join(BLOBS, saf
 
 /* ------------------------------------------------------------ the store for a project */
 
-export function storeFor(surveyId: string): LiveStore {
-  return isSandbox(surveyId) ? sandboxStore() : supabaseLiveStore(supabaseService() as never);
+/** the survey's live rooms, on its client database (tenancy) */
+export async function storeFor(surveyId: string): Promise<LiveStore> {
+  return isSandbox(surveyId) ? sandboxStore() : supabaseLiveStore((await surveyDb(surveyId)) as never);
 }
 
 /** the room, only when it belongs to this project */

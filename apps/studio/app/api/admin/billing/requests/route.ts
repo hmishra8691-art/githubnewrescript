@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb, surveysAcross } from "@/lib/db";
 import { audit } from "@/lib/guard";
 import { requireBillingAdmin, billingError } from "@/lib/billingAdmin";
 
@@ -18,10 +18,10 @@ export async function GET(req: NextRequest) {
     const list = await gate.meter.store.listCreditRequests(status ? { status } : {});
     let names: Record<string, string> = {}, projects: Record<string, { code: string; title: string }> = {};
     if (!gate.sandbox && list.length) {
-      const db = supabaseAdmin();
+      const db = platformDb();
       const { data: ps } = await db.from("profiles").select("id, full_name, email").in("id", [...new Set(list.map((r) => r.userId))]);
       for (const p of ps ?? []) names[p.id] = p.full_name || p.email || p.id;
-      const { data: ss } = await db.from("surveys").select("id, code, title").in("id", [...new Set(list.map((r) => r.surveyId).filter(Boolean) as string[])]);
+      const { data: ss } = await surveysAcross<{ id: string; code: string; title: string }>("id, code, title", (q) => q.in("id", [...new Set(list.map((r) => r.surveyId).filter(Boolean) as string[])]));
       for (const s of ss ?? []) projects[s.id] = { code: s.code, title: s.title };
     }
     return NextResponse.json({ ok: true, requests: list.map((r) => ({ ...r, requester: names[r.userId] ?? (gate.sandbox ? "Sandbox user" : r.userId), project: r.surveyId ? projects[r.surveyId] ?? (gate.sandbox ? { code: "SANDBOX", title: "Sandbox project" } : null) : null })) });

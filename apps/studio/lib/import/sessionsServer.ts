@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "../admin";
+import { clientDb, type Db } from "../db";
 import { mediaDb } from "../mediaRoute";
 import { IMPORT_BUCKET, expiryFrom, memorySessionStore, sourceKey, type ImportSession, type SessionStore } from "./sessions";
 
@@ -13,8 +13,12 @@ const hasDatabase = () => !!process.env.SUPABASE_URL && !!process.env.SUPABASE_S
 const g = globalThis as unknown as { __rescriptImportMemory?: SessionStore };
 export function memoryStore(): SessionStore { return (g.__rescriptImportMemory ??= memorySessionStore()); }
 
-export function importSessionStore(): SessionStore {
-  return hasDatabase() ? databaseStore() : memoryStore();
+/**
+ * `customerId`: the importing person's workspace — its client database holds the session (tenancy). Without one
+ * (a platform administrator's own import, the housekeeping sweep) the primary.
+ */
+export function importSessionStore(customerId: string | null = null): SessionStore {
+  return hasDatabase() ? databaseStore(clientDb(customerId)) : memoryStore();
 }
 
 type Row = Record<string, unknown>;
@@ -29,9 +33,8 @@ const toSession = (r: Row): ImportSession => ({
   createdAt: String(r.created_at), appliedAt: (r.applied_at as string | null) ?? null, rolledBackAt: (r.rolled_back_at as string | null) ?? null,
 });
 
-function databaseStore(): SessionStore {
-  const db = supabaseAdmin();
-  const objects = mediaDb().stores;
+function databaseStore(db: Db): SessionStore {
+  const objects = mediaDb(db).stores;
   const LIST = "id, customer_id, user_id, survey_id, into_mode, scope, file_name, format, platform, fingerprint, size_bytes, storage_provider, bucket, storage_key, source_expires_at, status, report_digest, decisions, error, created_at, applied_at, rolled_back_at";
   return {
     kind: "database",

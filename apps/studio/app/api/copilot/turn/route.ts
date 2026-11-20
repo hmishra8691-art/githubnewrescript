@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { createHash } from "node:crypto";
 import { SurveyDefinition } from "@rescript/schema";
 import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError, isProviderError, capacityNotice, ProviderError, type ProviderErrorKind, type ProviderEvent } from "@rescript/ai";
@@ -36,7 +37,6 @@ import { billingProjectFor, isSandboxProject, meteredAi, refusalResponse } from 
 import { copilotCall } from "@/lib/aiPromptCache";
 import type { AiEstimate } from "@/lib/aiEstimate";
 import { latestRun } from "@/lib/analytics";
-import { supabaseAdmin } from "@/lib/admin";
 import { describeThemeImages, withThemeImage } from "@/lib/copilot/themeImageText";
 /* prompt-injection audit (2026-10-18): untrusted text fenced, scanned, and the provenance gate on high-risk actions */
 import { assessTurn, carryProvenance, fenceResearch, gateReply, provenanceRejections, turnNotice } from "@/lib/copilot/injection";
@@ -329,7 +329,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const findingsTurn = findingsIntent(message);
   /* the findings the copilot answers from are the project's own stored run, read here — never numbers the browser sends (audit A-3). The sandbox has no stored data, so its fixture's run is taken as sent. */
   const sentRun = body.analysisRun && typeof body.analysisRun === "object" && Array.isArray((body.analysisRun as { findings?: unknown }).findings) ? body.analysisRun as RunBrief : null;
-  const analysisRun: RunBrief | null = !findingsTurn ? null : isSandboxProject(surveyId) ? sentRun : await latestRun(supabaseAdmin(), surveyId).catch(() => null);
+  const analysisRun: RunBrief | null = !findingsTurn ? null : isSandboxProject(surveyId) ? sentRun : await latestRun(await surveyDb(surveyId), surveyId).catch(() => null);
   /* §3 TASK-AWARE SELECTION: a theme turn gets no questionnaire; a logic edit on a large survey the named questions and their dependencies in full */
   const focusIds = referencedQuestions(def, message);
   const qScope = questionnaireScope({ message, mode, themeOnly: themeScope, uxOnly: cls.uxOnly, focusCount: focusIds.length, questionCount: def.questions.length });

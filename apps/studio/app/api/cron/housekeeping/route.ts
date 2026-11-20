@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { timingSafeEqual } from "node:crypto";
-import { supabaseService } from "@/lib/authServer";
 import { importSessionStore } from "@/lib/import/sessionsServer";
 
 /**
@@ -42,7 +42,8 @@ type Pass = Record<string, number | boolean>;
 
 async function run(req: Request): Promise<NextResponse> {
   if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 });
-  const db = supabaseService();
+  /* tenancy: rescript_housekeeping clears platform rows (login attempts) and client rows (result caches, share access, interview telemetry) in one call; it runs on the primary until that is split per class (docs/TENANCY, step 4) */
+  const db = platformDb();
   const startedAt = Date.now();
   const totals: Record<string, number> = {};
   let passes = 0;

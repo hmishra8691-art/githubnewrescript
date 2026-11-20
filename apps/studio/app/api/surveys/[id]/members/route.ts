@@ -4,7 +4,6 @@ import {
   accessLabel, avatarHue, can, diffAccess, GRANTABLE_ROLES, initialsOf, ROLE_DESCRIPTION, ROLE_LABEL,
   type AuditRow, type MemberGrant,
 } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, notifyProject, requireProject } from "@/lib/guard";
 import { accessHistory, grantRefusal, losesEditing, memberAccessView, parseAccessRequest } from "@/lib/projectAccess";
 
@@ -124,7 +123,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
 /** the audit rows about who has access to this project, as sentences */
 async function membershipHistory(surveyId: string, expired: { userId: string; name: string | null; expiresAt: string }[], now: number) {
-  const db = supabaseService();
   const { data } = await platformDb().from("audit_logs")
     .select("id, action, entity, entity_id, user_id, detail, created_at")
     .eq("survey_id", surveyId).like("action", "project.%")

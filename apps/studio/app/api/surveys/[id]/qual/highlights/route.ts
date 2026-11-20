@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { freshUrl, MediaError } from "@rescript/media";
 import { applyReelOp, reelItemStates, excerptClip, redactText, type HighlightReel } from "@rescript/analytics";
 import { liveClip } from "@rescript/analytics/live";
@@ -50,7 +51,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       const live = range ? liveClip(ctx.rows.transcripts.find((t) => t.id === e.sourceId)?.meta, e.segmentId, range) : null;
       if (live && range) { mediaId = live.mediaId; range = { ...range, start: live.start, end: live.end }; }
       if (!range || !mediaId) return json({ error: "This excerpt has no clip: its transcript has no recording or no timestamps.", code: "no_clip" }, 404);
-      const handle = mediaDbOrResponse();
+      const handle = await mediaDbOrResponse(() => surveyDb(params.id));
       if ("response" in handle) return handle.response;
       const { data: owned } = await handle.db.from("media_objects").select("id, survey_id, kind").eq("id", mediaId).maybeSingle();
       if (!owned || owned.survey_id !== params.id) return json({ error: "no such recording" }, 404);

@@ -1,12 +1,12 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { newSurveyDefinition } from "@/lib/defaults";
 import { Studio } from "@/components/studio/Studio";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
 import { ensureElementIds, migrateQuizKeys, migrateRetiredVariants } from "@rescript/engine";
 import { projectPageGate } from "@/lib/guard";
+import { surveyDb } from "@/lib/db";
 import { SESSION_COOKIE_NAME } from "@/lib/authServer";
 
 export const dynamic = "force-dynamic";
@@ -69,7 +69,8 @@ export default async function StudioPage({ params, searchParams }: { params: { i
   const wantsTool = !!(searchParams && (typeof searchParams.tab === "string" || typeof searchParams.mode === "string" || typeof searchParams.split === "string"));
   if (!wantsTool) return <ProjectOverview surveyDbId={params.id} />;
 
-  const db = supabaseAdmin();
+  /* the survey's client database (tenancy) */
+  const db = await surveyDb(params.id);
 
   // draft columns only exist after migration 0003 — ask for them, but survive
   // their absence

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { aiProviderName } from "@rescript/ai";
 import { gatedNarrativeFor } from "@/lib/analyticsNarrative";
 import { SurveyDefinition } from "@rescript/schema";
@@ -10,7 +11,6 @@ import { artifactFingerprint, definitionHash, editionOf, GENERATOR_VERSION, type
 import { obtainArtifact, type Produced, type Fail as ArtifactFail } from "@/lib/artifacts/service";
 import { artifactDeps, documentLook, fingerprintInputs, type DocumentLook } from "@/lib/artifacts/server";
 import { readStructure, themeStamp } from "@/lib/reportThemesStore";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { buildFor, loadDefinition, previousRun } from "@/lib/analytics";
 import { deckQuotesFor } from "@rescript/analytics";
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
   /* the survey, the client and the fieldwork dates */
   let def: SurveyDefinition;
   let client = output.client, fieldwork: { from?: string; to?: string } | undefined;
-  const db = sandbox ? null : supabaseService();
+  const db = sandbox ? null : await surveyDb(surveyId);
   let loaded: Awaited<ReturnType<typeof loadDefinition>> | null = null;
   if (sandbox) {
     const parsed = SurveyDefinition.safeParse(body.definition);
@@ -237,7 +237,7 @@ export async function POST(req: NextRequest) {
   const fpIn = await fingerprintInputs(db!, { surveyId, type: output.type as ArtifactType, audience: output.audience, def, client: client ?? null, look, narrative: body.narrative === false ? "engine" : "auto", environment, dataset: datasetKind });
   const fingerprint = artifactFingerprint(fpIn);
   let made: Made | null = null;
-  const got = await obtainArtifact(artifactDeps(), {
+  const got = await obtainArtifact(artifactDeps(await surveyDb(surveyId)), {
     surveyId, type: output.type as ArtifactType, edition: fpIn.edition, fingerprint, userId: user?.userId ?? null, customerId: user?.customerId ?? null,
     inputs: { ...fpIn, revision: loaded?.revision ?? null, versionId: loaded?.versionId ?? null },
     regenerate: output.regenerate === true || body.regenerate === true,

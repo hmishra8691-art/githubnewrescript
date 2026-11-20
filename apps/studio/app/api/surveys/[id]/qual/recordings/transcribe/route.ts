@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { transcribe } from "@rescript/ai";
 import { readObject, STT_MAX_BYTES } from "@rescript/media";
 import { isFailure, requireProject } from "@/lib/guard";
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const ready = await sttPrecheck(gate.user, params.id, "qual_transcription");
     if (!ready.ok) return json({ error: ready.error, code: ready.code }, ready.status);
-    const handle = mediaDbOrResponse();
+    const handle = await mediaDbOrResponse(() => surveyDb(params.id));
     if ("response" in handle) return handle.response;
     const { data: media } = await handle.db.from("media_objects").select("id, bucket, path, storage_provider, mime_type, bytes, duration_seconds, status, original_filename").eq("id", session.recording_media_id).maybeSingle();
     if (!media || media.status !== "stored") return json({ error: "the recording has not finished uploading" }, 409);

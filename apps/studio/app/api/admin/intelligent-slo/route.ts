@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { rowsAcross } from "@/lib/db";
 import { isFailure, requireAdmin } from "@/lib/guard";
 import { intelligentSlo, type OperationRow } from "@/lib/intelligentSlo";
 
@@ -18,7 +18,8 @@ export async function GET(req: NextRequest) {
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
   const rows: OperationRow[] = [];
   for (let page = 0; page < 50; page++) {
-    const { data, error } = await supabaseAdmin().from("intelligent_operations").select("source, status, created_at, intent").gte("created_at", since).order("created_at", { ascending: true }).range(page * 1000, page * 1000 + 999);
+    /* every client database's operations (the primary alone today) */
+    const { data, error } = await rowsAcross<{ source: string; status: string; created_at: string; intent: string | null }>("intelligent_operations", "source, status, created_at, intent", (q) => q.gte("created_at", since).order("created_at", { ascending: true }).range(page * 1000, page * 1000 + 999));
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     rows.push(...((data ?? []) as OperationRow[]));
     if (!data || data.length < 1000) break;

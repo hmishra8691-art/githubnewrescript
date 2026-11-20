@@ -1,4 +1,5 @@
 import "server-only";
+import { platformDb } from "@/lib/db";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { emptyPanelState, memoryPanelStore, supabasePanelStore, type MemoryPanelState, type PanelStore } from "@rescript/analytics";
 import type { PanelHasher } from "@rescript/engine";
@@ -6,7 +7,6 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { aiProviderName, deriveKey, envelopeStatus, guardedFetch, maskSecretUrl, openEnvelope, sealEnvelope, signedHeader, validateEndpoint } from "@rescript/ai";
-import { supabaseService } from "@/lib/authServer";
 import { sendMail } from "@/lib/mail";
 import { dbNotifyStore } from "./dbStore.ts";
 import { emptyNotifyState, memoryNotifyStore, type MemoryNotifyState } from "./memoryStore.ts";
@@ -63,18 +63,21 @@ export function sandboxPanelState(): MemoryPanelState {
   return b.panels as unknown as MemoryPanelState;
 }
 /** the panel store: the database (0072, the saved definition's panels), or the sandbox's memory (secrets sealed with the sandbox key) */
-export function panelStore(): PanelStore {
+/** `db`: the survey's client database (tenancy: surveyDb / ctx.db) */
+export function panelStore(db?: unknown): PanelStore {
   if (notifySandbox()) {
     const st = sandboxPanelState();
     const mem = memoryPanelStore(st, { onChange: () => persistSandbox() });
     return { ...mem, async secret(surveyId, key) { const sealed = st.secrets[`${surveyId}|${key}`]; if (!sealed) return null; try { return openSealed(sealed, panelAad(surveyId, key)); } catch { return null; } } };
   }
-  return supabasePanelStore(supabaseService() as never, { openPanelSecret: (sealed, aad) => openSealed(sealed, aad) });
+  if (!db) throw new Error("panelStore: pass the survey's routed database (lib/db.ts)");
+  return supabasePanelStore(db as never, { openPanelSecret: (sealed, aad) => openSealed(sealed, aad) });
 }
 /** the signer's digests (node:crypto) */
 export const panelHasher: PanelHasher = (alg, data, secret) => (alg === "hmac-sha256" || alg === "hmac-sha1" ? createHmac(alg === "hmac-sha256" ? "sha256" : "sha1", secret).update(data, "utf8").digest() : createHash(alg).update(data + secret, "utf8").digest());
 
-export function notifyStore(): NotifyStore { return notifySandbox() ? sandboxBox().store : dbNotifyStore(supabaseService()); }
+/* the notification feed, recipients and the project-members function are central (platform / review) */
+export function notifyStore(): NotifyStore { return notifySandbox() ? sandboxBox().store : dbNotifyStore(platformDb() as never); }
 export function sandboxMemory(): MemoryNotifyState { return sandboxBox().state; }
 const sandboxKey = (): Buffer | null => (notifySandbox() ? sandboxBox().key : null);
 

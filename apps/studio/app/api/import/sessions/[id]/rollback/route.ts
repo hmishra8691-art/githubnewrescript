@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { callerFrom, canSee, notFound } from "@/lib/import/sessionAccess";
 import { importSessionStore } from "@/lib/import/sessionsServer";
 import { rollbackPlan, summarize } from "@/lib/import/sessions";
 import { audit, isFailure, requireEditRightFor, requireProjectFor, requireUser } from "@/lib/guard";
-import { supabaseAdmin } from "@/lib/admin";
 import { DELETE as deleteProject } from "../../../../surveys/[id]/route";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ export const runtime = "nodejs";
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const authed = await requireUser(req);
-  const store = importSessionStore();
+  const store = importSessionStore(isFailure(authed) ? null : authed.customerId);
   const s = await store.get(params.id).catch(() => null);
   const caller = callerFrom(authed, !!s && s.customerId === null);
   if ("response" in caller) return caller.response;
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   let responses = 0;
   if (s.into === "new" && s.surveyId && s.customerId !== null) {
-    const { count } = await supabaseAdmin().from("responses").select("id", { count: "exact", head: true }).eq("survey_id", s.surveyId);
+    const { count } = await (await surveyDb(s.surveyId)).from("responses").select("id", { count: "exact", head: true }).eq("survey_id", s.surveyId);
     responses = count ?? 0;
   }
   const plan = rollbackPlan(s, { responses });

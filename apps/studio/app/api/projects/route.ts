@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { avatarHue, initialsOf, roleSourceNote, ROLE_LABEL } from "@rescript/access";
-import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data, error } = await db.rpc("rescript_my_projects", {
     p_user: user.userId,
     p_lock_stale_seconds: user.policies.lock.staleAfterSeconds,

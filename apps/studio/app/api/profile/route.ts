@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { setPassword, supabaseService, verifyPassword } from "@/lib/authServer";
+import { countAcross, platformDb } from "@/lib/db";
+import { setPassword, verifyPassword } from "@/lib/authServer";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data: profile } = await db
     .from("profiles")
     .select("id, user_code, email, full_name, organization, job_title, role, status, created_at, last_login_at, customer_id")
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest) {
     : { data: null };
 
   const [{ count: owned }, { count: shared }] = await Promise.all([
-    db.from("surveys").select("id", { count: "exact", head: true }).eq("owner_id", user.userId),
+    countAcross("surveys", (q) => q.eq("owner_id", user.userId)).then((count) => ({ count })),
     db.from("project_members").select("survey_id", { count: "exact", head: true }).eq("user_id", user.userId),
   ]);
 
@@ -98,7 +99,7 @@ export async function PATCH(req: NextRequest) {
   const rejected = ["userId", "userCode", "user_code", "email", "role", "status", "customer_id", "id"]
     .filter((k) => k in (body ?? {}));
 
-  const db = supabaseService();
+  const db = platformDb();
   const { error } = await db.from("profiles").update(update).eq("id", user.userId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

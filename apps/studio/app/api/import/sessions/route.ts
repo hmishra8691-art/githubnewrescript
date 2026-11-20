@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   if (!sandbox && !caller.user) return NextResponse.json({ error: "sign in" }, { status: 401 });
   const limit = Math.min(200, Math.max(1, Number(req.nextUrl.searchParams.get("limit") ?? 50) || 50));
   try {
-    const store = importSessionStore();
+    const store = importSessionStore(isFailure(authed) ? null : authed.customerId);
     const rows = await store.list({ customerId: caller.customerId, surveyId: surveyId && !sandbox ? surveyId : undefined, limit });
     return NextResponse.json({ sessions: rows.map(summarize), store: store.kind });
   } catch (e) {

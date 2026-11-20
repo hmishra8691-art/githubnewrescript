@@ -3,7 +3,7 @@ import {
   routeRecipient, redirectNotice, escapeHtml, summarise,
   type SendSummary,
 } from "@rescript/mail";
-import { supabaseService } from "./authServer";
+import { clientDb, surveyDb } from "./db";
 import { platformTier } from "./platform";
 
 /**
@@ -153,9 +153,12 @@ async function deliver(args: {
 }
 
 /** Record what happened. Never throws: a missing log row must not fail a send. */
+/** the mail log is the client's (tenancy): the survey's database, else the workspace's */
+const mailDb = async (m: MailMessage) => (m.surveyId ? surveyDb(m.surveyId) : clientDb(m.customerId ?? null));
+
 async function log(m: MailMessage, status: "sent" | "failed" | "suppressed", extra: { providerId?: string | null; error?: string | null }) {
   try {
-    await supabaseService().from("mail_deliveries").insert({
+    await (await mailDb(m)).from("mail_deliveries").insert({
       customer_id: m.customerId ?? null,
       survey_id: m.surveyId ?? null,
       kind: m.kind,
@@ -174,9 +177,9 @@ async function log(m: MailMessage, status: "sent" | "failed" | "suppressed", ext
 }
 
 /** Has this exact message already gone? */
-async function alreadySent(dedupeKey: string): Promise<boolean> {
+async function alreadySent(m: MailMessage, dedupeKey: string): Promise<boolean> {
   try {
-    const { data } = await supabaseService()
+    const { data } = await (await mailDb(m))
       .from("mail_deliveries")
       .select("id")
       .eq("dedupe_key", dedupeKey)
@@ -198,7 +201,7 @@ export async function sendMail(m: MailMessage): Promise<MailResult> {
   const cfg = mailConfig();
   if (!cfg.configured) return { sent: false, reason: "not_configured" };
 
-  if (m.dedupeKey && (await alreadySent(m.dedupeKey))) {
+  if (m.dedupeKey && (await alreadySent(m, m.dedupeKey))) {
     return { sent: false, reason: "duplicate" };
   }
 

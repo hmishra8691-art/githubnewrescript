@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb, surveysAcross } from "@/lib/db";
 import { can, parseIdentifier } from "@rescript/access";
-import { supabaseAdmin } from "@/lib/admin";
 import { audit, isFailure, requireProjectFor, requireUser, type AuthedUser } from "@/lib/guard";
 import { getMeter } from "@/lib/metering";
 
@@ -75,7 +75,7 @@ async function resolveSource(
 async function findRecipient(user: AuthedUser, raw: string): Promise<{ id: string; userCode: string; name: string } | null> {
   const ident = parseIdentifier(raw);
   if (ident.kind === "unknown") return null;
-  const db = supabaseAdmin();
+  const db = platformDb();
   let q = db.from("profiles").select("id, user_code, full_name, email, status, customer_id");
   q = ident.kind === "email" ? q.eq("email", ident.value) : q.eq("user_code", ident.value);
   const { data } = await q.maybeSingle();
@@ -203,7 +203,7 @@ export async function GET(req: NextRequest) {
 
 /** The projects this person may spend from, with their wallets. */
 async function ownedProjectWalletIds(user: AuthedUser): Promise<{ ids: string[]; list: { id: string; code: string; title: string; walletId: string | null; balance: number; available: number; currency: string }[] }> {
-  const db = supabaseAdmin();
+  const db = platformDb();
   const { data: mine } = await db.rpc("rescript_my_projects", { p_user: user.userId, p_lock_stale_seconds: user.policies.lock.staleAfterSeconds });
   const rows = ((mine ?? []) as { survey_id: string; code: string; title: string; my_role: string }[])
     .filter((r) => can(r.my_role as never, "billing.transfer"));
@@ -227,9 +227,9 @@ async function labelsFor(user: AuthedUser, refs: string[]): Promise<Record<strin
   const out: Record<string, string> = {};
   const unique = [...new Set(refs)];
   if (!unique.length) return out;
-  const db = supabaseAdmin();
+  const db = platformDb();
   const [{ data: ss }, { data: ps }] = await Promise.all([
-    db.from("surveys").select("id, code, title").in("id", unique),
+    surveysAcross<{ id: string; code: string; title: string }>("id, code, title", (q) => q.in("id", unique)),
     db.from("profiles").select("id, full_name, email, user_code").in("id", unique),
   ]);
   for (const s of ss ?? []) out[s.id] = `${s.title} · ${s.code}`;

@@ -132,7 +132,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    */
   const mediaWarnings: string[] = [];
   try {
-    const mdb = mediaDb();
+    /* a question video is copied inside the SOURCE's database; across workspaces on separate databases this needs a source-to-destination copy (docs/TENANCY, still open) */
+    const mdb = mediaDb(gate.db);
     for (const q of result.def.questions) {
       const iv = (q.settings as { interviewVideo?: { mediaId?: string; url?: string; path?: string } }).interviewVideo;
       if (!iv?.mediaId) continue;

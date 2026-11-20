@@ -206,7 +206,7 @@ function section(raw: Record<string, unknown>, key: string): Record<string, unkn
 export async function loadPolicies(customerId: string | null): Promise<AccessPolicies> {
   let raw: Record<string, unknown> = {};
   try {
-    const db = supabaseService();
+    const db = platformDb();
     const { data } = await db.rpc("rescript_access_policy", { p_customer: customerId });
     if (data && typeof data === "object") raw = data as Record<string, unknown>;
   } catch {
@@ -268,7 +268,7 @@ export async function createAccount(args: {
   organization?: string | null;
   jobTitle?: string | null;
 }): Promise<{ userId: string } | { error: string; status: number }> {
-  const db = supabaseService();
+  const db = platformDb();
   const { data, error } = await db.auth.admin.createUser({
     email: args.email,
     password: args.password,
@@ -293,7 +293,7 @@ export async function createAccount(args: {
 
 /** Change a password for an existing account. */
 export async function setPassword(userId: string, password: string): Promise<{ error?: string }> {
-  const db = supabaseService();
+  const db = platformDb();
   const { error } = await db.auth.admin.updateUserById(userId, { password });
   return error ? { error: error.message } : {};
 }
@@ -306,7 +306,7 @@ export async function setPassword(userId: string, password: string): Promise<{ e
  */
 export async function findAccount(identifier: { kind: "email" | "user_code" | "unknown"; value: string }) {
   if (identifier.kind === "unknown") return null;
-  const db = supabaseService();
+  const db = platformDb();
   const q = db.from("profiles").select("id, email, full_name, user_code, customer_id, status, role, locked_until");
   const { data } = identifier.kind === "email"
     ? await q.eq("email", identifier.value.toLowerCase()).maybeSingle()
@@ -323,7 +323,7 @@ export async function recordAttempt(args: {
   reason?: string;
 }): Promise<void> {
   try {
-    const db = supabaseService();
+    const db = platformDb();
     await db.from("login_attempts").insert({
       identifier: args.identifier.slice(0, 200),
       user_id: args.userId ?? null,

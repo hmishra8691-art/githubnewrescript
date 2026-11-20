@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { mediaEnvironment } from "@/lib/metering";
 import { mediaDbOrResponse, projectStt } from "@/lib/mediaRoute";
@@ -52,7 +53,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const mediaId = req.nextUrl.searchParams.get("mediaId") ?? "";
   if (!mediaId) return NextResponse.json({ error: "mediaId required" }, { status: 400 });
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
 
   try {
@@ -73,7 +74,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const mediaId = String(body.mediaId ?? req.nextUrl.searchParams.get("mediaId") ?? "").trim();
   if (!mediaId) return NextResponse.json({ error: "mediaId required" }, { status: 400 });
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   const db = handle.db;
 

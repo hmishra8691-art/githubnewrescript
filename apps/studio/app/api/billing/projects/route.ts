@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { isFailure, requireUser } from "@/lib/guard";
 import { getMeter } from "@/lib/metering";
 import { stripInternalCosts } from "@/lib/billingView";
@@ -32,7 +32,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
-  const db = supabaseAdmin();
+  const db = platformDb();
   const { data: mine, error } = await db.rpc("rescript_my_projects", {
     p_user: user.userId,
     p_lock_stale_seconds: user.policies.lock.staleAfterSeconds,

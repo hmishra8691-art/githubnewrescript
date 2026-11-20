@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { assetFor, removeMedia, updateAsset, MediaError } from "@rescript/media";
@@ -40,7 +41,7 @@ async function usageOf(db: { rpc(fn: string, args: Record<string, unknown>): Pro
 export async function GET(req: NextRequest, { params }: { params: { id: string; mediaId: string } }) {
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   try {
     const asset = await assetFor(handle.db, params.mediaId, { surveyId: params.id, customerId: gate.survey.customer_id ?? gate.user.customerId ?? null });
@@ -58,7 +59,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (isFailure(gate)) return gate.response;
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "expected a JSON body" }, { status: 400 }); }
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   try {
     const patch: { displayName?: string | null; altText?: string | null; shared?: boolean } = {};
@@ -77,7 +78,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 export async function DELETE(req: NextRequest, { params }: { params: { id: string; mediaId: string } }) {
   const gate = await requireEditRight(req, params.id, "survey.edit");
   if (isFailure(gate)) return gate.response;
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   const db = handle.db;
   try {

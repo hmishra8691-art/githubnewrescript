@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb, rowsAcross, surveysAcross } from "@/lib/db";
 import { summarizeWallet, balanceLevel } from "@rescript/billing";
-import { supabaseAdmin } from "@/lib/admin";
 import { audit } from "@/lib/guard";
 import { requireBillingAdmin, billingError } from "@/lib/billingAdmin";
 import { projectMeterView } from "@/lib/billingView";
@@ -30,15 +30,17 @@ export async function GET(req: NextRequest) {
     const wallets = await gate.meter.store.listWallets({});
     let projects: Record<string, { code: string; title: string; status: string; owner: string | null; customer: string | null }> = {};
     if (!gate.sandbox && wallets.length) {
-      const db = supabaseAdmin();
+      const db = platformDb();
       /* survey policies only — an interview policy's `surveyId` is null, and a
          null in an `in ('…')` list asks `surveys` about nothing */
       const policyIds = (await gate.meter.store.listSpending({}))
         .map((p) => p.surveyId)
         .filter((id): id is string => typeof id === "string" && id.length > 0);
       const ids = [...new Set([...wallets.map((w) => w.surveyId).filter(Boolean) as string[], ...policyIds])];
-      const { data } = await db.from("surveys").select("id, code, title, status, owner_id, customer_id, profiles:owner_id(full_name, email), customers:customer_id(name)").in("id", ids);
-      for (const r of (data ?? []) as any[]) projects[r.id] = { code: r.code, title: r.title, status: r.status, owner: r.profiles?.full_name ?? r.profiles?.email ?? null, customer: r.customers?.name ?? null };
+      /* survey rows from every client database; owners and workspaces (platform) looked up beside them */
+      const { data } = await surveysAcross<{ id: string; code: string; title: string; status: string; owner_id: string | null; customer_id: string | null }>("id, code, title, status, owner_id, customer_id", (q) => q.in("id", ids));
+      const names = await ownerAndWorkspaceNames(data);
+      for (const r of data) projects[r.id] = { code: r.code, title: r.title, status: r.status, owner: names.owner(r.owner_id), customer: names.customer(r.customer_id) };
       const userIds = wallets.map((w) => w.userId).filter(Boolean) as string[];
       if (userIds.length) {
         const { data: ps } = await db.from("profiles").select("id, user_code, full_name, email").in("id", userIds);
@@ -80,17 +82,15 @@ export async function GET(req: NextRequest) {
     const interviewIds = policies.filter((p) => p.subjectKind === "interview").map((p) => p.subjectId);
     const interviewProjects: Record<string, { code: string; title: string; status: string; owner: string | null; customer: string | null }> = {};
     if (interviewIds.length && !gate.sandbox) {
-      const { data: ivp } = await supabaseAdmin()
-        .from("interview_projects")
-        .select("id, code, name, status, customer_id, profiles:owner_id(full_name, email), customers:customer_id(name)")
-        .in("id", interviewIds);
-      /* the same joins the survey rows use, so the Owner column is not blank for
-         half the table */
-      for (const row of (ivp ?? []) as any[]) {
+      const { data: ivp } = await rowsAcross<{ id: string; code: string; name: string; status: string; owner_id: string | null; customer_id: string | null }>(
+        "interview_projects", "id, code, name, status, owner_id, customer_id", (q) => q.in("id", interviewIds));
+      /* the same owner and workspace names the survey rows use, so the Owner column is not blank for half the table */
+      const names = await ownerAndWorkspaceNames(ivp);
+      for (const row of ivp) {
         interviewProjects[row.id] = {
           code: row.code, title: row.name, status: row.status,
-          owner: row.profiles?.full_name ?? row.profiles?.email ?? null,
-          customer: row.customers?.name ?? null,
+          owner: names.owner(row.owner_id),
+          customer: names.customer(row.customer_id),
         };
       }
     }
@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
       if (!gate.sandbox) {
         /* the subject's own table — an interview project is not in `surveys` */
         const table = subjectKind === "interview" ? "interview_projects" : "surveys";
-        const { data } = await supabaseAdmin().from(table).select("customer_id").eq("id", subjectId).maybeSingle();
+        const { data } = await platformDb().from(table).select("customer_id").eq("id", subjectId).maybeSingle();
         if (!data) return NextResponse.json({ error: "Unknown project." }, { status: 404 });
         customerId = data.customer_id;
       }
@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
   try {
     let customerId = "sandbox";
     if (!gate.sandbox) {
-      const { data } = await supabaseAdmin().from("surveys").select("customer_id").eq("id", body.surveyId).maybeSingle();
+      const data = (await surveysAcross<{ customer_id: string }>("customer_id", (q) => q.eq("id", body.surveyId))).data[0];
       if (!data) return NextResponse.json({ error: "Unknown project." }, { status: 404 });
       customerId = data.customer_id;
     }
@@ -191,4 +191,18 @@ export async function PATCH(req: NextRequest) {
     if (gate.user) await audit({ action: "billing.wallet_changed", userId: gate.user.userId, sessionId: gate.user.sessionId, customerId: gate.user.customerId, surveyId: wallet.surveyId ?? undefined, entity: "wallet", entityId: wallet.id, detail: patch });
     return NextResponse.json({ ok: true, wallet });
   } catch (e) { return billingError(e); }
+}
+
+/** owners' names and workspaces' names for rows read from client databases (people and workspaces are platform data) */
+async function ownerAndWorkspaceNames(rows: { owner_id: string | null; customer_id: string | null }[]) {
+  const owners = [...new Set(rows.map((r) => r.owner_id).filter(Boolean) as string[])];
+  const customers = [...new Set(rows.map((r) => r.customer_id).filter(Boolean) as string[])];
+  const db = platformDb();
+  const [{ data: ps }, { data: cs }] = await Promise.all([
+    owners.length ? db.from("profiles").select("id, full_name, email").in("id", owners) : Promise.resolve({ data: [] as { id: string; full_name: string | null; email: string | null }[] }),
+    customers.length ? db.from("customers").select("id, name").in("id", customers) : Promise.resolve({ data: [] as { id: string; name: string | null }[] }),
+  ]);
+  const p = new Map((ps ?? []).map((x) => [x.id as string, (x.full_name as string | null) ?? (x.email as string | null) ?? null]));
+  const c = new Map((cs ?? []).map((x) => [x.id as string, (x.name as string | null) ?? null]));
+  return { owner: (id: string | null) => (id ? p.get(id) ?? null : null), customer: (id: string | null) => (id ? c.get(id) ?? null : null) };
 }

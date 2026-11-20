@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { aiModelName, aiProviderName } from "@rescript/ai";
 import { priceSpec } from "@rescript/billing";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireAdmin } from "@/lib/guard";
 import { getMeter, getSandboxMeter } from "@/lib/metering";
 import { adminCases, type EvalCase } from "@/lib/eval/cases";
@@ -31,7 +31,7 @@ export const maxDuration = 300;
  * with this administrator's session; if the administrator chose their own AI provider for Intelligent Mode, the
  * run uses it and says so (byok calls).
  */
-const store = () => adminRunStore(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY ? supabaseAdmin() : null);
+const store = () => adminRunStore(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY ? platformDb() : null);
 const pricedModel = () => (aiProviderName() === "fake" ? "claude-sonnet-4-6" : aiModelName());
 
 async function estimator() {

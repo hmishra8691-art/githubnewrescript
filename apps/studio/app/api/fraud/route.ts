@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
+import { platformDb } from "@/lib/db";
 import { audit, isFailure, requireUser } from "@/lib/guard";
-import { supabaseService } from "@/lib/authServer";
 import { noStore, recruitmentActor, refuseManage } from "@/lib/recruitment/access";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +43,9 @@ export async function GET(req: NextRequest) {
   if (isFailure(actor)) return actor.response;
   if (!actor.canManage) return refuseManage();
 
-  const db = supabaseService();
+  /* tenancy: fraud intelligence joins the shared trust and network tables with each client's cases — central until
+     step 4 decides how cases are kept (docs/TENANCY) */
+  const db = platformDb();
   const url = new URL(req.url);
   const status = url.searchParams.get("status") ?? "open";
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") ?? 50) || 50));
@@ -177,7 +179,9 @@ export async function POST(req: NextRequest) {
   let body: Body;
   try { body = (await req.json()) as Body; } catch { return noStore({ error: "Expected a JSON body." }, 400); }
   const action = str(body.action);
-  const db = supabaseService();
+  /* tenancy: fraud intelligence joins the shared trust and network tables with each client's cases — central until
+     step 4 decides how cases are kept (docs/TENANCY) */
+  const db = platformDb();
 
   if (action === "resolve") {
     const caseId = str(body.caseId);

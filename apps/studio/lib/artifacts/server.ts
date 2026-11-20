@@ -1,4 +1,5 @@
 import "server-only";
+import { Db, surveyDb } from "@/lib/db";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ThemeSpec, StructureRequest, DatasetSpec } from "@rescript/analytics";
 import { logoFromBytes, type DocLogo } from "@rescript/analytics/export";
@@ -17,8 +18,9 @@ import type { ArtifactDeps } from "./service";
  * fingerprint inputs — ONE function for the output route and the list route,
  * so "is there a new version?" is asked exactly as the document is made.
  */
-export function artifactDeps(): ArtifactDeps {
-  const m = mediaDb();
+/** `db`: the survey's client database (ctx.db) */
+export function artifactDeps(db: Db): ArtifactDeps {
+  const m = mediaDb(db);
   return { db: m as unknown as ArtifactDeps["db"], store: m.stores.primary };
 }
 
@@ -55,7 +57,8 @@ export async function readLogo(url: string, scope: { surveyId: string; customerI
     }
     const id = mediaIdFromUrl(url);
     if (!id) return null;
-    const md = mediaDb();
+    /* the logo is read from the survey's client database */
+    const md = mediaDb(await surveyDb(scope.surveyId));
     const { data: row } = await (md as unknown as SupabaseClient).from("media_objects").select("survey_id, customer_id, shared, bucket, path, storage_provider, status, bytes").eq("id", id).maybeSingle();
     if (!row || row.status !== "stored") return null;
     if (row.survey_id !== scope.surveyId && !(row.shared && scope.customerId && row.customer_id === scope.customerId)) return null;

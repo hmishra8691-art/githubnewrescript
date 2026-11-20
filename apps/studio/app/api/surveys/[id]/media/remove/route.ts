@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { isFailure, requireEditRight } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { removeMedia, purgeQuestionMedia, MediaError } from "@rescript/media";
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "expected a JSON body" }, { status: 400 }); }
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   const db = handle.db;
 

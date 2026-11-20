@@ -35,7 +35,7 @@ export interface PurgeResult {
  * on purpose so this stays a plain, dependency-free function that a test can
  * drive with a stub, rather than requiring the full `SupabaseClient` type
  * (and, transitively, the Next-only `server-only` import chain that comes
- * with `supabaseAdmin()`). The real `supabaseAdmin()` client already
+ * with the service-role client). The real service-role client already
  * satisfies this shape structurally, so callers pass it unchanged.
  */
 export interface StorageDb {

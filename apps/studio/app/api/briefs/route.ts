@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb, surveysAcross, type Db } from "@/lib/db";
 import { ResearchBrief } from "@rescript/schema";
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -16,14 +16,14 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
-  let db: ReturnType<typeof supabaseAdmin>;
-  try { db = supabaseAdmin(); } catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : "Supabase is not configured" }, { status: 503, headers: { "cache-control": "no-store" } }); }
+  let db: Db;
+  try { db = platformDb(); } catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : "Supabase is not configured" }, { status: 503, headers: { "cache-control": "no-store" } }); }
   const { data: mine, error } = await db.rpc("rescript_my_projects", { p_user: user.userId, p_lock_stale_seconds: user.policies.lock.staleAfterSeconds });
   if (error) return NextResponse.json({ error: error.message }, { status: 500, headers: { "cache-control": "no-store" } });
   const rows = (mine ?? []) as { survey_id: string; title: string; updated_at: string }[];
   const ids = rows.map((r) => r.survey_id).slice(0, 200);
   if (!ids.length) return NextResponse.json({ ok: true, briefs: [] }, { headers: { "cache-control": "no-store" } });
-  const { data: surveys, error: e2 } = await db.from("surveys").select("id, title, updated_at, draft_definition").in("id", ids);
+  const { data: surveys, error: e2 } = await surveysAcross<{ id: string; title: string; updated_at: string; draft_definition: unknown }>("id, title, updated_at, draft_definition", (q) => q.in("id", ids));
   if (e2) return NextResponse.json({ error: e2.message }, { status: 500, headers: { "cache-control": "no-store" } });
   const briefs = (surveys ?? []).map((s) => {
     const raw = (s.draft_definition as { research?: { brief?: unknown } } | null)?.research?.brief;

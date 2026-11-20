@@ -1,8 +1,9 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import type { Db } from "@/lib/db";
+import { perDatabase } from "@/lib/perDatabase";
 import { timingSafeEqual } from "node:crypto";
 import { assessAndStore, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
-import { supabaseService } from "@/lib/authServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,9 +44,13 @@ function authorised(req: Request): boolean {
 export async function GET(req: Request) { if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 }); return run(); }
 export async function POST(req: Request) { if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 }); return run(); }
 
+/* tenancy: once per client database (lib/perDatabase.ts) */
 async function run(): Promise<NextResponse> {
+  return perDatabase((db) => runOn(db));
+}
+
+async function runOn(db: Db): Promise<NextResponse> {
   const started = Date.now();
-  const db = supabaseService();
   const before = new Date(Date.now() - GRACE_MS).toISOString();
   const { data, error } = await db
     .from("responses")

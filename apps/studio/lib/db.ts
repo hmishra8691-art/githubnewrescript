@@ -79,3 +79,35 @@ export const clientDb = (customerId: string | null | undefined) => customerDb(cu
 export const everyDatabase = () => router.everyDatabase();
 export const registerKeyFor = (kind: DirectoryKind, key: string, customerId: string | null | undefined, surveyId: string | null = null) =>
   router.registerKeyFor(kind, key, customerId, surveyId);
+
+/**
+ * Survey rows read across every client database and merged — for the pages that hold survey ids but no survey
+ * route (billing, notifications, administration: a title, a code, whose workspace). The primary alone today.
+ * `build` adds the filters (`.in("id", ids)`, `.eq("owner_id", …)`); embedded joins to platform tables (profiles,
+ * customers) do not cross databases, so callers read those from platformDb() separately.
+ */
+export async function rowsAcross<T = Record<string, unknown>>(
+  table: string,
+  select: string,
+  build: (q: ReturnType<ReturnType<Db["from"]>["select"]>) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+): Promise<{ data: T[]; error: { message: string } | null }> {
+  const out: T[] = [];
+  for (const t of everyDatabase()) {
+    const { data, error } = await build(t.db.from(table).select(select));
+    if (error) return { data: out, error };
+    out.push(...((data ?? []) as T[]));
+  }
+  return { data: out, error: null };
+}
+
+export const surveysAcross = <T = Record<string, unknown>>(select: string, build: Parameters<typeof rowsAcross>[2]) => rowsAcross<T>("surveys", select, build);
+
+/** a count summed over every client database (`build` adds the filters to a head-only count query) */
+export async function countAcross(table: string, build: (q: ReturnType<ReturnType<Db["from"]>["select"]>) => PromiseLike<{ count: number | null; error: { message: string } | null }>): Promise<number> {
+  let n = 0;
+  for (const t of everyDatabase()) {
+    const { count } = await build(t.db.from(table).select("id", { count: "exact", head: true }));
+    n += count ?? 0;
+  }
+  return n;
+}

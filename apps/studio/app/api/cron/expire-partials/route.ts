@@ -1,7 +1,8 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import { platformDb, type Db } from "@/lib/db";
+import { perDatabase } from "@/lib/perDatabase";
 import { timingSafeEqual } from "node:crypto";
-import { supabaseService } from "@/lib/authServer";
 import { planPartialExpiry, inactiveSinceFilter } from "@/lib/partialExpiry";
 
 export const runtime = "nodejs";
@@ -78,9 +79,13 @@ function chunks<T>(xs: T[], n: number): T[][] {
   return out;
 }
 
+/* tenancy: once per client database (lib/perDatabase.ts) */
 async function run(req: Request): Promise<NextResponse> {
+  return perDatabase((db) => runOn(db, req));
+}
+
+async function runOn(db: Db, req: Request): Promise<NextResponse> {
   if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 });
-  const db = supabaseService();
   const startedAt = Date.now();
   const now = new Date();
   const overBudget = () => Date.now() - startedAt > BUDGET_MS;
@@ -102,7 +107,7 @@ async function run(req: Request): Promise<NextResponse> {
     let reservationsMore = false;
     for (let pass = 0; pass < RTID_PASSES; pass++) {
       if (Date.now() - startedAt > RTID_BUDGET_MS) { reservationsMore = true; break; }
-      const { data, error: rtidErr } = await db.rpc("rescript_rtid_sweep", { p_limit: RTID_SLICE });
+      const { data, error: rtidErr } = await platformDb().rpc("rescript_rtid_sweep", { p_limit: RTID_SLICE });
       if (rtidErr) {
         console.warn("[rescript:expire-partials] reservation sweep unavailable (migration 0083?)", rtidErr.message);
         break;

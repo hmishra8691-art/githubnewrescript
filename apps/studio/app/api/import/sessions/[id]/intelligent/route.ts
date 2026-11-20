@@ -20,7 +20,7 @@ export const maxDuration = 120;
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const authed = await requireUser(req);
-  const store = importSessionStore();
+  const store = importSessionStore(isFailure(authed) ? null : authed.customerId);
   const s = await store.get(params.id).catch(() => null);
   if (isFailure(authed) && !(s && s.customerId === null)) return authed.response;
   const caller = callerFrom(authed, !!s && s.customerId === null);

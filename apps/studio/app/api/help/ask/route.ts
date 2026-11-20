@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb, surveyDb, type Db } from "@/lib/db";
 import { aiProviderName, completeJson } from "@rescript/ai";
 import { isFailure, requireProjectFor, requireUser, type AuthedUser } from "@/lib/guard";
-import { supabaseAdmin } from "@/lib/admin";
 import { dbConfigured } from "@/lib/copilot/durable";
 import { aiReadyFor } from "@/lib/byok/connect";
 import { billingProjectFor, getMeter, meteredAi, projectLookup } from "@/lib/metering";
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
   const context = surveyId ? readContext(body.context) : readContext({ surface: "platform" });
 
   /* the conversation so far: the user's own, from the store; otherwise what the browser sent (sandbox) */
-  const db = user && dbConfigured() ? supabaseAdmin() : null;
+  const db = user && dbConfigured() ? platformDb() : null;
   let conversationId = str(body.conversationId, 64) || null;
   let history: { role: "user" | "assistant"; text: string; sources?: string[]; level?: number }[] = [];
   let persisted = !!db;
@@ -252,11 +252,12 @@ const MAX_DEFINITION = 4_000_000;
  * The survey to check: what the Studio sent (the user's open survey, unsaved edits included), else the project's saved
  * draft. Called only after the user's read access to `surveyId` is established (or in the sandbox).
  */
-async function surveyDefinition(raw: unknown, surveyId: string, db: ReturnType<typeof supabaseAdmin> | null): Promise<SurveyDefinition | null> {
+async function surveyDefinition(raw: unknown, surveyId: string, db: Db | null): Promise<SurveyDefinition | null> {
   let src: unknown = raw && typeof raw === "object" ? raw : null;
   if (src && JSON.stringify(src).length > MAX_DEFINITION) src = null;
   if (!src && db && surveyId !== "sandbox") {
-    const { data } = await db.from("surveys").select("draft_definition, definition").eq("id", surveyId).maybeSingle();
+    /* the survey's own client database (tenancy) */
+    const { data } = await (await surveyDb(surveyId)).from("surveys").select("draft_definition, definition").eq("id", surveyId).maybeSingle();
     src = (data as { draft_definition?: unknown; definition?: unknown } | null)?.draft_definition ?? (data as { definition?: unknown } | null)?.definition ?? null;
   }
   if (!src) return null;

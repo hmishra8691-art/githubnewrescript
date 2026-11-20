@@ -1,6 +1,6 @@
 import "server-only";
 import type { ResearchChunk } from "@rescript/import/research";
-import { supabaseAdmin } from "@/lib/admin";
+import { surveyDb } from "@/lib/db";
 import type { DocSummary } from "./research";
 import { dbConfigured, memoryOf, storeWithFallback } from "./durable";
 
@@ -64,16 +64,17 @@ class MemoryStore implements ResearchStore {
 
 class SupabaseStore implements ResearchStore {
   durable = true;
-  private db = supabaseAdmin();
+  /** the survey's client database (tenancy): each method routes by its survey */
+  private on = (surveyId: string) => surveyDb(surveyId);
   async list(surveyId: string): Promise<StoredDoc[]> {
-    const { data, error } = await this.db.from("copilot_documents").select("id, ref, survey_id, name, format, kind, pages, chars, ocr_pages, summary, warnings, created_at").eq("survey_id", surveyId).order("created_at");
+    const { data, error } = await (await this.on(surveyId)).from("copilot_documents").select("id, ref, survey_id, name, format, kind, pages, chars, ocr_pages, summary, warnings, created_at").eq("survey_id", surveyId).order("created_at");
     if (error) throw new Error(error.message);
     return (data ?? []).map((r) => ({ id: r.id, ref: r.ref, surveyId: r.survey_id, name: r.name, format: r.format, kind: r.kind ?? undefined, pages: r.pages, chars: r.chars, ocrPages: r.ocr_pages, summary: r.summary, warnings: r.warnings ?? [], createdAt: r.created_at }));
   }
   async chunks(surveyId: string, docIds?: string[]): Promise<StoredChunk[]> {
     const docs = await this.list(surveyId);
     const refOf = new Map(docs.map((d) => [d.id, d.ref]));
-    let q = this.db.from("copilot_chunks").select("document_id, seq, page, heading, kind, text, embedding").eq("survey_id", surveyId).order("seq").limit(5000);
+    let q = (await this.on(surveyId)).from("copilot_chunks").select("document_id, seq, page, heading, kind, text, embedding").eq("survey_id", surveyId).order("seq").limit(5000);
     if (docIds?.length) q = q.in("document_id", docIds);
     const { data, error } = await q;
     if (error) throw new Error(error.message);
@@ -82,20 +83,20 @@ class SupabaseStore implements ResearchStore {
   async nextRef(surveyId: string) { return newRef(new Set((await this.list(surveyId)).map((d) => d.ref))); }
   async add(doc: Omit<StoredDoc, "id" | "createdAt">, chunks: StoredChunk[], meta: { customerId: string | null; userId: string | null }): Promise<StoredDoc> {
     const ref = doc.ref;
-    const { data, error } = await this.db.from("copilot_documents").insert({
+    const { data, error } = await (await this.on(doc.surveyId)).from("copilot_documents").insert({
       survey_id: doc.surveyId, customer_id: meta.customerId, ref, name: doc.name, format: doc.format, kind: doc.kind ?? null, pages: doc.pages, chars: doc.chars,
       ocr_pages: doc.ocrPages, summary: doc.summary, warnings: doc.warnings, created_by: meta.userId,
     }).select("id, created_at").single();
     if (error) throw new Error(error.message);
     const rows = chunks.map((c) => ({ document_id: data.id, survey_id: doc.surveyId, seq: c.seq, page: c.page, heading: c.heading ?? null, kind: c.kind, text: c.text, embedding: c.embedding ?? null }));
     for (let i = 0; i < rows.length; i += 200) {
-      const { error: e2 } = await this.db.from("copilot_chunks").insert(rows.slice(i, i + 200));
-      if (e2) { await this.db.from("copilot_documents").delete().eq("id", data.id); throw new Error(e2.message); }
+      const { error: e2 } = await (await this.on(doc.surveyId)).from("copilot_chunks").insert(rows.slice(i, i + 200));
+      if (e2) { await (await this.on(doc.surveyId)).from("copilot_documents").delete().eq("id", data.id); throw new Error(e2.message); }
     }
     return { ...doc, id: data.id, createdAt: data.created_at };
   }
   async remove(surveyId: string, id: string) {
-    const { error, count } = await this.db.from("copilot_documents").delete({ count: "exact" }).eq("survey_id", surveyId).eq("id", id);
+    const { error, count } = await (await this.on(surveyId)).from("copilot_documents").delete({ count: "exact" }).eq("survey_id", surveyId).eq("id", id);
     if (error) throw new Error(error.message);
     return (count ?? 0) > 0;
   }

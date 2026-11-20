@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb, surveysAcross } from "@/lib/db";
 import { requireBillingAdmin, billingError } from "@/lib/billingAdmin";
 
 export const dynamic = "force-dynamic";
@@ -27,10 +27,10 @@ export async function GET(req: NextRequest) {
         projects: [{ id: "sandbox", code: "SANDBOX", title: "Sandbox project", status: "draft", ownerId: "sandbox-user", wallet: bal(byProject.get("sandbox")) }, { id: "sandbox-b", code: "SANDBOX-B", title: "Second sandbox project", status: "draft", ownerId: "sandbox-user-2", wallet: bal(byProject.get("sandbox-b")) }],
       });
     }
-    const db = supabaseAdmin();
+    const db = platformDb();
     const [{ data: profiles }, { data: surveys }] = await Promise.all([
       db.from("profiles").select("id, user_code, full_name, email, status").order("full_name"),
-      db.from("surveys").select("id, code, title, status, owner_id").order("title"),
+      surveysAcross<{ id: string; code: string; title: string; status: string; owner_id: string | null }>("id, code, title, status, owner_id", (q) => q.order("title")),
     ]);
     return NextResponse.json({
       ok: true,

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { isFailure, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { listAssets, MediaError } from "@rescript/media";
@@ -21,7 +22,7 @@ export const runtime = "nodejs";
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   try {
     let assets = await listAssets(handle.db, { surveyId: params.id, customerId: gate.survey.customer_id ?? gate.user.customerId ?? null });

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { beginUpload, mediaLimits, MediaError, stageLogger, RECORDING_CONSTRAINTS, type MediaKind } from "@rescript/media";
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const questionId = String(body.questionId ?? "").trim();
   if (!questionId && kind !== "survey_asset") return NextResponse.json({ error: "questionId required" }, { status: 400 });
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
 
   const log = stageLogger(`survey:${params.id}`);
@@ -102,7 +103,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const gate = await requireProject(req, params.id, "project.read");
   if (isFailure(gate)) return gate.response;
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
 
   try {

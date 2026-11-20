@@ -20,7 +20,7 @@ export const maxDuration = 300; // 2026-11-07: 5× the old limit — no AI reque
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireAiCaller(req);
   if (!gate.ok) return gate.response;
-  const store = importSessionStore();
+  const store = importSessionStore(gate.user?.customerId ?? null);
   const s = await store.get(params.id).catch(() => null);
   if (!s || !canSee(s, { user: gate.user, customerId: gate.user?.customerId ?? null })) return notFound();
   if (s.status !== "analyzed") return NextResponse.json({ error: `This import is already ${s.status.replace("_", " ")}.` }, { status: 409 });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb, surveysAcross } from "@/lib/db";
 import { audit } from "@/lib/guard";
 import { requireBillingAdmin, billingError } from "@/lib/billingAdmin";
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     if (!walletId && typeof body?.surveyId === "string") {
       let customerId = "sandbox";
       if (!gate.sandbox) {
-        const { data } = await supabaseAdmin().from("surveys").select("customer_id").eq("id", body.surveyId).maybeSingle();
+        const data = (await surveysAcross<{ customer_id: string }>("customer_id", (q) => q.eq("id", body.surveyId))).data[0];
         if (!data) return NextResponse.json({ error: "Unknown project." }, { status: 404 });
         customerId = data.customer_id;
       }
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     if (!walletId && typeof body?.userId === "string") {
       let customerId = "sandbox";
       if (!gate.sandbox) {
-        const { data } = await supabaseAdmin().from("profiles").select("customer_id").eq("id", body.userId).maybeSingle();
+        const { data } = await platformDb().from("profiles").select("customer_id").eq("id", body.userId).maybeSingle();
         if (!data) return NextResponse.json({ error: "Unknown user." }, { status: 404 });
         customerId = data.customer_id ?? gate.user?.customerId ?? "";
       }

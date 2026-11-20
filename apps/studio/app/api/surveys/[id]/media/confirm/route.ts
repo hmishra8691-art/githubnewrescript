@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { isFailure, requireEditRight } from "@/lib/guard";
 import { getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const mediaId = String(body.mediaId ?? "").trim();
   if (!mediaId) return NextResponse.json({ error: "mediaId required" }, { status: 400 });
 
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   const db = handle.db;
   const log = stageLogger(`survey:${params.id}`);

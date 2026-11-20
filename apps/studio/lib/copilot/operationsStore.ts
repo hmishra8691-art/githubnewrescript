@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "@/lib/admin";
+import { surveyDb } from "@/lib/db";
 import { dbConfigured, storeWithFallback } from "./durable";
 import {
   LIMITS, MemoryOperationStore, fromRow, planUpdate, toRow, withChangeN,
@@ -30,34 +30,35 @@ const CHECK_VIOLATION = "23514";
 
 class SupabaseOperationStore implements OperationStore {
   durable = true;
-  private db = supabaseAdmin();
+  /** the survey's client database (tenancy): each method routes by its survey */
+  private on = (surveyId: string) => surveyDb(surveyId);
 
   /** the probe: one id, which fails with 42P01 / PGRST205 when the migration has not been applied */
   async probe(surveyId: string) {
-    const { error } = await this.db.from(TABLE).select("id").eq("survey_id", surveyId).limit(1);
+    const { error } = await (await this.on(surveyId)).from(TABLE).select("id").eq("survey_id", surveyId).limit(1);
     if (error) throw error;
   }
   async list(surveyId: string, limit = 200): Promise<OperationSummary[]> {
-    const { data, error } = await this.db.from(TABLE).select(LIST_COLUMNS).eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(limit);
+    const { data, error } = await (await this.on(surveyId)).from(TABLE).select(LIST_COLUMNS).eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(limit);
     if (error) throw new Error(error.message);
     return (data ?? []).map((r) => { const { before: _b, after: _a, ...rest } = fromRow(r as unknown as Record<string, unknown>); return rest; });
   }
   async get(surveyId: string, id: string): Promise<OperationRecord | null> {
-    const { data, error } = await this.db.from(TABLE).select("*").eq("survey_id", surveyId).eq("id", id).maybeSingle();
+    const { data, error } = await (await this.on(surveyId)).from(TABLE).select("*").eq("survey_id", surveyId).eq("id", id).maybeSingle();
     if (error) throw new Error(error.message);
     return data ? fromRow(data as Record<string, unknown>) : null;
   }
   async create(surveyId: string, fields: OperationFields, meta: { userId: string | null; surveyId: string }): Promise<OperationRecord> {
-    let { data, error } = await this.db.from(TABLE).insert({ ...toRow(fields), survey_id: surveyId, created_by: meta.userId }).select("*").single();
+    let { data, error } = await (await this.on(surveyId)).from(TABLE).insert({ ...toRow(fields), survey_id: surveyId, created_by: meta.userId }).select("*").single();
     /* a database without migration 0063 still holds the prompt to 4,000 characters: the record is kept with the prompt cut there (its length and hash are in the intent) rather than lost */
     if (error && error.code === CHECK_VIOLATION && /prompt_len/.test(error.message) && fields.prompt.length > LIMITS.legacyPrompt) {
-      ({ data, error } = await this.db.from(TABLE).insert({ ...toRow({ ...fields, prompt: fields.prompt.slice(0, LIMITS.legacyPrompt) }), survey_id: surveyId, created_by: meta.userId }).select("*").single());
+      ({ data, error } = await (await this.on(surveyId)).from(TABLE).insert({ ...toRow({ ...fields, prompt: fields.prompt.slice(0, LIMITS.legacyPrompt) }), survey_id: surveyId, created_by: meta.userId }).select("*").single());
     }
     if (error) throw new Error(error.message);
     return fromRow(data as Record<string, unknown>);
   }
   async update(surveyId: string, id: string, patch: OperationPatch): Promise<UpdateResult> {
-    const { data: cur, error: e1 } = await this.db.from(TABLE).select("id, status, change_n").eq("survey_id", surveyId).eq("id", id).maybeSingle();
+    const { data: cur, error: e1 } = await (await this.on(surveyId)).from(TABLE).select("id, status, change_n").eq("survey_id", surveyId).eq("id", id).maybeSingle();
     if (e1) return { ok: false, status: 500, error: e1.message };
     if (!cur) return { ok: false, status: 404, error: "No such operation." };
     const current = { status: cur.status as OperationRecord["status"], changeN: (cur.change_n as number | null) ?? null };
@@ -70,7 +71,7 @@ class SupabaseOperationStore implements OperationStore {
      * its client says the record may be behind.
      */
     const write = async (extra: Record<string, unknown>) => {
-      const { data, error } = await this.db.from(TABLE).update({ ...row, ...extra }).eq("survey_id", surveyId).eq("id", id).eq("status", current.status).select("*").maybeSingle();
+      const { data, error } = await (await this.on(surveyId)).from(TABLE).update({ ...row, ...extra }).eq("survey_id", surveyId).eq("id", id).eq("status", current.status).select("*").maybeSingle();
       if (error) return { ok: false as const, conflict: error.code === UNIQUE_VIOLATION, error: error.message };
       if (!data) return { ok: false as const, conflict: false, error: "The operation changed while this update was on its way; reload the history." };
       return { ok: true as const, value: fromRow(data as Record<string, unknown>) };
@@ -81,7 +82,7 @@ class SupabaseOperationStore implements OperationStore {
     }
     const r = await withChangeN(
       async () => {
-        const { data, error } = await this.db.from(TABLE).select("change_n").eq("survey_id", surveyId).not("change_n", "is", null).order("change_n", { ascending: false }).limit(1);
+        const { data, error } = await (await this.on(surveyId)).from(TABLE).select("change_n").eq("survey_id", surveyId).not("change_n", "is", null).order("change_n", { ascending: false }).limit(1);
         if (error) throw new Error(error.message);
         return (data ?? []).map((x) => x.change_n as number | null);
       },

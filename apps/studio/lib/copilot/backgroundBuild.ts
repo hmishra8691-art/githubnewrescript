@@ -165,8 +165,8 @@ export async function backgroundBuilderFor(task: ExecTask, deps: BackgroundBuild
 /** the survey as it is stored, for a build that has no editor to read it from */
 export async function loadDefinition(surveyId: string): Promise<SurveyDefinition | null> {
   try {
-    const { supabaseAdmin } = await import("@/lib/admin");
-    const { data } = await supabaseAdmin().from("surveys").select("definition").eq("id", surveyId).maybeSingle();
+    const { surveyDb } = await import("@/lib/db");
+    const { data } = await (await surveyDb(surveyId)).from("surveys").select("definition").eq("id", surveyId).maybeSingle();
     const raw = (data as { definition?: unknown } | null)?.definition;
     return raw ? (raw as SurveyDefinition) : null;
   } catch { return null; }

@@ -1,7 +1,8 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import type { Db } from "@/lib/db";
+import { perDatabase } from "@/lib/perDatabase";
 import { timingSafeEqual } from "node:crypto";
-import { supabaseAdmin } from "@/lib/admin";
 import { mediaDb } from "@/lib/mediaRoute";
 import { sendMail } from "@/lib/mail";
 import { mediaDeliveryEmail } from "@rescript/mail";
@@ -90,17 +91,19 @@ interface Report {
 export async function GET(req: Request) { return run(req); }
 export async function POST(req: Request) { return run(req); }
 
+/* tenancy: once per client database (lib/perDatabase.ts) */
 async function run(req: Request): Promise<NextResponse> {
   if (!authorised(req)) {
     return NextResponse.json({ error: "not authorised" }, { status: 401 });
   }
-
-  let db;
   try {
-    db = mediaDb();
+    return await perDatabase((client) => runOn(mediaDb(client)));
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 501 });
   }
+}
+
+async function runOn(db: ReturnType<typeof mediaDb>): Promise<NextResponse> {
 
   const report: Report = { expired: 0, deleted: 0, discovered: 0, sent: 0, failed: 0, warnings: [] };
 
@@ -180,7 +183,8 @@ async function run(req: Request): Promise<NextResponse> {
 
   /* --------------------------------------------------------- 3. send */
 
-  const admin = supabaseAdmin();
+  /* the same client database as the deliveries (its surveys and responses) */
+  const admin = db as unknown as Db;
   const base = (process.env.STUDIO_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
 
   for (const id of queue) {

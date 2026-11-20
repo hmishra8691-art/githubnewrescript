@@ -32,7 +32,7 @@ export function storyDeps(db: SupabaseClient, opts: { userId?: string | null; su
     runPlanFor: (d, surveyId, ctx, o) => runPlanFor(d as SupabaseClient, surveyId, ctx as never, o) as never,
     compute: (d, surveyId, ctx, def) => compute(d as SupabaseClient, surveyId, ctx as never, def),
     reportFacts: (d, surveyId, def) => reportFacts(d as SupabaseClient, surveyId, def),
-    store: () => mediaDb().stores.primary,
+    store: () => mediaDb(db as never).stores.primary,
     fonts: () => loadReportFonts(join(process.cwd(), "public", "report-fonts")),
     narration: (surveyId, environment) => speechNarration("platform-speech", async (text, o) => {
       const ctx = await meterCtx(db, surveyId, environment, opts.userId ?? null);

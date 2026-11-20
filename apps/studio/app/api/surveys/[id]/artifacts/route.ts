@@ -28,7 +28,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const ctx = await requireProject(req, params.id, "project.read");
   if (isFailure(ctx)) return ctx.response;
   const may = (type: ArtifactType) => can(ctx.grant, artifactCapability(type, "list") as Capability);
-  const deps = artifactDeps();
+  const deps = artifactDeps(ctx.db);
   const listed = await listArtifacts(deps, { surveyId: params.id, userId: ctx.user.userId, may });
   if (!listed.ok) return listed.code === "artifacts_unavailable" ? json({ lines: [], unavailable: listed.error }) : json({ error: listed.error, code: listed.code }, listed.status);
   /* what each line would be made from now — only for the lines that exist (nothing to compare otherwise) */

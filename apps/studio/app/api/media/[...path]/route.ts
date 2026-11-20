@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { keyDb } from "@/lib/db";
 import { isFailure, requireProject, requireUser } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { freshUrl, MediaError, PLAYBACK_URL_SECONDS } from "@rescript/media";
@@ -32,7 +33,8 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
   if (!/^[0-9a-f-]{36}$/i.test(id) || (params.path?.length ?? 0) > 2) {
     return NextResponse.json({ error: "no such recording" }, { status: 404 });
   }
-  const handle = mediaDbOrResponse();
+  /* the recording's client database, found by its id (tenancy) */
+  const handle = await mediaDbOrResponse(() => keyDb("media", id));
   if ("response" in handle) return handle.response;
 
   /* the row first, for the survey to gate on — but nothing is minted yet */

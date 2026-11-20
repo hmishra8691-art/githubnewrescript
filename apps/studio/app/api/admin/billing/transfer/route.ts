@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb, surveysAcross } from "@/lib/db";
 import { audit } from "@/lib/guard";
 import { requireBillingAdmin, billingError } from "@/lib/billingAdmin";
 
@@ -52,9 +52,9 @@ export async function POST(req: NextRequest) {
     const resolve = async (ref: Ref, create: boolean) => {
       let customerId = "sandbox";
       if (!gate.sandbox) {
-        const db = supabaseAdmin();
+        const db = platformDb();
         if (ref.type === "project") {
-          const { data } = await db.from("surveys").select("customer_id").eq("id", ref.id).maybeSingle();
+          const data = (await surveysAcross<{ customer_id: string }>("customer_id", (q) => q.eq("id", ref.id))).data[0];
           if (!data) return null; customerId = data.customer_id;
         } else {
           const { data } = await db.from("profiles").select("customer_id").eq("id", ref.id).maybeSingle();
@@ -92,9 +92,9 @@ export async function GET(req: NextRequest) {
     if (gate.sandbox) {
       Object.assign(names, { sandbox: "Sandbox project", "sandbox-b": "Second sandbox project", "sandbox-user": "Sandbox user", "sandbox-user-2": "Second sandbox user", "sandbox-admin": "Sandbox administrator" });
     } else if (list.length) {
-      const db = supabaseAdmin();
+      const db = platformDb();
       const refs = [...new Set(list.flatMap((t) => [t.sourceRef, t.destinationRef, t.transferredBy]).filter(Boolean) as string[])];
-      const [{ data: ss }, { data: ps }] = await Promise.all([db.from("surveys").select("id, code, title").in("id", refs), db.from("profiles").select("id, full_name, email, user_code").in("id", refs)]);
+      const [{ data: ss }, { data: ps }] = await Promise.all([surveysAcross<{ id: string; code: string; title: string }>("id, code, title", (q) => q.in("id", refs)), db.from("profiles").select("id, full_name, email, user_code").in("id", refs)]);
       for (const s of ss ?? []) names[s.id] = `${s.title} · ${s.code}`;
       for (const p of ps ?? []) names[p.id] = p.full_name || p.email || p.user_code;
     }

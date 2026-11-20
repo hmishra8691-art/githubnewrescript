@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { beginUpload, MediaError, stageLogger } from "@rescript/media";
 import { isFailure, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!UUID.test(sessionId)) return json({ error: "which session is this the recording of (sessionId)" }, 400);
   const mimeType = typeof body?.mimeType === "string" ? body.mimeType : "";
   if (!/^(audio|video)\//.test(mimeType)) return json({ error: `a session recording is an audio or video file (this is ${mimeType || "an unknown type"})` }, 415);
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   const { data: session } = await handle.db.from("qual_sessions").select("id").eq("survey_id", params.id).eq("id", sessionId).maybeSingle();
   if (!session) return json({ error: "no such session" }, 404);

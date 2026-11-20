@@ -1,7 +1,8 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import { perDatabase } from "@/lib/perDatabase";
+import type { Db } from "@/lib/db";
 import { timingSafeEqual } from "node:crypto";
-import { supabaseService } from "@/lib/authServer";
 import { storyDeps } from "@/lib/storyService";
 import { pendingRenders, stepRender } from "@/lib/storyEngine";
 
@@ -29,9 +30,13 @@ function authorised(req: Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function run(req: Request) {
+/* tenancy: once per client database (lib/perDatabase.ts) */
+async function run(req: Request): Promise<NextResponse> {
   if (!authorised(req)) return NextResponse.json({ error: "unauthorised" }, { status: 401 });
-  const db = supabaseService();
+  return perDatabase((db) => runOn(db));
+}
+
+async function runOn(db: Db): Promise<NextResponse> {
   const t0 = Date.now();
   const ids = await pendingRenders(db, 3);
   const done: { id: string; status: string }[] = [];

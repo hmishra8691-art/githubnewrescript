@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { sessionStatus, sessionStatusHint, type SessionRecord } from "@rescript/access";
-import { loadPolicies, supabaseService } from "@/lib/authServer";
+import { loadPolicies } from "@/lib/authServer";
 import { audit, isFailure, requireAdmin } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
   const admin = await requireAdmin(req);
   if (isFailure(admin)) return admin.response;
 
-  const db = supabaseService();
+  const db = platformDb();
   const { data, error } = await db.rpc("rescript_active_sessions", {
     p_stale_seconds: admin.policies.session.staleAfterSeconds,
   });
@@ -71,7 +72,7 @@ export async function POST(req: NextRequest) {
   const userId = String(body?.userId ?? "");
   if (!sessionId && !userId) return NextResponse.json({ error: "Name a session or a user." }, { status: 400 });
 
-  const db = supabaseService();
+  const db = platformDb();
   let targets: { id: string; user_id: string }[] = [];
   if (sessionId) {
     const { data } = await db.from("user_sessions").select("id, user_id").eq("id", sessionId).eq("status", "active");

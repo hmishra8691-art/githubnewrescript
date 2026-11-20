@@ -1,5 +1,6 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import { everyDatabase } from "@/lib/db";
 import { mediaDb } from "@/lib/mediaRoute";
 import { readObject, buildZip, freshUrl, PLAYBACK_URL_SECONDS } from "@rescript/media";
 import {
@@ -65,14 +66,19 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return GONE("This link is incomplete", "Use the full link from the delivery email, including everything after the question mark.");
   }
 
-  let db;
+  /* tenancy: a delivery link names no client, so each client database is asked for the token (the primary alone today) */
+  let db: ReturnType<typeof mediaDb> | null = null;
+  let row: Awaited<ReturnType<typeof deliveryForToken>> = null;
   try {
-    db = mediaDb();
+    for (const target of everyDatabase()) {
+      db = mediaDb(target.db);
+      row = await deliveryForToken(db, token);
+      if (row) break;
+    }
   } catch {
     return NextResponse.json({ error: "this deployment has no database configured" }, { status: 501 });
   }
-
-  const row = await deliveryForToken(db, token);
+  if (!db) return NextResponse.json({ error: "this deployment has no database configured" }, { status: 501 });
   /*
    * A wrong token and an expired one give the same answer. Distinguishing
    * them tells someone guessing which of their guesses was closer, and tells

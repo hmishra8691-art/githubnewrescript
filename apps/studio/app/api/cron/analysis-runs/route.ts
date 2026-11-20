@@ -1,8 +1,8 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import { everyDatabase, type Db } from "@/lib/db";
 import { timingSafeEqual } from "node:crypto";
 import type { SurveyDefinition } from "@rescript/schema";
-import { supabaseService } from "@/lib/authServer";
 import { loadDefinition, dueMilestone, runPlanFor, draftFindingsReport, hasFindingsReport } from "@/lib/analytics";
 import { advancedTick } from "@/lib/advancedModels";
 
@@ -44,17 +44,20 @@ export async function POST(req: Request) { if (!authorised(req)) return NextResp
 
 async function run(req: Request): Promise<NextResponse> {
   if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 });
-  const db = supabaseService();
   const startedAt = Date.now();
-  // only a survey whose definition carries an analysis plan can have a run due
-  const { data: withPlan, error } = await db.from("surveys").select("id").not("draft_definition->research->>analysisPlan", "is", null).in("status", ["testing", "live", "closed"]).order("updated_at", { ascending: false }).limit(MAX_SURVEYS);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  const surveyIds = (withPlan ?? []).map((r) => String((r as { id: string }).id));
+  /* tenancy: every client database is visited (the primary alone today) */
+  const work: { db: Db; surveyId: string }[] = [];
+  for (const target of everyDatabase()) {
+    // only a survey whose definition carries an analysis plan can have a run due
+    const { data: withPlan, error } = await target.db.from("surveys").select("id").not("draft_definition->research->>analysisPlan", "is", null).in("status", ["testing", "live", "closed"]).order("updated_at", { ascending: false }).limit(MAX_SURVEYS);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    for (const r of withPlan ?? []) work.push({ db: target.db, surveyId: String((r as { id: string }).id) });
+  }
   const ran: { surveyId: string; trigger: string; n: number; findings: number; report?: string }[] = [];
   const skipped: { surveyId: string; reason: string }[] = [];
   const advanced: { surveyId: string; jobsStarted: number; jobsAdvanced: number; run: string | null }[] = [];
   let checked = 0;
-  for (const surveyId of surveyIds) {
+  for (const { db, surveyId } of work) {
     if (Date.now() - startedAt > BUDGET_MS) { skipped.push({ surveyId, reason: "time budget spent — next hour" }); continue; }
     checked++;
     const loaded = await loadDefinition(db, surveyId);

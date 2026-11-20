@@ -1,8 +1,9 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import type { Db } from "@/lib/db";
+import { perDatabase } from "@/lib/perDatabase";
 import { timingSafeEqual } from "node:crypto";
 import type { ExecTask } from "@rescript/engine";
-import { supabaseService } from "@/lib/authServer";
 import { backgroundContextFor, isRefused, refusalMessage } from "@/lib/copilot/background";
 import { advanceJob } from "@/lib/qual/autoCode";
 
@@ -57,11 +58,15 @@ export async function POST(req: Request) { if (!authorised(req)) return NextResp
 
 interface JobRow { id: string; survey_id: string; kind: string; status: string; created_by: string | null; lease_until: string | null; updated_at: string }
 
+/* tenancy: once per client database (lib/perDatabase.ts) */
 async function run(req: Request): Promise<NextResponse> {
+  return perDatabase((db) => runOn(db, req));
+}
+
+async function runOn(db: Db, req: Request): Promise<NextResponse> {
   if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 });
 
   const startedAt = Date.now();
-  const db = supabaseService();
   const now = new Date();
   const staleBefore = new Date(now.getTime() - STALE_MS).toISOString();
 

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { keyDb, platformDb } from "@/lib/db";
 import {
   Meter, MemoryMeterStore, SupabaseMeterStore, estimateTokens,
   type MeterContext, type MeterRefusal, type UsageSpec, type UsageEvent, type Environment,
@@ -11,7 +12,6 @@ import { allowPrivateFrom } from "./byok/resolve";
 import { connectionRefusalStatus, meteredCore, usageToSpec, type ConnectionRefusal, type Metered, type RunDeps } from "./meterRun";
 export { usageToSpec, type ConnectionRefusal, type Metered };
 export { aiSpec, meterModel, meterProvider, type AiEstimate };
-import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProjectFor, type AuthedUser, type ProjectContext } from "@/lib/guard";
 import type { Capability } from "@rescript/access";
 
@@ -49,7 +49,7 @@ declare global {
 /** The meter for real projects (database) — or the memory one when there is no database. */
 export function getMeter(): Meter {
   if (!dbConfigured()) return getSandboxMeter();
-  if (!globalThis.__rescriptMeter) globalThis.__rescriptMeter = new Meter(new SupabaseMeterStore(supabaseAdmin()));
+  if (!globalThis.__rescriptMeter) globalThis.__rescriptMeter = new Meter(new SupabaseMeterStore(platformDb()));
   return globalThis.__rescriptMeter;
 }
 
@@ -127,7 +127,8 @@ export function projectLookup(gate: ProjectContext): Pick<MeterContext, "custome
  */
 export async function mediaEnvironment(mediaId: string): Promise<Environment> {
   try {
-    const db = supabaseAdmin();
+    /* the recording's client database, found by its id (tenancy) */
+    const db = await keyDb("media", mediaId);
     const { data: media } = await db.from("media_objects").select("response_id").eq("id", mediaId).maybeSingle();
     const responseId = (media as { response_id?: string | null } | null)?.response_id;
     if (!responseId) return "TEST";

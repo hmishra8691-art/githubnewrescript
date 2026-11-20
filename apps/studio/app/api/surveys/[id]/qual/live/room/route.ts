@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { readObject } from "@rescript/media";
 import {
   memberAction, joinWithInvite, mergeLiveTranscript, guideProgress, assistInput, assistPrompt, readAssist, fakeAssistReply,
@@ -12,7 +13,6 @@ import { billingProjectFor, meteredSttCall, refusalResponse } from "@/lib/meteri
 import { qualGuardCapability, qualRefusal } from "@/lib/qual/qualAccess";
 import { json, loadSettings, refuse, storeFailure } from "@/lib/qual/qualStore";
 import { modelRunner } from "@/lib/qual/synthesisStore";
-import { supabaseService } from "@/lib/authServer";
 import { connectionFor, isSandbox, liveDeps, readSandboxBlob, sandboxReady, storeFor, trackSummary, transcribeChunks, liveMigrationMissing, LIVE_MIGRATION_MESSAGE, type Meter } from "@/lib/live/liveServer";
 
 export const dynamic = "force-dynamic";
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     user = authed;
     manage = qualRefusal(gate.grant, "manage") === null;
   }
-  const store = storeFor(params.id);
+  const store = await storeFor(params.id);
   try {
     /* the respondent app's participants, forwarded server to server (sandbox only) */
     if (body.via === "runtime") {
@@ -109,9 +109,9 @@ async function meterFor(user: AuthedUser | null, surveyId: string): Promise<Mete
   return async (seconds, fn) => { const m = await meteredSttCall(billing.meter, billing.ctx, "qual_live_transcription", seconds, fn); return m.ok ? { ok: true, value: m.value } : { ok: false, refusal: m }; };
 }
 
-function bytesReader(surveyId: string): ((t: LiveTrack) => Promise<Uint8Array | null>) | { response: Response } {
+async function bytesReader(surveyId: string): Promise<((t: LiveTrack) => Promise<Uint8Array | null>) | { response: Response }> {
   if (isSandbox(surveyId)) return async (t) => (t.mediaId ? readSandboxBlob(t.mediaId) : null);
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(surveyId));
   if ("response" in handle) return handle;
   return async (t) => {
     if (!t.mediaId) return null;
@@ -130,7 +130,7 @@ async function work(store: LiveStore, row: LiveRoomRow, user: AuthedUser | null,
     if (!ready.ok) stt = { ready: false, reason: ready.error };
     else {
       const meter = await meterFor(user, surveyId);
-      const read = bytesReader(surveyId);
+      const read = await bytesReader(surveyId);
       if ("response" in meter) stt = { ready: false, reason: "the project's wallet refused the transcription" };
       else if ("response" in read) stt = { ready: false, reason: "media storage is not configured" };
       else {
@@ -152,7 +152,7 @@ async function assist(store: LiveStore, row: LiveRoomRow, user: AuthedUser | nul
   const now = Date.parse(liveDeps.now());
   const progress = guideProgress(row.state, tr.segments, now);
   if (!tr.segments.some((s) => s.speaker !== "Moderator")) return json({ ok: true, assist: { at: liveDeps.now(), origin: "none", probes: [], heldBack: [], missedObjectives: [], note: tr.segments.length ? "No participant has been transcribed yet." : "Nothing has been transcribed yet — suggestions start once participants' recordings are transcribed (recording and speech-to-text must be on).", progress, turnsSeen: 0 }, calls: 0 });
-  const names = isSandbox(surveyId) ? [] : (await loadSettings(supabaseService(), surveyId)).redactNames;
+  const names = isSandbox(surveyId) ? [] : (await loadSettings(await surveyDb(surveyId), surveyId)).redactNames;
   const input = assistInput(row.state, tr.segments, progress, { names });
   const runner = await modelRunner(isSandbox(surveyId) ? null : user, surveyId, "qual_live_assist", "responses.manage", Array.isArray(body.fake) ? body.fake : null);
   if ("response" in runner) return runner.response;

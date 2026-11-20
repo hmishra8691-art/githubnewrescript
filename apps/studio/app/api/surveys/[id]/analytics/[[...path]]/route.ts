@@ -1,7 +1,7 @@
 import { infographicDashboard } from "@rescript/analytics";
 import { shareView } from "@/lib/shareView";
 import { NextRequest, NextResponse } from "next/server";
-import { platformDb } from "@/lib/db";
+import { clientDb, platformDb, surveyDb, type Db } from "@/lib/db";
 import { assertNotReadOnly, getMeter, projectContext, projectLookup, recordUsage } from "@/lib/metering";
 import type { Environment } from "@rescript/billing";
 import type { AuditEvent, Capability } from "@rescript/access";
@@ -11,7 +11,6 @@ import {
   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
   type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, parseAskOps, parseUndo, analysisReadiness, type StoryDefinition } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
-import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireEditRight, requireProject, type ProjectContext } from "@/lib/guard";
 import { builderItems, modelInterpretation, narrateStory, parseBrief } from "@/lib/analyticsBuilder";
 import { applyOps, askContext, datasetFrom, propose as proposeAsk, undoRecords } from "@/lib/analyticsAsk";
@@ -103,7 +102,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   /* the plan's advanced models: live state, reading, re-run — lib/advancedModels.ts (2026-10-22) */
   if (head === "advanced") return advancedGET(req, params.id);
   const surveyId = params.id;
-  const db = supabaseService();
+  /* the survey's client database (tenancy); people's names are read from platformDb */
+  const db = await surveyDb(surveyId);
 
   /*
    * WHAT THIS MEMBER MAY DO HERE (the Apply audit, 2026-10-17). The /analytics page asked
@@ -287,7 +287,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
  * the mistake that makes regional reports drift from the national one.
  */
 async function computeReport(
-  db: ReturnType<typeof supabaseService>,
+  db: Db,
   surveyId: string,
   loaded: Awaited<ReturnType<typeof loadDefinition>> & { def: unknown },
   report: ReportDefinition | { widgets?: { analysisId?: string }[]; blocks?: unknown[] },
@@ -322,7 +322,7 @@ async function computeReport(
 export async function POST(req: NextRequest, { params }: { params: { id: string; path?: string[] } }) {
   const [head, itemId, action] = params.path ?? [];
   const surveyId = params.id;
-  const db = supabaseService();
+  const db = await surveyDb(surveyId);
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   /* chunked model runs (HB): lib/modelJobs.ts, migration 0066 */
   if (head === "models") return modelJobsPOST(req, surveyId, itemId, action, body);
@@ -1083,7 +1083,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const surveyId = params.id;
   if (head !== "shares" || !itemId || !isUuid(itemId)) return bad("Unknown analytics endpoint.", 404);
   const ctx = await gate(req, surveyId, "analytics.publish"); if (isFailure(ctx)) return ctx.response;
-  const db = supabaseService();
+  const db = ctx.db;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const { data: cur } = await db.from("analytics_shares").select("*, analytics_reports(name)").eq("id", itemId).eq("survey_id", surveyId).maybeSingle();
   if (!cur) return bad("Unknown share.", 404);
@@ -1125,7 +1125,8 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (head === "report-templates" && itemId) {
     const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
     if (!isUuid(itemId)) return bad("A built-in template cannot be removed.", 400);
-    const db2 = supabaseService();
+    /* a workspace's template lives in that workspace's client database */
+    const db2 = clientDb(ctx.user.customerId);
     const { error } = await db2.from("analytics_report_templates")
       .update({ deleted_at: new Date().toISOString() })
       .eq("id", itemId).eq("customer_id", ctx.user.customerId ?? "");
@@ -1137,7 +1138,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (!head || !(head in COLLECTIONS) || !itemId || !isUuid(itemId)) return bad("Unknown analytics endpoint.", 404);
   const coll = COLLECTIONS[head as Collection];
   const ctx = await gate(req, surveyId, coll.write); if (isFailure(ctx)) return ctx.response;
-  const db = supabaseService();
+  const db = ctx.db;
   if (head === "shares") {
     const { data, error } = await db.from("analytics_shares").update({ revoked_at: new Date().toISOString(), revoked_by: ctx.user.userId }).eq("id", itemId).eq("survey_id", surveyId).select("id, report_id").single();
     if (error) return bad(error.message, 500);

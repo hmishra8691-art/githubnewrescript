@@ -1,7 +1,7 @@
 import "server-only";
 import type { DatasetSpec } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
-import { supabaseAdmin } from "../admin";
+import { surveyDb } from "@/lib/db";
 import { latestRun, loadDefinition } from "../analytics";
 import { applyPlan } from "../analysisPlanService";
 import { dbConfigured } from "../copilot/durable.ts";
@@ -16,17 +16,17 @@ export function serverResearchBackend(): ResearchBackend | null {
   if (!dbConfigured()) return null;
   return {
     async definition(surveyId) {
-      const r = await loadDefinition(supabaseAdmin(), surveyId);
+      const r = await loadDefinition(await surveyDb(surveyId), surveyId);
       return "error" in r ? { error: r.error } : { def: r.def as SurveyDefinition };
     },
     async applyPlan(surveyId, dataset: DatasetSpec) {
-      const db = supabaseAdmin();
+      const db = await surveyDb(surveyId);
       const loaded = await loadDefinition(db, surveyId);
       if ("error" in loaded) return { ok: false, status: loaded.status, error: loaded.error };
       return (await applyPlan(db, surveyId, loaded, { dataset, userId: null })) as unknown as ApplyLite;
     },
     async latestRun(surveyId, environment) {
-      return (await latestRun(supabaseAdmin(), surveyId, environment)) as unknown as ResearchRunLite | null;
+      return (await latestRun(await surveyDb(surveyId), surveyId, environment)) as unknown as ResearchRunLite | null;
     },
   };
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb } from "@/lib/db";
 import { isFailure, requireAdmin } from "@/lib/guard";
 import { getMeter } from "@/lib/metering";
 import { buildCacheReport, supabaseCachePage } from "@/lib/aiCacheReport";
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   try {
     const meter = getMeter();
     const [rates, config] = await Promise.all([meter.rates(), meter.config()]);
-    const report = await buildCacheReport(supabaseCachePage(supabaseAdmin()), { days: Number.isFinite(days) ? days : 30, excludeEval: sp.get("excludeEval") === "1" }, { rates, config });
+    const report = await buildCacheReport(supabaseCachePage(platformDb()), { days: Number.isFinite(days) ? days : 30, excludeEval: sp.get("excludeEval") === "1" }, { rates, config });
     return NextResponse.json({ ok: true, report }, { headers: { "cache-control": "no-store" } });
   } catch (e) {
     console.warn("[rescript:ai-cache]", JSON.stringify({ error: ((e as Error)?.message ?? "").slice(0, 200) }));

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientDb, everyDatabase, type Db } from "@/lib/db";
 import { verifyWebhook, normaliseEvent, webhookIdempotencyKey, WEBHOOK_SPECS } from "@rescript/recruitment";
-import { supabaseService } from "@/lib/authServer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -51,19 +51,24 @@ export async function POST(req: NextRequest, context: { params: Promise<{ vendor
   const headers: Record<string, string> = {};
   req.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
 
-  const db = supabaseService();
+  /* tenancy: a delivery names no client, so each client database is asked for this vendor's integration */
+  let db: Db = clientDb(null);
 
   /*
    * The secret lives sealed beside the integration, like every other credential (0081). One query, by vendor
    * slug, because the delivery carries no customer identity — that is what the signature establishes.
    */
-  const { data: integration } = await db
-    .from("vendor_integrations")
-    .select("id, customer_id, credentials_sealed, panel_vendors!inner(slug)")
-    .eq("panel_vendors.slug", vendor)
-    .eq("enabled", true)
-    .limit(1)
-    .maybeSingle();
+  let integration: unknown = null;
+  for (const target of everyDatabase()) {
+    const { data } = await target.db
+      .from("vendor_integrations")
+      .select("id, customer_id, credentials_sealed, panel_vendors!inner(slug)")
+      .eq("panel_vendors.slug", vendor)
+      .eq("enabled", true)
+      .limit(1)
+      .maybeSingle();
+    if (data) { integration = data; db = target.db; break; }
+  }
 
   const row = integration as { id?: string; customer_id?: string; credentials_sealed?: string | null } | null;
   const secret = process.env.VENDOR_WEBHOOK_SECRET?.trim() || null;

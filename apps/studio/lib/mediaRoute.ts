@@ -1,6 +1,6 @@
 import "server-only";
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import type { Db } from "@/lib/db";
 import { getMeter, projectContext, meteredStt } from "@/lib/metering";
 import type { Environment } from "@rescript/billing";
 import type { ProjectContext } from "@/lib/guard";
@@ -17,14 +17,14 @@ import { buildMediaStores } from "@rescript/media/server";
  * differ between the Studio (a researcher's question, charged to the project)
  * and the runtime (a respondent's answer, charged to the session).
  */
-export function mediaDb(): MediaDb {
+/** the media pipeline on ONE client's database — the caller says which (ctx.db, surveyDb, keyDb: lib/db.ts) */
+export function mediaDb(admin: Db): MediaDb {
   /*
    * The database handle, with the stores beside it: Cloudflare R2 for
    * everything new when it is configured, Supabase Storage for the objects
    * stored before the switch (and for everything, until it is). See
    * `@rescript/media/server` — this is the only line that knows.
    */
-  const admin = supabaseAdmin();
   return {
     from: (t: string) => admin.from(t),
     rpc: (fn: string, args: Record<string, unknown>) => admin.rpc(fn as never, args as never),
@@ -32,9 +32,9 @@ export function mediaDb(): MediaDb {
   } as unknown as MediaDb;
 }
 
-export function mediaDbOrResponse(): { db: MediaDb } | { response: NextResponse } {
+export async function mediaDbOrResponse(open: () => Db | Promise<Db>): Promise<{ db: MediaDb } | { response: NextResponse }> {
   try {
-    return { db: mediaDb() };
+    return { db: mediaDb(await open()) };
   } catch (e) {
     return { response: NextResponse.json({ error: (e as Error).message }, { status: 501 }) };
   }

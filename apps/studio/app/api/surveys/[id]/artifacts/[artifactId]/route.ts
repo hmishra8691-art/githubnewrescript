@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: { id: string; artifactId: string } }) {
   const ctx = await requireProject(req, params.id, "project.read");
   if (isFailure(ctx)) return ctx.response;
-  const r = await artifactLink(artifactDeps(), { surveyId: params.id, artifactId: params.artifactId, userId: ctx.user.userId, can: (c) => can(ctx.grant, c as Capability) });
+  const r = await artifactLink(artifactDeps(ctx.db), { surveyId: params.id, artifactId: params.artifactId, userId: ctx.user.userId, can: (c) => can(ctx.grant, c as Capability) });
   if (!r.ok) return NextResponse.json({ error: r.error, code: r.code }, { status: r.status, headers: { "cache-control": "no-store" } });
   if (req.nextUrl.searchParams.get("redirect") === "1") return NextResponse.redirect(r.link.url, { status: 302, headers: { "cache-control": "no-store" } });
   return NextResponse.json({ ...r.link, artifact: r.view }, { headers: { "cache-control": "no-store" } });

@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { surveyDb } from "@/lib/db";
 import { freshUrl, MediaError } from "@rescript/media";
 import { isFailure, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const mediaId = req.nextUrl.searchParams.get("mediaId") ?? "";
   const download = req.nextUrl.searchParams.get("download") === "1";
   if (!mediaId) return json({ error: "mediaId required" }, 400);
-  const handle = mediaDbOrResponse();
+  const handle = await mediaDbOrResponse(() => surveyDb(params.id));
   if ("response" in handle) return handle.response;
   try {
     const { data: owned } = await handle.db.from("media_objects").select("id, survey_id, kind").eq("id", mediaId).maybeSingle();

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { platformDb } from "@/lib/db";
 import { CATEGORY_LABEL, usageByCategory, money6 } from "@rescript/billing";
-import { supabaseAdmin } from "@/lib/admin";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 import { getMeter } from "@/lib/metering";
 import { publicEvent, stripInternalCosts } from "@/lib/billingView";
@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
-  const db = supabaseAdmin();
+  const db = platformDb();
   const { data: mine, error } = await db.rpc("rescript_my_projects", { p_user: user.userId, p_lock_stale_seconds: user.policies.lock.staleAfterSeconds });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const rows = (mine ?? []) as { survey_id: string; code: string; title: string; status: string; my_role: string }[];

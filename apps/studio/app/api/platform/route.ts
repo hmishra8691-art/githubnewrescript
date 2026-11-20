@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/admin";
+import { platformDb, type Db } from "@/lib/db";
 import { isFailure, requireAdmin } from "@/lib/guard";
 import { platformInfo } from "@/lib/platform";
 import { mailConfig, sendMail } from "@/lib/mail";
@@ -145,7 +145,7 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
  * the database and the warning says so — the drift the two comments above
  * record is then a visible fact instead of a discovery for the next audit.
  */
-async function readMarks(db: ReturnType<typeof supabaseAdmin>): Promise<string[]> {
+async function readMarks(db: Db): Promise<string[]> {
   const { data, error } = await db.from("schema_marks").select("migration").order("migration", { ascending: true }).limit(500);
   if (error || !Array.isArray(data)) return [];
   return data.map((r) => String((r as { migration: string }).migration)).filter((m) => /^\d{4}$/.test(m));
@@ -190,7 +190,8 @@ export async function GET(_req: NextRequest) {
   const probed = info.configured.database && info.configured.serviceKey;
   let marks: string[] = [];
   if (probed) {
-    const db = supabaseAdmin();
+    /* the primary's schema; every client database is checked by scripts/tenancy-migrations-status.mjs */
+    const db = platformDb();
     marks = await readMarks(db);
     for (const probe of PROBES) {
       const { error } = await db

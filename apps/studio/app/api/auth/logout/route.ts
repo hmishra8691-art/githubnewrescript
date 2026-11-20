@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { clearSessionCookie, sessionIdFrom, supabaseService } from "@/lib/authServer";
+import { platformDb } from "@/lib/db";
+import { clearSessionCookie, sessionIdFrom } from "@/lib/authServer";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
 
   if (sessionId) {
     try {
-      const db = supabaseService();
+      const db = platformDb();
       await db.rpc("rescript_end_session", { p_session: sessionId, p_reason: "logout", p_by: null });
     } catch (e) {
       console.error("[rescript:auth] logout could not end the session row", { error: (e as Error).message });
