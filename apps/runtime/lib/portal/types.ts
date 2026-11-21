@@ -1,4 +1,4 @@
-import type { AccountStatus } from "@rescript/access/respondent";
+import type { AccountStatus, PrivacyRequestKind } from "@rescript/access/respondent";
 import type { BenchmarkSnapshot, StoredScore } from "@rescript/analytics/benchmark";
 import type { ScorecardResult } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
@@ -119,8 +119,20 @@ export interface PortalStore {
   benchmark(e: EnrolmentRec): Promise<{ snapshot: BenchmarkSnapshot; computedAt: string } | null>;
   saveBenchmark(e: EnrolmentRec, snapshot: BenchmarkSnapshot, now: string): Promise<void>;
 
+  /* phase 5 — consent and privacy requests (migration 0105). `consent` answers null when it cannot tell (the
+     table is not there yet): the portal then behaves as it did before consent existed. */
+  consent(accountId: string, version: string): Promise<{ givenAt: string } | "needed" | null>;
+  saveConsent(accountId: string, version: string, now: string, ipHash: string | null): Promise<void>;
+  withdrawConsent(accountId: string, now: string): Promise<void>;
+  addRequest(r: { accountId: string; surveyId: string; customerId: string | null; enrolmentId: string; kind: PrivacyRequestKind; message: string | null; now: string }): Promise<void>;
+  requests(accountId: string): Promise<PrivacyRequestRec[]>;
+  /** when an organiser's staff opened this person's results: time and survey */
+  staffViews(accountId: string): Promise<{ at: string; surveyId: string | null }[]>;
+
   log(e: PortalEvent): Promise<void>;
 }
+
+export interface PrivacyRequestRec { id: string; enrolmentId: string; surveyId: string; kind: PrivacyRequestKind; status: "open" | "done" | "declined"; message: string | null; responseNote: string | null; createdAt: string; resolvedAt: string | null }
 
 export interface StoredScorecard {
   responseId: string;

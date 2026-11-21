@@ -19,6 +19,8 @@
  *  12. (phase 3) my progress: the person's own results over time as a chart and a table, the change against the
  *      previous result and since the first, the average of everyone beside the latest result only, when the next
  *      one is due; nothing about anybody else
+ *  13. (phase 5) rule-written sentences, the AI paragraph on request (stand-in provider), the projection; the
+ *      notice at invitation; my privacy: withdraw and agree again, a request to an organiser
  *  11. (phase 2) my results: each score with its range name and bar; the comparison with everyone and with my own
  *      team only; no other team, no person and no cut point reaches the browser; the print layout keeps the results
  */
@@ -276,6 +278,44 @@ console.log("\n6 — a change must come from the portal itself");
   ok("a change without the portal header, or from another origin, is refused");
 }
 
+console.log("\n6b — my privacy (phase 5)");
+{
+  await page.goto("/portal/account");
+  await page.waitForSelector('[data-testid="pt-requests"]');
+  assert.match(await page.textContent('[data-testid="pt-privacy-consent"]'), /You agreed to this/);
+  assert.match(await page.textContent('[data-testid="pt-viewed"]'), /No organiser's staff have opened your individual results/);
+  /* a request to one assessment's organiser: sent, listed as waiting; the same request twice is refused */
+  await page.selectOption('[data-testid="pt-req-assessment"]', "e-index");
+  await page.selectOption('[data-testid="pt-req-kind"]', "correction");
+  await page.click('[data-testid="pt-req-send"]');
+  await page.waitForSelector(".pt-note.is-bad");
+  assert.match(await page.textContent(".pt-note.is-bad"), /say what should be corrected/);
+  await page.fill('[data-testid="pt-req-message"]', "My team is South, not North.");
+  await page.click('[data-testid="pt-req-send"]');
+  await page.waitForSelector('[data-testid="pt-req-list"] tbody tr');
+  const row = (await page.textContent('[data-testid="pt-req-list"] tbody tr')).replace(/\s+/g, " ");
+  assert.match(row, /Workplace wellbeing index/); assert.match(row, /A correction/); assert.match(row, /My team is South, not North\./); assert.match(row, /Waiting for an answer/);
+  const twice = await api("me", { action: "request", assessmentId: "e-index", kind: "correction", message: "Once more, please." });
+  assert.equal(twice.status, 409); assert.equal(twice.body.code, "already_asked");
+  assert.equal((await api("me", { action: "request", assessmentId: "e-ben", kind: "deletion", message: "" })).status, 404, "not about somebody else's assessment");
+  /* withdrawing the agreement hides the assessments everywhere until it is given again */
+  page.once("dialog", (d) => d.accept());
+  await page.click('[data-testid="pt-withdraw"]');
+  await page.waitForFunction(() => /You have not agreed to this notice/.test(document.querySelector('[data-testid="pt-privacy-consent"]')?.textContent ?? ""));
+  assert.equal((await api("assessments/e-index")).body.code, "consent_needed");
+  assert.equal((await api("progress")).body.tracks.length, 0);
+  await page.goto("/portal");
+  await page.waitForSelector('[data-testid="pt-consent"]');
+  assert.equal(await page.locator(".pt-tile").count(), 0);
+  assert.equal(await page.isDisabled('[data-testid="pt-consent-give"]'), true);
+  await page.check('[data-testid="pt-agree"]');
+  await page.click('[data-testid="pt-consent-give"]');
+  await page.waitForSelector('[data-testid="pt-card-completed"]');
+  assert.equal(await page.locator(".pt-tile").count(), 4);
+  assert.equal((await api("assessments/e-index")).status, 200);
+  ok("my privacy: the notice and its withdrawal (assessments hidden until agreed again), a request to an organiser with its status, nothing about anyone else's");
+}
+
 console.log("\n7 — profile, password, sign out");
 {
   await page.goto("/portal/account");
@@ -312,6 +352,12 @@ console.log("\n8 — invitation link");
   assert.ok(!page.url().includes(INVITE), "the token is removed from the address bar");
   await page.fill('[data-testid="pt-new-password"]', "caras own long password");
   await page.fill('[data-testid="pt-new-password-again"]', "caras own long password");
+  /* phase 5: the notice is read and agreed to before the account exists */
+  assert.match(await page.textContent('[data-testid="pt-notice"]'), /Each organiser that invites you can see the answers you give in their own assessments/);
+  assert.equal(await page.isDisabled('[data-testid="pt-activate"]'), true, "no account without the notice agreed to");
+  const noConsent = await api("invitation", { token: INVITE, password: "caras own long password" });
+  assert.equal(noConsent.status, 400); assert.equal(noConsent.body.code, "consent_required");
+  await page.check('[data-testid="pt-agree"]');
   await page.click('[data-testid="pt-activate"]');
   await page.waitForURL(/\/portal$/);
   await page.waitForSelector('[data-testid="pt-none"]');

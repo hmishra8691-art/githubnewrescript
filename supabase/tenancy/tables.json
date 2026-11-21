@@ -425,6 +425,10 @@
       "class": "platform",
       "why": "a respondent's portal identity \u2014 one person wherever the client's data lives; holds no answers and names no survey"
     },
+    "portal_consents": {
+      "class": "platform",
+      "why": "which version of the portal notice a person agreed to \u2014 beside the account"
+    },
     "portal_credentials": {
       "class": "platform",
       "why": "portal sign-in secrets (hashes only) \u2014 credentials are platform data"
@@ -436,6 +440,10 @@
     "portal_events": {
       "class": "platform",
       "why": "the portal's access log: sign-ins, views, edits, researcher actions"
+    },
+    "portal_requests": {
+      "class": "platform",
+      "why": "a person's privacy request to an organiser \u2014 beside the account; a workspace reads only those for its own surveys"
     },
     "portal_scorecards": {
       "class": "customer",

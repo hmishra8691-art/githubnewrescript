@@ -152,6 +152,8 @@ export const AUDIT_EVENTS = [
   "portal.scores_rebuilt",
   /* phase 3: a member opened ONE respondent's portal results — who looked at whom, never what the results were */
   "portal.individual_viewed",
+  /* phase 5: a respondent's privacy request (a copy, a correction, deletion) was answered — which kind and how, never its text */
+  "portal.request_resolved",
   "api_key.created",
   "tool.called",
   "fieldwork.proposal_decided",
@@ -399,6 +401,7 @@ export function describeEvent(r: AuditRow): string {
     case "api_key.created": return `${who} created the API key “${str(d.name)}” (${str(d.prefix)}…)`;
     case "api_key.revoked": return `${who} revoked the API key “${str(d.name)}”`;
     case "portal.access_changed": return `${who} ${str(d.summary) || "changed respondent portal access"}${d.count ? ` (${str(d.count)} ${Number(d.count) === 1 ? "respondent" : "respondents"})` : ""}`;
+    case "portal.request_resolved": return `${who} marked a respondent's ${str(d.kind) || "privacy"} request as ${str(d.status) || "answered"}`;
     case "portal.individual_viewed": return `${who} opened one respondent's portal results${d.respondentId ? ` (${str(d.respondentId)})` : ""}`;
     case "portal.scores_rebuilt": return `${who} scored the completed responses again for the respondent portal${d.count !== undefined ? ` (${str(d.count)} scored)` : ""}`;
     case "privacy.erasure": return `${who} erased a respondent (by ${str(d.identifierKind).replace("_", " ")})${d.verified === false ? " — NOT fully verified" : ""}`;

@@ -174,3 +174,35 @@ export function enrolmentAccess(f: EnrolmentFacts, now: number): EnrolmentAccess
   if (attemptsLeft === 0) return { ...none, state: "completed", reason: limit === 1 ? null : "You have used all your attempts." };
   return { state: f.finished > 0 ? "completed" : "open", canStart: true, canResume: false, attemptsLeft, reason: null };
 }
+
+/* ------------------------------------------------------------------ the portal notice (phase 5) */
+
+/**
+ * WHAT A PERSON AGREES TO BEFORE USING THE PORTAL. Versioned: a consent record names the version, so the words a
+ * person agreed to can always be shown again. Change the words → change the version → everyone is asked again.
+ * These words describe what the software does; they are not legal advice and should be reviewed for each market.
+ */
+export const PORTAL_CONSENT = {
+  version: "2026-11-20",
+  title: "Before you continue",
+  paragraphs: [
+    "This portal shows you the assessments you have been invited to and, where an organiser allows it, your answers and results.",
+    "Each organiser that invites you can see the answers you give in their own assessments. They cannot see your assessments from other organisers.",
+    "Signing in, viewing results and changing answers are recorded, so there is a record of who did what. You can see when an organiser's staff opened your results.",
+    "From Profile and security you can ask an organiser for a copy of your data, to correct it or to delete it. You can withdraw this agreement at any time; your assessments are then hidden in the portal until you agree again.",
+  ],
+} as const;
+
+export type PrivacyRequestKind = "access" | "correction" | "deletion";
+export const PRIVACY_REQUEST_KINDS: readonly PrivacyRequestKind[] = ["access", "correction", "deletion"];
+export const PRIVACY_REQUEST_MAX_OPEN = 10;
+
+/** the request as it will be stored, or the sentence that says what is wrong with it */
+export function readPrivacyRequest(body: { kind?: unknown; message?: unknown }): { kind: PrivacyRequestKind; message: string | null } | { error: string } {
+  const kind = body.kind as PrivacyRequestKind;
+  if (!PRIVACY_REQUEST_KINDS.includes(kind)) return { error: "Choose what you are asking for." };
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  if (message.length > 2000) return { error: "Please keep the message under 2,000 characters." };
+  if (kind === "correction" && message.length < 5) return { error: "Please say what should be corrected." };
+  return { kind, message: message || null };
+}

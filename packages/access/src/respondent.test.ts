@@ -94,3 +94,13 @@ test("an enrolment: upcoming, open, in progress, completed, closed, suspended â€
   assert.equal(at({ surveyStatus: "closed" }).canStart, false);
   assert.equal(at({ suspended: true, inProgress: true }).state, "suspended");
 });
+
+test("the portal notice is versioned; a privacy request is one of three kinds, and a correction says what to correct", async () => {
+  const { PORTAL_CONSENT, readPrivacyRequest } = await import("./respondent.js");
+  assert.match(PORTAL_CONSENT.version, /^\d{4}-\d{2}-\d{2}$/); assert.ok(PORTAL_CONSENT.paragraphs.length >= 3);
+  assert.ok(PORTAL_CONSENT.paragraphs.join(" ").includes("withdraw"));
+  assert.deepEqual(readPrivacyRequest({ kind: "access" }), { kind: "access", message: null });
+  assert.deepEqual(readPrivacyRequest({ kind: "deletion", message: "  Please delete my answers.  " }), { kind: "deletion", message: "Please delete my answers." });
+  assert.deepEqual(readPrivacyRequest({ kind: "correction", message: "My year of birth is 1984." }), { kind: "correction", message: "My year of birth is 1984." });
+  for (const bad of [{ kind: "export_all" }, { kind: "correction" }, { kind: "correction", message: "x" }, { kind: "access", message: "x".repeat(2001) }, {}]) assert.ok("error" in readPrivacyRequest(bad), JSON.stringify(bad).slice(0, 60));
+});

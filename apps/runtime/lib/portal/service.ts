@@ -1,6 +1,6 @@
 import {
   PORTAL_POLICY, accountVerdict, enrolmentAccess, failuresAfterWrong, hashPassword, hashToken, lockoutVerdict, mintToken, normaliseLogin,
-  passwordProblems, sessionVerdict, verifyPassword, TOKEN, type EnrolmentAccess, type PortalPolicy,
+  passwordProblems, readPrivacyRequest, sessionVerdict, verifyPassword, PORTAL_CONSENT, PRIVACY_REQUEST_MAX_OPEN, TOKEN, type EnrolmentAccess, type PortalPolicy,
 } from "@rescript/access/respondent";
 import { buildBenchmark, compare, onePerPerson, type BenchmarkSnapshot, type Comparison } from "@rescript/analytics/benchmark";
 import { buildInsights, buildProjections, buildTrends, checkSubmission, editDecision, editWindow, isAssessment, minChanges, nextDue, portalAnswerLines, portalDefinition, portalPresentation, portalSettings, NOTE_NOT_ADVICE, PROJECTION_NOTE, respondentScorecard, scorecardOf, seriesOf, OVERALL_ID, type DimensionTrend, type HistoryPoint, type Insight, type Projection, type PortalAnswerLine, type PortalPresentation, type PortalWords, type ScorecardResult } from "@rescript/engine";
@@ -150,17 +150,20 @@ export async function invitationInfo(d: PortalDeps, token: unknown) {
   const cred = account ? await d.store.credential(account.id) : null;
   if (!account || !cred?.inviteExpiresAt || Date.parse(cred.inviteExpiresAt) <= d.now()) throw badLink();
   if (account.status === "suspended" || account.status === "closed") throw badLink();
-  return { respondentId: account.respondentId, name: account.name };
+  return { respondentId: account.respondentId, name: account.name, notice: { title: PORTAL_CONSENT.title, paragraphs: PORTAL_CONSENT.paragraphs } };
 }
 
-export async function acceptInvitation(d: PortalDeps, body: { token: unknown; password: unknown }, meta: RequestMeta = {}) {
+export async function acceptInvitation(d: PortalDeps, body: { token: unknown; password: unknown; consent?: unknown }, meta: RequestMeta = {}) {
   await invitationInfo(d, body.token);
+  /* an account begins with the portal notice agreed to — said before the password is set, recorded with it */
+  if (body.consent !== true) throw new PortalError(400, "consent_required", "Please read the notice and tick the box to continue.");
   const account = (await d.store.accountByInviteHash(hashToken(body.token as string)))!;
   const password = checkNewPassword(body.password, account);
   const now = iso(d.now());
   await d.store.saveCredential(account.id, { passwordHash: await hashPassword(password), mustChange: false, inviteTokenHash: null, inviteExpiresAt: null, resetTokenHash: null, resetExpiresAt: null, failedAttempts: 0, lastFailedAt: null });
   await d.store.saveAccount(account.id, { status: "active" });
   await d.store.revokeAllSessions(account.id, "password_set", now);
+  try { await d.store.saveConsent(account.id, PORTAL_CONSENT.version, now, meta.ipHash ?? null); } catch (err) { console.warn("[rescript:portal] consent not recorded", JSON.stringify({ error: (err as Error).message })); }
   const s = await openSession(d, { ...account, status: "active" }, meta, "invitation_accepted");
   return { ...s, account: accountView(account), mustChangePassword: false };
 }
@@ -279,14 +282,65 @@ function card(e: EnrolmentRec, f: Awaited<ReturnType<typeof facts>>): Assessment
 /** the dashboard: every assessment linked to this account, and nothing else */
 export async function overview(d: PortalDeps, ctx: PortalContext) {
   const cards: AssessmentCard[] = [];
+  /* without the notice agreed to, the account is there but its assessments are not shown */
+  if (await consentNeeded(d, ctx)) return { account: accountView(ctx.account), assessments: cards, consent: { needed: true, ...PORTAL_CONSENT } };
   for (const e of await d.store.enrolments(ctx.account.id)) cards.push(card(e, await facts(d, e)));
   const order: Record<string, number> = { in_progress: 0, open: 1, upcoming: 2, completed: 3, closed: 4, suspended: 5 };
   cards.sort((a, b) => (order[a.state]! - order[b.state]!) || a.title.localeCompare(b.title));
-  return { account: accountView(ctx.account), assessments: cards };
+  return { account: accountView(ctx.account), assessments: cards, consent: { needed: false, ...PORTAL_CONSENT } };
+}
+
+/* ------------------------------------------------------------------ phase 5: consent and privacy */
+
+/** has this person still to agree to the current notice? (a store that cannot tell — before migration 0105 — means no) */
+async function consentNeeded(d: PortalDeps, ctx: PortalContext): Promise<boolean> {
+  try { return (await d.store.consent(ctx.account.id, PORTAL_CONSENT.version)) === "needed"; } catch { return false; }
+}
+const mustConsent = async (d: PortalDeps, ctx: PortalContext) => { if (await consentNeeded(d, ctx)) throw new PortalError(403, "consent_needed", "Please read and accept the portal notice on the Overview page first."); };
+
+export async function giveConsent(d: PortalDeps, ctx: PortalContext, body: { version: unknown }, meta: RequestMeta = {}): Promise<void> {
+  if (body.version !== PORTAL_CONSENT.version) throw new PortalError(409, "notice_changed", "The notice has changed. Please reload the page and read it again.");
+  await d.store.saveConsent(ctx.account.id, PORTAL_CONSENT.version, iso(d.now()), meta.ipHash ?? null);
+  await d.store.log({ accountId: ctx.account.id, event: "consent_given", detail: { version: PORTAL_CONSENT.version } });
+}
+
+export async function withdrawConsent(d: PortalDeps, ctx: PortalContext): Promise<void> {
+  await d.store.withdrawConsent(ctx.account.id, iso(d.now()));
+  await d.store.log({ accountId: ctx.account.id, event: "consent_withdrawn", detail: { version: PORTAL_CONSENT.version } });
+}
+
+/** the privacy part of the account page: the agreement, the person's requests and their answers, and who opened their results */
+export async function myPrivacy(d: PortalDeps, ctx: PortalContext) {
+  let state: Awaited<ReturnType<PortalStore["consent"]>> = null;
+  try { state = await d.store.consent(ctx.account.id, PORTAL_CONSENT.version); } catch { /* cannot tell */ }
+  const enrolments = await d.store.enrolments(ctx.account.id);
+  const title = new Map(enrolments.map((e) => [e.id, e.title]));
+  const bySurvey = new Map(enrolments.map((e) => [e.surveyId, e.title]));
+  const safe = async <T>(f: () => Promise<T[]>): Promise<T[]> => { try { return await f(); } catch { return []; } };
+  const requests = (await safe(() => d.store.requests(ctx.account.id))).map((r) => ({ id: r.id, assessment: title.get(r.enrolmentId) ?? "An assessment no longer in your list", kind: r.kind, status: r.status, message: r.message, answer: r.responseNote, createdAt: r.createdAt, resolvedAt: r.resolvedAt }));
+  const viewed = (await safe(() => d.store.staffViews(ctx.account.id))).map((v) => ({ at: v.at, assessment: (v.surveyId && bySurvey.get(v.surveyId)) || "An assessment" }));
+  return {
+    consent: { available: state !== null, given: state !== null && state !== "needed", givenAt: state && state !== "needed" ? state.givenAt : null, version: PORTAL_CONSENT.version, title: PORTAL_CONSENT.title, paragraphs: PORTAL_CONSENT.paragraphs },
+    assessments: state === "needed" ? [] : enrolments.map((e) => ({ id: e.id, title: e.title })),
+    requests, viewed,
+  };
+}
+
+/** ask the organiser of ONE assessment for a copy of one's data, a correction or deletion. Recorded; the organiser answers. */
+export async function fileRequest(d: PortalDeps, ctx: PortalContext, body: { enrolmentId: unknown; kind: unknown; message: unknown }): Promise<void> {
+  const e = await own(d, ctx, body.enrolmentId);
+  const r = readPrivacyRequest(body);
+  if ("error" in r) throw new PortalError(400, "bad_request", r.error);
+  const mine = await d.store.requests(ctx.account.id);
+  if (mine.filter((x) => x.status === "open").length >= PRIVACY_REQUEST_MAX_OPEN) throw new PortalError(429, "too_many_requests", "You have several requests still open. Please wait for an answer before sending more.");
+  if (mine.some((x) => x.status === "open" && x.enrolmentId === e.id && x.kind === r.kind)) throw new PortalError(409, "already_asked", "You have already asked for this, and it is still open.");
+  await d.store.addRequest({ accountId: ctx.account.id, surveyId: e.surveyId, customerId: e.customerId, enrolmentId: e.id, kind: r.kind, message: r.message, now: iso(d.now()) });
+  await d.store.log({ accountId: ctx.account.id, event: "privacy_request", surveyId: e.surveyId, customerId: e.customerId, detail: { kind: r.kind } });
 }
 
 /** the enrolment, only when it belongs to this account — otherwise "not found" */
 async function own(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown): Promise<EnrolmentRec> {
+  await mustConsent(d, ctx);
   const e = typeof enrolmentId === "string" ? (await d.store.enrolments(ctx.account.id)).find((x) => x.id === enrolmentId) : null;
   if (!e) throw new PortalError(404, "not_found", "That assessment was not found.");
   return e;
@@ -407,6 +461,7 @@ export interface ProgressTrack {
  * the comparison is permitted and a group of the minimum size exists — it is the average of everyone, never a person.
  */
 export async function progress(d: PortalDeps, ctx: PortalContext): Promise<{ tracks: ProgressTrack[] }> {
+  if (await consentNeeded(d, ctx)) return { tracks: [] };
   const groups = new Map<string, { title: string; series: boolean; members: { e: EnrolmentRec; live: SurveyDefinition; period: string | null; last: string | null }[]; points: HistoryPoint[] }>();
   for (const e of await d.store.enrolments(ctx.account.id)) {
     const f = await facts(d, e);

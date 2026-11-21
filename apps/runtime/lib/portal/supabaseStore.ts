@@ -2,7 +2,7 @@ import "server-only";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { platformDb, router, surveyDb, type customerDb } from "@/lib/db";
 import type { BenchmarkSnapshot, StoredScore } from "@rescript/analytics/benchmark";
-import type { AccountRec, AttemptData, AttemptRec, CredentialRec, EnrolmentRec, PortalStore, SessionRec } from "./types";
+import type { AccountRec, AttemptData, AttemptRec, CredentialRec, EnrolmentRec, PortalStore, PrivacyRequestRec, SessionRec } from "./types";
 
 /**
  * THE PORTAL'S STORE ON THE DATABASE (phase 1, 2026-11-20).
@@ -162,6 +162,33 @@ export function supabasePortalStore(): PortalStore {
     async saveBenchmark(e, snapshot, now) {
       const { error } = await (await dbOf(e)).from("portal_benchmarks").upsert({ survey_id: e.surveyId, fingerprint: snapshot.fingerprint, people: snapshot.n, snapshot, computed_at: now }, { onConflict: "survey_id" });
       if (error) console.warn("[rescript:portal] benchmark not stored", JSON.stringify({ surveyId: e.surveyId, error: error.message }));
+    },
+
+    /* phase 5 (migration 0105). Before it is applied `consent` cannot tell, and says so with null. */
+    async consent(accountId, version) {
+      const { data, error } = await platform.from("portal_consents").select("given_at, withdrawn_at").eq("account_id", accountId).eq("version", version).maybeSingle();
+      if (error) return null;
+      const row = data as Row | null;
+      return row && !row.withdrawn_at ? { givenAt: String(row.given_at) } : "needed";
+    },
+    async saveConsent(accountId, version, now, ipHash) {
+      must(await platform.from("portal_consents").upsert({ account_id: accountId, version, given_at: now, withdrawn_at: null, ip_hash: ipHash }, { onConflict: "account_id,version" }), "save consent");
+    },
+    async withdrawConsent(accountId, now) {
+      must(await platform.from("portal_consents").update({ withdrawn_at: now }).eq("account_id", accountId).is("withdrawn_at", null), "withdraw consent");
+    },
+    async addRequest(r) {
+      must(await platform.from("portal_requests").insert({ account_id: r.accountId, survey_id: r.surveyId, customer_id: r.customerId, enrolment_id: r.enrolmentId, kind: r.kind, message: r.message, created_at: r.now }), "add request");
+    },
+    async requests(accountId) {
+      const { data, error } = await platform.from("portal_requests").select("id, enrolment_id, survey_id, kind, status, message, response_note, created_at, resolved_at").eq("account_id", accountId).order("created_at", { ascending: false }).limit(100);
+      if (error) return [];
+      return ((data ?? []) as Row[]).map((r) => ({ id: String(r.id), enrolmentId: String(r.enrolment_id), surveyId: String(r.survey_id), kind: r.kind as PrivacyRequestRec["kind"], status: r.status as PrivacyRequestRec["status"], message: str(r.message), responseNote: str(r.response_note), createdAt: String(r.created_at), resolvedAt: str(r.resolved_at) }));
+    },
+    async staffViews(accountId) {
+      const { data, error } = await platform.from("portal_events").select("created_at, survey_id").eq("account_id", accountId).eq("event", "results_viewed_by_staff").order("created_at", { ascending: false }).limit(50);
+      if (error) return [];
+      return ((data ?? []) as Row[]).map((r) => ({ at: String(r.created_at), surveyId: str(r.survey_id) }));
     },
 
     async log(ev) {

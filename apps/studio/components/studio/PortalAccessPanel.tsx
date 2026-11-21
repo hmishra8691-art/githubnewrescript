@@ -3,6 +3,7 @@ import React from "react";
 import { PORTAL_TEMPLATES, applyPortalTemplate, portalTemplate, templateRules } from "@rescript/engine";
 import { PortalSettings } from "@rescript/schema";
 import { PortalPersonResults } from "./PortalPersonResults";
+import { PortalRequestsPanel } from "./PortalRequestsPanel";
 import { PortalScorecardPanel } from "./PortalScorecardPanel";
 import { useStudio } from "./store";
 
@@ -135,6 +136,7 @@ export function PortalAccessPanel() {
           <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>These settings are saved with the survey and apply once it is published. The switches in the list below apply immediately.</p>
 
           <PortalScorecardPanel />
+          <PortalRequestsPanel />
 
           <div className="row" style={{ gap: 8, margin: "16px 0 8px", flexWrap: "wrap" }}>
             <strong style={{ fontSize: 13.5 }}>People</strong>

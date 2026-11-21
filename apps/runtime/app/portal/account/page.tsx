@@ -2,6 +2,7 @@
 import React from "react";
 import { portalApi, when } from "@/components/portal/api";
 import { NewPassword, Note, Shell } from "@/components/portal/Shell";
+import { Privacy } from "@/components/portal/Privacy";
 
 interface Me { account: { respondentId: string; name: string | null; email: string | null }; sessions: { id: string; device: string | null; signedInAt: string; lastSeenAt: string; current: boolean }[] }
 
@@ -70,6 +71,7 @@ export default function PortalAccount() {
         </table>
         <p className="pt-why">You are signed out automatically after 30 minutes without activity.</p>
       </div>
+      <Privacy />
     </Shell>
   );
 }

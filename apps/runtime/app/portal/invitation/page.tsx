@@ -6,17 +6,18 @@ import { Narrow, NewPassword, Note } from "@/components/portal/Shell";
 /** /portal/invitation#token=… — the link in an invitation. The token is in the fragment, so it is never sent in a page request or kept in a server log. */
 export default function PortalInvitation() {
   const [token, setToken] = React.useState<string | null>(null);
-  const [info, setInfo] = React.useState<{ respondentId: string; name: string | null } | null>(null);
+  const [info, setInfo] = React.useState<{ respondentId: string; name: string | null; notice?: { title: string; paragraphs: string[] } } | null>(null);
   const [state, setState] = React.useState<"checking" | "ready" | "invalid">("checking");
   const [pw, setPw] = React.useState(""); const [again, setAgain] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [agreed, setAgreed] = React.useState(false);
 
   React.useEffect(() => {
     const t = takeFragmentToken();
     if (!t) { setState("invalid"); return; }
     setToken(t);
-    void portalApi<{ respondentId: string; name: string | null }>("invitation", { token: t }, { redirectOn401: false }).then((r) => {
+    void portalApi<{ respondentId: string; name: string | null; notice?: { title: string; paragraphs: string[] } }>("invitation", { token: t }, { redirectOn401: false }).then((r) => {
       if (r.ok) { setInfo(r.data); setState("ready"); } else setState("invalid");
     });
   }, []);
@@ -25,7 +26,7 @@ export default function PortalInvitation() {
     e.preventDefault();
     if (pw !== again) { setError("The two passwords are not the same."); return; }
     setBusy(true); setError(null);
-    const r = await portalApi("invitation", { token, password: pw }, { redirectOn401: false });
+    const r = await portalApi("invitation", { token, password: pw, consent: agreed }, { redirectOn401: false });
     setBusy(false);
     if (!r.ok) { setError(r.error.error); return; }
     window.location.assign("/portal");
@@ -44,7 +45,14 @@ export default function PortalInvitation() {
       {error && <Note kind="bad">{error}</Note>}
       <form onSubmit={submit} noValidate>
         <NewPassword value={pw} again={again} onChange={(a, b) => { setPw(a); setAgain(b); }} />
-        <button className="pt-btn is-primary" type="submit" disabled={busy || pw.length < 10 || !again} data-testid="pt-activate">{busy ? "Saving…" : "Set password and continue"}</button>
+        {info?.notice && (
+          <div className="pt-notice" data-testid="pt-notice">
+            <p className="pt-q">{info.notice.title}</p>
+            {info.notice.paragraphs.map((t, i) => <p key={i}>{t}</p>)}
+            <label className="pt-check"><input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} data-testid="pt-agree" /> <span>I have read this and agree.</span></label>
+          </div>
+        )}
+        <button className="pt-btn is-primary" type="submit" disabled={busy || pw.length < 10 || !again || !agreed} data-testid="pt-activate">{busy ? "Saving…" : "Set password and continue"}</button>
       </form>
     </Narrow>
   );

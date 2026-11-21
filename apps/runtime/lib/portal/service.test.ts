@@ -61,14 +61,16 @@ test("invitation: the link shows only the id, sets a password once, signs in, an
   r.m.accounts.push({ id: "a3", respondentId: "RSP-NEW00003", email: null, name: "Cara", scope: "assessment", status: "invited", expiresAt: null, lastLoginAt: null });
   r.m.credentials.set("a3", { accountId: "a3", passwordHash: null, mustChange: false, failedAttempts: 0, lastFailedAt: null, inviteTokenHash: hashToken(token), inviteExpiresAt: new Date(T0 + 86_400_000).toISOString(), resetTokenHash: null, resetExpiresAt: null });
 
-  assert.deepEqual(await invitationInfo(r.d, token), { respondentId: "RSP-NEW00003", name: "Cara" });
+  const info = await invitationInfo(r.d, token);
+  assert.deepEqual([info.respondentId, info.name], ["RSP-NEW00003", "Cara"]);
+  assert.deepEqual(Object.keys(info).sort(), ["name", "notice", "respondentId"], "the id, the name and the notice to agree to — nothing else");
   await fails(signIn(r.d, { login: "RSP-NEW00003", password: "anything-at-all" }), 401, "no_match");
-  await fails(acceptInvitation(r.d, { token, password: "short" }), 400, "weak_password");
-  const s = await acceptInvitation(r.d, { token, password: "a long new password" });
+  await fails(acceptInvitation(r.d, { token, password: "short" , consent: true }), 400, "weak_password");
+  const s = await acceptInvitation(r.d, { token, password: "a long new password" , consent: true });
   assert.equal((await authenticate(r.d, s.sessionToken)).account.respondentId, "RSP-NEW00003");
   assert.equal(r.m.accounts.find((a) => a.id === "a3")!.status, "active");
   assert.ok(!JSON.stringify([...r.m.credentials.values()]).includes("a long new password"), "the password is never stored readable");
-  await fails(acceptInvitation(r.d, { token, password: "another long password" }), 410, "link_invalid");
+  await fails(acceptInvitation(r.d, { token, password: "another long password" , consent: true }), 410, "link_invalid");
   await fails(invitationInfo(r.d, mintToken()), 410);
 
   const late = mintToken();
@@ -674,4 +676,98 @@ test("progress in words: a pattern and the latest change; a projection only with
     ["drive", true, "If the pattern of your last 4 results continued, your next Drive score would be about 3."],
   ]);
   assert.match(t!.projectionNote!, /not a prediction/);
+});
+
+/* ------------------------------------------------------------------ phase 5: consent and privacy requests */
+
+const { giveConsent, withdrawConsent, myPrivacy, fileRequest } = await import("./service.ts");
+const { PORTAL_CONSENT } = await import("@rescript/access/respondent");
+
+test("an invitation is accepted only with the notice agreed to, and the agreement is recorded with its version", async () => {
+  const r = await rig();
+  const token = mintToken();
+  const cara: AccountRec = { id: "a3", respondentId: "RSP-CARA0003", email: null, name: null, scope: "persistent", status: "invited", expiresAt: null, lastLoginAt: null };
+  r.m.accounts.push(cara); r.m.consentAsked.add("a3");
+  r.m.credentials.set("a3", { accountId: "a3", passwordHash: null, mustChange: false, failedAttempts: 0, lastFailedAt: null, inviteTokenHash: hashToken(token), inviteExpiresAt: new Date(T0 + 86_400_000).toISOString(), resetTokenHash: null, resetExpiresAt: null });
+  await fails(acceptInvitation(r.d, { token, password: "a long new password" }), 400, "consent_required");
+  await fails(acceptInvitation(r.d, { token, password: "a long new password", consent: "yes" }), 400, "consent_required");
+  assert.equal(r.m.credentials.get("a3")!.passwordHash, null, "nothing was set");
+  const s = await acceptInvitation(r.d, { token, password: "a long new password", consent: true });
+  assert.equal(r.m.consents.get("a3")!.version, PORTAL_CONSENT.version);
+  const ctx = await authenticate(r.d, s.sessionToken);
+  assert.equal((await overview(r.d, ctx)).consent.needed, false);
+});
+
+test("without the notice agreed to, the account works but its assessments are hidden everywhere; agreeing shows them; withdrawing hides them again", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, trendDef({ show: { scores: true, answers: true, trends: true } }));
+  took(r, e, "r1", 3, 4, 5);
+  r.m.consentAsked.add(r.ana.id);
+  const o = await overview(r.d, ctx);
+  assert.deepEqual([o.consent.needed, o.assessments.length, o.consent.version, o.consent.paragraphs.length > 2], [true, 0, PORTAL_CONSENT.version, true]);
+  await fails(assessmentDetail(r.d, ctx, "e1"), 403, "consent_needed");
+  await fails(startLink(r.d, ctx, "e1"), 403, "consent_needed");
+  await fails(personalReport(r.d, ctx, "e1"), 403, "consent_needed");
+  await fails(fileRequest(r.d, ctx, { enrolmentId: "e1", kind: "access", message: "" }), 403, "consent_needed");
+  assert.deepEqual((await progress(r.d, ctx)).tracks, []);
+  assert.deepEqual((await myPrivacy(r.d, ctx)).assessments, []);
+  /* the account itself still works: profile, password, sessions */
+  assert.equal((await updateProfile(r.d, ctx, { name: "Ana" })).name, "Ana");
+
+  await fails(giveConsent(r.d, ctx, { version: "an-older-notice" }), 409, "notice_changed");
+  await giveConsent(r.d, ctx, { version: PORTAL_CONSENT.version });
+  assert.equal((await overview(r.d, ctx)).assessments.length, 1);
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).attempts.length, 1);
+  const p = await myPrivacy(r.d, ctx);
+  assert.deepEqual([p.consent.given, p.consent.available, p.assessments.length], [true, true, 1]);
+
+  await withdrawConsent(r.d, ctx);
+  assert.equal((await overview(r.d, ctx)).consent.needed, true);
+  await fails(assessmentDetail(r.d, ctx, "e1"), 403, "consent_needed");
+  assert.deepEqual(r.m.events.filter((x) => x.event.startsWith("consent_")).map((x) => x.event), ["consent_given", "consent_withdrawn"]);
+});
+
+test("a store that cannot tell (the tables are not there yet) changes nothing: the portal behaves as before consent existed", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, trendDef());
+  took(r, e, "r1", 3, 4, 5);
+  r.m.store.consent = async () => null;
+  assert.equal((await overview(r.d, ctx)).assessments.length, 1);
+  r.m.store.consent = async () => { throw new Error("relation portal_consents does not exist"); };
+  r.m.store.requests = async () => { throw new Error("relation portal_requests does not exist"); };
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).attempts.length, 1);
+  const p = await myPrivacy(r.d, ctx);
+  assert.deepEqual([p.consent.available, p.requests, p.viewed], [false, [], []]);
+});
+
+test("privacy requests: to the organiser of one's own assessment, one open request of a kind, a limit, and the answer comes back", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  wave(r, "e1", r.ana.id, trendDef(), { title: "Wellbeing 2026" });
+  wave(r, "b1", r.ben.id, trendDef());
+  await fails(fileRequest(r.d, ctx, { enrolmentId: "b1", kind: "deletion", message: "" }), 404, "not_found");
+  await fails(fileRequest(r.d, ctx, { enrolmentId: "e1", kind: "everything", message: "" }), 400, "bad_request");
+  await fails(fileRequest(r.d, ctx, { enrolmentId: "e1", kind: "correction", message: "" }), 400, "bad_request");
+  await fileRequest(r.d, ctx, { enrolmentId: "e1", kind: "correction", message: "My year of birth is 1984." });
+  await fails(fileRequest(r.d, ctx, { enrolmentId: "e1", kind: "correction", message: "Again, please." }), 409, "already_asked");
+  await fileRequest(r.d, ctx, { enrolmentId: "e1", kind: "access", message: "" });
+  assert.deepEqual(r.m.requests.map((x) => [x.accountId, x.surveyId, x.kind, x.status]), [["a1", "survey-e1", "correction", "open"], ["a1", "survey-e1", "access", "open"]]);
+  /* the organiser answers (the Studio writes this) */
+  Object.assign(r.m.requests[0]!, { status: "done", responseNote: "Corrected on 21 November.", resolvedAt: new Date(T0).toISOString() });
+  const mine = (await myPrivacy(r.d, ctx)).requests;
+  assert.deepEqual(mine.map((x) => [x.assessment, x.kind, x.status, x.answer]), [["Wellbeing 2026", "access", "open", null], ["Wellbeing 2026", "correction", "done", "Corrected on 21 November."]]);
+  assert.deepEqual((await myPrivacy(r.d, await signedIn(r, r.ben))).requests, [], "nobody sees another person's requests");
+  await fileRequest(r.d, ctx, { enrolmentId: "e1", kind: "correction", message: "One more thing to correct." });
+  for (let i = 0; i < 8; i++) r.m.requests.push({ ...r.m.requests[1]!, id: `x${i}`, enrolmentId: `other-${i}` });
+  await fails(fileRequest(r.d, ctx, { enrolmentId: "e1", kind: "deletion", message: "" }), 429, "too_many_requests");
+});
+
+test("a person can see when an organiser's staff opened their results", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  wave(r, "e1", r.ana.id, trendDef(), { title: "Wellbeing 2026" });
+  r.m.events.push({ accountId: r.ana.id, event: "results_viewed_by_staff", surveyId: "survey-e1", detail: { at: "2026-11-20T08:00:00.000Z" } }, { accountId: r.ben.id, event: "results_viewed_by_staff", surveyId: "survey-e1", detail: {} });
+  assert.deepEqual((await myPrivacy(r.d, ctx)).viewed, [{ at: "2026-11-20T08:00:00.000Z", assessment: "Wellbeing 2026" }]);
 });
