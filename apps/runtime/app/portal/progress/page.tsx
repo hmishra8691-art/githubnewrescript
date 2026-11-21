@@ -2,9 +2,10 @@
 import React from "react";
 import { begin, portalApi, when } from "@/components/portal/api";
 import { Note, Shell } from "@/components/portal/Shell";
+import { Insights, type InsightLine } from "@/components/portal/Scores";
 import { TrendCard, type Trend } from "@/components/portal/Trend";
 
-interface Track { title: string; series: boolean; assessments: { id: string; title: string; period: string | null }[]; results: number; trends: Trend[]; nextDue: { at: string; overdue: boolean; assessmentId: string } | null; look: { note: string | null; accent: string; words: { again: string } } }
+interface Track { title: string; series: boolean; assessments: { id: string; title: string; period: string | null }[]; results: number; trends: Trend[]; nextDue: { at: string; overdue: boolean; assessmentId: string } | null; look: { note: string | null; accent: string; words: { again: string } }; insights: InsightLine[]; projections: { dimension: string; label: string; ok: boolean; text: string }[]; projectionNote: string | null }
 
 /** MY PROGRESS (phase 3): the signed-in person's own results over time. */
 export default function PortalProgress() {
@@ -27,7 +28,15 @@ export default function PortalProgress() {
             {t.nextDue && <> {t.nextDue.overdue ? "The next one is due now." : `The next one is due ${when(t.nextDue.at)}.`}</>}
           </p>
           {t.nextDue?.overdue && <p className="pt-noprint"><button type="button" className="pt-btn is-primary" onClick={() => begin(t.nextDue!.assessmentId, setError)} data-testid="pt-due-start">{t.look.words.again}</button></p>}
+          <Insights lines={t.insights} />
           <div className="pt-card"><ul className="pt-answers pt-scores">{t.trends.map((x) => <TrendCard key={x.id} t={x} />)}</ul></div>
+          {t.projections.length > 0 && (
+            <div className="pt-card pt-insights" data-testid="pt-projections">
+              <p className="pt-q">If the pattern continued</p>
+              <ul>{t.projections.map((p) => <li key={p.dimension} className={p.ok ? "is-neutral" : "is-muted"}>{p.text}</li>)}</ul>
+              <p className="pt-why">{t.projectionNote}</p>
+            </div>
+          )}
           {t.look.note && <p className="pt-why" style={{ marginTop: 8 }}>{t.look.note}</p>}
         </section>
       ))}

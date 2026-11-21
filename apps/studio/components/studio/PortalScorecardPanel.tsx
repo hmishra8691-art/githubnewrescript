@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { isAssessment, scorecardProblems } from "@rescript/engine";
+import { isAssessment, portalTemplate, scorecardProblems } from "@rescript/engine";
 import { PortalSettings, type ScoreDimension } from "@rescript/schema";
 import { calculatedVariables, groupingQuestions, itemKey, newScoreId, scorableItems } from "@/lib/portalScoresCore";
 import { useStudio } from "./store";
@@ -36,6 +36,7 @@ export function PortalScorecardPanel() {
   const groupable = React.useMemo(() => groupingQuestions(s.def), [s.def]);
   const problems = React.useMemo(() => scorecardProblems(s.def), [s.def]);
   const test = isAssessment(s.def);
+  const fixed = portalTemplate(portal?.template)?.enforce;
   const [open, setOpen] = React.useState<number | null>(null);
 
   const [status, setStatus] = React.useState<Status | null>(null);
@@ -97,6 +98,13 @@ export function PortalScorecardPanel() {
         <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.comparison && !!portal?.benchmark.enabled} disabled={!portal?.show.scores} onChange={(e) => set((p) => { p.show.comparison = e.target.checked; p.benchmark.enabled = e.target.checked; })} data-testid="portal-show-comparison" /> …and how they compare with others</label>
         <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.trends} disabled={!portal?.show.scores} onChange={(e) => set((p) => { p.show.trends = e.target.checked; })} data-testid="portal-show-trends" /> …and how they have changed over time</label>
       </div>
+      <div className="row" style={{ gap: 16, marginTop: 6, flexWrap: "wrap", fontSize: 13 }} data-testid="portal-insight-switches">
+        <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.insights} disabled={!portal?.show.scores} onChange={(e) => set((p) => { p.show.insights = e.target.checked; })} data-testid="portal-show-insights" /> A few sentences about their results (written by fixed rules)</label>
+        <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.projection} disabled={!portal?.show.scores || !portal?.show.trends || !!fixed?.noProjection} onChange={(e) => set((p) => { p.show.projection = e.target.checked; })} data-testid="portal-show-projection" /> …a range for their next result, from four like results</label>
+        <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.aiSummary} disabled={!portal?.show.insights || !!fixed?.noAi} onChange={(e) => set((p) => { p.show.aiSummary = e.target.checked; })} data-testid="portal-show-ai" /> …and, when they ask, the sentences as a paragraph written by the AI provider</label>
+      </div>
+      {portal?.show.aiSummary && !fixed?.noAi && <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>Only the rule-written sentences are sent to the AI provider: no name, no ID and no answer. Each paragraph is charged to this project's AI budget; when the budget refuses, respondents see the sentences instead.</p>}
+      {(fixed?.noAi || fixed?.noProjection) && <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>This survey's template does not allow {[fixed.noProjection ? "a projection" : "", fixed.noAi ? "the AI paragraph" : ""].filter(Boolean).join(" or ")}.</p>}
       {portal?.show.scores && !dims.length && <div className="chip warn qd-note" style={{ marginTop: 8 }}>No scores are defined yet, so there is nothing to show. Add one below.</div>}
 
       <div style={{ marginTop: 10, display: "grid", gap: 8 }}>

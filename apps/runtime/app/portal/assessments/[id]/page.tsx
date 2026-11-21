@@ -1,14 +1,14 @@
 "use client";
 import React from "react";
 import { begin, portalApi, when } from "@/components/portal/api";
-import { Scores, type Comparison, type Scorecard } from "@/components/portal/Scores";
+import { Insights, Scores, type Comparison, type InsightLine, type Scorecard } from "@/components/portal/Scores";
 import { Note, Shell } from "@/components/portal/Shell";
 
 type Option = { code: string | number; label: string };
 type Input = { kind: "single"; options: Option[]; value: string | number | null } | { kind: "multi"; options: Option[]; value: (string | number)[] } | { kind: "text"; long: boolean; value: string } | { kind: "number"; value: number | null };
 interface Line { questionId: string; code: string; text: string; answer: string; edit: { allowed: boolean; reason?: string }; input: Input | null }
-interface Attempt { id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: Line[] | null; editableUntil: string | null; editable: boolean; editNote: string | null; scores: Scorecard | null; comparison: Comparison[] | null }
-interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; resultNote: string | null; canViewTrends?: boolean; look: { words: { one: string; organiser: string; results: string; start: string; again: string }; accent: string } }; attempts: Attempt[] }
+interface Attempt { id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: Line[] | null; editableUntil: string | null; editable: boolean; editNote: string | null; scores: Scorecard | null; comparison: Comparison[] | null; insights: InsightLine[] | null }
+interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; resultNote: string | null; canExplain?: boolean; canViewTrends?: boolean; look: { words: { one: string; organiser: string; results: string; start: string; again: string }; accent: string } }; attempts: Attempt[] }
 
 const STATUS: Record<string, string> = { complete: "Completed", in_progress: "In progress", screened: "Ended early", quota_full: "Ended early", terminated: "Ended early" };
 
@@ -110,6 +110,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
             <section key={`s-${a.id}`}>
               <h2 data-testid={i === 0 ? "pt-results-title" : undefined}>{i === 0 ? d.assessment.look.words.results : `Results from ${when(a.completedAt)}`}</h2>
               <Scores scores={a.scores!} comparison={a.comparison} note={d.assessment.resultNote} />
+              {a.insights && a.insights.length > 0 && <Insights lines={a.insights} onExplain={d.assessment.canExplain ? async () => { const r = await portalApi<{ text: string; source: "ai" | "rules" }>(`assessments/${params.id}`, { action: "explain" }); return r.ok ? r.data : r.error.error; } : undefined} />}
             </section>
           ))}
 

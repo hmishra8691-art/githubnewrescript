@@ -126,3 +126,12 @@ textarea.pt-input { min-height: 96px; resize: vertical; }
 
 /* phase 4: an assessment's template names its kind and gives its pages their colour */
 .pt-kind { font-size: 12px; font-weight: 600; color: var(--pt-brand); text-transform: uppercase; letter-spacing: .04em; }
+
+/* phase 5: sentences about the results */
+.pt-insights { margin-top: 12px; }
+.pt-insights ul { margin: 6px 0 4px; padding-left: 20px; }
+.pt-insights li { padding: 3px 0; }
+.pt-insights li.is-better::marker { color: var(--pt-ok); }
+.pt-insights li.is-worse::marker { color: var(--pt-warn); }
+.pt-insights li.is-muted { color: var(--pt-muted); }
+.pt-said { margin: 10px 0 2px; padding: 10px 12px; border-left: 3px solid var(--pt-brand); background: var(--pt-soft); border-radius: 0 8px 8px 0; }

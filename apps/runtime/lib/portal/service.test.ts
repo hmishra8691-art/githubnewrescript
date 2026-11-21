@@ -589,3 +589,89 @@ test("re-wording touches only the two names, and only whole words", () => {
   assert.equal(inWords("Reassessment of the organisers", w), "Reassessment of the organisers");
   assert.equal(inWords(null, w), null);
 });
+
+/* ------------------------------------------------------------------ phase 5: insights, projection, the AI summary */
+
+const { explainResults } = await import("./service.ts");
+const twoScores = { dimensions: [{ id: "energy", label: "Energy", source: { kind: "items", items: [{ question: "e1" }] } }, { id: "drive", label: "Drive", source: { kind: "items", items: [{ question: "e2" }] } }] };
+const insightDef = (portal: Record<string, unknown> = {}) => indexDef({ scorecard: twoScores, show: { scores: true, insights: true }, ...portal });
+/* e1 → Energy, e2 → Drive */
+const took2 = (r: Rig, e: EnrolmentRec, id: string, daysAgo: number, energy: number, drive: number) => took(r, e, id, daysAgo, energy, drive);
+
+test("a few sentences about the results: only with the switch, only from what the person is shown", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, indexDef({ scorecard: twoScores, show: { scores: true } }));
+  took2(r, e, "r1", 2, 5, 2);
+  let d = await assessmentDetail(r.d, ctx, "e1");
+  assert.equal(d.attempts[0]!.insights, null); assert.equal(d.assessment.canExplain, false);
+  r.m.definitions.set("v-e1", insightDef());
+  d = await assessmentDetail(r.d, ctx, "e1");
+  assert.deepEqual(d.attempts[0]!.insights!.map((i) => i.text), ["Of your scores, Energy is the strongest (5 of 5).", "Of your scores, Drive has the most room to move (2 of 5)."]);
+  assert.equal(d.assessment.canExplain, false, "re-wording needs its own switch");
+  /* scores off: no sentences either */
+  r.m.definitions.set("v-e1", indexDef({ scorecard: twoScores, show: { insights: true } }));
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).attempts[0]!.insights, null);
+});
+
+test("the AI re-wording: opt-in; the provider is sent the sentences and the noun only; anything unusable falls back to the sentences", async () => {
+  const r = await rig();
+  r.ana.name = "Ana Silva";
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, insightDef());
+  took2(r, e, "r1", 2, 5, 2);
+  await fails(explainResults(r.d, ctx, "e1"), 403, "summary_off");
+
+  r.m.definitions.set("v-e1", insightDef({ template: "employee_engagement", show: { scores: true, insights: true, aiSummary: true } }));
+  const rules = "Of your scores, Energy is the strongest (5 of 5). Of your scores, Drive has the most room to move (2 of 5).";
+  assert.deepEqual(await explainResults(r.d, ctx, "e1"), { text: rules, source: "rules" }, "no provider: the sentences themselves");
+
+  const sent: unknown[] = [];
+  const withAi = { ...r.d, summarise: async (req: unknown) => { sent.push(req); return "You scored strongest on Energy, at 5 of 5, while Drive, at 2 of 5, has the most room to move."; } };
+  assert.deepEqual(await explainResults(withAi, ctx, "e1"), { text: "You scored strongest on Energy, at 5 of 5, while Drive, at 2 of 5, has the most room to move.", source: "ai" });
+  assert.deepEqual(Object.keys(sent[0] as object).sort(), ["customerId", "noun", "sentences", "sessionId", "surveyId"]);
+  assert.equal((sent[0] as { noun: string }).noun, "survey");
+  const wire = JSON.stringify((sent[0] as { sentences: string[]; noun: string }).sentences);
+  for (const secret of ["Ana", "RSP-ANA", "ana@example.org", "North", "tok-"]) assert.ok(!wire.includes(secret), `the sentences carry no ${secret}`);
+
+  assert.equal((await explainResults({ ...r.d, summarise: async () => null }, ctx, "e1")).source, "rules", "a refused or discarded reply");
+  assert.equal((await explainResults({ ...r.d, summarise: async () => { throw new Error("provider down"); } }, ctx, "e1")).source, "rules");
+  assert.deepEqual(r.m.events.filter((x) => x.event === "results_summarised").map((x) => x.detail!.source), ["rules", "ai", "rules", "rules"]);
+  await fails(explainResults(withAi, await signedIn(r, r.ben), "e1"), 404, "not_found");
+});
+
+test("a health template never sends anything to the AI provider and never projects, whatever is switched on", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, insightDef({ template: "wellbeing_checkin", show: { scores: true, trends: true, insights: true, projection: true, aiSummary: true } }));
+  for (const [i, v] of [1, 2, 3, 4, 5].entries()) took2(r, e, `r${i}`, 50 - i * 10, v, 3);
+  let called = 0;
+  const withAi = { ...r.d, summarise: async () => { called++; return "x"; } };
+  assert.equal((await assessmentDetail(withAi, ctx, "e1")).assessment.canExplain, false);
+  await fails(explainResults(withAi, ctx, "e1"), 403, "summary_off");
+  assert.equal(called, 0);
+  const [t] = (await progress(r.d, ctx)).tracks;
+  assert.deepEqual([t!.projections, t!.projectionNote], [[], null]);
+  assert.ok(t!.insights.length > 0, "the rule-written sentences are still allowed");
+});
+
+test("progress in words: a pattern and the latest change; a projection only with its switch and four like results", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, insightDef({ show: { scores: true, trends: true, insights: true } }));
+  for (const [i, v] of [1, 2, 3, 4].entries()) took2(r, e, `r${i}`, 40 - i * 10, v, 3);
+  let [t] = (await progress(r.d, ctx)).tracks;
+  assert.deepEqual(t!.insights.map((i) => [i.kind, i.dimension, i.text]), [
+    ["sustained", "energy", "Energy has moved up in each of your last 4 results."],
+    ["change", "energy", "Energy is up 1 since your previous result (from 3 to 4)."],
+  ]);
+  assert.deepEqual(t!.projections, [], "projection is its own switch");
+  r.m.definitions.set("v-e1", insightDef({ show: { scores: true, trends: true, projection: true } }));
+  [t] = (await progress(r.d, ctx)).tracks;
+  assert.deepEqual(t!.insights, []);
+  assert.deepEqual(t!.projections.map((p) => [p.dimension, p.ok, p.text]), [
+    ["energy", true, "If the pattern of your last 4 results continued, your next Energy score would be about 5."],
+    ["drive", true, "If the pattern of your last 4 results continued, your next Drive score would be about 3."],
+  ]);
+  assert.match(t!.projectionNote!, /not a prediction/);
+});

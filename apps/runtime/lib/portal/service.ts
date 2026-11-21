@@ -3,7 +3,7 @@ import {
   passwordProblems, sessionVerdict, verifyPassword, TOKEN, type EnrolmentAccess, type PortalPolicy,
 } from "@rescript/access/respondent";
 import { buildBenchmark, compare, onePerPerson, type BenchmarkSnapshot, type Comparison } from "@rescript/analytics/benchmark";
-import { buildTrends, checkSubmission, editDecision, editWindow, isAssessment, minChanges, nextDue, portalAnswerLines, portalDefinition, portalPresentation, portalSettings, NOTE_NOT_ADVICE, respondentScorecard, scorecardOf, seriesOf, OVERALL_ID, type DimensionTrend, type HistoryPoint, type PortalAnswerLine, type PortalPresentation, type PortalWords, type ScorecardResult } from "@rescript/engine";
+import { buildInsights, buildProjections, buildTrends, checkSubmission, editDecision, editWindow, isAssessment, minChanges, nextDue, portalAnswerLines, portalDefinition, portalPresentation, portalSettings, NOTE_NOT_ADVICE, PROJECTION_NOTE, respondentScorecard, scorecardOf, seriesOf, OVERALL_ID, type DimensionTrend, type HistoryPoint, type Insight, type Projection, type PortalAnswerLine, type PortalPresentation, type PortalWords, type ScorecardResult } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import { scoreInterview, type ScoredInterview } from "./scorecardRow.ts";
 import type { AccountRec, AttemptRec, EnrolmentRec, PortalStore, SessionRec } from "./types.ts";
@@ -35,7 +35,12 @@ export class PortalError extends Error {
   }
 }
 
-export interface PortalDeps { store: PortalStore; now: () => number; policy?: PortalPolicy }
+export interface SummaryRequest { customerId: string; surveyId: string; sessionId: string; noun: string; sentences: string[] }
+export interface PortalDeps {
+  store: PortalStore; now: () => number; policy?: PortalPolicy;
+  /** phase 5: the AI re-wording of rule-written sentences (metered, guarded); absent or null = the sentences as they are */
+  summarise?: (req: SummaryRequest) => Promise<string | null>;
+}
 export interface PortalContext { account: AccountRec; session: SessionRec }
 export interface RequestMeta { device?: string | null; ipHash?: string | null }
 
@@ -295,6 +300,8 @@ export interface AttemptView {
   scores: ScorecardResult | null;
   /** how the latest attempt's scores sit among everyone's and the person's own group's — groups only, never a person */
   comparison: Comparison[] | null;
+  /** phase 5: a few rule-written sentences about the latest results (their strongest score, the one with most room, their standing) */
+  insights: Insight[] | null;
 }
 
 /** a snapshot is rebuilt when it is older than this, or was made for another scoring, grouping or minimum */
@@ -335,6 +342,7 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
     const mayScore = !!portal?.show.scores && visible && !!f.live && !!scorecardOf(f.live);
     let answers: PortalAnswerLine[] | null = null, editableUntil: string | null = null, editable = false, editNote: string | null = null;
     let scores: ScorecardResult | null = null, comparison: Comparison[] | null = null;
+    let insights: Insight[] | null = null;
     if ((may || mayScore) && a.versionId) {
       const data = await d.store.attempt(e, a.id);
       const def = await d.store.definition(e, a.versionId);
@@ -355,16 +363,20 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
           const scored = scoreInterview(pd, data);
           scores = scored ? respondentScorecard(pd, scored.result) : null;
           if (scored && scores && a.id === latestComplete?.id && portal!.show.comparison && portal!.benchmark.enabled) comparison = comparisonView(pd, scored, await benchmarkFor(d, e, pd, scored.key));
+          /* from what the person is shown, and nothing more: the visible scores and their own standing */
+          if (scores && a.id === latestComplete?.id && portal!.show.insights) insights = buildInsights(scores, null, comparison);
         }
       }
     }
-    views.push({ id: a.id, status: a.status, startedAt: a.startedAt, completedAt: a.completedAt, revision: a.revision, answers, editableUntil, editable, editNote, scores, comparison });
+    views.push({ id: a.id, status: a.status, startedAt: a.startedAt, completedAt: a.completedAt, revision: a.revision, answers, editableUntil, editable, editNote, scores, comparison, insights });
   }
   await d.store.log({ accountId: ctx.account.id, event: "assessment_viewed", surveyId: e.surveyId, customerId: e.customerId });
   const c = card(e, f);
   /* the sentence under a person's results: the template's; without one, the standard note unless it is a marked test */
   const resultNote = c.look.note ?? (f.live && isAssessment(f.live) ? null : NOTE_NOT_ADVICE);
-  return { assessment: { ...c, resultNote }, attempts: views };
+  /* the AI re-wording is offered only where the researcher allows it and there is something to re-word */
+  const canExplain = !!portal?.show.aiSummary && views.some((v) => v.insights?.length);
+  return { assessment: { ...c, resultNote, canExplain }, attempts: views };
 }
 
 /* ------------------------------------------------------------------ phase 3: results over time */
@@ -381,6 +393,10 @@ export interface ProgressTrack {
   trends: DimensionTrend[];
   nextDue: { at: string; overdue: boolean; assessmentId: string } | null;
   look: PortalPresentation;
+  /** phase 5: patterns and changes in words; and, where allowed, the range the next result would fall in */
+  insights: Insight[];
+  projections: Projection[];
+  projectionNote: string | null;
 }
 
 /**
@@ -436,11 +452,39 @@ export async function progress(d: PortalDeps, ctx: PortalContext): Promise<{ tra
       trends: buildTrends(g.points, minChanges(newest.live)),
       nextDue: due && !newest.e.suspended ? { ...due, assessmentId: newest.e.id } : null,
       look: lookOf(newest.live),
+      insights: [], projections: [], projectionNote: null,
     });
+    const t = tracks.at(-1)!;
+    const show = portalSettings(newest.live)!.show;
+    /* only patterns and changes here — the page of one assessment says which score is strongest */
+    if (show.insights) t.insights = buildInsights({ v: 1, fingerprint: "", dimensions: [], overall: null }, t.trends, null, minChanges(newest.live));
+    if (show.projection) { t.projections = buildProjections(t.trends); t.projectionNote = t.projections.length ? PROJECTION_NOTE : null; }
   }
   tracks.sort((a, b) => a.title.localeCompare(b.title));
   await d.store.log({ accountId: ctx.account.id, event: "progress_viewed" });
   return { tracks };
+}
+
+/**
+ * THE SAME SENTENCES, RE-WORDED (phase 5). Offered only where the researcher switched it on (and the template
+ * allows it). The provider is sent the rule-written sentences and the word for the assessment — no name, no id,
+ * no answer. Whatever comes back is checked; if there is nothing usable, the person gets the sentences themselves
+ * and is told which they are reading.
+ */
+export async function explainResults(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown): Promise<{ text: string; source: "ai" | "rules" }> {
+  const detail = await assessmentDetail(d, ctx, enrolmentId);
+  if (!detail.assessment.canExplain) throw new PortalError(403, "summary_off", "A summary is not available for this assessment.");
+  const a = detail.attempts.find((x) => x.insights?.length)!;
+  const e = await own(d, ctx, enrolmentId);
+  const sentences = a.insights!.map((i) => i.text);
+  let text: string | null = null;
+  if (d.summarise && e.customerId) {
+    const row = (await d.store.attempts(e)).find((x) => x.id === a.id);
+    try { text = await d.summarise({ customerId: e.customerId, surveyId: e.surveyId, sessionId: row?.sessionId ?? a.id, noun: detail.assessment.look.words.one, sentences }); }
+    catch (err) { console.warn("[rescript:portal] summary failed", JSON.stringify({ surveyId: e.surveyId, error: (err as Error).message })); }
+  }
+  await d.store.log({ accountId: ctx.account.id, event: "results_summarised", surveyId: e.surveyId, customerId: e.customerId, detail: { source: text ? "ai" : "rules", sentences: sentences.length } });
+  return text ? { text, source: "ai" } : { text: sentences.join(" "), source: "rules" };
 }
 
 /**

@@ -9,6 +9,7 @@ import { NOTE_GROUPS, fmtScore as fmt, placeOn as place, standingText, type Stan
  */
 export interface Dimension { id: string; label: string; description?: string; score: number | null; min: number | null; max: number | null; percent: number | null; band: { label: string; note?: string } | null; higherIsBetter: boolean; reason?: string }
 export interface Comparison { dimension: string; everyone: Standing | null; groups: (Standing & { grouping: string; group: string })[]; note: string | null }
+export interface InsightLine { kind: string; dimension: string; tone: "better" | "worse" | "neutral"; text: string }
 export interface Scorecard { dimensions: Dimension[]; overall: { label: string; percent: number } | null }
 
 function Bar({ percent, mark, label }: { percent: number; mark: number | null; label: string }) {
@@ -40,6 +41,26 @@ function Row({ d, c }: { d: Dimension; c: Comparison | undefined }) {
         </ul>
       )}
     </li>
+  );
+}
+
+/** a few sentences about the results, written by fixed rules; and, where allowed, the same re-worded on request */
+export function Insights({ lines, onExplain }: { lines: InsightLine[]; onExplain?: () => Promise<{ text: string; source: "ai" | "rules" } | string> }) {
+  const [said, setSaid] = React.useState<{ text: string; source: "ai" | "rules" } | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  if (!lines.length) return null;
+  const ask = async () => { setBusy(true); setError(null); const r = await onExplain!(); setBusy(false); if (typeof r === "string") setError(r); else setSaid(r); };
+  return (
+    <div className="pt-card pt-insights" data-testid="pt-insights">
+      <p className="pt-q">In a few words</p>
+      <ul>{lines.map((l, i) => <li key={i} className={`is-${l.tone}`}>{l.text}</li>)}</ul>
+      {said && <p className="pt-said" data-testid="pt-summary">{said.text}</p>}
+      {said && <p className="pt-why">{said.source === "ai" ? "This paragraph was written by an AI system from the sentences above, and checked against them. Only those sentences were sent — not your name or your answers." : "A re-worded summary is not available right now, so these are the sentences above."}</p>}
+      {error && <p className="pt-why" role="alert">{error}</p>}
+      {onExplain && !said && <p className="pt-noprint" style={{ margin: "8px 0 0" }}><button type="button" className="pt-btn" onClick={ask} disabled={busy} data-testid="pt-explain">{busy ? "Writing…" : "Put this in a paragraph"}</button></p>}
+      <p className="pt-why">These sentences are worked out from your scores by fixed rules. They state what the figures show and nothing about why.</p>
+    </div>
   );
 }
 

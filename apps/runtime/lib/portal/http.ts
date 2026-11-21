@@ -1,3 +1,5 @@
+import { aiConfigured, writeResultSummary } from "@rescript/ai";
+import { meteredSessionAi } from "@/lib/metering";
 import "server-only";
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
@@ -5,7 +7,7 @@ import { clientIp } from "@rescript/quality/server";
 import { limited, type LimitedRoute } from "@/lib/rateLimit";
 import { portalSandbox, portalSandboxAvailable } from "./sandbox";
 import { supabasePortalStore } from "./supabaseStore";
-import { PortalError, authenticate, type PortalContext, type PortalDeps, type RequestMeta } from "./service";
+import { PortalError, authenticate, type PortalContext, type PortalDeps, type SummaryRequest, type RequestMeta } from "./service";
 
 /**
  * THE PORTAL'S HTTP EDGE (phase 1, 2026-11-20): the cookie, the request checks and the error shape, once, for every
@@ -24,10 +26,22 @@ const NO_STORE = { "cache-control": "no-store, private", "x-robots-tag": "noinde
 
 const dbConfigured = () => !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+/**
+ * The AI re-wording of a person's result sentences (phase 5), under the survey's meter like every other AI call a
+ * respondent causes: reserved before, settled after, and refused — which reads as "no summary" — when the
+ * project's budget says no. What is sent is in @rescript/ai `writeResultSummary`: the sentences, nothing else.
+ */
+async function summarise(req: SummaryRequest): Promise<string | null> {
+  if (!aiConfigured()) return null;
+  const billing = dbConfigured() ? { customerId: req.customerId, surveyId: req.surveyId, environment: "LIVE" as const, sessionId: req.sessionId } : null;
+  const out = await meteredSessionAi(billing, { estimateText: req.sentences.join(" "), maxTokens: 260, operation: "portal_result_summary" }, () => writeResultSummary({ sentences: req.sentences, noun: req.noun }));
+  return "refused" in out ? null : out.value;
+}
+
 export async function portalDeps(): Promise<PortalDeps> {
-  if (dbConfigured()) return { store: supabasePortalStore(), now: Date.now };
+  if (dbConfigured()) return { store: supabasePortalStore(), now: Date.now, summarise };
   /* no database: the developer sandbox (memory, seeded) — never in production, never beside a database */
-  if (portalSandboxAvailable()) return { store: (await portalSandbox()).store, now: Date.now };
+  if (portalSandboxAvailable()) return { store: (await portalSandbox()).store, now: Date.now, summarise };
   throw new PortalError(503, "unavailable", "The portal is not available on this installation.");
 }
 

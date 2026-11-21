@@ -155,6 +155,18 @@ console.log("\n4b — my results (phase 2)");
   assert.equal(await page.locator('[data-testid="pt-scores"]').isVisible(), true);
   assert.equal(await page.locator('[data-testid="pt-print"]').isVisible(), false);
   await page.emulateMedia({ media: "screen" });
+  /* phase 5: a few rule-written sentences; on request the same as one paragraph (the stand-in provider joins them), labelled as AI-written */
+  const said = await text("pt-insights");
+  assert.match(said, /Of your scores, Energy is the strongest \(9 of 10\)\./); assert.match(said, /Of your scores, Pressure has the most room to move \(5 of 10\)\./);
+  assert.match(said, /Your Energy score is higher than most of the 23 people compared\./); assert.match(said, /worked out from your scores by fixed rules/);
+  assert.equal(await page.locator('[data-testid="pt-summary"]').count(), 0, "nothing is sent until the person asks");
+  await page.click('[data-testid="pt-explain"]');
+  await page.waitForSelector('[data-testid="pt-summary"]');
+  assert.match(await text("pt-summary"), /^In short: Of your scores, Energy is the strongest/);
+  assert.match(await text("pt-insights"), /written by an AI system from the sentences above.*Only those sentences were sent/);
+  const refused = await api("assessments/e-done", { action: "explain" });
+  assert.equal(refused.status, 403); assert.equal(refused.body.code, "summary_off");
+
   /* the same report as a file: a real PDF, downloaded by the button; nobody else's, and nothing without a session */
   const file = await page.evaluate(async () => {
     const r = await fetch("/api/portal/assessments/e-index/report");
@@ -198,25 +210,32 @@ console.log("\n4c — my progress (phase 3)");
   const text = async (id) => (await page.textContent(`[data-testid="${id}"]`)).replace(/\s+/g, " ");
   assert.equal(await page.locator('[data-testid="pt-track"]').count(), 1, "only the assessment that shares its history");
   const track = await text("pt-track");
-  assert.match(track, /Workplace wellbeing index/); assert.match(track, /3 results\./); assert.match(track, /The next one is due /);
+  assert.match(track, /Workplace wellbeing index/); assert.match(track, /4 results\./); assert.match(track, /The next one is due /);
   assert.equal(await page.locator('[data-testid="pt-due-start"]').count(), 0, "not due yet: no button");
-  /* energy 5 → 7 → 9; pressure 8 → 6 → 5 (less is better) */
+  /* energy 4 → 5 → 7 → 9; pressure 9 → 8 → 6 → 5 (less is better) */
   assert.match(await text("pt-change-energy"), /Up 2 \(from 7 to 9\)/);
   assert.match(await page.getAttribute('[data-testid="pt-change-energy"]', "class"), /is-better/);
   const energy = await text("pt-trend-energy");
-  assert.match(energy, /Compared with your previous result, since /); assert.match(energy, /Since your first result: Up 4 \(from 5 to 9\)/);
+  assert.match(energy, /Compared with your previous result, since /); assert.match(energy, /Since your first result: Up 5 \(from 4 to 9\)/);
   assert.match(await text("pt-change-pressure"), /Down 1 \(from 6 to 5\)/);
   assert.match(await page.getAttribute('[data-testid="pt-change-pressure"]', "class"), /is-better/, "down is better for pressure");
   assert.match(await text("pt-trend-pressure"), /lower is better/);
   assert.equal(await page.locator('[data-testid^="pt-trend-"]').first().getAttribute("data-testid"), "pt-trend-__overall", "the headline first");
   /* the chart: three like results joined by one line; everyone's average beside the latest only */
   const chart = page.locator('[data-testid="pt-chart-energy"]');
-  assert.equal(await chart.locator("circle").count(), 3); assert.equal(await chart.locator("polyline").count(), 1);
+  assert.equal(await chart.locator("circle").count(), 4); assert.equal(await chart.locator("polyline").count(), 1);
   assert.equal(await chart.locator(".pt-trend-dot.is-apart").count(), 0); assert.equal(await chart.locator(".pt-trend-group").count(), 1);
-  assert.match(await chart.getAttribute("aria-label"), /Energy over time: .* 5, .* 7, .* 9/);
+  assert.match(await chart.getAttribute("aria-label"), /Energy over time: .* 4, .* 5, .* 7, .* 9/);
   const rows = await page.$$eval('[data-testid="pt-trend-energy"] tbody tr', (trs) => trs.map((tr) => tr.textContent.replace(/\s+/g, " ")));
-  assert.equal(rows.length, 3); assert.match(rows[0], /5 of 10Moderate—/); assert.match(rows[2], /9 of 10High[\d.]+ \(23 people\)/);
+  assert.equal(rows.length, 4); assert.match(rows[1], /5 of 10Moderate—/); assert.match(rows[3], /9 of 10High[\d.]+ \(23 people\)/);
   assert.match(await page.textContent("main"), /only between results that were scored the same way/);
+  /* phase 5: the pattern in words, and where the next result would fall if it continued — said to be arithmetic, not a prediction */
+  const words = await text("pt-insights");
+  assert.match(words, /Energy has moved up in each of your last 4 results\./); assert.match(words, /Pressure has moved down in each of your last 4 results\./);
+  const proj = await text("pt-projections");
+  assert.match(proj, /If the pattern of your last 4 results continued, your next Energy score would (most likely be between [\d.]+ and [\d.]+|be about [\d.]+)\./);
+  assert.match(proj, /not a prediction of what will happen/);
+  assert.equal(await page.locator('[data-testid="pt-track"] [data-testid="pt-explain"]').count(), 0);
   const raw = await api("progress");
   const sent = JSON.stringify(raw.body);
   assert.equal(raw.status, 200); assert.equal(raw.body.tracks.length, 1);

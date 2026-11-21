@@ -41,7 +41,7 @@ const indexSurvey = () => SurveyDefinition.parse({
   flow: [{ type: "page", id: "p1", questionIds: ["e1", "e2", "s1", "s2", "team"] }, { type: "end", id: "e", status: "complete" }],
   deployment: { access: { mode: "unique_links", allowRetake: true } },
   portal: {
-    enabled: true, template: "employee_engagement", show: { answers: true, scores: true, comparison: true, trends: true },
+    enabled: true, template: "employee_engagement", show: { answers: true, scores: true, comparison: true, trends: true, insights: true, projection: true, aiSummary: true },
     series: { id: "workplace-wellbeing", label: "Workplace wellbeing index", repeatEveryDays: 90 },
     scorecard: {
       overall: { label: "Wellbeing index" },
@@ -90,8 +90,9 @@ async function seed(): Promise<MemoryPortal> {
   m.definitions.set("v-index", idx);
   enrol("e-index", "sbx-1", "Workplace wellbeing index", "v-index");
   const mine = { e1: 4, e2: 5, s1: 2, s2: 3, team: "n" };
-  /* three results over time: the page "My progress" has something to draw */
+  /* four results over time (enough for a projection): the page "My progress" has something to draw */
   m.attempts.set("e-index", [
+    row("r-index-0", { versionId: "v-index", answers: { e1: 2, e2: 2, s1: 5, s2: 4, team: "n" }, startedAt: ago(300 * 24 + 1), completedAt: ago(300 * 24) }),
     row("r-index-1", { versionId: "v-index", answers: { e1: 2, e2: 3, s1: 4, s2: 4, team: "n" }, startedAt: ago(200 * 24 + 1), completedAt: ago(200 * 24) }),
     row("r-index-2", { versionId: "v-index", answers: { e1: 3, e2: 4, s1: 3, s2: 3, team: "n" }, startedAt: ago(100 * 24 + 1), completedAt: ago(100 * 24) }),
     row("r-index", { versionId: "v-index", answers: mine }),
