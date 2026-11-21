@@ -1,5 +1,6 @@
 import type { PortalSettings, Question, SurveyDefinition } from "@rescript/schema";
 import { isAssessment } from "./assessment.js";
+import { enforcePortalTemplate } from "./portalTemplates.js";
 import { htmlToText } from "./validate.js";
 
 /**
@@ -21,7 +22,8 @@ import { htmlToText } from "./validate.js";
  *      is set; calculated and hidden questions are never editable.
  */
 export function portalSettings(def: Pick<SurveyDefinition, "portal">): PortalSettings | null {
-  return def.portal?.enabled ? def.portal : null;
+  /* phase 4: a template's fixed rules are applied HERE, where every reader of the settings passes */
+  return def.portal?.enabled ? enforcePortalTemplate(def.portal) : null;
 }
 
 /** question id → the ids of the page, block and sections that contain it (innermost first) */
