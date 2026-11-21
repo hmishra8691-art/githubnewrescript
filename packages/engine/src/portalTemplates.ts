@@ -58,6 +58,10 @@ export interface PortalTemplate {
     noEditing?: true;
     /** submitted answers are never shown back */
     noAnswers?: true;
+    /** phase 5: no projection of a next result (a health score, a hiring decision) */
+    noProjection?: true;
+    /** phase 5: nothing about this person's results is sent to the AI provider */
+    noAi?: true;
   };
   suggests: string[];
 }
@@ -67,7 +71,7 @@ export const NOTE_NOT_ADVICE = "Scores describe the answers you gave. They are n
 const HEALTH_NOTE = "These scores describe the answers you gave. They are not a diagnosis or medical advice. If you are worried about your health, speak to a health professional.";
 export const STANDARD_ACCENT = "#1f4fd8";
 
-const show = (s: Partial<PortalSettings["show"]>): PortalSettings["show"] => ({ answers: false, history: false, scores: false, bands: true, comparison: false, trends: false, ...s });
+const show = (s: Partial<PortalSettings["show"]>): PortalSettings["show"] => ({ answers: false, history: false, scores: false, bands: true, comparison: false, trends: false, insights: false, projection: false, aiSummary: false, ...s });
 
 export const PORTAL_TEMPLATES: readonly PortalTemplate[] = [
   /* ---------------------------------------------------------------- work */
@@ -131,7 +135,7 @@ export const PORTAL_TEMPLATES: readonly PortalTemplate[] = [
     words: { one: "assessment", many: "assessments", organiser: "the recruiting team", results: "My results", start: "Start the assessment", again: "Start" },
     note: "These results are one part of an application and are read together with everything else you provide.", accent: "#334155",
     defaults: { identity: "assessment", show: show({}), editing: { mode: "none" }, maxAttempts: 1, minCohort: 10 },
-    enforce: { noComparison: true, noEditing: true, noAnswers: true },
+    enforce: { noComparison: true, noEditing: true, noAnswers: true, noProjection: true, noAi: true },
     suggests: ["Total", "One score per competency"],
   },
 
@@ -162,7 +166,7 @@ export const PORTAL_TEMPLATES: readonly PortalTemplate[] = [
     words: { one: "questionnaire", many: "questionnaires", organiser: "your care team", results: "My scores", start: "Start the questionnaire", again: "Complete the next one" },
     note: HEALTH_NOTE, accent: "#0f766e",
     defaults: { identity: "persistent", show: show({ answers: true, scores: true, trends: true }), editing: { mode: "window", windowHours: 24 }, minCohort: 20, repeatEveryDays: 90 },
-    enforce: { minCohort: 20 },
+    enforce: { minCohort: 20, noProjection: true, noAi: true },
     suggests: ["Symptoms", "Function", "Quality of life"],
   },
   {
@@ -171,7 +175,7 @@ export const PORTAL_TEMPLATES: readonly PortalTemplate[] = [
     words: { one: "check-in", many: "check-ins", organiser: "the organiser", results: "How I am doing", start: "Start the check-in", again: "Check in again" },
     note: HEALTH_NOTE, accent: "#0f766e",
     defaults: { identity: "persistent", show: show({ scores: true, trends: true }), editing: { mode: "none" }, minCohort: 20, repeatEveryDays: 14 },
-    enforce: { minCohort: 20 },
+    enforce: { minCohort: 20, noProjection: true, noAi: true },
     suggests: ["Wellbeing", "Sleep", "Stress"],
   },
   {
@@ -180,7 +184,7 @@ export const PORTAL_TEMPLATES: readonly PortalTemplate[] = [
     words: { one: "appraisal", many: "appraisals", organiser: "the organiser", results: "My profile", start: "Start the appraisal", again: "Start this year's" },
     note: HEALTH_NOTE, accent: "#be123c",
     defaults: { identity: "persistent", show: show({ answers: true, scores: true, trends: true }), editing: { mode: "window", windowHours: 72 }, minCohort: 20, repeatEveryDays: 365 },
-    enforce: { minCohort: 20 },
+    enforce: { minCohort: 20, noProjection: true, noAi: true },
     suggests: ["Activity", "Nutrition", "Sleep", "Stress"],
   },
 
@@ -280,6 +284,8 @@ export function enforcePortalTemplate(portal: PortalSettings): PortalSettings {
   if (e.noComparison) { out.show.comparison = false; out.benchmark.enabled = false; }
   if (e.noEditing) out.editing.mode = "none";
   if (e.noAnswers) { out.show.answers = false; out.show.history = false; out.editing.mode = "none"; }
+  if (e.noProjection) out.show.projection = false;
+  if (e.noAi) out.show.aiSummary = false;
   return out;
 }
 
@@ -318,5 +324,7 @@ export function templateRules(t: PortalTemplate): string[] {
   if (t.enforce.noComparison) out.push("Respondents are never compared with other people.");
   if (t.enforce.noEditing) out.push("Submitted answers can never be changed.");
   if (t.enforce.noAnswers) out.push("Submitted answers are never shown back.");
+  if (t.enforce.noProjection) out.push("No projection of a next result is shown.");
+  if (t.enforce.noAi) out.push("Nothing about a person's results is sent to the AI provider.");
   return out;
 }

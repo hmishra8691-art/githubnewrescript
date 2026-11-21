@@ -306,3 +306,4 @@ export * from "./portalPolicy.js";
 export * from "./scorecard.js";
 export * from "./history.js";
 export * from "./portalTemplates.js";
+export * from "./insights.js";

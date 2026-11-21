@@ -148,6 +148,12 @@ export const PortalSettings = z.object({
     comparison: z.boolean().default(false),
     /** phase 3: how their scores have changed across attempts and across the surveys of a series */
     trends: z.boolean().default(false),
+    /** phase 5: a few plain sentences about their results, written by fixed rules from their own scores */
+    insights: z.boolean().default(false),
+    /** …a range their next result would fall in if the recent pattern continued (needs four like results) */
+    projection: z.boolean().default(false),
+    /** …and the same sentences re-worded by the AI provider. Only the figures are sent — never a name or an answer. */
+    aiSummary: z.boolean().default(false),
   }).default({}),
   series: PortalSeries.optional(),
   /** phase 2: what is scored, and how it is compared. Absent = this survey shows no scores in the portal. */

@@ -46,6 +46,7 @@ test("health templates say what the scores are not, and compare only in larger g
     assert.match(t.note!, /not a diagnosis/); assert.match(t.note!, /health professional/);
     assert.ok((t.enforce.minCohort ?? 0) >= 20, t.id);
     assert.equal(t.defaults.show.comparison, false, `${t.id}: comparison is off until the researcher turns it on`);
+    assert.deepEqual([t.enforce.noProjection, t.enforce.noAi], [true, true], `${t.id}: no projection of a health score, and nothing sent to the AI provider`);
   }
   for (const t of PORTAL_TEMPLATES) assert.ok(!/\b(patient|clinical|hipaa)\b/i.test(`${Object.values(t.words).join(" ")} ${t.note ?? ""}`), `${t.id}: nothing shown to a respondent labels them`);
 });
@@ -71,6 +72,9 @@ test("a template's fixed rules hold wherever the settings are read, whatever the
   assert.equal(portalSettings(def({ template: "patient_outcomes", benchmark: { enabled: true, minCohort: 10 } }))!.benchmark.minCohort, 20);
   assert.equal(portalSettings(def({ template: "patient_outcomes", benchmark: { enabled: true, minCohort: 50 } }))!.benchmark.minCohort, 50);
   assert.equal(portalSettings(def({ template: "community_survey" }))!.benchmark.minCohort, 30);
+  /* phase 5: a health template never projects and never uses the AI provider, whatever is switched on */
+  const care = portalSettings(def({ template: "wellbeing_checkin", show: { scores: true, insights: true, projection: true, aiSummary: true } }))!;
+  assert.deepEqual([care.show.insights, care.show.projection, care.show.aiSummary], [true, false, false]);
 });
 
 test("no template, an unknown template, a portal that is off: nothing changes", () => {
@@ -103,7 +107,7 @@ test("applying a template keeps what the researcher built — scores, groups, se
 test("presentation and the rules in words", () => {
   const p = portalPresentation({ template: "patient_outcomes" });
   assert.deepEqual([p.words.one, p.words.organiser, p.words.results, p.accent], ["questionnaire", "your care team", "My scores", "#0f766e"]);
-  assert.deepEqual(templateRules(portalTemplate("candidate_assessment")!), ["Respondents are never compared with other people.", "Submitted answers can never be changed.", "Submitted answers are never shown back."]);
-  assert.deepEqual(templateRules(portalTemplate("patient_outcomes")!), ["A comparison is never shown for fewer than 20 people."]);
+  assert.deepEqual(templateRules(portalTemplate("candidate_assessment")!), ["Respondents are never compared with other people.", "Submitted answers can never be changed.", "Submitted answers are never shown back.", "No projection of a next result is shown.", "Nothing about a person's results is sent to the AI provider."]);
+  assert.deepEqual(templateRules(portalTemplate("patient_outcomes")!), ["A comparison is never shown for fewer than 20 people.", "No projection of a next result is shown.", "Nothing about a person's results is sent to the AI provider."]);
   assert.deepEqual(templateRules(portalTemplate("athlete_tracking")!), []);
 });
