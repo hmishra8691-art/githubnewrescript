@@ -51,11 +51,14 @@ export function Insights({ lines, onExplain }: { lines: InsightLine[]; onExplain
   const [error, setError] = React.useState<string | null>(null);
   if (!lines.length) return null;
   const ask = async () => { setBusy(true); setError(null); const r = await onExplain!(); setBusy(false); if (typeof r === "string") setError(r); else setSaid(r); };
+  /* the button that was pressed goes away: the focus moves to the paragraph that replaced it */
+  const saidRef = React.useRef<HTMLParagraphElement>(null);
+  React.useEffect(() => { if (said) saidRef.current?.focus(); }, [said]);
   return (
     <div className="pt-card pt-insights" data-testid="pt-insights">
       <p className="pt-q">In a few words</p>
       <ul>{lines.map((l, i) => <li key={i} className={`is-${l.tone}`}>{l.text}</li>)}</ul>
-      {said && <p className="pt-said" data-testid="pt-summary">{said.text}</p>}
+      {said && <p className="pt-said" data-testid="pt-summary" tabIndex={-1} ref={saidRef}>{said.text}</p>}
       {said && <p className="pt-why">{said.source === "ai" ? "This paragraph was written by an AI system from the sentences above, and checked against them. Only those sentences were sent — not your name or your answers." : "A re-worded summary is not available right now, so these are the sentences above."}</p>}
       {error && <p className="pt-why" role="alert">{error}</p>}
       {onExplain && !said && <p className="pt-noprint" style={{ margin: "8px 0 0" }}><button type="button" className="pt-btn" onClick={ask} disabled={busy} data-testid="pt-explain">{busy ? "Writing…" : "Put this in a paragraph"}</button></p>}

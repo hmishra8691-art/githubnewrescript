@@ -18,8 +18,11 @@ function Editor({ line, onSave, onCancel, busy }: { line: Line; onSave: (v: unkn
   const input = line.input!;
   const [value, setValue] = React.useState<unknown>(input.value);
   const name = `pt-edit-${line.questionId}`;
+  /* the Change button was replaced by this form: the focus moves into it; Escape leaves it */
+  const form = React.useRef<HTMLFormElement>(null);
+  React.useEffect(() => { (form.current?.querySelector("input:checked, input, textarea") as HTMLElement | null)?.focus(); }, []);
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(value); }} data-testid="pt-editor">
+    <form ref={form} onSubmit={(e) => { e.preventDefault(); onSave(value); }} onKeyDown={(e) => { if (e.key === "Escape" && !busy) { e.stopPropagation(); onCancel(); } }} data-testid="pt-editor">
       {input.kind === "single" && (
         <div className="pt-choices" role="radiogroup" aria-label={line.text}>
           {input.options.map((o) => (<label key={String(o.code)}><input type="radio" name={name} checked={value === o.code} onChange={() => setValue(o.code)} /> <span>{o.label}</span></label>))}
@@ -47,6 +50,13 @@ export default function PortalAssessment({ params }: { params: { id: string } })
   const [error, setError] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<string | null>(null);
+  /* when an editor closes, the focus goes back to the Change button it came from */
+  const lastEdited = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (editing) { lastEdited.current = editing; return; }
+    const code = lastEdited.current; lastEdited.current = null;
+    if (code) requestAnimationFrame(() => (document.querySelector(`[data-edit-key="${CSS.escape(code)}"]`) as HTMLElement | null)?.focus());
+  }, [editing, d]);
   const [busy, setBusy] = React.useState(false);
   const load = React.useCallback(async () => {
     const r = await portalApi<Detail>(`assessments/${params.id}`);
@@ -156,7 +166,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
                         : (
                           <>
                             <p className="pt-a">{l.answer}</p>
-                            {l.edit.allowed && l.input && <button type="button" className="pt-btn is-quiet pt-noprint" onClick={() => { setEditing(`${a.id}:${l.questionId}`); setSaved(null); }} data-testid={`pt-change-${l.code}`}>Change</button>}
+                            {l.edit.allowed && l.input && <button type="button" className="pt-btn is-quiet pt-noprint" onClick={() => { setEditing(`${a.id}:${l.questionId}`); setSaved(null); }} data-testid={`pt-change-${l.code}`} data-edit-key={`${a.id}:${l.questionId}`} aria-label={`Change your answer to: ${l.text}`}>Change</button>}
                             {l.edit.allowed && !l.input && <p className="pt-why pt-noprint">This kind of answer cannot be changed here. Ask {d.assessment.look.words.organiser} if it needs correcting.</p>}
                           </>
                         )}
