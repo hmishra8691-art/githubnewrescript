@@ -131,6 +131,9 @@ export function PortalAccessPanel() {
             <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.answers} onChange={(e) => set((p) => { p.show.answers = e.target.checked; })} data-testid="portal-show-answers" /> Respondents can see the answers they submitted</label>
             <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.history} disabled={!portal?.show.answers} onChange={(e) => set((p) => { p.show.history = e.target.checked; })} data-testid="portal-show-history" /> …and their earlier attempts</label>
           </div>
+          <div className="row" style={{ gap: 16, marginTop: 6, flexWrap: "wrap", fontSize: 13 }}>
+            <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.rewards} onChange={(e) => set((p) => { p.show.rewards = e.target.checked; })} data-testid="portal-show-rewards" /> Respondents can see what they have earned: this survey's points, level and badges, and their run of on-time completions</label>
+          </div>
           {editing.mode !== "none" && !portal?.show.answers && <div className="chip warn qd-note" style={{ marginTop: 8 }}>Answers can only be changed when respondents can see them. Turn that on too.</div>}
           {s.def.assessment?.enabled && editing.mode !== "none" && <div className="chip warn qd-note" style={{ marginTop: 8 }}>This is a scored test: answers are final once submitted, whatever is chosen here.</div>}
           <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>These settings are saved with the survey and apply once it is published. The switches in the list below apply immediately.</p>

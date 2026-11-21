@@ -3,7 +3,7 @@ import {
   passwordProblems, readPrivacyRequest, sessionVerdict, verifyPassword, PORTAL_CONSENT, PRIVACY_REQUEST_MAX_OPEN, TOKEN, type EnrolmentAccess, type PortalPolicy,
 } from "@rescript/access/respondent";
 import { buildBenchmark, compare, onePerPerson, type BenchmarkSnapshot, type Comparison } from "@rescript/analytics/benchmark";
-import { buildInsights, buildProjections, buildTrends, checkSubmission, editDecision, editWindow, isAssessment, minChanges, nextDue, portalAnswerLines, portalDefinition, portalPresentation, portalSettings, NOTE_NOT_ADVICE, PROJECTION_NOTE, respondentScorecard, scorecardOf, seriesOf, OVERALL_ID, type DimensionTrend, type HistoryPoint, type Insight, type Projection, type PortalAnswerLine, type PortalPresentation, type PortalWords, type ScorecardResult } from "@rescript/engine";
+import { buildAchievements, buildInsights, buildProjections, buildTrends, checkSubmission, editDecision, editWindow, isAssessment, minChanges, nextDue, portalAnswerLines, portalDefinition, portalPresentation, portalSettings, NOTE_NOT_ADVICE, PROJECTION_NOTE, respondentScorecard, scorecardOf, seriesOf, OVERALL_ID, type Achievements, type DimensionTrend, type HistoryPoint, type Insight, type Projection, type PortalAnswerLine, type PortalPresentation, type PortalWords, type ScorecardResult } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import { scoreInterview, type ScoredInterview } from "./scorecardRow.ts";
 import type { AccountRec, AttemptRec, EnrolmentRec, PortalStore, SessionRec } from "./types.ts";
@@ -428,9 +428,17 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
   const c = card(e, f);
   /* the sentence under a person's results: the template's; without one, the standard note unless it is a marked test */
   const resultNote = c.look.note ?? (f.live && isAssessment(f.live) ? null : NOTE_NOT_ADVICE);
+  /* phase 6: what the survey itself awarded (its points, level and badges), and the streak of on-time completions */
+  let rewards: Achievements | null = null;
+  if (f.live && portal?.show.rewards) {
+    const done = f.attempts.filter((a) => a.status === "complete" && a.completedAt).sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt))).slice(-HISTORY_ATTEMPTS);
+    const read: { completedAt: string; calculated: Record<string, unknown> }[] = [];
+    for (const a of done) { const data = await d.store.attempt(e, a.id); if (data) read.push({ completedAt: a.completedAt!, calculated: data.calculated }); }
+    rewards = buildAchievements(f.live, read, now);
+  }
   /* the AI re-wording is offered only where the researcher allows it and there is something to re-word */
   const canExplain = !!portal?.show.aiSummary && views.some((v) => v.insights?.length);
-  return { assessment: { ...c, resultNote, canExplain }, attempts: views };
+  return { assessment: { ...c, resultNote, canExplain, rewards }, attempts: views };
 }
 
 /* ------------------------------------------------------------------ phase 3: results over time */

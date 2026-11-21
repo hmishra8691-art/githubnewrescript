@@ -307,3 +307,4 @@ export * from "./scorecard.js";
 export * from "./history.js";
 export * from "./portalTemplates.js";
 export * from "./insights.js";
+export * from "./achievements.js";

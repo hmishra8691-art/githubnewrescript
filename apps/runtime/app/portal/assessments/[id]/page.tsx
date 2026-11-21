@@ -8,7 +8,8 @@ type Option = { code: string | number; label: string };
 type Input = { kind: "single"; options: Option[]; value: string | number | null } | { kind: "multi"; options: Option[]; value: (string | number)[] } | { kind: "text"; long: boolean; value: string } | { kind: "number"; value: number | null };
 interface Line { questionId: string; code: string; text: string; answer: string; edit: { allowed: boolean; reason?: string }; input: Input | null }
 interface Attempt { id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: Line[] | null; editableUntil: string | null; editable: boolean; editNote: string | null; scores: Scorecard | null; comparison: Comparison[] | null; insights: InsightLine[] | null }
-interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; resultNote: string | null; canExplain?: boolean; canViewTrends?: boolean; look: { words: { one: string; organiser: string; results: string; start: string; again: string }; accent: string } }; attempts: Attempt[] }
+interface Rewards { points: number | null; level: { index: number; name: string } | null; nextLevel: { name: string; pointsToGo: number } | null; badges: { id: string; title: string; description: string | null; icon: string }[]; badgesAvailable: number; completions: number; streak: { current: number; best: number; every: number } | null }
+interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; resultNote: string | null; canExplain?: boolean; rewards?: Rewards | null; canViewTrends?: boolean; look: { words: { one: string; organiser: string; results: string; start: string; again: string }; accent: string } }; attempts: Attempt[] }
 
 const STATUS: Record<string, string> = { complete: "Completed", in_progress: "In progress", screened: "Ended early", quota_full: "Ended early", terminated: "Ended early" };
 
@@ -95,6 +96,31 @@ export default function PortalAssessment({ params }: { params: { id: string } })
             {shown && <button type="button" className="pt-btn" onClick={download} disabled={busy} data-testid="pt-download">Download PDF</button>}
             {shown && <button type="button" className="pt-btn" onClick={() => window.print()} data-testid="pt-print">Print</button>}
           </div>
+
+          {d.assessment.rewards && (d.assessment.rewards.completions > 0) && (() => { const r = d.assessment.rewards!; return (
+            <section data-testid="pt-rewards">
+              <h2>My achievements</h2>
+              <div className="pt-card">
+                <dl className="pt-facts">
+                  {r.points !== null && <div><dt>Points</dt><dd>{r.points}</dd></div>}
+                  {r.level && <div><dt>Level</dt><dd>{r.level.name}</dd></div>}
+                  {r.streak && <div><dt>In a row, on time</dt><dd>{r.streak.current}</dd></div>}
+                  {r.streak && r.streak.best > r.streak.current && <div><dt>Longest run</dt><dd>{r.streak.best}</dd></div>}
+                  <div><dt>Completed</dt><dd>{r.completions}</dd></div>
+                </dl>
+                {r.nextLevel && <p className="pt-why">{r.nextLevel.pointsToGo} more point{r.nextLevel.pointsToGo === 1 ? "" : "s"} to reach {r.nextLevel.name}.</p>}
+                {r.badgesAvailable > 0 && (
+                  <>
+                    <p className="pt-q" style={{ marginTop: 10 }}>Badges ({r.badges.length} of {r.badgesAvailable})</p>
+                    {r.badges.length === 0 ? <p className="pt-why">None yet.</p> : (
+                      <ul className="pt-badges">{r.badges.map((b) => (<li key={b.id}><span aria-hidden="true">{b.icon}</span> <strong>{b.title}</strong>{b.description ? <span className="pt-why"> {b.description}</span> : null}</li>))}</ul>
+                    )}
+                  </>
+                )}
+                <p className="pt-why">Achievements are recognition for taking part. They are not money and cannot be exchanged for anything.</p>
+              </div>
+            </section>
+          ); })()}
 
           <h2>History</h2>
           <div className="pt-card">

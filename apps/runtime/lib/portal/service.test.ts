@@ -771,3 +771,21 @@ test("a person can see when an organiser's staff opened their results", async ()
   r.m.events.push({ accountId: r.ana.id, event: "results_viewed_by_staff", surveyId: "survey-e1", detail: { at: "2026-11-20T08:00:00.000Z" } }, { accountId: r.ben.id, event: "results_viewed_by_staff", surveyId: "survey-e1", detail: {} });
   assert.deepEqual((await myPrivacy(r.d, ctx)).viewed, [{ at: "2026-11-20T08:00:00.000Z", assessment: "Wellbeing 2026" }]);
 });
+
+/* ------------------------------------------------------------------ phase 6: achievements */
+
+test("achievements: only with the switch; the survey's own points, level and badges, and the on-time streak", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const { badgeRule } = await import("@rescript/engine");
+  const game = { points: { perAnswer: 10 }, levels: [{ name: "Starter", minPoints: 0 }, { name: "Regular", minPoints: 30 }], badges: [{ id: "first", title: "First steps", icon: "star", when: badgeRule("POINTS >= 10")! }] };
+  const def = (show: Record<string, unknown>) => SurveyDefinition.parse({ ...trendDef({ show: { scores: true, ...show }, series: { id: "w", label: "Weekly", repeatEveryDays: 7 } }), gamification: game });
+  const e = wave(r, "e1", r.ana.id, def({}));
+  took(r, e, "r1", 10, 3, 3, { calculated: { POINTS: 20, LEVEL: 1, BADGES: "first" } });
+  took(r, e, "r2", 3, 4, 4, { calculated: { POINTS: 30, LEVEL: 2, BADGES: "first" } });
+  assert.equal((await assessmentDetail(r.d, ctx, "e1")).assessment.rewards, null);
+  r.m.definitions.set("v-e1", def({ rewards: true }));
+  const a = (await assessmentDetail(r.d, ctx, "e1")).assessment.rewards!;
+  assert.deepEqual([a.points, a.level!.name, a.nextLevel, a.badges.map((b) => b.title), a.completions, a.streak], [30, "Regular", null, ["First steps"], 2, { current: 2, best: 2, every: 7 }]);
+  await fails(assessmentDetail(r.d, await signedIn(r, r.ben), "e1"), 404, "not_found");
+});

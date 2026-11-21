@@ -71,7 +71,7 @@ export const NOTE_NOT_ADVICE = "Scores describe the answers you gave. They are n
 const HEALTH_NOTE = "These scores describe the answers you gave. They are not a diagnosis or medical advice. If you are worried about your health, speak to a health professional.";
 export const STANDARD_ACCENT = "#1f4fd8";
 
-const show = (s: Partial<PortalSettings["show"]>): PortalSettings["show"] => ({ answers: false, history: false, scores: false, bands: true, comparison: false, trends: false, insights: false, projection: false, aiSummary: false, ...s });
+const show = (s: Partial<PortalSettings["show"]>): PortalSettings["show"] => ({ answers: false, history: false, scores: false, bands: true, comparison: false, trends: false, insights: false, projection: false, aiSummary: false, rewards: false, ...s });
 
 export const PORTAL_TEMPLATES: readonly PortalTemplate[] = [
   /* ---------------------------------------------------------------- work */

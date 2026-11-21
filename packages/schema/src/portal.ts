@@ -154,7 +154,11 @@ export const PortalSettings = z.object({
     projection: z.boolean().default(false),
     /** …and the same sentences re-worded by the AI provider. Only the figures are sent — never a name or an answer. */
     aiSummary: z.boolean().default(false),
+    /** phase 6: the points, level and badges the survey awards (its gamification), and their streak of on-time completions */
+    rewards: z.boolean().default(false),
   }).default({}),
+  /** phase 6: respondents may write to the organiser about this assessment, and read the replies */
+  messages: z.boolean().default(false),
   series: PortalSeries.optional(),
   /** phase 2: what is scored, and how it is compared. Absent = this survey shows no scores in the portal. */
   scorecard: PortalScorecard.optional(),
