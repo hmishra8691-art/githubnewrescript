@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { NOTE_GROUPS, NOTE_NOT_ADVICE, fmtScore as fmt, placeOn as place, standingText, type Standing } from "@/lib/portal/words";
+import { NOTE_GROUPS, fmtScore as fmt, placeOn as place, standingText, type Standing } from "@/lib/portal/words";
 
 /**
  * ONE ATTEMPT'S SCORES (phase 2, 2026-11-20). Everything drawn here was decided on the server: which scores the
@@ -43,7 +43,7 @@ function Row({ d, c }: { d: Dimension; c: Comparison | undefined }) {
   );
 }
 
-export function Scores({ scores, comparison, scoredTest }: { scores: Scorecard; comparison: Comparison[] | null; scoredTest: boolean }) {
+export function Scores({ scores, comparison, note }: { scores: Scorecard; comparison: Comparison[] | null; note: string | null }) {
   const of = (id: string) => comparison?.find((c) => c.dimension === id);
   const overall = of("__overall");
   const anyMark = !!comparison?.some((c) => c.everyone);
@@ -60,7 +60,7 @@ export function Scores({ scores, comparison, scoredTest }: { scores: Scorecard; 
       <ul className="pt-answers pt-scores">{scores.dimensions.map((d) => <Row key={d.id} d={d} c={of(d.id)} />)}</ul>
       {anyMark && <p className="pt-why pt-legend"><span className="pt-bar-mark is-key" /> The line on a bar is the average of everyone compared.</p>}
       {comparison && <p className="pt-why">{NOTE_GROUPS}</p>}
-      {!scoredTest && <p className="pt-why">{NOTE_NOT_ADVICE}</p>}
+      {note && <p className="pt-why" data-testid="pt-result-note">{note}</p>}
     </div>
   );
 }

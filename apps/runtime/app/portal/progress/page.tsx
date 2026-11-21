@@ -3,9 +3,8 @@ import React from "react";
 import { begin, portalApi, when } from "@/components/portal/api";
 import { Note, Shell } from "@/components/portal/Shell";
 import { TrendCard, type Trend } from "@/components/portal/Trend";
-import { NOTE_NOT_ADVICE } from "@/lib/portal/words";
 
-interface Track { title: string; series: boolean; assessments: { id: string; title: string; period: string | null }[]; results: number; trends: Trend[]; nextDue: { at: string; overdue: boolean; assessmentId: string } | null }
+interface Track { title: string; series: boolean; assessments: { id: string; title: string; period: string | null }[]; results: number; trends: Trend[]; nextDue: { at: string; overdue: boolean; assessmentId: string } | null; look: { note: string | null; accent: string; words: { again: string } } }
 
 /** MY PROGRESS (phase 3): the signed-in person's own results over time. */
 export default function PortalProgress() {
@@ -21,19 +20,20 @@ export default function PortalProgress() {
       {!tracks && !error && <p className="pt-empty">Loading…</p>}
       {tracks && !tracks.length && <div className="pt-card pt-empty" data-testid="pt-no-progress">There is nothing to show over time yet. Results appear here when an assessment you have completed shares them.</div>}
       {tracks?.map((t) => (
-        <section key={t.title + t.assessments.map((a) => a.id).join()} data-testid="pt-track">
+        <section key={t.title + t.assessments.map((a) => a.id).join()} data-testid="pt-track" style={{ "--pt-brand": t.look.accent } as React.CSSProperties}>
           <h2>{t.title}</h2>
           <p className="pt-why" style={{ margin: "0 0 10px" }}>
             {t.results} result{t.results === 1 ? "" : "s"}{t.series && t.assessments.length > 1 ? ` across ${t.assessments.length} assessments` : ""}.
             {t.nextDue && <> {t.nextDue.overdue ? "The next one is due now." : `The next one is due ${when(t.nextDue.at)}.`}</>}
           </p>
-          {t.nextDue?.overdue && <p className="pt-noprint"><button type="button" className="pt-btn is-primary" onClick={() => begin(t.nextDue!.assessmentId, setError)} data-testid="pt-due-start">Take it now</button></p>}
+          {t.nextDue?.overdue && <p className="pt-noprint"><button type="button" className="pt-btn is-primary" onClick={() => begin(t.nextDue!.assessmentId, setError)} data-testid="pt-due-start">{t.look.words.again}</button></p>}
           <div className="pt-card"><ul className="pt-answers pt-scores">{t.trends.map((x) => <TrendCard key={x.id} t={x} />)}</ul></div>
+          {t.look.note && <p className="pt-why" style={{ marginTop: 8 }}>{t.look.note}</p>}
         </section>
       ))}
       {tracks && tracks.length > 0 && (
         <>
-          <p className="pt-why" style={{ marginTop: 14 }}>A change is shown only between results that were scored the same way. It describes your own answers at two points in time and says nothing about the cause. {NOTE_NOT_ADVICE}</p>
+          <p className="pt-why" style={{ marginTop: 14 }}>A change is shown only between results that were scored the same way. It describes your own answers at two points in time and says nothing about the cause. Scores are not a diagnosis or professional advice.</p>
           <p className="pt-noprint"><button type="button" className="pt-btn" onClick={() => window.print()}>Print</button></p>
         </>
       )}

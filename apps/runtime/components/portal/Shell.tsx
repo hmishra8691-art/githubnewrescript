@@ -3,10 +3,10 @@ import React from "react";
 import { portalApi } from "./api";
 
 /** The portal's frame for signed-in pages: the name bar, the three places, and Sign out. */
-export function Shell({ current, who, children }: { current: "overview" | "account" | "assessment"; who?: { respondentId: string; name: string | null } | null; children: React.ReactNode }) {
+export function Shell({ current, who, accent, children }: { current: "overview" | "account" | "assessment"; who?: { respondentId: string; name: string | null } | null; accent?: string; children: React.ReactNode }) {
   const out = async () => { await portalApi("logout", {}, { redirectOn401: false }); window.location.assign("/portal/login?ended=signed_out"); };
   return (
-    <div className="pt">
+    <div className="pt" style={accent ? ({ "--pt-brand": accent } as React.CSSProperties) : undefined}>
       <header className="pt-top">
         <div className="pt-top-in">
           <a className="pt-brand" href="/portal">My assessments</a>

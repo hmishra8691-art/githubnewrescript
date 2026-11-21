@@ -416,7 +416,7 @@ test("nobody reads another person's scores: someone else's assessment is 'not fo
 
 /* ------------------------------------------------------------------ phase 3: results over time */
 
-const { progress, HISTORY_ATTEMPTS } = await import("./service.ts");
+const { progress, personalReport, HISTORY_ATTEMPTS } = await import("./service.ts");
 const at = (days: number) => new Date(T0 - days * 86_400_000).toISOString();
 const trendDef = (portal: Record<string, unknown> = {}) => indexDef({ show: { scores: true, trends: true }, ...portal });
 /** an enrolment on its own version of the definition */
@@ -527,4 +527,65 @@ test("nobody's progress but one's own; and a very long history reads the most re
   const [t] = (await progress(r.d, await signedIn(r, r.ana))).tracks;
   assert.equal(t!.results, HISTORY_ATTEMPTS);
   assert.equal(t!.trends[0]!.points.at(-1)!.responseId, `r${HISTORY_ATTEMPTS + 5}`, "the newest is kept");
+});
+
+/* ------------------------------------------------------------------ phase 4: templates */
+
+const { inWords } = await import("./service.ts");
+
+test("a template gives an assessment its words, note and colour; without one it is the standard portal", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const plain = wave(r, "plain", r.ana.id, indexDef({ show: { scores: true } }));
+  const care = wave(r, "care", r.ana.id, indexDef({ template: "patient_outcomes", show: { scores: true } }), { suspended: true });
+  took(r, plain, "r1", 3, 4, 5); took(r, care, "r2", 3, 4, 5);
+  const cards = (await overview(r.d, ctx)).assessments;
+  const a = cards.find((c) => c.id === "plain")!, b = cards.find((c) => c.id === "care")!;
+  assert.deepEqual([a.look.template, a.look.words.one, a.look.words.start, a.look.accent], [null, "assessment", "Start", "#1f4fd8"]);
+  assert.deepEqual([b.look.template, b.look.words.one, b.look.words.results, b.look.accent], ["patient_outcomes", "questionnaire", "My scores", "#0f766e"]);
+  assert.equal(b.reason, "Your access to this questionnaire has been paused. Please contact your care team.", "the engine's reason, in the template's words");
+  assert.equal(a.reason, null);
+  assert.match((await assessmentDetail(r.d, ctx, "plain")).assessment.resultNote!, /not a diagnosis or professional advice/);
+  assert.match((await assessmentDetail(r.d, ctx, "care")).assessment.resultNote!, /speak to a health professional/);
+  const report = await personalReport(r.d, ctx, "care");
+  assert.equal(report.resultsTitle, "My scores"); assert.match(report.note!, /health professional/);
+});
+
+test("a marked test has no note of its own; a template's note still shows", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const paper = (template?: string) => SurveyDefinition.parse({ ...indexDef({ show: { scores: true }, ...(template ? { template } : {}) }), assessment: { defaultMarks: 1 } });
+  const t1 = wave(r, "t1", r.ana.id, paper()), t2 = wave(r, "t2", r.ana.id, paper("skills_assessment"));
+  took(r, t1, "r1", 3, 4, 5); took(r, t2, "r2", 3, 4, 5);
+  assert.equal((await assessmentDetail(r.d, ctx, "t1")).assessment.resultNote, null);
+  assert.match((await assessmentDetail(r.d, ctx, "t2")).assessment.resultNote!, /guide for development/);
+});
+
+test("a template's fixed rules reach the respondent: a candidate assessment shows no answers and no comparison whatever was saved", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const def = indexDef({ template: "candidate_assessment", show: { answers: true, history: true, scores: true, comparison: true }, editing: { mode: "until_locked" } });
+  const e = wave(r, "e1", r.ana.id, def);
+  took(r, e, "r1", 3, 4, 5); peers(r, e, def, 15, "n");
+  const d = await assessmentDetail(r.d, ctx, "e1");
+  assert.equal(d.attempts[0]!.answers, null); assert.equal(d.attempts[0]!.comparison, null);
+  assert.equal(d.attempts[0]!.scores!.dimensions[0]!.score, 9, "scores are the researcher's choice and stay");
+  assert.equal(d.assessment.canViewAnswers, false);
+  await fails(editAnswer(r.d, ctx, { enrolmentId: "e1", responseId: "r1", questionId: "e1", value: 2, revision: 0 }), 403, "editing_off");
+
+  /* a health template lifts the group minimum to twenty: fifteen colleagues are not enough */
+  const health = indexDef({ template: "wellbeing_checkin", show: { scores: true, comparison: true }, benchmark: { enabled: true, minCohort: 10, groups: [] } });
+  const h = wave(r, "h1", r.ana.id, health);
+  took(r, h, "r2", 3, 4, 5); peers(r, h, health, 15, "n");
+  const c = (await assessmentDetail(r.d, ctx, "h1")).attempts[0]!.comparison!;
+  assert.equal(c[0]!.everyone, null); assert.match(c[0]!.note!, /at least 20 people/);
+});
+
+test("re-wording touches only the two names, and only whole words", () => {
+  const w = { one: "check-in", many: "check-ins", organiser: "your coach", results: "R", start: "S", again: "A" };
+  assert.equal(inWords("The time to take this assessment has ended.", w), "The time to take this check-in has ended.");
+  assert.equal(inWords("Your answers have been locked by the organiser.", w), "Your answers have been locked by your coach.");
+  assert.equal(inWords("The organiser has paused the assessment.", w), "Your coach has paused the check-in.");
+  assert.equal(inWords("Reassessment of the organisers", w), "Reassessment of the organisers");
+  assert.equal(inWords(null, w), null);
 });

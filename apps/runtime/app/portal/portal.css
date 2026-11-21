@@ -44,7 +44,7 @@
 .pt-btn { appearance: none; border: 1px solid var(--pt-line); background: var(--pt-card); color: var(--pt-ink); font: inherit; font-weight: 600; font-size: 14.5px; padding: 8px 16px; border-radius: 10px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; }
 .pt-btn:hover { background: #f3f5f8; }
 .pt-btn.is-primary { background: var(--pt-brand); border-color: var(--pt-brand); color: var(--pt-brand-ink); }
-.pt-btn.is-primary:hover { background: #1941b5; }
+.pt-btn.is-primary:hover { background: var(--pt-brand); filter: brightness(.88); }
 .pt-btn.is-quiet { border-color: transparent; color: var(--pt-brand); padding-left: 8px; padding-right: 8px; }
 .pt-btn[disabled] { opacity: .55; cursor: not-allowed; }
 
@@ -123,3 +123,6 @@ textarea.pt-input { min-height: 96px; resize: vertical; }
 .pt-trend-table { font-size: 13.5px; margin-top: 6px; }
 @media (max-width: 560px) { .pt-score-head { flex-wrap: wrap; } .pt-change { white-space: normal; } }
 @media print { .pt-trend * { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+
+/* phase 4: an assessment's template names its kind and gives its pages their colour */
+.pt-kind { font-size: 12px; font-weight: 600; color: var(--pt-brand); text-transform: uppercase; letter-spacing: .04em; }

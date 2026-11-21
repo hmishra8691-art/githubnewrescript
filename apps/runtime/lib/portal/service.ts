@@ -3,7 +3,7 @@ import {
   passwordProblems, sessionVerdict, verifyPassword, TOKEN, type EnrolmentAccess, type PortalPolicy,
 } from "@rescript/access/respondent";
 import { buildBenchmark, compare, onePerPerson, type BenchmarkSnapshot, type Comparison } from "@rescript/analytics/benchmark";
-import { buildTrends, checkSubmission, editDecision, editWindow, isAssessment, minChanges, nextDue, portalAnswerLines, portalDefinition, portalSettings, respondentScorecard, scorecardOf, seriesOf, OVERALL_ID, type DimensionTrend, type HistoryPoint, type PortalAnswerLine, type ScorecardResult } from "@rescript/engine";
+import { buildTrends, checkSubmission, editDecision, editWindow, isAssessment, minChanges, nextDue, portalAnswerLines, portalDefinition, portalPresentation, portalSettings, NOTE_NOT_ADVICE, respondentScorecard, scorecardOf, seriesOf, OVERALL_ID, type DimensionTrend, type HistoryPoint, type PortalAnswerLine, type PortalPresentation, type PortalWords, type ScorecardResult } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
 import { scoreInterview, type ScoredInterview } from "./scorecardRow.ts";
 import type { AccountRec, AttemptRec, EnrolmentRec, PortalStore, SessionRec } from "./types.ts";
@@ -237,14 +237,33 @@ export interface AssessmentCard {
   reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores: boolean;
   /** phase 3: results over time may be seen; when a repeated assessment is next due */
   canViewTrends: boolean; nextDue: { at: string; overdue: boolean } | null;
+  /** phase 4: how this assessment presents itself — its template's words, note and colour (the standard ones without a template) */
+  look: PortalPresentation;
+}
+
+/** the survey's presentation; a portal that is off presents as standard */
+const lookOf = (live: SurveyDefinition | null): PortalPresentation => portalPresentation(live ? portalSettings(live) : null);
+
+/**
+ * The engine words its reasons for a standard portal ("the organiser", "this assessment"). A template names those
+ * two things differently, so a sentence is re-worded on its way out — the rule that produced it is untouched.
+ */
+export function inWords(text: string, w: PortalWords): string;
+export function inWords(text: string | null, w: PortalWords): string | null;
+export function inWords(text: string | null, w: PortalWords): string | null {
+  if (!text) return text;
+  const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+  return text.replace(/\bthe organiser\b/g, w.organiser).replace(/\bThe organiser\b/g, cap(w.organiser)).replace(/\b([Tt]his|[Tt]he) assessment\b/g, (_m, a: string) => `${a} ${w.one}`);
 }
 
 function card(e: EnrolmentRec, f: Awaited<ReturnType<typeof facts>>): AssessmentCard {
   const done = f.attempts.filter((a) => a.status === "complete" && a.completedAt).map((a) => a.completedAt!).sort();
   const portal = f.live ? portalSettings(f.live) : null;
+  const look = lookOf(f.live);
   return {
+    look,
     id: e.id, title: e.title, state: f.access.state, canStart: f.access.canStart, canResume: f.access.canResume, attemptsLeft: f.access.attemptsLeft,
-    reason: f.access.reason, opensAt: e.accessFrom, closesAt: e.accessUntil, attempts: f.attempts.filter((a) => FINISHED.has(a.status)).length,
+    reason: inWords(f.access.reason, look.words), opensAt: e.accessFrom, closesAt: e.accessUntil, attempts: f.attempts.filter((a) => FINISHED.has(a.status)).length,
     lastCompletedAt: done.at(-1) ?? null, canViewAnswers: !!portal?.show.answers && done.length > 0,
     canViewScores: !!portal?.show.scores && !!f.live && !!scorecardOf(f.live) && done.length > 0,
     canViewTrends: mayTrend(f.live) && done.length > 0,
@@ -305,6 +324,7 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
   const e = await own(d, ctx, enrolmentId);
   const f = await facts(d, e);
   const portal = f.live ? portalSettings(f.live) : null;
+  const words = lookOf(f.live).words;
   const ordered = [...f.attempts].sort((a, b) => String(b.startedAt ?? "").localeCompare(String(a.startedAt ?? "")));
   const latestComplete = ordered.find((a) => a.status === "complete");
   const now = d.now();
@@ -324,10 +344,11 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
           const enrol = { lockedAt: e.lockedAt, reopenedUntil: e.reopenedUntil };
           /* only the latest completed attempt can be changed: an earlier one is history */
           const window = a.id === latestComplete?.id ? editWindow(pd, a, enrol, now) : { allowed: false as const, code: "not_completed" as const, reason: "An earlier attempt cannot be changed." };
-          answers = portalAnswerLines(pd, data.answers, a, enrol, now).map((l) => (window.allowed ? l : { ...l, edit: window }));
+          answers = portalAnswerLines(pd, data.answers, a, enrol, now).map((l) => (window.allowed ? l : { ...l, edit: window }))
+            .map((l) => (l.edit.allowed ? l : { ...l, edit: { ...l.edit, reason: inWords(l.edit.reason, words) } }));
           editable = window.allowed && answers.some((l) => l.edit.allowed);
           editableUntil = window.allowed ? window.until : null;
-          editNote = window.allowed ? null : window.code === "editing_off" || window.code === "no_portal" ? null : window.reason;
+          editNote = window.allowed ? null : window.code === "editing_off" || window.code === "no_portal" ? null : inWords(window.reason, words);
         }
         if (mayScore) {
           /* a person's own scores are always worked out from their answers, never read from a stored row */
@@ -340,7 +361,10 @@ export async function assessmentDetail(d: PortalDeps, ctx: PortalContext, enrolm
     views.push({ id: a.id, status: a.status, startedAt: a.startedAt, completedAt: a.completedAt, revision: a.revision, answers, editableUntil, editable, editNote, scores, comparison });
   }
   await d.store.log({ accountId: ctx.account.id, event: "assessment_viewed", surveyId: e.surveyId, customerId: e.customerId });
-  return { assessment: { ...card(e, f), scoredTest: !!f.live && isAssessment(f.live) }, attempts: views };
+  const c = card(e, f);
+  /* the sentence under a person's results: the template's; without one, the standard note unless it is a marked test */
+  const resultNote = c.look.note ?? (f.live && isAssessment(f.live) ? null : NOTE_NOT_ADVICE);
+  return { assessment: { ...c, resultNote }, attempts: views };
 }
 
 /* ------------------------------------------------------------------ phase 3: results over time */
@@ -356,6 +380,7 @@ export interface ProgressTrack {
   results: number;
   trends: DimensionTrend[];
   nextDue: { at: string; overdue: boolean; assessmentId: string } | null;
+  look: PortalPresentation;
 }
 
 /**
@@ -410,6 +435,7 @@ export async function progress(d: PortalDeps, ctx: PortalContext): Promise<{ tra
       assessments: g.members.map((m) => ({ id: m.e.id, title: m.e.title, period: m.period })),
       trends: buildTrends(g.points, minChanges(newest.live)),
       nextDue: due && !newest.e.suspended ? { ...due, assessmentId: newest.e.id } : null,
+      look: lookOf(newest.live),
     });
   }
   tracks.sort((a, b) => a.title.localeCompare(b.title));
@@ -429,7 +455,7 @@ export async function personalReport(d: PortalDeps, ctx: PortalContext, enrolmen
   await d.store.log({ accountId: ctx.account.id, event: "report_downloaded", surveyId: e.surveyId, customerId: e.customerId });
   return {
     title: detail.assessment.title, person: { name: ctx.account.name, respondentId: ctx.account.respondentId }, completedAt: a.completedAt,
-    generatedAt: new Date(d.now()).toISOString(), scoredTest: detail.assessment.scoredTest, scores: a.scores, comparison: a.comparison,
+    generatedAt: new Date(d.now()).toISOString(), note: detail.assessment.resultNote, resultsTitle: detail.assessment.look.words.results, scores: a.scores, comparison: a.comparison,
     answers: a.answers?.length ? a.answers.map((l) => ({ code: l.code, text: l.text, answer: l.answer })) : null,
   };
 }
@@ -438,7 +464,7 @@ export async function personalReport(d: PortalDeps, ctx: PortalContext, enrolmen
 export async function startLink(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown): Promise<{ url: string; resumed: boolean }> {
   const e = await own(d, ctx, enrolmentId);
   const f = await facts(d, e);
-  if (!f.access.canStart && !f.access.canResume) throw new PortalError(409, `assessment_${f.access.state}`, f.access.reason ?? "This assessment cannot be taken at the moment.");
+  if (!f.access.canStart && !f.access.canResume) throw new PortalError(409, `assessment_${f.access.state}`, inWords(f.access.reason ?? "This assessment cannot be taken at the moment.", lookOf(f.live).words));
   if (!e.link) throw new PortalError(409, "assessment_closed", "This assessment is not open at the moment.");
   const running = f.access.canResume ? f.attempts.find((a) => a.status === "in_progress") : null;
   const q = new URLSearchParams({ token: e.token });
@@ -471,7 +497,7 @@ export async function editAnswer(d: PortalDeps, ctx: PortalContext, body: { enro
   const decision = editDecision(pd, body.questionId, data, { lockedAt: e.lockedAt, reopenedUntil: e.reopenedUntil }, d.now());
   if (!decision.allowed) {
     await d.store.log({ accountId: ctx.account.id, event: "answer_edit_refused", surveyId: e.surveyId, customerId: e.customerId, detail: { questionId: body.questionId, code: decision.code } });
-    throw new PortalError(403, decision.code, decision.reason);
+    throw new PortalError(403, decision.code, inWords(decision.reason, lookOf(f.live).words));
   }
   if (!Number.isInteger(body.revision)) throw new PortalError(400, "revision_required", "Please reload the page and try again.");
   if (JSON.stringify(body.value ?? null).length > 20_000) throw new PortalError(413, "too_large", "That answer is too long.");

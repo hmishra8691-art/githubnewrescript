@@ -16,4 +16,3 @@ export function standingText(s: Standing, higherIsBetter: boolean): string {
 }
 
 export const NOTE_GROUPS = "Comparisons are with groups of at least ten people. Nobody's individual result is shown to anyone else.";
-export const NOTE_NOT_ADVICE = "Scores describe the answers you gave. They are not a diagnosis or professional advice.";

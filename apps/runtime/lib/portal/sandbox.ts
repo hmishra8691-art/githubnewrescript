@@ -41,7 +41,7 @@ const indexSurvey = () => SurveyDefinition.parse({
   flow: [{ type: "page", id: "p1", questionIds: ["e1", "e2", "s1", "s2", "team"] }, { type: "end", id: "e", status: "complete" }],
   deployment: { access: { mode: "unique_links", allowRetake: true } },
   portal: {
-    enabled: true, show: { answers: true, scores: true, comparison: true, trends: true },
+    enabled: true, template: "employee_engagement", show: { answers: true, scores: true, comparison: true, trends: true },
     series: { id: "workplace-wellbeing", label: "Workplace wellbeing index", repeatEveryDays: 90 },
     scorecard: {
       overall: { label: "Wellbeing index" },

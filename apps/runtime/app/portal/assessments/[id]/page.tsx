@@ -8,7 +8,7 @@ type Option = { code: string | number; label: string };
 type Input = { kind: "single"; options: Option[]; value: string | number | null } | { kind: "multi"; options: Option[]; value: (string | number)[] } | { kind: "text"; long: boolean; value: string } | { kind: "number"; value: number | null };
 interface Line { questionId: string; code: string; text: string; answer: string; edit: { allowed: boolean; reason?: string }; input: Input | null }
 interface Attempt { id: string; status: string; startedAt: string | null; completedAt: string | null; revision: number; answers: Line[] | null; editableUntil: string | null; editable: boolean; editNote: string | null; scores: Scorecard | null; comparison: Comparison[] | null }
-interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; scoredTest: boolean; canViewTrends?: boolean }; attempts: Attempt[] }
+interface Detail { assessment: { id: string; title: string; state: string; canStart: boolean; canResume: boolean; reason: string | null; resultNote: string | null; canViewTrends?: boolean; look: { words: { one: string; organiser: string; results: string; start: string; again: string }; accent: string } }; attempts: Attempt[] }
 
 const STATUS: Record<string, string> = { complete: "Completed", in_progress: "In progress", screened: "Ended early", quota_full: "Ended early", terminated: "Ended early" };
 
@@ -79,7 +79,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
 
   const shown = d?.attempts.find((a) => a.answers || a.scores);
   return (
-    <Shell current="assessment">
+    <Shell current="assessment" accent={d?.assessment.look.accent}>
       <p className="pt-noprint"><a href="/portal">← Overview</a></p>
       {error && <Note kind="bad">{error}</Note>}
       {saved && <Note kind="ok">{saved}</Note>}
@@ -90,7 +90,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
           {d.assessment.reason && <p className="pt-lead">{d.assessment.reason}</p>}
           <div className="pt-row pt-noprint" style={{ margin: "12px 0 4px" }}>
             {d.assessment.canResume && <button type="button" className="pt-btn is-primary" onClick={() => begin(params.id, setError)} data-testid="pt-resume">Continue</button>}
-            {d.assessment.canStart && <button type="button" className="pt-btn is-primary" onClick={() => begin(params.id, setError)} data-testid="pt-start">{d.attempts.length ? "Take it again" : "Start"}</button>}
+            {d.assessment.canStart && <button type="button" className="pt-btn is-primary" onClick={() => begin(params.id, setError)} data-testid="pt-start">{d.attempts.length ? d.assessment.look.words.again : d.assessment.look.words.start}</button>}
             {d.assessment.canViewTrends && <a className="pt-btn" href="/portal/progress" data-testid="pt-progress">My progress over time</a>}
             {shown && <button type="button" className="pt-btn" onClick={download} disabled={busy} data-testid="pt-download">Download PDF</button>}
             {shown && <button type="button" className="pt-btn" onClick={() => window.print()} data-testid="pt-print">Print</button>}
@@ -98,7 +98,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
 
           <h2>History</h2>
           <div className="pt-card">
-            {d.attempts.length === 0 ? <p className="pt-empty">You have not taken this assessment yet.</p> : (
+            {d.attempts.length === 0 ? <p className="pt-empty">You have not started this {d.assessment.look.words.one} yet.</p> : (
               <table className="pt-table" data-testid="pt-attempts">
                 <thead><tr><th>Started</th><th>Finished</th><th>Status</th></tr></thead>
                 <tbody>{d.attempts.map((a) => (<tr key={a.id}><td>{when(a.startedAt, true)}</td><td>{when(a.completedAt, true) || "—"}</td><td>{STATUS[a.status] ?? a.status}</td></tr>))}</tbody>
@@ -108,8 +108,8 @@ export default function PortalAssessment({ params }: { params: { id: string } })
 
           {d.attempts.filter((a) => a.scores).map((a, i) => (
             <section key={`s-${a.id}`}>
-              <h2>{i === 0 ? "My results" : `Results from ${when(a.completedAt)}`}</h2>
-              <Scores scores={a.scores!} comparison={a.comparison} scoredTest={d.assessment.scoredTest} />
+              <h2 data-testid={i === 0 ? "pt-results-title" : undefined}>{i === 0 ? d.assessment.look.words.results : `Results from ${when(a.completedAt)}`}</h2>
+              <Scores scores={a.scores!} comparison={a.comparison} note={d.assessment.resultNote} />
             </section>
           ))}
 
@@ -129,7 +129,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
                           <>
                             <p className="pt-a">{l.answer}</p>
                             {l.edit.allowed && l.input && <button type="button" className="pt-btn is-quiet pt-noprint" onClick={() => { setEditing(`${a.id}:${l.questionId}`); setSaved(null); }} data-testid={`pt-change-${l.code}`}>Change</button>}
-                            {l.edit.allowed && !l.input && <p className="pt-why pt-noprint">This kind of answer cannot be changed here. Ask the organiser if it needs correcting.</p>}
+                            {l.edit.allowed && !l.input && <p className="pt-why pt-noprint">This kind of answer cannot be changed here. Ask {d.assessment.look.words.organiser} if it needs correcting.</p>}
                           </>
                         )}
                     </li>
@@ -138,7 +138,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
               </div>
             </section>
           ))}
-          {d.attempts.some((a) => a.status === "complete") && !d.attempts.some((a) => a.answers) && <p className="pt-why" style={{ marginTop: 16 }}>The organiser of this assessment has not made submitted answers available to view.</p>}
+          {d.attempts.some((a) => a.status === "complete") && !d.attempts.some((a) => a.answers) && <p className="pt-why" style={{ marginTop: 16 }}>Submitted answers are not available to view for this {d.assessment.look.words.one}.</p>}
         </>
       )}
     </Shell>

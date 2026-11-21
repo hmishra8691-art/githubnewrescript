@@ -8,7 +8,7 @@ import { portalReportPdf, reportFileName, reportTexts, type ReportInput } from "
 import { fmtScore, placeOn, standingText } from "./words.ts";
 
 const base = (over: Partial<ReportInput> = {}): ReportInput => ({
-  title: "Workplace wellbeing index", person: { name: "Ana Silva", respondentId: "RSP-ANA00001" }, completedAt: "2026-11-19T09:49:00Z", generatedAt: "2026-11-20T10:00:00Z", scoredTest: false,
+  title: "Workplace wellbeing index", person: { name: "Ana Silva", respondentId: "RSP-ANA00001" }, completedAt: "2026-11-19T09:49:00Z", generatedAt: "2026-11-20T10:00:00Z", note: "Scores describe the answers you gave. They are not a diagnosis or professional advice.",
   scores: {
     v: 1, fingerprint: "f", overall: { label: "Wellbeing index", percent: 75 },
     dimensions: [
@@ -61,10 +61,17 @@ test("only what the person may see goes in: no scores, no comparison, no answers
   assert.ok(!/Everyone:|ten people|Team:/.test(noCompare));
   const answersOnly = read(portalReportPdf(base({ scores: null, comparison: null }))!).text;
   assert.ok(!/My results|Energy 9/.test(answersOnly)); assert.match(answersOnly, /My answers/);
-  const test = read(portalReportPdf(base({ scoredTest: true, answers: null }))!).text;
+  const test = read(portalReportPdf(base({ note: null, answers: null }))!).text;
   assert.ok(!/not a diagnosis|My answers/.test(test));
   assert.equal(portalReportPdf(base({ scores: null, comparison: null, answers: null })), null, "nothing to show, no file");
   assert.equal(portalReportPdf(base({ scores: null, comparison: null, answers: [] })), null);
+});
+
+test("a template's heading and note are the report's", { skip: !tools && "qpdf / pdftotext are not installed" }, () => {
+  const { text } = read(portalReportPdf(base({ resultsTitle: "My marks", note: "Your answers are reported to your employer only as part of a group." }))!);
+  assert.match(text, /My marks/); assert.ok(!/My results/.test(text));
+  assert.match(text, /reported to your employer only as part of a group/); assert.ok(!/not a diagnosis/.test(text));
+  assert.equal(portalReportPdf(base({ note: "ध्यान दें" })), null, "a note the file cannot carry: no file");
 });
 
 test("a long report runs over pages and stays valid", { skip: !tools && "qpdf / pdftotext are not installed" }, () => {

@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { PORTAL_TEMPLATES, applyPortalTemplate, portalTemplate, templateRules } from "@rescript/engine";
 import { PortalSettings } from "@rescript/schema";
 import { PortalPersonResults } from "./PortalPersonResults";
 import { PortalScorecardPanel } from "./PortalScorecardPanel";
@@ -95,6 +96,7 @@ export function PortalAccessPanel() {
 
       {on && (
         <>
+          <PortalTemplatePicker current={portal?.template ?? null} onApply={(id) => s.update((d) => { const next = applyPortalTemplate(d.portal, id); if (next) d.portal = next; })} onClear={() => set((p) => { delete p.template; })} />
           <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", marginTop: 12 }}>
             <label style={{ fontSize: 13 }}>Identity
               <select className="select" value={portal?.identity ?? "persistent"} onChange={(e) => set((p) => { p.identity = e.target.value as PortalSettings["identity"]; })} data-testid="portal-identity">
@@ -214,6 +216,46 @@ export function PortalAccessPanel() {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+
+/**
+ * THE PORTAL TEMPLATE (phase 4, 2026-11-20). A template is a starting point — its words, its note under the results
+ * and its colour for respondents, and a set of switches the researcher can still change — plus a few rules that
+ * kind of study must not loosen, which the engine applies wherever the settings are read. Applying one keeps the
+ * scores, groups, series and locked questions already built.
+ */
+function PortalTemplatePicker({ current, onApply, onClear }: { current: string | null; onApply: (id: string) => void; onClear: () => void }) {
+  const [picked, setPicked] = React.useState<string>(current ?? "");
+  React.useEffect(() => { setPicked(current ?? ""); }, [current]);
+  const t = portalTemplate(picked);
+  const inUse = portalTemplate(current);
+  const rules = t ? templateRules(t) : [];
+  return (
+    <div style={{ marginTop: 12, padding: 10, border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 10 }} data-testid="portal-template">
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        <strong style={{ fontSize: 13.5 }}>Template</strong>
+        <select className="select" style={{ maxWidth: 320 }} value={picked} onChange={(e) => setPicked(e.target.value)} aria-label="Portal template" data-testid="portal-template-select">
+          <option value="">Standard portal (no template)</option>
+          <optgroup label="Industry portals">{PORTAL_TEMPLATES.filter((x) => x.featured).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</optgroup>
+          <optgroup label="More">{PORTAL_TEMPLATES.filter((x) => !x.featured).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</optgroup>
+        </select>
+        {t && <button type="button" className="btn small" onClick={() => onApply(t.id)} data-testid="portal-template-apply">{current === t.id ? "Reset to this template's settings" : "Use this template"}</button>}
+        {!t && current && <button type="button" className="btn small" onClick={onClear} data-testid="portal-template-clear">Remove the template</button>}
+        {inUse && <span className="chip on">In use: {inUse.name}</span>}
+      </div>
+      {t && (
+        <div style={{ fontSize: 12.5, marginTop: 8 }}>
+          <p style={{ margin: 0 }}>{t.summary}</p>
+          <p className="muted" style={{ margin: "6px 0 0" }}>Respondents see: "{t.words.one}", "{t.words.organiser}", "{t.words.results}".{t.note ? ` Under their results: "${t.note}"` : ""}</p>
+          {t.suggests.length > 0 && <p className="muted" style={{ margin: "4px 0 0" }}>Scores usually defined: {t.suggests.join(", ")}.</p>}
+          {rules.length > 0 && <div className="chip warn qd-note" style={{ marginTop: 6 }}>This template always applies: {rules.join(" ")}</div>}
+          {current !== t.id && <p className="muted" style={{ margin: "6px 0 0" }}>Using it sets the switches below to its starting values. Your scores, groups, series and locked questions are kept.</p>}
+        </div>
+      )}
+      {!t && <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>A template names things for your respondents and starts you from settings that suit the kind of study. Every template runs on the same portal.</p>}
     </div>
   );
 }

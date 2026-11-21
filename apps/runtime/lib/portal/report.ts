@@ -1,7 +1,7 @@
 import { PdfDoc, pdfCanWrite } from "@rescript/exporters/pdf";
 import type { Comparison } from "@rescript/analytics/benchmark";
 import type { PortalAnswerLine, ScorecardResult } from "@rescript/engine";
-import { NOTE_GROUPS, NOTE_NOT_ADVICE, fmtScore, placeOn, standingText } from "./words.ts";
+import { NOTE_GROUPS, fmtScore, placeOn, standingText } from "./words.ts";
 
 /**
  * THE PERSONAL REPORT AS A PDF FILE (phase 2, 2026-11-20). It contains exactly what the results page shows the
@@ -16,7 +16,10 @@ export interface ReportInput {
   person: { name: string | null; respondentId: string };
   completedAt: string | null;
   generatedAt: string;
-  scoredTest: boolean;
+  /** the sentence under the results (the template's, or the standard note); null = none */
+  note: string | null;
+  /** the heading over the scores: the template's ("My marks"), else "My results" */
+  resultsTitle?: string;
   scores: ScorecardResult | null;
   comparison: Comparison[] | null;
   answers: Pick<PortalAnswerLine, "code" | "text" | "answer">[] | null;
@@ -27,7 +30,7 @@ const MUTED: [number, number, number] = [0.36, 0.4, 0.46];
 
 /** every piece of text the report would carry — what `pdfCanWrite` is asked about */
 export function reportTexts(r: ReportInput): string[] {
-  const out = [r.title, r.person.name ?? "", r.person.respondentId];
+  const out = [r.title, r.person.name ?? "", r.person.respondentId, r.note ?? "", r.resultsTitle ?? ""];
   if (r.scores) {
     if (r.scores.overall) out.push(r.scores.overall.label);
     for (const d of r.scores.dimensions) out.push(d.label, d.description ?? "", d.band?.label ?? "", d.band?.note ?? "", d.reason ?? "");
@@ -48,7 +51,7 @@ export function portalReportPdf(r: ReportInput): Uint8Array | null {
   if (r.scores) {
     const of = (id: string) => r.comparison?.find((c) => c.dimension === id);
     doc.space(6);
-    doc.text("My results", { size: 14, bold: true, gapAfter: 4 });
+    doc.text(r.resultsTitle ?? "My results", { size: 14, bold: true, gapAfter: 4 });
     if (r.scores.overall) {
       const c = of("__overall");
       doc.pair(r.scores.overall.label, `${fmtScore(r.scores.overall.percent)} of 100`, { size: 13 });
@@ -73,7 +76,7 @@ export function portalReportPdf(r: ReportInput): Uint8Array | null {
     }
     if (r.comparison?.some((c) => c.everyone)) doc.text("The line on a bar is the average of everyone compared.", { size: 8.5, color: MUTED });
     if (r.comparison) doc.text(NOTE_GROUPS, { size: 8.5, color: MUTED });
-    if (!r.scoredTest) doc.text(NOTE_NOT_ADVICE, { size: 8.5, color: MUTED });
+    if (r.note) doc.text(r.note, { size: 8.5, color: MUTED });
   }
 
   if (r.answers?.length) {

@@ -133,7 +133,11 @@ console.log("\n4b — my results (phase 2)");
   const pressure = await text("pt-score-pressure");
   assert.match(pressure, /Pressure\s*5 of 10/); assert.match(pressure, /Everyone: Lower than \d+% of 23 people/, "less is better: worded from the good end");
   assert.ok(!(await text("pt-scores")).includes("South"), "no figure about another team");
-  assert.match(await text("pt-scores"), /groups of at least ten people/); assert.match(await text("pt-scores"), /not a diagnosis/);
+  assert.match(await text("pt-scores"), /groups of at least ten people/);
+  /* phase 4: this assessment uses the employee-engagement template — its note, its words, and nothing of the standard note */
+  assert.match(await text("pt-result-note"), /reported to your employer only as part of a group/); assert.ok(!/not a diagnosis/.test(await text("pt-scores")));
+  assert.equal(await text("pt-results-title"), "My results");
+  assert.equal((await page.textContent('[data-testid="pt-start"]')).trim(), "Take it again");
   /* the bar: a filled part, and the line for everyone's average */
   const bar = await page.$eval('[data-testid="pt-score-energy"] .pt-bar-fill', (el) => el.style.width);
   assert.equal(bar, "87.5%");
@@ -185,6 +189,10 @@ console.log("\n4c — my progress (phase 3)");
   await page.goto("/portal");
   await page.waitForSelector('[data-testid="pt-progress"]');
   assert.match(await page.textContent('[data-testid="pt-card-completed"]:has(a[href="/portal/assessments/e-index"]) [data-testid="pt-next-due"]'), /Next one due /);
+  /* phase 4: the tile names its kind in the template's word; an assessment with no template names none and keeps the standard words */
+  assert.equal((await page.textContent('[data-testid="pt-card-completed"]:has(a[href="/portal/assessments/e-index"]) [data-testid="pt-kind"]')).trim(), "survey");
+  assert.equal(await page.locator('[data-testid="pt-card-open"] [data-testid="pt-kind"]').count(), 0);
+  assert.equal((await page.textContent('[data-testid="pt-card-open"] [data-testid="pt-start"]')).trim(), "Start");
   await page.click('[data-testid="pt-progress"]');
   await page.waitForSelector('[data-testid="pt-track"]');
   const text = async (id) => (await page.textContent(`[data-testid="${id}"]`)).replace(/\s+/g, " ");

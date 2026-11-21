@@ -3,7 +3,7 @@ import React from "react";
 import { begin, portalApi, when } from "@/components/portal/api";
 import { Note, Shell } from "@/components/portal/Shell";
 
-interface Card { id: string; title: string; state: string; canStart: boolean; canResume: boolean; attemptsLeft: number | null; reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores?: boolean; canViewTrends?: boolean; nextDue?: { at: string; overdue: boolean } | null }
+interface Card { id: string; title: string; state: string; canStart: boolean; canResume: boolean; attemptsLeft: number | null; reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores?: boolean; canViewTrends?: boolean; nextDue?: { at: string; overdue: boolean } | null; look: { template: string | null; name: string | null; words: { one: string; start: string; again: string }; accent: string } }
 interface Me { account: { respondentId: string; name: string | null }; assessments: Card[] }
 
 const LABEL: Record<string, string> = { open: "To do", in_progress: "In progress", upcoming: "Opens soon", completed: "Completed", closed: "Closed", suspended: "Paused" };
@@ -12,8 +12,9 @@ function Tile({ c, onError }: { c: Card; onError: (m: string) => void }) {
   const [busy, setBusy] = React.useState(false);
   const go = async () => { setBusy(true); await begin(c.id, onError); setBusy(false); };
   return (
-    <article className="pt-card pt-tile" data-testid={`pt-card-${c.state}`}>
+    <article className="pt-card pt-tile" data-testid={`pt-card-${c.state}`} style={{ "--pt-brand": c.look.accent } as React.CSSProperties}>
       <span className={`pt-chip is-${c.state}`}>{LABEL[c.state] ?? c.state}</span>
+      {c.look.template && <span className="pt-kind" data-testid="pt-kind">{c.look.words.one}</span>}
       <h3>{c.title}</h3>
       <div className="pt-meta">
         {c.state === "upcoming" && c.opensAt && <div>Opens {when(c.opensAt, true)}</div>}
@@ -26,7 +27,7 @@ function Tile({ c, onError }: { c: Card; onError: (m: string) => void }) {
       </div>
       <div className="pt-actions">
         {c.canResume && <button type="button" className="pt-btn is-primary" onClick={go} disabled={busy} data-testid="pt-resume">Continue</button>}
-        {c.canStart && <button type="button" className="pt-btn is-primary" onClick={go} disabled={busy} data-testid="pt-start">{c.attempts > 0 ? "Take it again" : "Start"}</button>}
+        {c.canStart && <button type="button" className="pt-btn is-primary" onClick={go} disabled={busy} data-testid="pt-start">{c.attempts > 0 ? c.look.words.again : c.look.words.start}</button>}
         {c.attempts > 0 && <a className="pt-btn" href={`/portal/assessments/${c.id}`} data-testid="pt-view">{c.canViewScores ? "View my results" : c.canViewAnswers ? "View my answers" : "Details"}</a>}
       </div>
     </article>
