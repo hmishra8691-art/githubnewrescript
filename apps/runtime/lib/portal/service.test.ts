@@ -789,3 +789,53 @@ test("achievements: only with the switch; the survey's own points, level and bad
   assert.deepEqual([a.points, a.level!.name, a.nextLevel, a.badges.map((b) => b.title), a.completions, a.streak], [30, "Regular", null, ["First steps"], 2, { current: 2, best: 2, every: 7 }]);
   await fails(assessmentDetail(r.d, await signedIn(r, r.ben), "e1"), 404, "not_found");
 });
+
+/* ------------------------------------------------------------------ phase 6: notifications and messages */
+
+const { readNotices, thread, sendMessage, MESSAGES_PER_DAY } = await import("./service.ts");
+
+test("notifications: a person's own, about assessments still in their list, unread until read; nobody else's", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  wave(r, "e1", r.ana.id, trendDef(), { title: "Weekly check-in" });
+  const n = (over: Record<string, unknown>) => r.m.notifications.push({ id: `n${r.m.notifications.length}`, accountId: r.ana.id, kind: "due", title: "Your check-in is due", body: null, enrolmentId: "e1", createdAt: at(1), readAt: null, ...over } as never);
+  n({}); n({ kind: "request_answered", title: "Your request has been answered", createdAt: at(0.5) });
+  n({ enrolmentId: "gone", title: "About an assessment no longer listed" }); n({ accountId: r.ben.id, title: "Ben's" });
+  let o = await overview(r.d, ctx);
+  assert.deepEqual([o.notices.unread, o.notices.items.map((x) => [x.kind, x.assessment, x.read])], [2, [["request_answered", "Weekly check-in", false], ["due", "Weekly check-in", false]]]);
+  await readNotices(r.d, ctx);
+  o = await overview(r.d, ctx);
+  assert.deepEqual([o.notices.unread, o.notices.items.every((x) => x.read)], [0, true]);
+  assert.equal(r.m.notifications.find((x) => x.accountId === r.ben.id)!.readAt, null, "another person's stay unread");
+  r.m.store.notifications = async () => { throw new Error("relation portal_notifications does not exist"); };
+  assert.deepEqual((await overview(r.d, ctx)).notices, { unread: 0, items: [] }, "before the migration: none, and no error");
+});
+
+test("messages: only where the researcher allows it, only about one's own assessment, with limits; replies are marked read when opened", async () => {
+  const r = await rig();
+  const ctx = await signedIn(r, r.ana);
+  const e = wave(r, "e1", r.ana.id, trendDef({ template: "wellbeing_checkin" }));
+  wave(r, "b1", r.ben.id, trendDef({ messages: true }));
+  assert.equal((await overview(r.d, ctx)).assessments[0]!.canMessage, false);
+  await fails(sendMessage(r.d, ctx, { enrolmentId: "e1", text: "Hello" }), 403, "messages_off");
+  await fails(sendMessage(r.d, ctx, { enrolmentId: "b1", text: "Hello" }), 404, "not_found");
+
+  r.m.definitions.set("v-e1", trendDef({ template: "wellbeing_checkin", messages: true }));
+  assert.equal((await overview(r.d, ctx)).assessments[0]!.canMessage, true);
+  await fails(sendMessage(r.d, ctx, { enrolmentId: "e1", text: "   " }), 400, "empty_message");
+  await fails(sendMessage(r.d, ctx, { enrolmentId: "e1", text: "x".repeat(4001) }), 413, "too_long");
+  await sendMessage(r.d, ctx, { enrolmentId: "e1", text: "  When is the next one?  " });
+  r.m.messages.push({ id: "s1", accountId: r.ana.id, enrolmentId: "e1", surveyId: e.surveyId, fromStaff: true, body: "On Monday.", createdAt: new Date(T0 + 1000).toISOString(), readByRespondentAt: null });
+  r.m.messages.push({ id: "s2", accountId: r.ben.id, enrolmentId: "e1", surveyId: e.surveyId, fromStaff: true, body: "For Ben only.", createdAt: new Date(T0).toISOString(), readByRespondentAt: null });
+  const t = await thread(r.d, ctx, "e1");
+  assert.deepEqual([t.canWrite, t.organiser, t.messages.map((m) => [m.mine, m.body])], [true, "the organiser", [[true, "When is the next one?"], [false, "On Monday."]]]);
+  assert.ok(r.m.messages.find((m) => m.id === "s1")!.readByRespondentAt, "opening the conversation marks the reply as read");
+  assert.equal(r.m.messages.find((m) => m.id === "s2")!.readByRespondentAt, null);
+  for (let i = 1; i < MESSAGES_PER_DAY; i++) await sendMessage(r.d, ctx, { enrolmentId: "e1", text: `Message ${i}` });
+  await fails(sendMessage(r.d, ctx, { enrolmentId: "e1", text: "One too many" }), 429, "too_many_messages");
+  /* switched off again: the replies stay readable, writing stops */
+  r.m.definitions.set("v-e1", trendDef());
+  const later = await thread(r.d, ctx, "e1");
+  assert.deepEqual([later.canWrite, later.messages.length], [false, MESSAGES_PER_DAY + 1]);
+  await fails(thread(r.d, await signedIn(r, r.ben), "e1"), 404, "not_found");
+});

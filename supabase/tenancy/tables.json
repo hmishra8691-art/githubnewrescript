@@ -441,6 +441,14 @@
       "class": "platform",
       "why": "the portal's access log: sign-ins, views, edits, researcher actions"
     },
+    "portal_messages": {
+      "class": "platform",
+      "why": "the conversation between one respondent and the organiser of one assessment \u2014 beside the account"
+    },
+    "portal_notifications": {
+      "class": "platform",
+      "why": "what a person is told in their portal (due, closing, answered, a message) \u2014 beside the account"
+    },
     "portal_requests": {
       "class": "platform",
       "why": "a person's privacy request to an organiser \u2014 beside the account; a workspace reads only those for its own surveys"

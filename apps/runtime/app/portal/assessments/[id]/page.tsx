@@ -2,6 +2,7 @@
 import React from "react";
 import { begin, portalApi, when } from "@/components/portal/api";
 import { Insights, Scores, type Comparison, type InsightLine, type Scorecard } from "@/components/portal/Scores";
+import { Messages } from "@/components/portal/Messages";
 import { Note, Shell } from "@/components/portal/Shell";
 
 type Option = { code: string | number; label: string };
@@ -166,6 +167,7 @@ export default function PortalAssessment({ params }: { params: { id: string } })
             </section>
           ))}
           {d.attempts.some((a) => a.status === "complete") && !d.attempts.some((a) => a.answers) && <p className="pt-why" style={{ marginTop: 16 }}>Submitted answers are not available to view for this {d.assessment.look.words.one}.</p>}
+          <Messages assessmentId={params.id} />
         </>
       )}
     </Shell>

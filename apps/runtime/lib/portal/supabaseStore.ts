@@ -2,7 +2,7 @@ import "server-only";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { platformDb, router, surveyDb, type customerDb } from "@/lib/db";
 import type { BenchmarkSnapshot, StoredScore } from "@rescript/analytics/benchmark";
-import type { AccountRec, AttemptData, AttemptRec, CredentialRec, EnrolmentRec, PortalStore, PrivacyRequestRec, SessionRec } from "./types";
+import type { AccountRec, AttemptData, AttemptRec, CredentialRec, EnrolmentRec, MessageRec, NotificationRec, PortalStore, PrivacyRequestRec, SessionRec } from "./types";
 
 /**
  * THE PORTAL'S STORE ON THE DATABASE (phase 1, 2026-11-20).
@@ -190,6 +190,23 @@ export function supabasePortalStore(): PortalStore {
       if (error) return [];
       return ((data ?? []) as Row[]).map((r) => ({ at: String(r.created_at), surveyId: str(r.survey_id) }));
     },
+
+    /* phase 6 (migration 0106) */
+    async notifications(accountId) {
+      const { data, error } = await platform.from("portal_notifications").select("id, kind, title, body, enrolment_id, created_at, read_at").eq("account_id", accountId).order("created_at", { ascending: false }).limit(50);
+      if (error) return [];
+      return ((data ?? []) as Row[]).map((r) => ({ id: String(r.id), kind: r.kind as NotificationRec["kind"], title: String(r.title), body: str(r.body), enrolmentId: str(r.enrolment_id), createdAt: String(r.created_at), readAt: str(r.read_at) }));
+    },
+    async markNotificationsRead(accountId, now) { await platform.from("portal_notifications").update({ read_at: now }).eq("account_id", accountId).is("read_at", null); },
+    async messages(accountId, enrolmentId) {
+      const { data, error } = await platform.from("portal_messages").select("id, from_staff, body, created_at, read_by_respondent_at").eq("account_id", accountId).eq("enrolment_id", enrolmentId).order("created_at", { ascending: true }).limit(200);
+      if (error) return [];
+      return ((data ?? []) as Row[]).map((r) => ({ id: String(r.id), fromStaff: r.from_staff === true, body: String(r.body), createdAt: String(r.created_at), readByRespondentAt: str(r.read_by_respondent_at) } satisfies MessageRec));
+    },
+    async addMessage(m) {
+      must(await platform.from("portal_messages").insert({ account_id: m.accountId, survey_id: m.surveyId, customer_id: m.customerId, enrolment_id: m.enrolmentId, from_staff: false, body: m.body, created_at: m.now, read_by_respondent_at: m.now }), "add message");
+    },
+    async markMessagesRead(accountId, enrolmentId, now) { await platform.from("portal_messages").update({ read_by_respondent_at: now }).eq("account_id", accountId).eq("enrolment_id", enrolmentId).eq("from_staff", true).is("read_by_respondent_at", null); },
 
     async log(ev) {
       try {

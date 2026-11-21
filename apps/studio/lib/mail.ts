@@ -64,7 +64,9 @@ export type MailKind =
   | "support_escalation"
   /* 2026-11-20: the respondent portal — an invitation to set a password, and a self-service password reset (0103 widens the log's kinds) */
   | "portal_invitation"
-  | "portal_reset";
+  | "portal_reset"
+  /* phase 6: a portal notice (due, closing, answered, a message) — one sentence and a link, never an answer */
+  | "portal_notice";
 
 export interface MailMessage {
   to: string;

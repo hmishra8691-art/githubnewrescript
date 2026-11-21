@@ -278,6 +278,32 @@ console.log("\n6 — a change must come from the portal itself");
   ok("a change without the portal header, or from another origin, is refused");
 }
 
+console.log("\n6a — notifications and messages (phase 6)");
+{
+  await page.goto("/portal");
+  await page.waitForSelector('[data-testid="pt-notices"]');
+  const notices = (await page.textContent('[data-testid="pt-notices"]')).replace(/\s+/g, " ");
+  assert.match(notices, /Notifications \(1 new\)/); assert.match(notices, /You have a new message/); assert.match(notices, /Workplace wellbeing index/);
+  await page.click('[data-testid="pt-notices-read"]');
+  await page.waitForFunction(() => !/new\)/.test(document.querySelector('[data-testid="pt-notices"] h2')?.textContent ?? ""));
+  assert.equal(await page.locator('[data-testid="pt-notices-read"]').count(), 0);
+  /* the conversation: the organiser's reply (named in the template's words), a message sent, an empty one refused */
+  await page.goto("/portal/assessments/e-index");
+  await page.waitForSelector('[data-testid="pt-messages"]');
+  const talk = async () => (await page.textContent('[data-testid="pt-messages"]')).replace(/\s+/g, " ");
+  assert.match(await talk(), /Messages with your employer/); assert.match(await talk(), /Your employer · .*Thank you for taking part again this quarter\./);
+  assert.equal(await page.isDisabled('[data-testid="pt-msg-send"]'), true);
+  await page.fill('[data-testid="pt-msg-text"]', "Could the next one be a week later?");
+  await page.click('[data-testid="pt-msg-send"]');
+  await page.waitForFunction(() => /Could the next one be a week later\?/.test(document.querySelector('[data-testid="pt-messages"] ol')?.textContent ?? ""));
+  assert.match(await talk(), /You · .*Could the next one be a week later\?/); assert.match(await talk(), /not monitored for emergencies/);
+  assert.equal((await api("assessments/e-done", { action: "message", text: "Hello" })).body.code, "messages_off");
+  assert.equal((await api("assessments/e-ben", { action: "message", text: "Hello" })).status, 404);
+  await page.goto("/portal/assessments/e-done"); await page.waitForSelector('[data-testid="pt-answers"]');
+  assert.equal(await page.locator('[data-testid="pt-messages"]').count(), 0, "no conversation where messages are off and none were received");
+  ok("notifications are listed and marked read; a conversation with the organiser where it is allowed, and nowhere else");
+}
+
 console.log("\n6b — my privacy (phase 5)");
 {
   await page.goto("/portal/account");

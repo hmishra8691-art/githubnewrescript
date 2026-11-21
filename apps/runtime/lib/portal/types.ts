@@ -129,8 +129,18 @@ export interface PortalStore {
   /** when an organiser's staff opened this person's results: time and survey */
   staffViews(accountId: string): Promise<{ at: string; surveyId: string | null }[]>;
 
+  /* phase 6 — notifications and messages (migration 0106). Reads are empty and writes are skipped before it. */
+  notifications(accountId: string): Promise<NotificationRec[]>;
+  markNotificationsRead(accountId: string, now: string): Promise<void>;
+  messages(accountId: string, enrolmentId: string): Promise<MessageRec[]>;
+  addMessage(m: { accountId: string; surveyId: string; customerId: string | null; enrolmentId: string; body: string; now: string }): Promise<void>;
+  markMessagesRead(accountId: string, enrolmentId: string, now: string): Promise<void>;
+
   log(e: PortalEvent): Promise<void>;
 }
+
+export interface NotificationRec { id: string; kind: "due" | "closing" | "request_answered" | "message"; title: string; body: string | null; enrolmentId: string | null; createdAt: string; readAt: string | null }
+export interface MessageRec { id: string; fromStaff: boolean; body: string; createdAt: string; readByRespondentAt: string | null }
 
 export interface PrivacyRequestRec { id: string; enrolmentId: string; surveyId: string; kind: PrivacyRequestKind; status: "open" | "done" | "declined"; message: string | null; responseNote: string | null; createdAt: string; resolvedAt: string | null }
 

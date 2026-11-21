@@ -89,6 +89,10 @@ const PUBLIC = {
     "alert retries and digests (0072, G3): the same bearer-token credential as the media job, checked against CRON_SECRET by "
     + "`timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It sends what the delivery "
     + "log says is due, across every organisation, so there is no project to gate on — and no session",
+  "cron/portal-reminders/route.ts":
+    "respondent portal reminders (phase 6, 2026-11-20): the same bearer-token credential as the other jobs, checked against CRON_SECRET by "
+    + "`timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It tells enrolled respondents of live "
+    + "surveys that an assessment is due or closing, across every organisation, so there is no project to gate on — and no session",
   "portal-mail/route.ts":
     "password-reset mail for the respondent portal (phase 1, 2026-11-20), handed over by the respondent runtime: not a person and no "
     + "session. Authenticated by an HMAC-SHA256 signature (t=…,v1=…, five-minute window) over the raw body with a sub-key of "

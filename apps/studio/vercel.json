@@ -48,6 +48,10 @@
     {
       "path": "/api/cron/model-jobs",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/portal-reminders",
+      "schedule": "23 * * * *"
     }
   ]
 }

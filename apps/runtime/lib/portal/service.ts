@@ -245,6 +245,8 @@ export interface AssessmentCard {
   reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores: boolean;
   /** phase 3: results over time may be seen; when a repeated assessment is next due */
   canViewTrends: boolean; nextDue: { at: string; overdue: boolean } | null;
+  /** phase 6: the person may write to the organiser about this assessment */
+  canMessage: boolean;
   /** phase 4: how this assessment presents itself — its template's words, note and colour (the standard ones without a template) */
   look: PortalPresentation;
 }
@@ -275,6 +277,7 @@ function card(e: EnrolmentRec, f: Awaited<ReturnType<typeof facts>>): Assessment
     lastCompletedAt: done.at(-1) ?? null, canViewAnswers: !!portal?.show.answers && done.length > 0,
     canViewScores: !!portal?.show.scores && !!f.live && !!scorecardOf(f.live) && done.length > 0,
     canViewTrends: mayTrend(f.live) && done.length > 0,
+    canMessage: !!portal?.messages,
     nextDue: f.access.state === "suspended" || f.access.state === "closed" ? null : nextDue(f.live, done.at(-1) ?? null, Date.parse(f.at)),
   };
 }
@@ -283,11 +286,55 @@ function card(e: EnrolmentRec, f: Awaited<ReturnType<typeof facts>>): Assessment
 export async function overview(d: PortalDeps, ctx: PortalContext) {
   const cards: AssessmentCard[] = [];
   /* without the notice agreed to, the account is there but its assessments are not shown */
-  if (await consentNeeded(d, ctx)) return { account: accountView(ctx.account), assessments: cards, consent: { needed: true, ...PORTAL_CONSENT } };
+  if (await consentNeeded(d, ctx)) return { account: accountView(ctx.account), assessments: cards, consent: { needed: true, ...PORTAL_CONSENT }, notices: { unread: 0, items: [] } };
   for (const e of await d.store.enrolments(ctx.account.id)) cards.push(card(e, await facts(d, e)));
   const order: Record<string, number> = { in_progress: 0, open: 1, upcoming: 2, completed: 3, closed: 4, suspended: 5 };
   cards.sort((a, b) => (order[a.state]! - order[b.state]!) || a.title.localeCompare(b.title));
-  return { account: accountView(ctx.account), assessments: cards, consent: { needed: false, ...PORTAL_CONSENT } };
+  return { account: accountView(ctx.account), assessments: cards, consent: { needed: false, ...PORTAL_CONSENT }, notices: await notices(d, ctx, cards) };
+}
+
+/* ------------------------------------------------------------------ phase 6: notifications and messages */
+
+/** what the person has been told, newest first — only about assessments still in their list, and never an answer or a score */
+async function notices(d: PortalDeps, ctx: PortalContext, cards: AssessmentCard[]) {
+  let rows: Awaited<ReturnType<PortalStore["notifications"]>> = [];
+  try { rows = await d.store.notifications(ctx.account.id); } catch { /* before migration 0106 */ }
+  const title = new Map(cards.map((c) => [c.id, c.title]));
+  const items = rows.filter((n) => !n.enrolmentId || title.has(n.enrolmentId)).slice(0, 30).map((n) => ({ id: n.id, kind: n.kind, title: n.title, body: n.body, assessmentId: n.enrolmentId, assessment: n.enrolmentId ? title.get(n.enrolmentId)! : null, at: n.createdAt, read: !!n.readAt }));
+  return { unread: items.filter((n) => !n.read).length, items };
+}
+
+export async function readNotices(d: PortalDeps, ctx: PortalContext): Promise<void> {
+  await d.store.markNotificationsRead(ctx.account.id, iso(d.now()));
+}
+
+export const MESSAGE_MAX = 4000;
+export const MESSAGES_PER_DAY = 20;
+
+/** the conversation with the organiser of one of the person's assessments; opening it marks the replies as read */
+export async function thread(d: PortalDeps, ctx: PortalContext, enrolmentId: unknown) {
+  const e = await own(d, ctx, enrolmentId);
+  const f = await facts(d, e);
+  const allowed = !!(f.live && portalSettings(f.live)?.messages);
+  let rows: Awaited<ReturnType<PortalStore["messages"]>> = [];
+  try { rows = await d.store.messages(ctx.account.id, e.id); } catch { /* before migration 0106 */ }
+  if (rows.some((m) => m.fromStaff && !m.readByRespondentAt)) { try { await d.store.markMessagesRead(ctx.account.id, e.id, iso(d.now())); } catch { /* shown either way */ } }
+  /* replies already received stay readable when messaging is later switched off; only writing stops */
+  return { canWrite: allowed, organiser: lookOf(f.live).words.organiser, messages: rows.map((m) => ({ id: m.id, mine: !m.fromStaff, body: m.body, at: m.createdAt })) };
+}
+
+export async function sendMessage(d: PortalDeps, ctx: PortalContext, body: { enrolmentId: unknown; text: unknown }): Promise<void> {
+  const e = await own(d, ctx, body.enrolmentId);
+  const f = await facts(d, e);
+  if (!(f.live && portalSettings(f.live)?.messages)) throw new PortalError(403, "messages_off", inWords("Messages to the organiser are not available for this assessment.", lookOf(f.live).words));
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (!text) throw new PortalError(400, "empty_message", "Write a message first.");
+  if (text.length > MESSAGE_MAX) throw new PortalError(413, "too_long", `Please keep a message under ${MESSAGE_MAX.toLocaleString("en")} characters.`);
+  const since = d.now() - 86_400_000;
+  const mine = (await d.store.messages(ctx.account.id, e.id)).filter((m) => !m.fromStaff && Date.parse(m.createdAt) > since);
+  if (mine.length >= MESSAGES_PER_DAY) throw new PortalError(429, "too_many_messages", "You have sent many messages today. Please wait for a reply.");
+  await d.store.addMessage({ accountId: ctx.account.id, surveyId: e.surveyId, customerId: e.customerId, enrolmentId: e.id, body: text, now: iso(d.now()) });
+  await d.store.log({ accountId: ctx.account.id, event: "message_sent", surveyId: e.surveyId, customerId: e.customerId });
 }
 
 /* ------------------------------------------------------------------ phase 5: consent and privacy */

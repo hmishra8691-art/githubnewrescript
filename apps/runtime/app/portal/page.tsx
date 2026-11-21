@@ -4,7 +4,7 @@ import { begin, portalApi, when } from "@/components/portal/api";
 import { Note, Shell } from "@/components/portal/Shell";
 
 interface Card { id: string; title: string; state: string; canStart: boolean; canResume: boolean; attemptsLeft: number | null; reason: string | null; opensAt: string | null; closesAt: string | null; attempts: number; lastCompletedAt: string | null; canViewAnswers: boolean; canViewScores?: boolean; canViewTrends?: boolean; nextDue?: { at: string; overdue: boolean } | null; look: { template: string | null; name: string | null; words: { one: string; start: string; again: string }; accent: string } }
-interface Me { account: { respondentId: string; name: string | null }; assessments: Card[]; consent?: { needed: boolean; version: string; title: string; paragraphs: string[] } }
+interface Me { account: { respondentId: string; name: string | null }; assessments: Card[]; consent?: { needed: boolean; version: string; title: string; paragraphs: string[] }; notices?: { unread: number; items: { id: string; kind: string; title: string; body: string | null; assessmentId: string | null; assessment: string | null; at: string; read: boolean }[] } }
 
 const LABEL: Record<string, string> = { open: "To do", in_progress: "In progress", upcoming: "Opens soon", completed: "Completed", closed: "Closed", suspended: "Paused" };
 
@@ -58,6 +58,25 @@ export default function PortalOverview() {
           <label className="pt-check"><input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} data-testid="pt-agree" /> <span>I have read this and agree.</span></label>
           <p style={{ margin: "10px 0 0" }}><button type="button" className="pt-btn is-primary" disabled={!agreed} onClick={agree} data-testid="pt-consent-give">Continue</button></p>
         </div>
+      )}
+      {me?.notices && me.notices.items.length > 0 && (
+        <section aria-labelledby="pt-notices-h" data-testid="pt-notices">
+          <div className="pt-row" style={{ justifyContent: "space-between" }}>
+            <h2 id="pt-notices-h" style={{ marginBottom: 6 }}>Notifications{me.notices.unread > 0 ? ` (${me.notices.unread} new)` : ""}</h2>
+            {me.notices.unread > 0 && <button type="button" className="pt-btn is-quiet" onClick={async () => { await portalApi("me", { action: "read_notices" }); await load(); }} data-testid="pt-notices-read">Mark all as read</button>}
+          </div>
+          <div className="pt-card">
+            <ul className="pt-notices">
+              {me.notices.items.slice(0, me.notices.unread > 0 ? 10 : 3).map((n) => (
+                <li key={n.id} className={n.read ? "" : "is-new"}>
+                  {n.assessmentId ? <a href={`/portal/assessments/${n.assessmentId}`}>{n.title}</a> : <span>{n.title}</span>}
+                  <span className="pt-why"> {n.assessment ? `${n.assessment} · ` : ""}{when(n.at)}{n.read ? "" : " · new"}</span>
+                  {n.body && <div className="pt-why">{n.body}</div>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
       )}
       {me && !me.assessments.length && !me.consent?.needed && <div className="pt-card pt-empty" data-testid="pt-none">You have no assessments at the moment. When one is assigned to you it will appear here.</div>}
       {todo.length > 0 && (<><h2>To do</h2><div className="pt-grid">{todo.map((c) => <Tile key={c.id} c={c} onError={setError} />)}</div></>)}

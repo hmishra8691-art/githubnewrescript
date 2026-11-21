@@ -1,6 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import type { BenchmarkSnapshot, StoredScore } from "@rescript/analytics/benchmark";
-import type { AccountRec, AttemptData, CredentialRec, EnrolmentRec, PortalEvent, PortalStore, PrivacyRequestRec, SessionRec, StoredScorecard } from "./types.ts";
+import type { AccountRec, AttemptData, CredentialRec, EnrolmentRec, PortalEvent, MessageRec, NotificationRec, PortalStore, PrivacyRequestRec, SessionRec, StoredScorecard } from "./types.ts";
 
 /**
  * The portal's store in memory — for the service's tests, and for nothing else. It keeps the same promises the
@@ -23,11 +23,13 @@ export interface MemoryPortal {
   consentAsked: Set<string>;
   consents: Map<string, { version: string; givenAt: string; withdrawnAt: string | null }>;
   requests: (PrivacyRequestRec & { accountId: string })[];
+  notifications: (NotificationRec & { accountId: string })[];
+  messages: (MessageRec & { accountId: string; enrolmentId: string; surveyId: string })[];
   edits: { responseId: string; changes: Record<string, { from: unknown; to: unknown }>; by: string }[];
 }
 
 export function memoryPortal(): MemoryPortal {
-  const m: Omit<MemoryPortal, "store"> = { accounts: [], credentials: new Map(), sessions: [], enrolments: [], attempts: new Map(), definitions: new Map(), events: [], edits: [], scorecards: new Map(), benchmarks: new Map(), consentAsked: new Set(), consents: new Map(), requests: [] };
+  const m: Omit<MemoryPortal, "store"> = { accounts: [], credentials: new Map(), sessions: [], enrolments: [], attempts: new Map(), definitions: new Map(), events: [], edits: [], scorecards: new Map(), benchmarks: new Map(), consentAsked: new Set(), consents: new Map(), requests: [], notifications: [], messages: [] };
   let n = 0;
   const byCred = (pick: (c: CredentialRec) => string | null, hash: string) => {
     for (const c of m.credentials.values()) if (pick(c) === hash) return m.accounts.find((a) => a.id === c.accountId) ?? null;
@@ -77,6 +79,11 @@ export function memoryPortal(): MemoryPortal {
     async addRequest(r) { m.requests.push({ id: `req-${m.requests.length + 1}`, accountId: r.accountId, enrolmentId: r.enrolmentId, surveyId: r.surveyId, kind: r.kind, status: "open", message: r.message, responseNote: null, createdAt: r.now, resolvedAt: null }); },
     async requests(accountId) { return m.requests.filter((r) => r.accountId === accountId).map(({ accountId: _a, ...r }) => ({ ...r })).reverse(); },
     async staffViews(accountId) { return m.events.filter((e) => e.accountId === accountId && e.event === "results_viewed_by_staff").map((e) => ({ at: (e.detail?.at as string) ?? "1970-01-01T00:00:00.000Z", surveyId: e.surveyId ?? null })); },
+    async notifications(accountId) { return m.notifications.filter((x) => x.accountId === accountId).map(({ accountId: _a, ...x }) => ({ ...x })).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); },
+    async markNotificationsRead(accountId, now) { for (const x of m.notifications) if (x.accountId === accountId && !x.readAt) x.readAt = now; },
+    async messages(accountId, enrolmentId) { return m.messages.filter((x) => x.accountId === accountId && x.enrolmentId === enrolmentId).map(({ accountId: _a, enrolmentId: _e, surveyId: _s, ...x }) => ({ ...x })); },
+    async addMessage(x) { m.messages.push({ id: `msg-${m.messages.length + 1}`, accountId: x.accountId, enrolmentId: x.enrolmentId, surveyId: x.surveyId, fromStaff: false, body: x.body, createdAt: x.now, readByRespondentAt: x.now }); },
+    async markMessagesRead(accountId, enrolmentId, now) { for (const x of m.messages) if (x.accountId === accountId && x.enrolmentId === enrolmentId && x.fromStaff && !x.readByRespondentAt) x.readByRespondentAt = now; },
     async log(e) { m.events.push(e); },
   };
   return { ...m, store };

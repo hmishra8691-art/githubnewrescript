@@ -3,6 +3,7 @@ import React from "react";
 import { PORTAL_TEMPLATES, applyPortalTemplate, portalTemplate, templateRules } from "@rescript/engine";
 import { PortalSettings } from "@rescript/schema";
 import { PortalPersonResults } from "./PortalPersonResults";
+import { PortalMessagesPanel } from "./PortalMessagesPanel";
 import { PortalRequestsPanel } from "./PortalRequestsPanel";
 import { PortalScorecardPanel } from "./PortalScorecardPanel";
 import { useStudio } from "./store";
@@ -133,6 +134,7 @@ export function PortalAccessPanel() {
           </div>
           <div className="row" style={{ gap: 16, marginTop: 6, flexWrap: "wrap", fontSize: 13 }}>
             <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.show.rewards} onChange={(e) => set((p) => { p.show.rewards = e.target.checked; })} data-testid="portal-show-rewards" /> Respondents can see what they have earned: this survey's points, level and badges, and their run of on-time completions</label>
+            <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={!!portal?.messages} onChange={(e) => set((p) => { p.messages = e.target.checked; })} data-testid="portal-messages-on" /> Respondents can write to your team about this survey (replies are sent from the Messages card below)</label>
           </div>
           {editing.mode !== "none" && !portal?.show.answers && <div className="chip warn qd-note" style={{ marginTop: 8 }}>Answers can only be changed when respondents can see them. Turn that on too.</div>}
           {s.def.assessment?.enabled && editing.mode !== "none" && <div className="chip warn qd-note" style={{ marginTop: 8 }}>This is a scored test: answers are final once submitted, whatever is chosen here.</div>}
@@ -140,6 +142,7 @@ export function PortalAccessPanel() {
 
           <PortalScorecardPanel />
           <PortalRequestsPanel />
+          <PortalMessagesPanel />
 
           <div className="row" style={{ gap: 8, margin: "16px 0 8px", flexWrap: "wrap" }}>
             <strong style={{ fontSize: 13.5 }}>People</strong>

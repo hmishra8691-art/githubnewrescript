@@ -41,7 +41,7 @@ const indexSurvey = () => SurveyDefinition.parse({
   flow: [{ type: "page", id: "p1", questionIds: ["e1", "e2", "s1", "s2", "team"] }, { type: "end", id: "e", status: "complete" }],
   deployment: { access: { mode: "unique_links", allowRetake: true } },
   portal: {
-    enabled: true, template: "employee_engagement", show: { answers: true, scores: true, comparison: true, trends: true, insights: true, projection: true, aiSummary: true },
+    enabled: true, messages: true, template: "employee_engagement", show: { answers: true, scores: true, comparison: true, trends: true, insights: true, projection: true, aiSummary: true },
     series: { id: "workplace-wellbeing", label: "Workplace wellbeing index", repeatEveryDays: 90 },
     scorecard: {
       overall: { label: "Wellbeing index" },
@@ -103,6 +103,9 @@ async function seed(): Promise<MemoryPortal> {
     m.scorecards.set(surveyId, [...(m.scorecards.get(surveyId) ?? []), { responseId, key: sc.key, person, at: ago(29), values: sc.scores, cohort: sc.cohort }]);
   };
   stored("e-index", "r-index", mine);
+  /* phase 6: one notice waiting, and one reply from the organiser */
+  m.notifications.push({ id: "n-1", accountId: "sbx-1", kind: "message", title: "You have a new message", body: null, enrolmentId: "e-index", createdAt: ago(2), readAt: null });
+  m.messages.push({ id: "m-1", accountId: "sbx-1", enrolmentId: "e-index", surveyId, fromStaff: true, body: "Thank you for taking part again this quarter.", createdAt: ago(2), readByRespondentAt: null });
   for (let i = 0; i < 22; i++) stored(`peer-${i}`, `r-peer-${i}`, { e1: 1 + (i % 5), e2: 1 + ((i * 2) % 5), s1: 1 + ((i * 3) % 5), s2: 1 + ((i + 2) % 5), team: i < 11 ? "n" : "s" });
   return m;
 }
