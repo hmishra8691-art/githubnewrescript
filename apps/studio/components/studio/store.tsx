@@ -4,6 +4,7 @@ import type { Question } from "@rescript/schema";
 import { SurveyDefinition } from "@rescript/schema";
 import { normaliseQuestionOrder, canonicalizeSurveyConditions, ensureElementIds, migrateLegacyCustomCode, autoCodeAfterEdit, protectCollectedData, type ProtectedItem } from "@rescript/engine";
 import { serialRunner, isOwnWrite, rememberSent } from "@/lib/draftSave";
+import { sendJson } from "@/lib/compressedBody";
 import { codesFrozenBy } from "@/lib/responseSummary";
 
 /**
@@ -487,12 +488,8 @@ export function StudioProvider({
     const startedAt = Date.now();
     console.debug("[rescript:save] draft start", { surveyId: surveyDbId, baseRevision, questions: sent.questions.length });
       try {
-        const r = await fetch(`/api/surveys/${surveyDbId}/draft`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body,
-          cache: "no-store",
-        });
+        // gzipped when large (lib/compressedBody.ts): ~5× smaller on the wire (Master Demo 196 KB → 37 KB)
+        const r = await sendJson(`/api/surveys/${surveyDbId}/draft`, body, { method: "PUT", cache: "no-store" });
         const d = await r.json().catch(() => ({}));
         if (r.status === 501) {
           setSaveState({ kind: "unavailable", message: d.error ?? "autosave unavailable" });

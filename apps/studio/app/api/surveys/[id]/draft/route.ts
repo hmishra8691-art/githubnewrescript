@@ -6,6 +6,7 @@ import { SurveyDefinition, normalizeAsParsed } from "@rescript/schema";
 import { droppedFieldPaths, ensureElementIds } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { scriptAuditRows } from "@/lib/scriptAuditLog";
+import { readJsonBody } from "@/lib/compressedBody";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,10 @@ export const PUT = observed(async function PUT(req: NextRequest, { params }: { p
   const gate = await requireEditRight(req, params.id, "survey.edit");
   if (isFailure(gate)) return gate.response;
 
-  const body = await req.json().catch(() => null);
+  // plain or gzip (the editor compresses large drafts: lib/compressedBody.ts); too large once decompressed → 413
+  const read = await readJsonBody(req);
+  if (!read.ok && read.status !== 400) return NextResponse.json({ error: read.error }, { status: read.status });
+  const body = (read.ok ? read.value : null) as { definition?: unknown; baseRevision?: number; baseVersionId?: string | null } | null;
   if (!body?.definition) {
     return NextResponse.json({ error: "definition required" }, { status: 400 });
   }
