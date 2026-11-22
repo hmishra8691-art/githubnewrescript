@@ -161,6 +161,8 @@ export type {
 export { productionTest, startingCounts } from "./productionTest.js";
 export type { ProductionTestOptions, ProductionTestReport, ProductionQuotaCell, QuotaFill } from "./productionTest.js";
 export { explorePaths, comparePaths, summarizePaths } from "./paths.js";
+export { coverageGoals, coverSurvey } from "./coverage.js";
+export type { CoverageGoal, CoverageReport, CoverRespondent, QuotaFeasibility, GoalKind } from "./coverage.js";
 export type { PathExploration, PathComparison, ElementReach } from "./paths.js";
 export { runSimulation, simulationRows, simulationStates, journeyLines, invalidProbes, newRunId } from "./simulationRun.js";
 export { observe, verifySurvey, observationLines } from "./observations.js";

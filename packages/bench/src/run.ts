@@ -3,6 +3,7 @@ import { agentDesign, agentInstructions, agentModel, agentOperations } from "./s
 import { fraudRedTeam } from "./suites/fraud.js";
 import { importFidelity } from "./suites/importFidelity.js";
 import { analyticsPerf, programmingPerf } from "./suites/perf.js";
+import { pathCoverage } from "./suites/coverage.js";
 import { agentLoopScripted } from "./suites/loop.js";
 import { verifierPlanted } from "./suites/verifier.js";
 import { recordedAutomation } from "./suites/recorded.js";
@@ -14,5 +15,5 @@ import { speechProviders } from "./suites/speech.js";
  * not measure, and the scorecard says "No benchmark yet" for it instead of leaving it out.
  */
 export function allSuites(root: string): Suite[] {
-  return [agentInstructions, agentOperations, agentDesign, verifierPlanted, agentLoopScripted, agentModel, programmingPerf, analyticsPerf, importFidelity(root), speechProviders, fraudRedTeam, recordedAutomation(root)];
+  return [agentInstructions, agentOperations, agentDesign, verifierPlanted, agentLoopScripted, agentModel, programmingPerf, pathCoverage, analyticsPerf, importFidelity(root), speechProviders, fraudRedTeam, recordedAutomation(root)];
 }

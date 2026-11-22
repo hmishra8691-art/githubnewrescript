@@ -1,6 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import type { SimulationConfig, SimulationRunReport } from "@rescript/templates";
-import { observe } from "@rescript/templates";
+import { coverSurvey, observe, type CoverageReport } from "@rescript/templates";
 
 /**
  * "GENERATE 100 TEST RESPONSES AND TEST EVERYTHING" (2026-11-09) — Intelligent Mode's reading of a simulation request,
@@ -36,6 +36,34 @@ export function simulationRequest(text: string, def: SurveyDefinition): { config
   const config: SimulationConfig = { count, seed: 20261109, edgeRate: edge ? 0.5 : 0.2, completeShare: ends ? 0.6 : 0.75, probeInvalid: true, ...(focus.length ? { focus } : {}) };
   return { config, understood: `Simulate ${count} test respondents through the real survey logic${edge ? ", half of them on edge cases" : ""}${ends ? ", with more screen-outs and quota paths" : ""}${focus.length ? `, focused on ${focus.join(", ")}` : ""}, and check what happened.` };
 }
+
+/**
+ * PATH COVERAGE ASKED FOR IN WORDS (Level 5 roadmap P2): "test every path", "which test respondents cover all the
+ * logic?", "check path coverage". Answered by coverSurvey: the goals, what was met, the smallest test script, and
+ * quota feasibility. Nothing is saved.
+ */
+export function coverageRequest(text: string): boolean {
+  const t = text.toLowerCase().replace(/\s+/g, " ").trim();
+  if (/\b(?:delete|remove|clear)\b/.test(t)) return false;
+  return /\b(?:path|logic|branch|route) coverage\b/.test(t)
+    || /\b(?:test|check|cover|walk|exercise)\b.{0,20}\b(?:every|each|all(?: the)?)\b.{0,12}\b(?:paths?|routes?|branch(?:es)?|logic)\b/.test(t)
+    || /\b(?:smallest|minimum|fewest)\b.{0,40}\b(?:respondents?|script|cases?)\b.{0,30}\b(?:cover|test)/.test(t)
+    || /\bquota feasibility\b|\bcan (?:the|my) quotas? (?:be )?fill\b/.test(t);
+}
+
+export function coverageAnswer(def: SurveyDefinition, r: CoverageReport): { answer: string; sections: { title: string; items: { label: string; detail?: string }[] }[] } {
+  const code = (id: string) => def.questions.find((q) => q.id === id)?.code ?? id;
+  const answer = `${r.met.length} of ${r.goals.length} logic goals met (${r.share}%) by ${r.simulated} simulated respondents. The smallest test script that covers them all is ${r.script.length} respondent${r.script.length === 1 ? "" : "s"}.${r.unmet.length ? ` ${r.unmet.length} goal${r.unmet.length === 1 ? " was" : "s were"} not met — listed with the reason.` : " Every goal was met."}${r.quotaProblems.length || r.quotas.some((q) => q.problem) ? " Quota problems found." : ""}`;
+  return {
+    answer,
+    sections: [
+      ...(r.unmet.length ? [{ title: "Not met", items: r.unmet.slice(0, 12).map((u) => ({ label: u.goal.label, detail: u.why })) }] : []),
+      { title: "Test script (walk these by hand)", items: r.script.map((s, i) => ({ label: `Respondent ${i + 1} (${s.code}, simulated, ends ${s.endStatus}) covers ${s.covers.length} goal${s.covers.length === 1 ? "" : "s"}`, detail: Object.entries(s.answers).slice(0, 12).map(([k, v]) => `${code(k)} = ${Array.isArray(v) ? v.join("+") : typeof v === "object" && v ? JSON.stringify(v) : String(v)}`).join(", ") })) },
+      ...(r.quotas.length ? [{ title: "Quota feasibility", items: [...r.quotaProblems.map((p) => ({ label: p })), ...r.quotas.map((q) => ({ label: `${q.quota} · ${q.label}: entered by ${q.entered} simulated completes${q.target != null ? `, target ${q.target}` : ""}, maximum ${q.limit}`, ...(q.problem ? { detail: q.problem } : {}) }))] }] : []),
+    ],
+  };
+}
+export { coverSurvey };
 
 /** the answer Intelligent Mode gives after a run */
 export function simulationAnswer(def: SurveyDefinition, r: SimulationRunReport): { answer: string; sections: { title: string; items: { label: string; detail?: string }[] }[] } {

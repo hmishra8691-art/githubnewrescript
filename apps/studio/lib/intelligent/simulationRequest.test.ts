@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
 import { runSimulation } from "@rescript/templates";
-import { parseDistributions, parseExpectations, parseProfiles, simulationAnswer, simulationRequest } from "./simulationRequest.ts";
+import { coverageAnswer, coverageRequest, coverSurvey, parseDistributions, parseExpectations, parseProfiles, simulationAnswer, simulationRequest } from "./simulationRequest.ts";
 
 const def = SurveyDefinition.parse({
   meta: { id: "s", code: "S", title: "S" },
@@ -45,4 +45,14 @@ test("the Manual form's fields become profiles, distributions and expectations â
   assert.ok(seen && /broken for \d+ of \d+ simulated respondents/.test(seen.items[0].label), JSON.stringify(bad.sections));
   assert.match(seen!.items[0].detail ?? "", /SIM-.*\(simulated, ended/);
   assert.match(seen!.items[0].detail ?? "", /should be hidden here and was not/);
+});
+
+test("path coverage asked in words: read, answered with the script and what was not met", () => {
+  for (const t of ["Test every path", "check path coverage", "What is the smallest set of test respondents that covers all the logic?", "Can my quotas fill?", "walk all the branches"]) assert.equal(coverageRequest(t), true, t);
+  for (const t of ["Simulate 100 respondents", "Add a question about paths", "Delete every path", "How many completes for Â±3%?"]) assert.equal(coverageRequest(t), false, t);
+  // the module-level survey above
+  const a = coverageAnswer(def, coverSurvey(def, { seed: 1 }));
+  assert.match(a.answer, /logic goals met .* smallest test script/);
+  const script = a.sections.find((s) => s.title.startsWith("Test script"));
+  assert.ok(script && script.items.length >= 1 && /simulated/.test(script.items[0].label));
 });

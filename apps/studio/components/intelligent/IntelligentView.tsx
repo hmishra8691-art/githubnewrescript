@@ -32,7 +32,7 @@ import { CopilotCard, SaveFailed } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
 import { TaskStrip } from "./TaskStrip";
 import { researchRequest } from "../../lib/intelligent/researchRequest";
-import { setPendingSimulation, simulationAnswer, simulationRequest } from "../../lib/intelligent/simulationRequest";
+import { coverageAnswer, coverageRequest, coverSurvey, setPendingSimulation, simulationAnswer, simulationRequest } from "../../lib/intelligent/simulationRequest";
 import { runSimulation } from "@rescript/templates";
 import { methodologyAnswer, methodologyQuestion, setPendingMethodology } from "../../lib/intelligent/methodologyRequest";
 import { trackerAnswer, trackerQuestion } from "../../lib/intelligent/trackerRequest";
@@ -423,6 +423,16 @@ export function IntelligentView() {
       setPendingMethodology({ objective: t });
       const a = methodologyAnswer(method);
       copilot.local(t, { kind: "answer", category: "research_design", understood: `Which research methodology fits: ${method.categoryName}`, answer: a.answer, sections: a.sections, detected: [{ what: "category", value: method.categoryName }, { what: "recommended", value: method.recommended.name }] }, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
+    if (coverageRequest(t)) {
+      try {
+        const r = coverSurvey(s.def, { seed: 20261128 });
+        const a = coverageAnswer(s.def, r);
+        copilot.local(t, { kind: "answer", category: "testing", understood: "Find the smallest set of test respondents that covers every page, condition, branch, skip, ending and quota cell.", answer: a.answer, sections: a.sections, detected: [] }, heard);
+      } catch (e) {
+        copilot.local(t, { kind: "answer", category: "testing", understood: "Check path coverage.", answer: `Path coverage could not run: ${(e as Error).message}`, sections: [], detected: [] }, heard);
+      }
       setBusy(false); inputRef.current?.focus(); return;
     }
     const sim = simulationRequest(t, s.def);
