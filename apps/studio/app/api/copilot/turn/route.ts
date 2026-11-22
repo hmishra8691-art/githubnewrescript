@@ -435,6 +435,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const verifyRepair = sanitizeVerifyRepair((body as { verifyRepair?: unknown }).verifyRepair);
   const executionReport = verifyRepair ? fenceUntrusted(verifyRepair.report, { source: "the Studio's test-session report (it quotes what the scripts printed)", nonce: fenceNonceFor(`${surveyId}\u0000verify\u0000${message}`) }) : undefined;
   if (executionReport && !research) stableExtra.push(UNTRUSTED_DATA_RULE);
+  /* survey text, a pasted brief or an image name that reads like instructions: the same rule, even with nothing fenced (live eval 2026-11-22: the model removed an injected line from Q5 correctly but quoted it back) */
+  if (provenance.flagged && !stableExtra.includes(UNTRUSTED_DATA_RULE)) stableExtra.push(UNTRUSTED_DATA_RULE);
   const guard = <R extends NonNullable<ReturnType<typeof coerceCopilotReply>>>(r: R | null): R | null => (r ? gateReply(r, def, provenance, { allowUrls: themeImageUrl ?? [] }).reply : r);
   const deterministic = mode === "review" ? reviewSurvey(def) : null;
   /* the prompt in full, and — for the rare provider that says it is too long for the model's context window — in compact form: no research passages, no memory of earlier turns. `planOnly`: the plan stage's, without the action guides */

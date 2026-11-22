@@ -38,7 +38,7 @@ const MISS_PLAN = {
 export const ENGINE_1114_CASES: EvalCase[] = [
   /* ---------------------------------------------------------------- #11 per-item guides */
   {
-    id: "staged-item-guides", category: "staged_generation", title: "#11 each staged item gets the guides it needs, not the brief's whole set", fixture: "blank", tags: ["engine-11-14"],
+    id: "staged-item-guides", category: "staged_generation", title: "#11 each staged item gets the guides it needs, not the brief's whole set", scripted: true, fixture: "blank", tags: ["engine-11-14"],
     turns: [
       { message: "Create a survey of smartphone buyers in India with quotas by region (50/50 north–south), a MaxDiff of eight phone features and a Hindi version", mode: "generate", stage: "plan", fake: ITEM_PLAN, expect: { stage: "plan", planItemsMin: 4 } },
       { message: "Create a survey of smartphone buyers in India with quotas by region (50/50 north–south), a MaxDiff of eight phone features and a Hindi version", mode: "generate", stage: "execute",
@@ -60,7 +60,7 @@ export const ENGINE_1114_CASES: EvalCase[] = [
     ],
   },
   {
-    id: "staged-guide-miss", category: "staged_generation", title: "#11 an item proposes a MaxDiff it was not sent the guide for: refused by the gate, logged, repaired with the guide", fixture: "blank", tags: ["engine-11-14"],
+    id: "staged-guide-miss", category: "staged_generation", title: "#11 an item proposes a MaxDiff it was not sent the guide for: refused by the gate, logged, repaired with the guide", scripted: true, fixture: "blank", tags: ["engine-11-14"],
     turns: [
       { message: "Create a short brand survey with a MaxDiff of what matters in a brand", mode: "generate", stage: "plan", fake: MISS_PLAN, expect: { stage: "plan", planItemsMin: 2 } },
       { message: "Create a short brand survey with a MaxDiff of what matters in a brand", mode: "generate", stage: "execute",
@@ -75,7 +75,7 @@ export const ENGINE_1114_CASES: EvalCase[] = [
 
   /* ---------------------------------------------------------------- #12 the readiness rule at action time */
   {
-    id: "analysis-readiness-repair", category: "analysis_plan", title: "#12 an ANOVA with no grouping is refused at action time, naming it; the repair adds it", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "analysis-readiness-repair", category: "analysis_plan", title: "#12 an ANOVA with no grouping is refused at action time, naming it; the repair adds it", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Plan an ANOVA of the NPS score",
       fake: [
         { kind: "edit", reply: "Planned the ANOVA.", actions: [{ op: "add_analysis_test", method: "anova", outcome: "Q1", priority: 1 }] },
@@ -86,25 +86,25 @@ export const ENGINE_1114_CASES: EvalCase[] = [
 
   /* ---------------------------------------------------------------- #13 refused designs */
   {
-    id: "method-fix-maxdiff-per-task", category: "methods", title: "#13 5 items per task from 5 items: corrected to 4 by the Studio, no second call", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-fix-maxdiff-per-task", category: "methods", title: "#13 5 items per task from 5 items: corrected to 4 by the Studio, no second call", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Add a MaxDiff of battery, camera, price, screen and storage, 5 per task",
       fake: { kind: "edit", reply: "Added the MaxDiff.", actions: [{ op: "create_maxdiff", ref: "MD5", items: ["Battery", "Camera", "Price", "Screen", "Storage"], perTask: 5 }] },
       expect: { opsPresent: ["create_maxdiff"], appliedMin: 1, methodFixesMin: 1, parse: "clean", replyNotMatches: ["could not be made"] } }],
   },
   {
-    id: "method-fix-dual-none", category: "methods", title: "#13 dual-response plus an in-task None: the None is dropped (the two cannot be combined)", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-fix-dual-none", category: "methods", title: "#13 dual-response plus an in-task None: the None is dropped (the two cannot be combined)", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Add a choice-based conjoint of brand, storage and price with a dual-response none",
       fake: { kind: "edit", reply: "Added the CBC with dual response.", actions: [{ op: "create_conjoint", ref: "DUAL_CBC", method: "cbc", attributes: PHONE_ATTRS, dualResponse: true, none: true }] },
       expect: { opsPresent: ["create_conjoint"], appliedMin: 1, methodFixesMin: 1 } }],
   },
   {
-    id: "method-fix-cva-profiles", category: "methods", title: "#13 a rating-based conjoint with too few profiles: raised to the fewest that identify the part-worths", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-fix-cva-profiles", category: "methods", title: "#13 a rating-based conjoint with too few profiles: raised to the fewest that identify the part-worths", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Make a rating-based conjoint of brand, storage and price with 5 profiles",
       fake: { kind: "edit", reply: "Added the CVA.", actions: [{ op: "create_conjoint", ref: "CVA5", method: "cva", attributes: PHONE_ATTRS, profiles: 5 }] },
       expect: { opsPresent: ["create_conjoint"], appliedMin: 1, methodFixesMin: 1 } }],
   },
   {
-    id: "method-repair-prohibitions", category: "methods", title: "#13 prohibitions that rule out every concept: refused with the prohibitions named → repaired → applied", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-repair-prohibitions", category: "methods", title: "#13 prohibitions that rule out every concept: refused with the prohibitions named → repaired → applied", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Add a choice-based conjoint of brand, storage and price; never show Alpha at ₹14,999",
       fake: [
         { kind: "edit", reply: "Added the CBC.", actions: [{ op: "create_conjoint", ref: "PRO_CBC", method: "cbc", attributes: PHONE_ATTRS, prohibitions: ALL_PROHIBITED }] },
@@ -113,7 +113,7 @@ export const ENGINE_1114_CASES: EvalCase[] = [
       expect: { opsPresent: ["create_conjoint"], appliedMin: 1, parse: "repaired", replyNotMatches: ["could not be made"] } }],
   },
   {
-    id: "method-repair-gate-cbc", category: "methods", title: "#13 a CBC refused at the gate (no attributes) now reaches the repair", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-repair-gate-cbc", category: "methods", title: "#13 a CBC refused at the gate (no attributes) now reaches the repair", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Add a choice-based conjoint with brand (Alpha, Beta, Gamma), storage (64 GB, 128 GB, 256 GB) and price (₹14,999, ₹19,999, ₹24,999)",
       fake: [
         { kind: "edit", reply: "Added the CBC.", actions: [{ op: "create_conjoint", ref: "GATE_CBC", method: "cbc" }] },
@@ -122,7 +122,7 @@ export const ENGINE_1114_CASES: EvalCase[] = [
       expect: { opsPresent: ["create_conjoint"], appliedMin: 1, parse: "repaired" } }],
   },
   {
-    id: "method-repair-menu", category: "methods", title: "#13 a menu-based conjoint without its menu: refused at the gate → repaired with the items → applied", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-repair-menu", category: "methods", title: "#13 a menu-based conjoint without its menu: refused at the gate → repaired with the items → applied", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Add a menu-based conjoint: data pack (₹99, ₹149), insurance (₹149, ₹199), streaming (₹199, ₹299)",
       fake: [
         { kind: "edit", reply: "Added the menu.", actions: [{ op: "create_conjoint", ref: "MENU", method: "menu" }] },
@@ -131,7 +131,7 @@ export const ENGINE_1114_CASES: EvalCase[] = [
       expect: { opsPresent: ["create_conjoint"], appliedMin: 1, parse: "repaired" } }],
   },
   {
-    id: "method-repair-acbc", category: "methods", title: "#13 an ACBC with CBC-only fields (tasks): refused with the reason → repaired → applied", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-repair-acbc", category: "methods", title: "#13 an ACBC with CBC-only fields (tasks): refused with the reason → repaired → applied", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Add an adaptive conjoint (ACBC) of brand, storage and price",
       fake: [
         { kind: "edit", reply: "Added the ACBC.", actions: [{ op: "create_conjoint", ref: "PHONE_ACBC", method: "acbc", attributes: PHONE_ATTRS, tasks: 12 }] },
@@ -140,7 +140,7 @@ export const ENGINE_1114_CASES: EvalCase[] = [
       expect: { opsPresent: ["create_conjoint"], appliedMin: 1, parse: "repaired" } }],
   },
   {
-    id: "method-repair-simulate", category: "methods", title: "#13 simulate_conjoint naming a level the design does not have: refused → repaired → applied", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-repair-simulate", category: "methods", title: "#13 simulate_conjoint naming a level the design does not have: refused → repaired → applied", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [
       { message: "Add a choice-based conjoint with brand (Alpha, Beta, Gamma), storage (64 GB, 128 GB, 256 GB) and price (₹14,999, ₹19,999, ₹24,999)",
         fake: { kind: "edit", reply: "Added the CBC.", actions: [{ op: "create_conjoint", ref: "SIM_CBC", method: "cbc", attributes: PHONE_ATTRS }] },
@@ -154,7 +154,7 @@ export const ENGINE_1114_CASES: EvalCase[] = [
     ],
   },
   {
-    id: "method-repair-refused-again", category: "methods", title: "#13 repaired and still refused (one-level attribute): nothing added, and the reason said plainly", fixture: "nps_relationship", tags: ["engine-11-14"],
+    id: "method-repair-refused-again", category: "methods", title: "#13 repaired and still refused (one-level attribute): nothing added, and the reason said plainly", scripted: true, fixture: "nps_relationship", tags: ["engine-11-14"],
     turns: [{ message: "Add a choice-based conjoint of brand and price",
       fake: [
         { kind: "edit", reply: "Added the CBC.", actions: [{ op: "create_conjoint", ref: "BAD_CBC", method: "cbc", attributes: [{ name: "Brand", levels: ["Alpha"] }, { name: "Price", levels: ["₹14,999", "₹19,999"] }] }] },

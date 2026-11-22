@@ -385,7 +385,7 @@ export function translationIntent(text: string): boolean {
 
 /** a request about the analysis framework — the guide goes with it */
 export function analysisIntent(text: string): boolean {
-  return /\b(?:analy[sz]\w*|crosstabs?|cross[- ]tabs?|banner|hypothes\w*|dependent|independent|moderat\w*|mediat\w*|regression|correlat\w*|chi[- ]?square|t[- ]tests?|anova|significan\w*|drivers?|top[- ]?2?[- ]?box|derived variables?|segment(?:ation)? variables?|variable roles?|measurement levels?|statistical|which (?:test|method)|methodolog\w*|maxdiff or|conjoint or)\b/i.test(text) || /हाइपोथीसिस|हाइपोथिसिस|आइपोथीसिस|परिकल्पना|विश्लेषण|एनालिसिस|क्रॉसटैब/.test(text);
+  return /\b(?:analy[sz]\w*|reliability|omega|cronbach\w*|latent class\w*|bootstrap\w*|crosstabs?|cross[- ]tabs?|banner|hypothes\w*|dependent|independent|moderat\w*|mediat\w*|regression|correlat\w*|chi[- ]?square|t[- ]tests?|anova|significan\w*|drivers?|top[- ]?2?[- ]?box|derived variables?|segment(?:ation)? variables?|variable roles?|measurement levels?|statistical|which (?:test|method)|methodolog\w*|maxdiff or|conjoint or)\b/i.test(text) || /हाइपोथीसिस|हाइपोथिसिस|आइपोथीसिस|परिकल्पना|विश्लेषण|एनालिसिस|क्रॉसटैब/.test(text);
 }
 
 /** "design a survey", "survey design करना चाहता हूँ", "सर्वे डिजाइन करके दो", "survey ही create करना है" — building a survey, in English, Hinglish and Devanagari */
@@ -405,7 +405,7 @@ const NEXT_QUESTION = new RegExp(String.raw`(?:\bnext|नेक्स्ट|न�
 export function classifyRequest(message: string, surveyQuestions: number, documents: number): { mode: RequestMode; research: boolean; ux: boolean; uxOnly: boolean; /** S2a D9: the request asks for behaviour — under inferred look-only the native behaviour ops pass (applySurveyActions `uxBehaviour`) */ uxBehaviour: boolean } {
   const t = message.toLowerCase();
   // "review my survey", "check the logic", "audit this questionnaire" — not "the literature review says…"
-  const review = /^(?:please\s+|can you\s+|could you\s+)?(?:review|audit|check|critique|evaluate|assess|proofread)\b(?!.*\b(?:add|create|build)\b)|\b(?:review|audit|check|critique|evaluate|assess)\s+(?:my|the|this|our)\s+(?:survey|questionnaire|questions|logic|flow|wording|routing)\b|\bwhat(?:'s| is) wrong\b|\bany (?:problems|issues)\b|survey (?:ka )?review|review (?:karo|kar do)/.test(t);
+  const review = /^(?:please\s+|can you\s+|could you\s+)?(?:review|audit|check|critique|evaluate|assess|proofread)\b(?!.*\b(?:add|create|build)\b)(?!.*\b(?:reliability|omega|cronbach\w*|alpha|validity|latent class|mediat\w*|regression|correlat\w*|significan\w*|bootstrap\w*)\b)|\b(?:review|audit|check|critique|evaluate|assess)\s+(?:my|the|this|our)\s+(?:survey|questionnaire|questions|logic|flow|wording|routing)\b|\bwhat(?:'s| is) wrong\b|\bany (?:problems|issues)\b|survey (?:ka )?review|review (?:karo|kar do)/.test(t);
   /*
    * A LOCALIZED EDIT IS NOT A GENERATION (2026-10-17): "Add a hypothesis about price sensitivity", "Create three
    * questions to measure it" on a survey that exists add ONE object — they used to read as generation (any

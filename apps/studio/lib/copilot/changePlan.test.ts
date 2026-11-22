@@ -80,3 +80,20 @@ test("a create item promising more than ~12 simple (or ~5 complex) questions is 
   assert.equal(coerceChangePlan({ kind: "plan", items: [{ id: "a", title: "Add a 40-question block", kind: "create", reason: "r" }] }, { splitLarge: false })!.items.length, 1, "the seam to keep an item whole");
   void splitLargeItems;
 });
+
+test("merged items: what creates questions goes first, what points at them follows, each in its own order (live eval 2026-11-22)", async () => {
+  const { buildOrder } = await import("./changePlan.ts");
+  const acts = [
+    { op: "set_research", objective: "x" },
+    { op: "set_question_analysis", target: "Q1", crosstabBy: ["REGION"] },
+    { op: "add_crosstab", rows: ["Q1"], columns: ["REGION"] },
+    { op: "create_question", ref: "Q1", type: "single" },
+    { op: "add_skip", after: "REGION" },
+    { op: "create_question", ref: "REGION", type: "single" },
+    { op: "delete_question", target: "OLD" },
+  ];
+  assert.deepEqual(buildOrder(acts).map((a) => (a as { op: string }).op), ["set_research", "create_question", "create_question", "set_question_analysis", "add_crosstab", "add_skip", "delete_question"]);
+  const prompt = executeItemPrompt({ summary: "s", items: [] } as never, { id: "p1", title: "Design", kind: "design", objects: [], reason: "r" } as never, 0, [], []);
+  assert.match(prompt, /never a code a later item will create/);
+  assert.match(planStagePrompt(), /analysis plan is its OWN LAST item/);
+});

@@ -72,6 +72,21 @@ const strs = (v: unknown, max = 60): string[] | undefined => (Array.isArray(v) ?
 const METHODS = new Set<string>(ANALYSIS_METHODS);
 const ROLES = new Set<string>(ANALYSIS_ROLES);
 const LEVELS = new Set<string>(MEASUREMENT_LEVELS);
+/**
+ * The level a model MEANT (eval 2026-11-22: claude-sonnet-4-6 wrote "ordinal (1=never, 2=sometimes, 3=often)",
+ * "nominal (class label assigned by lca)", "continuous"): the leading word when it is a level, and the usual
+ * synonyms — continuous/scale/numeric are interval, categorical is nominal. Anything else is returned as given and
+ * refused with the list, as before.
+ */
+const LEVEL_SYNONYMS: Record<string, string> = { continuous: "interval", scale: "interval", numeric: "interval", metric: "interval", categorical: "nominal", dichotomous: "nominal", binary: "nominal", ranking: "rank", ranked: "rank", "multi-select": "multi", multiple: "multi", "open text": "text", open: "text" };
+export function measurementLevelOf(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const t = raw.trim().toLowerCase();
+  if (LEVELS.has(t)) return t;
+  const head = t.split(/[\s(,;:—–-]+/)[0] ?? "";
+  if (LEVELS.has(head)) return head;
+  return LEVEL_SYNONYMS[t] ?? LEVEL_SYNONYMS[head] ?? t;
+}
 const MEASURES = new Set(["pct_col", "pct_row", "count", "mean"]);
 const DERIVED_KINDS = new Set(["mean_score", "sum_score", "top_box", "bottom_box", "recode", "count", "flag", "index"]);
 const methods = (v: unknown): AnalysisMethod[] | undefined => { const xs = strs(v); return xs ? xs.map((m) => m.toLowerCase().replace(/[\s-]+/g, "_")).filter((m) => METHODS.has(m)) as AnalysisMethod[] : undefined; };
@@ -85,9 +100,22 @@ function crosstabSpec(x: unknown): CrosstabSpec | string {
   const measure = str(o.measure);
   return { rows, columns, ...(measure && MEASURES.has(measure) ? { measure: measure as PlannedCrosstab["measure"] } : {}), ...(priority(o.priority) ? { priority: priority(o.priority) } : {}), ...(hyps(o.hypotheses) ? { hypotheses: hyps(o.hypotheses) } : {}), ...(str(o.reason) ? { reason: str(o.reason) } : {}) };
 }
+/**
+ * The method a model MEANT (eval 2026-11-22: claude-sonnet-4-6 wrote `"type": "latent_class_analysis"` with
+ * `indicators` and `classes_min` / `classes_max`). Only unambiguous names: a mediation is a regression only when
+ * it names its mediator; nothing is guessed from a description.
+ */
+const METHOD_SYNONYMS: Record<string, string> = { latent_class_analysis: "latent_class", lca: "latent_class", latent_classes: "latent_class", cronbach_alpha: "reliability", cronbachs_alpha: "reliability", omega: "reliability", mcdonalds_omega: "reliability", reliability_analysis: "reliability", scale_reliability: "reliability", factor_analysis: "factor", efa: "factor", linear_regression: "regression", ols: "regression", chi2: "chi_square", chisquare: "chi_square", ttest: "t_test", one_way_anova: "anova", hierarchical_bayes: "hb", structural_equation_model: "sem", structural_equation_modelling: "sem", structural_equation_modeling: "sem" };
+export function methodNameOf(raw: string | undefined, o: Record<string, unknown> = {}): string | undefined {
+  if (!raw) return raw;
+  if (METHODS.has(raw)) return raw;
+  if ((raw === "mediation" || raw === "mediation_analysis") && str(o.mediator)) return "regression";
+  return METHOD_SYNONYMS[raw] ?? raw;
+}
+
 function testSpec(x: unknown): TestSpec | string {
   const o = (x ?? {}) as Record<string, unknown>;
-  const method = str(o.method ?? o.test)?.toLowerCase().replace(/[\s-]+/g, "_");
+  const method = methodNameOf(str(o.method ?? o.test ?? o.type ?? o.analysis)?.toLowerCase().replace(/[\s-]+/g, "_"), o);
   if (!method || !METHODS.has(method)) return `“${method ?? ""}” is not an analysis method the platform runs (${[...METHODS].join(", ")})`;
   const variables = strs(o.variables ?? o.predictors ?? o.indicators) ?? [];
   const outcome = str(o.outcome ?? o.dependent), groupBy = str(o.groupBy ?? o.group_by ?? o.by);
@@ -120,6 +148,14 @@ export function testOptions(method: AnalysisMethod, o: Record<string, unknown>):
   if (!keys) return undefined;
   const src = { ...(o.options && typeof o.options === "object" && !Array.isArray(o.options) ? o.options as Record<string, unknown> : {}) };
   for (const k of keys) if (o[k] !== undefined && src[k] === undefined) src[k] = o[k];
+  /* snake_case and the classes_min / classes_max a model writes for minClasses / maxClasses */
+  const snake = (k: string) => k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const alias: Record<string, string[]> = { minClasses: ["classes_min", "min_classes"], maxClasses: ["classes_max", "max_classes"] };
+  for (const k of keys) for (const a of [snake(k), ...(alias[k] ?? [])]) {
+    if (src[k] !== undefined) break;
+    const v = (o.options as Record<string, unknown> | undefined)?.[a] ?? o[a];
+    if (v !== undefined) src[k] = v;
+  }
   const out: Record<string, unknown> = {};
   for (const k of keys) {
     const v = src[k];
@@ -184,7 +220,7 @@ export function coerceAnalysisAction(op: string, o: Record<string, unknown>): An
       if (!target) return "set_question_analysis needs a target";
       const role = o.role === null ? null : str(o.role)?.toLowerCase();
       if (role && !ROLES.has(role)) return `“${role}” is not a variable role (${[...ROLES].join(", ")})`;
-      const measurement = o.measurement === null ? null : str(o.measurement)?.toLowerCase();
+      const measurement = o.measurement === null ? null : measurementLevelOf(str(o.measurement));
       if (measurement && !LEVELS.has(measurement)) return `“${measurement}” is not a measurement level (${[...LEVELS].join(", ")})`;
       const a: AnalysisAction = { op, target };
       if (role !== undefined) a.role = role as AnalysisRole | null;

@@ -156,7 +156,8 @@ export function scoreTurn(turn: EvalTurn, out: TurnOutcome, ctx: { defBefore: un
   if (e.clarify === "required") c("clarify", f.clarify, "did not ask");
   if (e.parse === "clean") c("parse_clean", f.oneShotParse && !f.repairRan, f.repairRan ? "needed the repair pass" : "a call needed a continuation or a re-ask");
   if (e.parse === "repaired") c("parse_repaired", f.repairRan && f.repaired, f.repairRan ? "the repair pass did not fix it" : "no repair pass ran");
-  if (e.context) {
+  /* a durable task or a plan answers with its plan, not a single-turn reading: the route's context flags (guides sent, ux) describe a turn it did not take */
+  if (e.context && f.stage !== "task" && f.stage !== "plan") {
     const got = obj(obj(out.body).context);
     for (const [k, v] of Object.entries(e.context)) c(`context:${k}`, typeof v === "boolean" ? !!got[k] === v : got[k] === v, `context.${k} = ${JSON.stringify(got[k])}, expected ${JSON.stringify(v)}`);
   }

@@ -148,7 +148,7 @@ export function planStagePrompt(opts: { longBrief?: boolean } = {}): string {
 
 THIS TURN: THE CHANGE PLAN ONLY — NO ACTIONS. Before anything is built, the researcher reads a plan and approves it item by item. Reply with ONLY this JSON object:
 {"kind":"plan","summary":"<one sentence: what will change and why>","items":[{"id":"p1","title":"<imperative, short: Add a purchase-intent block>","kind":"create|modify|remove|logic|design|analysis|other","objects":["Q5","Screener"],"reason":"<why, in research terms>","detail":"<what exactly, when the title is not enough>"}],"questions":["<what you would ask before building, if anything>"],"assumptions":["<what you assumed instead of asking>"]}
-Rules: one item per coherent change (a block of questions is one item; a logic rule is one item; the research design — objective, hypotheses, constructs — is one item; the analysis plan is one item). Order the items as they should be built: design first, then structure, then questions, then logic, then analysis. Name objects by their codes where they exist in the OUTLINE. ${opts.longBrief ? "3 to 30" : "3 to 15"} items. Do not write questions or options here — only what will be done.`;
+Rules: one item per coherent change (a block of questions is one item; a logic rule is one item; the research design — objective, hypotheses, constructs — is one item; the analysis plan is one item). Order the items as they should be built: design first, then structure, then questions, then logic, then analysis — the analysis plan is its OWN LAST item, never part of the design item. Name objects by their codes where they exist in the OUTLINE. ${opts.longBrief ? "3 to 30" : "3 to 15"} items. Do not write questions or options here — only what will be done.`;
 }
 
 /** The instruction appended to the normal prompt for one item of an approved plan. */
@@ -159,7 +159,21 @@ export function executeItemPrompt(plan: ChangePlan, item: ChangePlanItem, index:
 THIS TURN: EXECUTE ONE ITEM OF THE APPROVED CHANGE PLAN. The researcher approved this plan (${plan.summary}):
 ${list}
 ${done.length ? `\nALREADY BUILT in earlier turns of this plan (do not repeat; new questions may reference these by the codes given): ${done.join("; ")}\n` : ""}
-BUILD ITEM ${index + 1} ONLY: "${item.title}"${item.detail ? ` — ${item.detail}` : ""} (${item.reason}). Reply in the usual JSON shape with "kind":"proposal" and the ACTIONS FOR THIS ITEM ONLY — complete questions with their options, codes and analysis tags where they apply. No "plan" field, no actions for other items, no commentary about the other items. "reply": one sentence saying what this item adds.`;
+BUILD ITEM ${index + 1} ONLY: "${item.title}"${item.detail ? ` — ${item.detail}` : ""} (${item.reason}). Reply in the usual JSON shape with "kind":"proposal" and the ACTIONS FOR THIS ITEM ONLY — complete questions with their options, codes and analysis tags where they apply. NAME ONLY questions in the OUTLINE, built by an earlier item, or created by this reply: never a code a later item will create — its logic, quotas, crosstabs and analysis belong to that later item or to the analysis item. No "plan" field, no actions for other items, no commentary about the other items. "reply": one sentence saying what this item adds.`;
+}
+
+/**
+ * WHAT MAKES THINGS FIRST, WHAT POINTS AT THEM AFTER (live eval 2026-11-22). The items' actions are applied as one
+ * proposal; an early item (the research design, a screener) often tags, routes or plans the analysis of questions a
+ * LATER item creates, and in plan order those references reached the engine before their questions existed — dozens
+ * refused, one expensive repair call. Actions that create or reshape the survey keep their order and go first;
+ * everything that refers to questions (logic, routing, quotas, analysis, translations, deletions) keeps its order and
+ * follows. An action the model never resolves (a code no item creates) is still refused, as before.
+ */
+const BUILDS_FIRST = new Set(["set_research", "create_block", "create_question", "create_loop", "create_calculation", "create_embedded", "create_randomizer", "create_maxdiff", "create_conjoint", "create_experiment", "create_qual_guide", "update_question", "move_question", "move_block", "rename_block"]);
+export function buildOrder(actions: unknown[]): unknown[] {
+  const op = (a: unknown) => String((a as { op?: unknown } | null)?.op ?? "");
+  return [...actions.filter((a) => BUILDS_FIRST.has(op(a))), ...actions.filter((a) => !BUILDS_FIRST.has(op(a)))];
 }
 
 /** The replies of the executed items, as one reply for the gate: actions in plan order, the sentences joined, the plan carried as blocks. */
@@ -179,7 +193,7 @@ export function mergeItemReplies(items: { item: ChangePlanItem; raw: unknown }[]
     if (!understanding && o.understanding) understanding = o.understanding;
     if (typeof o.memory === "string") memory = o.memory;
   }
-  return { kind: "proposal", reply: replies.join(" ") || `Built ${items.length} item${items.length === 1 ? "" : "s"} of the plan.`, actions, assumptions, sources, ...(understanding ? { understanding } : {}), ...(memory ? { memory } : {}), plan: items.map(({ item }) => ({ block: item.title, purpose: item.reason })) };
+  return { kind: "proposal", reply: replies.join(" ") || `Built ${items.length} item${items.length === 1 ? "" : "s"} of the plan.`, actions: buildOrder(actions), assumptions, sources, ...(understanding ? { understanding } : {}), ...(memory ? { memory } : {}), plan: items.map(({ item }) => ({ block: item.title, purpose: item.reason })) };
 }
 
 /**

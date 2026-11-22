@@ -95,6 +95,8 @@ if (flag("admin-subset")) cases = adminCases(cases);
 const filter = opt("filter");
 if (filter) { const re = new RegExp(filter, "i"); cases = cases.filter((c) => re.test(c.id) || re.test(c.category)); }
 if (cassette) cases = cases.filter((c) => cassette.cases[c.id]);
+/* scripted-only cases test the Studio against a deliberately wrong reply: they mean nothing with a real model */
+if (mode !== "fake") { const scripted = cases.filter((c) => c.scripted); if (scripted.length) { cases = cases.filter((c) => !c.scripted); notes.push(`${scripted.length} scripted-only case(s) not run with a real model (they test the Studio's handling of a deliberately wrong reply; the fake run covers them): ${scripted.map((c) => c.id).join(", ")}`); } }
 if (flag("list")) { for (const c of cases) console.log(`${c.id.padEnd(40)} ${c.category.padEnd(18)} ${c.turns.length} turn(s)  ${c.title}`); process.exit(0); }
 if (!cases.length) { console.error("No case to run."); process.exit(2); }
 

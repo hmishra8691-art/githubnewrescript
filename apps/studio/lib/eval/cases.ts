@@ -122,6 +122,13 @@ export interface EvalCase {
   /** where a case came from: built in, E2's injection corpus, E3's production prompts */
   source?: "golden" | "injection-corpus" | "production-prompts" | "local-minimal";
   tags?: string[];
+  /**
+   * The case tests how the STUDIO handles a deliberately wrong scripted reply (a refused design corrected, a refusal
+   * repaired, a guide that was not sent) — the scripted reply is the input. A real model may answer correctly the
+   * first time, or ask, so the mechanism is never reached: such a case runs with the fake provider only and a live
+   * run lists it as not run (first live eval, 2026-11-22).
+   */
+  scripted?: boolean;
 }
 
 /** budgets per category when a case names none — generous for a real model, and checked against the measured numbers */
@@ -452,7 +459,7 @@ export const GOLDEN_CASES: EvalCase[] = [
 
   /* ---------------------------------------------------------------- the repair pass */
   {
-    id: "repair-bad-reference", category: "repair", title: "A refused action goes back once and the correction applies", fixture: "screener_quota",
+    id: "repair-bad-reference", category: "repair", title: "A refused action goes back once and the correction applies", scripted: true, fixture: "screener_quota",
     turns: [{ message: "Show S4 only to people who answered 1 at S3",
       fake: [
         { kind: "edit", reply: "Done.", actions: [{ op: "set_display_logic", target: "S4", expression: "S99 = 1" }] },
@@ -564,7 +571,8 @@ export function productionCorpusCases(corpus: ProductionCorpus | null | undefine
     if (e.guides && typeof e.guides === "object") for (const g of ROUTE_GUIDES) ctx[g] = !!e.guides[g];
     /* a pasted brief on a survey not built yet is designed (the route's briefMode): `generate` is right there too */
     const longBrief = (c.tags ?? []).includes("long brief") || c.prompt.length >= 1500;
-    const mode = e.mode ? (longBrief && e.mode !== "generate" && !(c.context?.questions) ? [e.mode, "generate"] : e.mode) : undefined;
+    /* and with a real provider a long brief becomes a plan-first durable task (lib/tasks/turnTask.ts): mode "task" */
+    const mode = e.mode ? (longBrief ? [...new Set([e.mode, ...(!(c.context?.questions) ? ["generate"] : []), "task"])] : e.mode) : undefined;
     const expect: TurnExpect = { noHighRisk: true, noFileClaim: true, ...(mode ? { mode } : {}), ...(e.scope && e.scope !== "supported" ? { scope: e.scope } : {}), ...(Object.keys(ctx).length ? { context: ctx } : {}) };
     const withSurvey = (c.context?.questions ?? 0) > 0 && !!corpus?.survey?.length;
     return {

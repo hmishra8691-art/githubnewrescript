@@ -596,3 +596,10 @@ test("P0-2: cost — no repair call for a refusal no answer can change; a repair
   assert.deepEqual(mergeRepair([a, b], [{ ...b }, c]), [a, b, c], "an accepted action the model repeated is kept once");
   assert.match(repairPrompt({ prompt: "P", raw: {}, refused: ["r"], total: 2, uxGuideSent: true, ops: ["create_behavior"] }).text, /ONLY the corrected replacements for the refused actions/);
 });
+
+test("a statistical 'check' (reliability, omega, mediation) is an analysis request, not a survey review (live eval 2026-11-22)", () => {
+  assert.notEqual(classifyRequest("Check the reliability of the trust scale with omega", 3, 0).mode, "review");
+  assert.ok(analysisIntent("Check the reliability of the trust scale with omega"));
+  assert.equal(classifyRequest("Check the logic of my survey", 12, 0).mode, "review", "a real review still reads as one");
+  assert.equal(classifyRequest("Review my survey", 12, 0).mode, "review");
+});

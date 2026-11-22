@@ -29,7 +29,8 @@ test("sent when a request is about AI interviews, not otherwise; cached as a sta
   for (const m of ["Add a question about price", "make Q3 required", "interview guide about switching"]) assert.ok(!aiInterviewIntent(m), m);
   assert.ok(COPILOT_STABLE_GUIDES.includes(COPILOT_AI_INTERVIEW_GUIDE));
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800);
-  assert.ok(COPILOT_AI_INTERVIEW_GUIDE.length < 3_000, `${COPILOT_AI_INTERVIEW_GUIDE.length}`);
+  /* 2026-11-22: + configure in the same reply as the guide (the live eval's model left it out) (was < 3,000) */
+  assert.ok(COPILOT_AI_INTERVIEW_GUIDE.length < 3_100, `${COPILOT_AI_INTERVIEW_GUIDE.length}`);
   assert.ok(COPILOT_QUAL_GUIDE.length < 5_600, `qualitative guide ${COPILOT_QUAL_GUIDE.length}`);
   for (const w of ["never say it is launched or live", "NOT supported", "live human-moderated sessions", "multi-party video calls", "consent.statement"]) assert.ok(COPILOT_AI_INTERVIEW_GUIDE.includes(w), w);
 });
