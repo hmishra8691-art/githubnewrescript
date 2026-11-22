@@ -514,6 +514,18 @@ export const RULES: RuleDef[] = [
     params: [p("minKeys", "Judge from this many consecutive keystrokes (the collector keeps the last 20 changes of an answer)", lvl(19, 15, 12, 10)), p("maxCharsPerSecond", "Flag above this many characters a second across those keys", lvl(20, 16, 14, 12))],
   },
   {
+    id: "bot.pointer_jump", category: "bot", title: "Mouse clicks without moving the pointer",
+    description: "Most mouse clicks landed far from the previous one with no pointer movement between them. A mouse travels; a script clicking by coordinates does not. Voice control and switch access can look the same. Needs the pointer summary; skipped without it and on touch.",
+    defaultSeverity: "medium", riskPoints: 20, qualityPenalty: 0, enabledIn: ALL, needs: ["interaction"],
+    params: [p("minClicks", "Judge from this many mouse clicks", lvl(12, 8, 6, 5)), p("share", "Flag when this share of clicks jumped", lvl(0.8, 0.6, 0.5, 0.4))],
+  },
+  {
+    id: "bot.pointer_ruler", category: "bot", title: "Pointer paths drawn with a ruler",
+    description: "Most pointer paths between clicks were perfectly straight lines in equal steps. A hand curves and varies its speed; a script interpolating between two points does not. Needs the pointer summary; skipped without it and on touch.",
+    defaultSeverity: "high", riskPoints: 30, qualityPenalty: 0, enabledIn: ALL, needs: ["interaction"],
+    params: [p("minClicks", "Judge from this many mouse clicks", lvl(12, 8, 6, 5)), p("share", "Flag when this share of paths were straight and even", lvl(0.8, 0.6, 0.5, 0.4))],
+  },
+  {
     id: "bot.no_interaction", category: "bot", title: "No human interaction recorded",
     description: "Pages answered without pointer, key or scroll events.",
     defaultSeverity: "high", riskPoints: 30, qualityPenalty: 0, enabledIn: ALL, needs: ["interaction"],

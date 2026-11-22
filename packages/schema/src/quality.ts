@@ -307,6 +307,8 @@ export const QUALITY_RULE_PARAMS: Readonly<Record<string, readonly string[]>> = 
   "network.risk_provider": ["minRisk"],
   "bot.machine_timing": ["maxPageMs"],
   "bot.even_typing": ["minKeys", "maxVariation"],
+  "bot.pointer_jump": ["minClicks", "share"],
+  "bot.pointer_ruler": ["minClicks", "share"],
   "bot.superhuman_typing": ["minKeys", "maxCharsPerSecond"],
   "bot.no_interaction": ["share"],
   "bot.impossible_sequence": [],

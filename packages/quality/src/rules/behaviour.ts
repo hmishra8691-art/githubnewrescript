@@ -282,6 +282,29 @@ export function behaviourRules(ctx: RuleContext): FlagDraft[] {
     }
   }
 
+  /*
+   * HOW THE MOUSE REACHED WHAT IT CLICKED (Level 5 roadmap F4, 2026-11-27) — from the collector's pointer summary.
+   * A hand on a mouse draws a curved path of many small, uneven steps to each target. A script either does not
+   * move at all (the pointer is simply somewhere else at the next click) or moves along a ruler in equal steps.
+   * Both are physical facts about a mouse, not a style. Skipped without the summary (older responses, touch).
+   * Voice control and switch access click without moving a pointer too, which is why a jump alone is evidence to
+   * weigh and its explanation says so.
+   */
+  const ptr = t && !ctx.disabledTelemetry.has("interaction") ? t.interaction.pointer : undefined;
+  if (ptr && ctx.enabled("bot.pointer_jump")) {
+    const min = ctx.param<number>("bot.pointer_jump", "minClicks"), share = ctx.param<number>("bot.pointer_jump", "share");
+    if (ptr.approaches >= min && ptr.teleports / ptr.approaches >= share) {
+      out.push({ ruleId: "bot.pointer_jump", observed: `${ptr.teleports} of ${ptr.approaches} mouse clicks landed 80 px or more from the last one with no movement between`, expected: `under ${pct(share)}`, explanation: "The pointer was at one place and then clicked at another without travelling there. A mouse cannot do that; a script clicking by coordinates does. Voice control and switch access also click without moving a pointer, so read this with the rest of the evidence.", intensity: Math.min(1, ptr.teleports / ptr.approaches) });
+    }
+  }
+  if (ptr && ctx.enabled("bot.pointer_ruler")) {
+    const min = ctx.param<number>("bot.pointer_ruler", "minClicks"), share = ctx.param<number>("bot.pointer_ruler", "share");
+    const ruled = Math.min(ptr.straight, ptr.evenSteps);
+    if (ptr.approaches >= min && ruled / ptr.approaches >= share) {
+      out.push({ ruleId: "bot.pointer_ruler", observed: `${ptr.straight} of ${ptr.approaches} mouse paths were perfectly straight and ${ptr.evenSteps} had steps of equal length`, expected: `under ${pct(share)} of both`, explanation: "The pointer travelled to its targets along straight lines in equal steps. A hand curves, overshoots and varies its speed; a script interpolating between two points looks like this.", intensity: Math.min(1, ruled / ptr.approaches) });
+    }
+  }
+
   /* -------------------------------------------------------------- bot */
   if (t && !ctx.disabledTelemetry.has("interaction") && ctx.enabled("bot.no_interaction")) {
     const share = ctx.param<number>("bot.no_interaction", "share");

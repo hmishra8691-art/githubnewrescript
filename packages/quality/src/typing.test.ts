@@ -40,3 +40,35 @@ test("too few keystrokes, or no history at all, is not judged", () => {
   /* a pasted answer arrives as one change of many characters: not a run of keystrokes */
   assert.deepEqual(flagsOf(withHistory("pasted", [[40_000, { len: 0 }], [40_500, { len: 140 }]])), []);
 });
+
+/* ---- F4: the collector's summaries (whole-answer typing, pointer path) */
+const withSummaries = (id: string, typing: Record<string, number> | null, pointer: Record<string, number> | null): ResponseRecord => {
+  const r = withHistory(id, []);
+  delete r.telemetry!.questions.oe!.history;
+  if (typing) r.telemetry!.questions.oe!.typing = typing as never;
+  if (pointer) r.telemetry!.interaction.pointer = pointer as never;
+  return r;
+};
+
+test("the whole-answer typing summary is used when the collector kept one", () => {
+  assert.deepEqual(flagsOf(withSummaries("sum-even", { keys: 140, gaps: 139, meanMs: 181, sdMs: 4, minMs: 172, pauses: 0, corrections: 0 }, null)), ["bot.even_typing"]);
+  assert.deepEqual(flagsOf(withSummaries("sum-fast", { keys: 140, gaps: 139, meanMs: 46, sdMs: 2, minMs: 41, pauses: 0, corrections: 0 }, null)), ["bot.superhuman_typing"]);
+  /* a person: 210 ms on average, spread 150 ms, three corrections, four pauses */
+  assert.deepEqual(flagsOf(withSummaries("sum-person", { keys: 150, gaps: 145, meanMs: 210, sdMs: 150, minMs: 60, pauses: 4, corrections: 3 }, null)), []);
+  /* even, but corrected twice: not flagged */
+  assert.deepEqual(flagsOf(withSummaries("sum-corrected", { keys: 140, gaps: 139, meanMs: 181, sdMs: 4, minMs: 172, pauses: 0, corrections: 2 }, null)), []);
+});
+
+test("the pointer path: jumps and ruler-straight paths are flagged; a hand's paths, touch and few clicks are not", () => {
+  /* a script clicking by coordinates: 30 clicks, 28 of them far from the last with no movement */
+  assert.deepEqual(flagsOf(withSummaries("ptr-jump", null, { approaches: 30, moves: 30, teleports: 28, straight: 0, evenSteps: 0, meanStraightness: 1 })), ["bot.pointer_jump"]);
+  /* a script interpolating: every path straight, every step the same */
+  assert.deepEqual(flagsOf(withSummaries("ptr-ruler", null, { approaches: 30, moves: 480, teleports: 0, straight: 30, evenSteps: 29, meanStraightness: 1 })), ["bot.pointer_ruler"]);
+  /* a hand: many moves, curved, an occasional straight flick */
+  assert.deepEqual(flagsOf(withSummaries("ptr-hand", null, { approaches: 30, moves: 1900, teleports: 1, straight: 2, evenSteps: 0, meanStraightness: 0.86 })), []);
+  /* straight but uneven steps (a quick, direct flick of the wrist): not the ruler */
+  assert.deepEqual(flagsOf(withSummaries("ptr-flick", null, { approaches: 30, moves: 600, teleports: 0, straight: 22, evenSteps: 1, meanStraightness: 0.99 })), []);
+  /* too few clicks to judge, and no summary at all (touch, an older response) */
+  assert.deepEqual(flagsOf(withSummaries("ptr-few", null, { approaches: 4, moves: 4, teleports: 4, straight: 0, evenSteps: 0, meanStraightness: 1 })), []);
+  assert.deepEqual(flagsOf(withSummaries("ptr-none", null, null)), []);
+});

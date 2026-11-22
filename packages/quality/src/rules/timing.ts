@@ -360,6 +360,17 @@ export function timingRules(ctx: RuleContext): FlagDraft[] {
    */
   if (ctx.enabled("bot.even_typing") || ctx.enabled("bot.superhuman_typing")) {
     for (const [qid, qt] of Object.entries(t.questions)) {
+      /* the whole answer, when the collector kept its summary (F4): more keys than the 20-change window can show */
+      const ty = qt.typing;
+      if (ty && ty.gaps >= 20 && ty.meanMs > 0) {
+        const cps = 1000 / ty.meanMs, variation = ty.sdMs / ty.meanMs;
+        if (ctx.enabled("bot.superhuman_typing") && ty.gaps >= ctx.param<number>("bot.superhuman_typing", "minKeys") && cps > ctx.param<number>("bot.superhuman_typing", "maxCharsPerSecond")) {
+          out.push({ ruleId: "bot.superhuman_typing", questionIds: [qid], observed: `${ty.keys} keys at ${cps.toFixed(1)} characters a second over the whole answer`, expected: `at most ${ctx.param<number>("bot.superhuman_typing", "maxCharsPerSecond")} a second`, explanation: "The answer was typed key by key faster than a person can sustain — consistent with a script typing it." });
+        } else if (ctx.enabled("bot.even_typing") && ty.gaps >= ctx.param<number>("bot.even_typing", "minKeys") && ty.corrections === 0 && variation < ctx.param<number>("bot.even_typing", "maxVariation")) {
+          out.push({ ruleId: "bot.even_typing", questionIds: [qid], observed: `${ty.keys} keys, ${Math.round(ty.meanMs)} ms apart, varying by ${Math.round(variation * 100)}% over the whole answer and never corrected`, expected: `gaps that vary by ${Math.round(ctx.param<number>("bot.even_typing", "maxVariation") * 100)}% or more, or a correction`, explanation: "Every key came at almost the same interval and nothing was corrected. People's typing speeds up, slows down and is fixed along the way; a script typing with a fixed delay looks like this." });
+        }
+        continue;
+      }
       const h = qt.history;
       if (!h || h.length < 10) continue;
       /* the longest run of single keystrokes: each change adds exactly one character */
