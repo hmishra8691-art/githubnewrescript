@@ -1,4 +1,4 @@
-# Level 5 roadmap, Phase 2 (Essentials) — progress (updated 28 November 2026)
+# Level 5 roadmap, Phase 2 (Essentials) — progress (updated 22 November 2026)
 
 Phase 2 is the essentials for all seven areas, about twelve weeks of work in the roadmap. This document is kept
 as it goes: what is done, what was tested, what is next. AI design agents come first, as asked.
@@ -335,7 +335,8 @@ billing.
 
 **I6, side-by-side review.** Each imported question is compared with the source part by part (type, text, options,
 rows, logic), and each part is marked same, converted, check or lost. "Accept all at or above" a confidence accepts in
-bulk. This is a "Side by side" tab on the import review screen. Acceptance is not saved yet. The tab's badges first
+bulk. This is a "Side by side" tab on the import review screen. Acceptance is saved with the import since 0290 (see
+below). The tab's badges first
 used fixed colours and failed the theme test; 0279 fixed this.
 
 ### Qualitative batch: highlight reel as video, interview booking (22 November)
@@ -361,7 +362,7 @@ Not covered:
 
 - Panel members from the sample exchange are reached through their vendor, so they are not invited by email here.
 - The incentive is recorded, not paid.
-- There is no Studio screen yet; booking works through the API.
+- The Studio screen came later (0287, see below).
 
 ### Reporting batch: one model, shared dashboards, viewer rules, client masters, schedules (22 November)
 
@@ -416,6 +417,51 @@ Each run:
 An alert watches one figure. It emails once when the figure crosses its threshold, not again while it stays over, and
 never on a small base. The hourly job claims each due schedule before running it, so overlapping runs never run one
 schedule twice.
+
+### Screens and finishing touches (22 November, 0287 to 0291)
+
+Things that worked only through the API now have screens, and two gaps left above are closed.
+
+**Booking tab (Q6), 0287.** Research Tools → Qualitative → Booking:
+
+- **Times:** add bookable times from a window (day, hours, length, gap, places, moderator) in the researcher's own
+  time zone; withdraw a time, and the people who held it are listed to contact.
+- **Invite:** typed addresses and/or respondents from the survey. Addresses skipped or not sent are listed with the
+  reason. The button is disabled, with the reason shown, when email is not configured.
+- **Bookings:** status, time, reminders sent and incentive per person; mark attended or no-show; cancel for someone.
+- **Target:** how many more to invite to reach a number of sessions.
+
+0289 tests the invitee's public page in a browser and removes a duplicated note on it.
+
+**Analytics screens (M2, M3, M4), 0288.**
+
+- **"Why this number":** choose a number cell in the Tables view or a result's Tables tab, and the explanation opens
+  under the table: the count over the base, the significance letters in words with the test and correction, small-base
+  cautions, and what computed it.
+- **Tab book:** Explore → Tab book. Pick up to 8 banner columns; the Studio drafts a table per question, runs it and
+  offers the workbook download (needs report downloads; audited as an export). The draft no longer adds a table per
+  option of a multi-select.
+- **Simulators:** Explore → Simulators. MaxDiff preference shares for a chosen set of items; TURF reach and frequency
+  as items are toggled, with the best addition and swap (computed on the server, no respondent rows returned); price
+  demand and revenue index, or the Van Westendorp reading, with the range respondents named shown.
+
+The assumption checks (M5) appear in result warnings as before; there is no separate screen for them.
+
+**Import review acceptance saved (I6), 0290.** Questions accepted in the side-by-side review are kept with the import
+(who, when, at what level) and come back when the import is reopened. A question that changed since it was accepted
+is dropped from the acceptance, and the screen says so. Needs migration 0113; without it, saving answers with a
+message naming the migration.
+
+**Republish on refresh (R5), 0291.** A report schedule can republish: each run, scheduled or "Run now", publishes the
+fresh results as the report's next version, so share links that follow the latest version show the new numbers.
+Links pinned to a version do not change. The rules:
+
+- The Studio's Publish button and schedules use the same publish code, so viewer filters, drill values and the
+  minimum base apply in both.
+- A schedule never forces a publish. A run that comes back partial keeps the last published version, and the run's
+  summary says why; a run that cannot render its file publishes nothing.
+- A scheduled publish is audited like a manual one, marked as from the schedule.
+- Needs migration 0114. Without it, schedules still save and run; only the republish option is unavailable.
 
 ## The scorecard after this
 
@@ -482,6 +528,11 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | Digests, change summary, next run times, alerts that fire once | `reportSchedule.test.ts`, 4 tests (analytics suite: 941) | pass |
 | One schedule run end to end against an in-memory database: Word rendered, stored, a sign-in link mailed and no file, the second run reports an 8-point move, an alert fires once, a deleted report, a failed computation | `reportSchedulesCore.test.ts`, 3 tests (Studio suite: 1,343) | pass |
 | The fake-provider AI eval after all of the above | `pnpm eval:ai` | 67 of 67 |
+| Booking page in a browser: open times in the invitee's zone with a taken time not offered, book, cancel and the time offered again, a time taken a moment earlier refused, an unknown link, no page errors | `scripts/booking-page-browser.mjs` (mocked API) | 6 of 6 |
+| Analytics screens in a browser: the explanation's sentence and base, 11 tables listed and one opened, the workbook downloads, MaxDiff shares sum to 100%, TURF reach, a price inside the range | `scripts/reporting-screens-browser.mjs` (fake backend computed by the real engine, 400 synthetic respondents) | 8 of 8 |
+| Review acceptance: who and when, held by the bulk rule, dropped when the question changes | `sessions.test.ts`, 1 new test | pass |
+| Publish: a partial report refused unless forced, numbering, the report pointed at the new version, another project's or a deleted report unknown | `reportPublishCore.test.ts`, 2 tests | pass |
+| Republish: a new version on each run that unpinned links follow, a partial run not published, a failed render publishing nothing, no publish without the setting or on an alert | `reportSchedulesCore.test.ts`, 2 new tests (Studio suite: 1,363) | pass |
 
 ## What was NOT tested
 
@@ -497,17 +548,18 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 - **The server simulation route still returns the old verdict sentences.** Only the in-conversation simulation
   shows observations.
 - **Quota cells are not yet written into the survey from a sentence.**
-- **The analytics batch has no screens.** "Why this number", the tab plan, the simulators and the assumption checks
-  are engine functions with tests; no Studio screen or route shows them yet, and none was opened in a browser.
+- **The analytics screens were tested in a browser against a fake backend, not a real database.** The new
+  analytics-tools route was type-checked and audited, not called on real data.
 - **The fraud batch was not run against a database.** The hourly cross-survey pass, the trust route and the console
   route were type-checked and audited (Studio suite 1,332 passes), not called; the review console card was not opened in a browser. No
   reviewer has made decisions, so the rule verdicts and κ have no real figures yet.
-- **Nothing in the import, qualitative and reporting batches ran against a database.** Migrations 0107 to 0110
-  are not applied. The routes were type-checked and audited, not called over HTTP. No email was sent.
-- **Not opened in a browser:** the booking page, the side-by-side tab, the drill selector, the viewer-rules editor,
-  the master import button, and the schedules card.
+- **Nothing in the import, qualitative and reporting batches ran against a database.** Migrations 0107 to 0110,
+  0113 and 0114 are not applied. The routes were type-checked and audited, not called over HTTP. No email was sent.
+- **Not opened in a browser:** the Booking tab (project pages need sign-in), the side-by-side tab with saving (the
+  script `scripts/import-side-review-browser.mjs` is written, but the dev server ran out of memory compiling the
+  import route here), the drill selector, the viewer-rules editor, the master import button, and the schedules card
+  with its republish option.
 - **R4 was tested on a template I built, not on a real client's template.**
-- **A schedule's refresh does not republish a shared version.** Shared links keep showing the last published version.
 - **English only.**
 
 ## Phase 2 item by item
@@ -519,26 +571,32 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | --- | --- | --- | --- |
 | AI design agents (8) | A3, A5, A6, A7, A15 | A2 (about 90 of 850 cases), A4 (loop built, no model), A8 (reasons in plans, not on screen) | |
 | Programming (6) | P2, P3 | P1 (edits faster, target not met), P5 (engine and route; no screen) | P4, P11 |
-| Analytics (6) | M5, M10 | M1 (measured only), M2, M3, M4 (engine and tests; no screen) | |
-| Import (6) | I3, I6 (review tab; acceptance not saved) | I1 (10 of 300 files), I2 (exists, 58.3%, not examined), I4 (preview only; storing waits on the billing decision) | I5 |
-| Reporting (6) | R1, R2, R3, R4, R5, R6 (not run against a database) | | |
-| Qualitative (6) | Q4, Q6 (no screen for booking) | | Q2, Q3, Q5, Q7 |
+| Analytics (6) | M2, M3, M4 (screens tested against a fake backend), M5, M10 | M1 (measured only) | |
+| Import (6) | I3, I6 | I1 (10 of 300 files), I2 (exists, 58.3%, not examined), I4 (preview only; storing waits on the billing decision) | I5 |
+| Reporting (6) | R1, R2, R3, R4, R5 (with republish), R6 (not run against a database) | | |
+| Qualitative (6) | Q4, Q6 | | Q2, Q3, Q5, Q7 |
 | Fraud (6) | F3, F4 (typing and pointer summaries collected, sanitised and read by four rules), F6, F11 | F5 (typing rules only; open-end content not judged) | F2 |
 
 Some "not started" items have earlier work in the product that I have not assessed against the roadmap's
 definition (libraries, dashboards, the quality review screen, the import review screen). I have not counted them.
 
-**Next:** the 11 items asked for are built (I3, I4, I6, Q4, Q6, R1 to R6). F2 still waits on the
-build-or-license decision; I4's storage waits on the billing decision for migrated completes.
+**Next:** the 11 items asked for are built (I3, I4, I6, Q4, Q6, R1 to R6), and their screens and the two follow-ups
+(review acceptance, republish) are in 0287 to 0291. F2 still waits on the build-or-license decision; I4's storage
+waits on the billing decision for migrated completes. Open in the table: P1, P4, P5's screen, P11, M1, I1, I2, I5, Q2,
+Q3, Q5, Q7, F2, F5, and the model-dependent parts of A2, A4 and A8.
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages
 reviewed by people, P11 real devices, and anything needing the model, speech or vendor keys.
 
-The model baseline was run once on 0273 (43 of 67, $2.99, [AI-EVAL-BASELINE-2026-11-22.md](AI-EVAL-BASELINE-2026-11-22.md)); 0274 holds the fixes and has not been re-run with the model.
+The model baseline was run on 0273 (43 of 67, $2.99) and again after the 0274 fixes (44 of 54, $1.23, Claude Haiku 4.5;
+[AI-EVAL-BASELINE-2026-11-22.md](AI-EVAL-BASELINE-2026-11-22.md)). 0286 fixed what that run showed; re-scoring the
+recorded answers offline gives 50 of 54. Three of the remaining four need a new live run to check (the conjoint
+re-ask, the multi-turn Italian case, the dual-response second turn); the fourth (latent classes with covariates,
+refused) waits on your decision.
 
 ## To apply
 
-Four migrations, written and not applied (with 0105 and 0106 from before):
+0105 and 0106 are applied on the live database. Written and not applied, in order:
 
 | Migration | What |
 | --- | --- |
@@ -546,6 +604,9 @@ Four migrations, written and not applied (with 0105 and 0106 from before):
 | 0108 | export history accepts PDF, CSV and Word (PDF and CSV rows are being refused today) |
 | 0109 | viewer rules on share links |
 | 0110 | report schedules and runs; mail kinds for deliveries and alerts |
+| 0111, 0112 | from the scale work, not this roadmap: responses partitioned by month, and survey versions copied to object storage (see [SCALE-READINESS-2026-11-22.md](SCALE-READINESS-2026-11-22.md)) |
+| 0113 | import sessions keep the side-by-side review's acceptance |
+| 0114 | report schedules can republish (needs 0110) |
 
 Two new hourly jobs are in `apps/studio/vercel.json` (interview reminders, report schedules); they need `CRON_SECRET`,
 like the others. Links in emails use `STUDIO_PUBLIC_URL` when it is set.
