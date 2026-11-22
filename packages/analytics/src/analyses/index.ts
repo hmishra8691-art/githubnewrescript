@@ -1,3 +1,5 @@
+import { adviseAnalysis } from "../dataAdvice.js";
+import { adviceChecks } from "../modelChecks.js";
 import { provenanceOf } from "../provenance.js";
 import { adviseChart } from "../questionChart.js";
 import type { AnalysisDefinition, AnalysisResult } from "../types.js";
@@ -102,6 +104,10 @@ export function finalizeResult(def: AnalysisDefinition, dataset: Dataset, core: 
     } catch { result = core; }
   }
   /* recording where a result came from must never be what stops a result: a definition that cannot be read for the record still gets its (failure) result */
+  /* M5: tables and tests carry the data advice as assumption checks (a regression has already checked its own fit) */
+  if (!result.error && !result.assumptions && ["crosstab", "test", "correlation"].includes(def.kind)) {
+    try { const a = adviseAnalysis(def, dataset); result = { ...result, assumptions: adviceChecks(a) }; } catch { /* the advice must never be what stops a result */ }
+  }
   try { return { ...result, provenance: provenanceOf(def, dataset, result, clock() - t0) }; } catch { return result; }
 }
 

@@ -7,6 +7,7 @@ import {
 } from "../stats/tests.js";
 import { correlate, correlationInterval, correlationMatrix } from "../stats/correlation.js";
 import { logistic, mediation, multinomialLogistic, ols, type Coefficient } from "../stats/regression.js";
+import { failedChecks, linearModelChecks, logisticModelChecks } from "../modelChecks.js";
 import { cronbachAlpha, factorAnalysis, hierarchical, kMeans, standardize } from "../stats/multivariate.js";
 import { fmtNum, fmtP, fmtPct, isOrdered, makeResult, opt, pct, refused, round } from "./common.js";
 import { expandBattery } from "./basics.js";
@@ -356,7 +357,9 @@ export function regression(def: AnalysisDefinition, ds: Dataset, totalCases: num
     else insights.push("No predictor is significant at the 5% level.");
     if (interactions.length) { const it = fit.coefficients.filter((t) => t.term.includes(" × ")); for (const t of it) insights.push(`Interaction ${t.term} ${sigWord(t.p)} (b = ${fmtNum(t.estimate, 3)}, p ${fmtP(t.p)})${moderation ? " — " + (t.p != null && t.p < 0.05 ? "moderation is supported" : "no moderation detected") : ""}.`); }
     chart = { categories: fit.coefficients.slice(1).map((t) => t.term), series: [{ name: "Standardized β", values: fit.coefficients.slice(1).map((t) => round(t.standardized, 3)), ci: fit.coefficients.slice(1).map((t) => (t.ci95 ? [round(t.ci95[0], 3)!, round(t.ci95[1], 3)!] : null)), sig: fit.coefficients.slice(1).map((t) => (t.p != null && t.p < 0.05 ? "*" : "")) }], points: fit.fitted.map((f, i) => ({ x: f, y: fit.residuals[i] })) };
-    return makeResult(def, ds, { tables, chart, tests, insights, warnings, recommendedCharts: ["coefficient_plot", "bar_horizontal", "forest", "scatter"], totalCases });
+    const assumptions = linearModelChecks(fit, spec, yv);
+    warnings.push(...failedChecks(assumptions).filter((w) => !/overlap/.test(w) || !fit.warnings.length));
+    return { ...makeResult(def, ds, { tables, chart, tests, insights, warnings, recommendedCharts: ["coefficient_plot", "bar_horizontal", "forest", "scatter"], totalCases }), assumptions };
   }
   if (model === "logistic") {
     const target = opt(def, "target", null) as string | null;
@@ -373,7 +376,9 @@ export function regression(def: AnalysisDefinition, ds: Dataset, totalCases: num
     insights.push(`Predicting ${labelOf(ds, y)} = “${cats.find((c) => c.code === pos)?.label ?? pos}”: McFadden R² = ${fmtNum(fit.mcFaddenR2, 3)}, accuracy ${fmtPct(fit.accuracy * 100)}.`);
     if (sig.length) insights.push(`Significant predictors: ${sig.map((t) => `${t.term} (OR = ${fmtNum(t.oddsRatio, 2)}, p ${fmtP(t.p)})`).join("; ")}.`);
     chart = { categories: fit.coefficients.slice(1).map((t) => t.term), series: [{ name: "Odds ratio", values: fit.coefficients.slice(1).map((t) => round(t.oddsRatio, 3)), ci: fit.coefficients.slice(1).map((t) => (t.ci95 ? [round(Math.exp(t.ci95[0]), 3)!, round(Math.exp(t.ci95[1]), 3)!] : null)), sig: fit.coefficients.slice(1).map((t) => (t.p != null && t.p < 0.05 ? "*" : "")) }] };
-    return makeResult(def, ds, { tables, chart, tests, insights, warnings, recommendedCharts: ["forest", "coefficient_plot", "bar_horizontal"], totalCases });
+    const assumptions = logisticModelChecks(fit, spec, yv);
+    warnings.push(...failedChecks(assumptions));
+    return { ...makeResult(def, ds, { tables, chart, tests, insights, warnings, recommendedCharts: ["forest", "coefficient_plot", "bar_horizontal"], totalCases }), assumptions };
   }
   // multinomial
   const col = categoricalColumn(ds, y).map((v) => (v == null || Array.isArray(v) ? null : v));

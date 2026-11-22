@@ -23,6 +23,7 @@ export * from "./findings.js";
 export * from "./findingsReport.js";
 export * from "./posthoc.js";
 export * from "./dataAdvice.js";
+export * from "./modelChecks.js";
 export * from "./synthesis.js";
 export * from "./dataQuery.js";
 export * from "./chartPurpose.js";

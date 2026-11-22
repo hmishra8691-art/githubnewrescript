@@ -224,6 +224,12 @@ export interface AnalysisResult {
    * plus the filters applied (`options.layerFilter`). Absent when the analysis defines none.
    */
   layer?: { reports: import("./analysisLayer.js").LayerReport[]; filtered?: { label: string; before: number; after: number }[] };
+  /**
+   * WHETHER THE METHOD'S ASSUMPTIONS HOLD (Level 5 roadmap M5): each check with what was measured, the threshold,
+   * holds / caution / fails, and what to do. Regression models check their own fit; tables and tests carry the
+   * data advice. Absent where the method has no assumption to check.
+   */
+  assumptions?: import("./modelChecks.js").AssumptionCheck[];
   /** set when the analysis could not be computed at all — a stable code and a sentence a researcher can act on, never a raw exception */
   /** `job_pending` (2026-10-22): a model that runs as a background job (HB) has not finished yet — nothing is read from it until it has */
   error?: { code: "unknown_kind" | "not_computable" | "no_data" | "unknown_variable" | "job_pending"; message: string };
