@@ -120,7 +120,25 @@ export interface PreparedList {
   dropped: number;
   /** the same person twice IN THIS FILE — the second occurrence is skipped */
   duplicates: string[];
+  /**
+   * Every finding, row by row, for a screen that explains itself (2026-11-21): which row of the researcher's own
+   * file, what is wrong, and whether the person is still added. `row` counts as a spreadsheet does — the heading
+   * row is 1.
+   */
+  problems: ListProblem[];
+  invalidEmails: number;
 }
+
+export type ListProblemKind = "invalid_email" | "duplicate" | "nobody" | "no_contact" | "example";
+export interface ListProblem {
+  row: number;
+  kind: ListProblemKind;
+  value: string;
+  /** true = this row is left out; false = added, but worth a look */
+  skipped: boolean;
+  message: string;
+}
+export const LIST_PROBLEM_CAP = 200;
 
 /**
  * Turn parsed rows into respondents.
@@ -147,6 +165,8 @@ export function prepareRespondentList(
   const seenEmail = new Set<string>();
   let dropped = 0;
   let badEmails = 0;
+  const problems: ListProblem[] = [];
+  const note = (p: ListProblem) => { if (problems.length < LIST_PROBLEM_CAP) problems.push(p); };
 
   rows.forEach((raw, i) => {
     const rec: PreparedRespondent = { email: null, external_id: null, name: null, embedded: {} };
@@ -169,13 +189,23 @@ export function prepareRespondentList(
       else rec.name = text.slice(0, 200);
     }
 
-    if (!rec.email && !rec.external_id && !rec.name) { dropped++; return; }
+    if (!rec.email && !rec.external_id && !rec.name) {
+      dropped++;
+      /* a completely blank line (the end of a sheet) is not a finding; a line with other columns filled in is */
+      if (Object.keys(rec.embedded).length) note({ row: i + 2, kind: "nobody", value: "", skipped: true, message: `Row ${i + 2} has no name, email or ID, so there is nobody to add.` });
+      return;
+    }
+
+    /* the template's own example row, uploaded unchanged, is not a person */
+    if (rec.email === "example.person@example.com") { dropped++; note({ row: i + 2, kind: "example", value: rec.email, skipped: true, message: `Row ${i + 2} is the template's example row, so it is left out.` }); return; }
 
     if (rec.email && !EMAIL_RE.test(rec.email)) {
       badEmails++;
       // +2 because a human counting rows in their spreadsheet counts the heading
       if (badEmails <= 5) issues.push(`row ${i + 2}: “${rec.email}” does not look like an email address`);
     }
+    if (rec.email && !EMAIL_RE.test(rec.email)) note({ row: i + 2, kind: "invalid_email", value: rec.email, skipped: false, message: `Row ${i + 2}: “${rec.email}” does not look like an email address. The person is added, but an invitation cannot be emailed to it.` });
+    if (!rec.email && !rec.external_id) note({ row: i + 2, kind: "no_contact", value: rec.name ?? "", skipped: false, message: `Row ${i + 2}: ${rec.name} has no email and no ID. They are added, but cannot be emailed and cannot be told apart from someone with the same name.` });
 
     /*
      * The id is the dedupe key when there is one, and the address otherwise —
@@ -184,10 +214,10 @@ export function prepareRespondentList(
      */
     if (rec.external_id) {
       const key = rec.external_id.toLowerCase();
-      if (seenExternal.has(key)) { duplicates.push(rec.external_id); return; }
+      if (seenExternal.has(key)) { duplicates.push(rec.external_id); note({ row: i + 2, kind: "duplicate", value: rec.external_id, skipped: true, message: `Row ${i + 2}: the ID “${rec.external_id}” is already in this file, so this row is left out.` }); return; }
       seenExternal.add(key);
     } else if (rec.email) {
-      if (seenEmail.has(rec.email)) { duplicates.push(rec.email); return; }
+      if (seenEmail.has(rec.email)) { duplicates.push(rec.email); note({ row: i + 2, kind: "duplicate", value: rec.email, skipped: true, message: `Row ${i + 2}: “${rec.email}” is already in this file, so this row is left out.` }); return; }
       seenEmail.add(rec.email);
     }
 
@@ -195,7 +225,7 @@ export function prepareRespondentList(
   });
 
   if (badEmails > 5) issues.push(`…and ${badEmails - 5} more addresses that do not look valid`);
-  return { people, issues, dropped, duplicates };
+  return { people, issues, dropped, duplicates, problems, invalidEmails: badEmails };
 }
 
 /** What the preview shows, so the screen and the route cannot describe it differently. */
@@ -209,8 +239,43 @@ export function summariseRespondentList(
     people: prepared.people.length,
     dropped: prepared.dropped,
     duplicatesInFile: prepared.duplicates.length,
+    invalidEmails: prepared.invalidEmails,
     withEmail: prepared.people.filter((p) => p.email).length,
     withExternalId: prepared.people.filter((p) => p.external_id).length,
     embeddedFields: [...new Set(Object.entries(mapping).filter(([, t]) => t === "embedded").map(([c]) => c))],
   };
 }
+
+
+/* ------------------------------------------------------------------ the template a researcher fills in (2026-11-21) */
+
+/**
+ * THE IMPORT TEMPLATE. Three columns everybody understands, plus one example of an extra column — because the most
+ * useful thing a template can show is that extra columns are welcome and travel with the person. The example row is
+ * obviously an example and is recognised and left out if it is uploaded unchanged.
+ */
+export const RESPONDENT_TEMPLATE_COLUMNS = ["name", "email", "id"] as const;
+export const RESPONDENT_TEMPLATE_EXAMPLE = { name: "Example Person (delete this row)", email: "example.person@example.com", id: "EMP-001" } as const;
+export const RESPONDENT_TEMPLATE_HELP = [
+  "One person per row. Keep the heading row.",
+  "email: needed to send an invitation by email. Leave empty for someone you will hand a link to.",
+  "id: your own reference for the person (staff number, member number). Optional, but it stops the same person being added twice.",
+  "name: optional. Used to greet the person.",
+  "You can add more columns (department, region, …). They are kept with the person.",
+  "Save as .xlsx or .csv, then upload it.",
+];
+
+export function respondentTemplateHeaders(extraColumns: string[] = []): string[] {
+  const seen = new Set<string>(RESPONDENT_TEMPLATE_COLUMNS);
+  const extra = extraColumns.map((c) => c.trim()).filter((c) => c && !seen.has(c.toLowerCase()) && seen.add(c.toLowerCase()));
+  return [...RESPONDENT_TEMPLATE_COLUMNS, ...extra];
+}
+
+const csvCell = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+/** the template as CSV, with a byte-order mark so Excel opens accented names correctly */
+export function respondentTemplateCsv(extraColumns: string[] = []): string {
+  const headers = respondentTemplateHeaders(extraColumns);
+  const example = headers.map((h) => (RESPONDENT_TEMPLATE_EXAMPLE as Record<string, string>)[h] ?? "");
+  return `\uFEFF${headers.map(csvCell).join(",")}\r\n${example.map(csvCell).join(",")}\r\n`;
+}
+

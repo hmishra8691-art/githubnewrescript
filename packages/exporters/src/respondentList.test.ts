@@ -204,3 +204,50 @@ test("the QR code is vector, and encodes the link it was given", async () => {
   assert.match(svg, /^<\?xml|^<svg/);
   assert.match(svg, /viewBox/, "without a viewBox it cannot scale, which is the whole reason for SVG");
 });
+
+/* ------------------------------------------------------------------ 2026-11-21: findings row by row, and the template */
+
+test("every finding names the row of the researcher's own file, says what is wrong and whether the person is still added", async () => {
+  const { prepareRespondentList, summariseRespondentList } = await import("./respondentList.js");
+  const mapping = { name: "name", email: "email", id: "external_id", region: "embedded" } as const;
+  const rows = [
+    { name: "Ada", email: "ada@example.com", id: "E1", region: "N" },
+    { name: "Bob", email: "bob-at-example", id: "E2", region: "S" },
+    { name: "Ada again", email: "other@example.com", id: "e1", region: "N" },
+    { name: "", email: "", id: "", region: "W" },
+    { name: "", email: "", id: "", region: "" },
+    { name: "Cy", email: "", id: "", region: "" },
+    { name: "Dee", email: "DEE@example.com", id: "", region: "" },
+    { name: "Dee twice", email: "dee@example.com", id: "", region: "" },
+  ];
+  const out = prepareRespondentList(rows, mapping);
+  assert.deepEqual(out.people.map((p) => p.name), ["Ada", "Bob", "Cy", "Dee"]);
+  assert.deepEqual(out.problems.map((p) => [p.row, p.kind, p.skipped]), [
+    [3, "invalid_email", false], [4, "duplicate", true], [5, "nobody", true], [7, "no_contact", false], [9, "duplicate", true],
+  ]);
+  assert.match(out.problems[0]!.message, /Row 3: “bob-at-example” does not look like an email address/);
+  assert.match(out.problems[1]!.message, /Row 4: the ID “e1” is already in this file/);
+  const sum = summariseRespondentList(rows.length, out, mapping);
+  assert.deepEqual([sum.people, sum.invalidEmails, sum.duplicatesInFile, sum.dropped], [4, 1, 2, 2]);
+});
+
+test("the template: the three columns, an example row that is recognised and left out, and it reads back through the importer", async () => {
+  const { respondentTemplateCsv, respondentTemplateHeaders, parseDelimitedList, guessRespondentMapping, prepareRespondentList } = await import("./respondentList.js");
+  const { respondentTemplateXlsx } = await import("./respondentTemplate.js");
+  const { parseSpreadsheet } = await import("./spreadsheetImport.js");
+  assert.deepEqual(respondentTemplateHeaders(["Region", "email", " ", "region"]), ["name", "email", "id", "Region"]);
+  const csv = respondentTemplateCsv(["department"]);
+  assert.ok(csv.startsWith("﻿name,email,id,department\r\n"));
+  /* filled in and uploaded: the example row is dropped with a reason, the real person is added */
+  const filled = parseDelimitedList(`${csv.replace(/^﻿/, "")}Ada Lovelace,ada@example.com,EMP-7,Maths\r\n`);
+  const mapping = guessRespondentMapping(filled.headers);
+  assert.deepEqual(mapping, { name: "name", email: "email", id: "external_id", department: "embedded" });
+  const out = prepareRespondentList(filled.rows, mapping);
+  assert.deepEqual(out.people.map((p) => [p.name, p.email, p.external_id, p.embedded]), [["Ada Lovelace", "ada@example.com", "EMP-7", { department: "Maths" }]]);
+  assert.deepEqual(out.problems.map((p) => [p.row, p.kind]), [[2, "example"]]);
+  /* the workbook: first sheet is the list, the instructions sheet is not read */
+  const sheet = await parseSpreadsheet(await respondentTemplateXlsx(["department"]));
+  assert.deepEqual(sheet.headers, ["name", "email", "id", "department"]);
+  assert.deepEqual(sheet.sheetNames, ["People", "How to fill this in"]);
+  assert.equal(prepareRespondentList(sheet.rows, guessRespondentMapping(sheet.headers)).people.length, 0, "an untouched template adds nobody");
+});
