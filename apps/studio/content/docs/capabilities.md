@@ -173,6 +173,7 @@ What ReScript supports, partly supports and does not support — methodologies, 
 | Research proposal / plan — Word | supported |  |
 | Statistical analysis plan — Word | supported |  |
 | Findings report — Word | supported |  |
+| Report or dashboard — Word (the same report model as PowerPoint, PDF, Excel and CSV) | supported | every block of a saved report or a dashboard: cover, sections, text, executive summary, insights, KPIs, tables, panel grids (headline then panels) and the methodology; charts are their data tables, or the picture the Studio drew; one renderer for every format, which says before building how each block comes out and which have no data |
 | Tables — Excel | supported |  |
 | Report / deck — PowerPoint | supported |  |
 | Findings deck — PowerPoint (from a run of the plan) | supported | kept once made: asking again downloads the stored version; a new version when the design, the data or the theme changed |

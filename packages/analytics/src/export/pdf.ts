@@ -13,6 +13,7 @@ import { summaryAnalysisIds } from "../blockRefs.js";
 import { chartTitleFor, seriesForChart } from "./shared.js";
 import { stackShares } from "../chartLayout.js";
 import { methodologyLines } from "../reportPages.js";
+import { expandPanels } from "../reportModel.js";
 
 export interface PdfInput {
   report: Pick<ReportDefinition, "title" | "subtitle" | "blocks"> & { author?: string; date?: string };
@@ -67,7 +68,8 @@ export async function buildPdf(input: PdfInput): Promise<Buffer> {
   doc.fillColor(subtle).fontSize(10).text([cover?.date ?? input.report.date ?? new Date().toISOString().slice(0, 10), cover?.author ?? input.report.author ?? input.meta?.generatedBy, input.meta?.survey].filter(Boolean).join(" · "), PAGE.m, 250, { width: W });
   doc.y = 290;
 
-  for (const block of input.report.blocks) {
+  /* R1: a panel grid is printed as its headline and then each panel (it used to be left out of the PDF without a word) */
+  for (const block of expandPanels(input.report.blocks)) {
     if (block.type === "cover" || block.type === "page_break") continue;
     if (block.type === "section") { footer(); newPage(); doc.rect(PAGE.m, 120, 6, 60).fill(primary); doc.fillColor(text).font("Helvetica-Bold").fontSize(22).text(block.title, PAGE.m + 18, 130, { width: W - 18 }); if (block.subtitle) doc.font("Helvetica").fontSize(12).fillColor(subtle).text(block.subtitle, PAGE.m + 18, doc.y + 4, { width: W - 18 }); doc.font("Helvetica"); doc.y = 220; continue; }
     if (block.type === "text") { if (block.title) heading(block.title, 13); para(block.markdown.replace(/[#*_`>]/g, "")); continue; }

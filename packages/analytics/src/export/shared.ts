@@ -60,3 +60,11 @@ export function reportForExport<R extends { title: string }>(input: R): R & Pick
 /** the largest image a PowerPoint slide embeds (pptx.ts drops bigger ones). Kept here, not in pptx.ts, so the published
  * limits (limits.ts, in the browser-safe main entry) can read it without pulling the PowerPoint writer into a page. */
 export const MAX_EMBEDDED_IMAGE_BYTES = 6 * 1024 * 1024;
+
+/** a PNG or JPEG data URI within the size cap — the one check before a client-drawn picture goes into a deck or a document */
+export function isEmbeddableImage(uri: unknown): uri is string {
+  if (typeof uri !== "string") return false;
+  if (!/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(uri)) return false;
+  const b64 = uri.slice(uri.indexOf(",") + 1);
+  return b64.length > 64 && (b64.length * 3) / 4 <= MAX_EMBEDDED_IMAGE_BYTES;
+}

@@ -17,7 +17,7 @@ import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock,
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
 import { summaryAnalysisIds } from "../blockRefs.js";
-import { chartTitleFor, reportForExport, seriesForChart, MAX_EMBEDDED_IMAGE_BYTES } from "./shared.js";
+import { chartTitleFor, reportForExport, seriesForChart, isEmbeddableImage, MAX_EMBEDDED_IMAGE_BYTES } from "./shared.js";
 import { chartPicture } from "../chartPictures.js";
 import { chartDecimals, chartFormatCode } from "../chartFormat.js";
 import { divergingLayout, divergingSeriesOrder, stackShares } from "../chartLayout.js";
@@ -52,14 +52,7 @@ export interface PptxInput {
  * Anything failing that is dropped rather than embedded — the export is a
  * document the customer sends on, not a channel for arbitrary bytes.
  */
-export { MAX_EMBEDDED_IMAGE_BYTES };
-export function isEmbeddableImage(uri: unknown): uri is string {
-  if (typeof uri !== "string") return false;
-  if (!/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(uri)) return false;
-  const b64 = uri.slice(uri.indexOf(",") + 1);
-  return b64.length > 64 && (b64.length * 3) / 4 <= MAX_EMBEDDED_IMAGE_BYTES;
-}
-
+export { MAX_EMBEDDED_IMAGE_BYTES, isEmbeddableImage };
 export const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
 
 /**

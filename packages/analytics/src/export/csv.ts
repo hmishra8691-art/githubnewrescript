@@ -5,6 +5,7 @@
  * column header says it is one.
  */
 import type { AnalysisResult, ReportDefinition, ResultTable } from "../types.js";
+import { expandPanels } from "../reportModel.js";
 
 export interface CsvInput { report: Pick<ReportDefinition, "title" | "blocks">; results: Record<string, AnalysisResult>; /** every table of every analysis, not only the blocks' first (default true) */ allTables?: boolean }
 
@@ -28,7 +29,8 @@ export function tableCsv(name: string, t: ResultTable): string {
 export function buildCsv(input: CsvInput): string {
   const parts: string[] = [`# ${input.report.title}`];
   const seen = new Set<string>();
-  for (const b of input.report.blocks) {
+  /* R1: a panel grid's panels are tables too (it has no single analysisId, so it used to be skipped) */
+  for (const b of expandPanels(input.report.blocks)) {
     if (!("analysisId" in b) || !b.analysisId) continue;
     const r = input.results[b.analysisId]; if (!r || r.error) continue;
     const tables = b.type === "table" && b.tableId ? r.tables.filter((t) => t.id === b.tableId) : input.allTables === false ? r.tables.slice(0, 1) : r.tables;

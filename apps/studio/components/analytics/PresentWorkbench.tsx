@@ -23,7 +23,7 @@ export function PresentWorkbench(p: { api: AxApi; surveyTitle: string; canExport
   const [editing, setEditing] = React.useState<string | null>(null);
   const payload = () => ({ selection: s.items.map((i) => ({ key: i.key, ...(i.title ? { title: i.title } : {}), ...(i.note ? { note: i.note } : {}) })), title: title.trim() || `${p.surveyTitle} — selection`, interpretations, ...(themeId ? { themeId } : {}) });
 
-  const exportAs = async (format: "pptx" | "pdf" | "xlsx" | "csv") => {
+  const exportAs = async (format: "pptx" | "pdf" | "docx" | "xlsx" | "csv") => {
     if (!s.items.length) return;
     setBusy(format); setNotice(null);
     try {
@@ -101,8 +101,8 @@ export function PresentWorkbench(p: { api: AxApi; surveyTitle: string; canExport
             <label className="ax-field"><span>Report theme</span><select className="select" value={themeId} onChange={(e) => setThemeId(e.target.value)}><option value="">Default</option>{p.themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
             <label className="ax-toggle" style={{ display: "block", margin: "8px 0" }}><input type="checkbox" checked={interpretations} onChange={(e) => setInterpretations(e.target.checked)} data-testid="ax-present-interp" /> Print the plain-language interpretation and the statistics under every analysis</label>
             <div className="ax-present-actions">
-              {(["pptx", "pdf", "xlsx", "csv"] as const).map((f) => (
-                <button key={f} className={`btn ${f === "pptx" ? "primary" : ""} ${busy === f ? "loading" : ""}`} disabled={!p.canExport || !s.items.length || !!busy} onClick={() => void exportAs(f)} data-testid={`ax-present-export-${f}`} title={!p.canExport ? "Your role cannot export" : f === "csv" ? "Every table, one CSV" : f === "xlsx" ? "Tables and charts in a workbook" : f === "pdf" ? "A document with vector charts, tables and interpretations" : "A deck, one slide per chart and table"}>{f.toUpperCase()}</button>
+              {(["pptx", "pdf", "docx", "xlsx", "csv"] as const).map((f) => (
+                <button key={f} className={`btn ${f === "pptx" ? "primary" : ""} ${busy === f ? "loading" : ""}`} disabled={!p.canExport || !s.items.length || !!busy} onClick={() => void exportAs(f)} data-testid={`ax-present-export-${f}`} title={!p.canExport ? "Your role cannot export" : f === "csv" ? "Every table, one CSV" : f === "xlsx" ? "Tables and charts in a workbook" : f === "pdf" ? "A document with vector charts, tables and interpretations" : f === "docx" ? "An editable Word document: text, tables, and each chart as its data table" : "A deck, one slide per chart and table"}>{f === "docx" ? "WORD" : f.toUpperCase()}</button>
               ))}
             </div>
             <button className={`btn ${busy === "save" ? "loading" : ""}`} style={{ width: "100%", marginTop: 8 }} disabled={!p.canEdit || !s.items.length || !!busy} onClick={() => void saveReport()} data-testid="ax-present-save" title={!p.canEdit ? "Your role cannot create reports" : "Keep editing it in Reports: templates, branding, publishing, sharing"}>Save as report</button>
