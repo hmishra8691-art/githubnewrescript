@@ -306,6 +306,8 @@ export * from "./toolRegistry.js";
 export { answerDesignRequest, interpretDesignRequest } from "./designIntent.js";
 export * from "./agentPlan.js";
 export * from "./agentLoop.js";
+export { fromSource, sourceDiff, toSource } from "./surveySource.js";
+export type { SourceProblem, SourceReading } from "./surveySource.js";
 export { fieldEstimate, interviewLength, precisionOf, quotaCells, sampleForDifference, sampleForMargin } from "./designCalc.js";
 export * from "./portalPolicy.js";
 export * from "./scorecard.js";
