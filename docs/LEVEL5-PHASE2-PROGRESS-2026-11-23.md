@@ -321,6 +321,102 @@ history, and the fraud centre already handled cases and rings. Added: a review q
 one response per cluster ahead of its siblings), per-rule verdicts (how often reviewers removed what a rule flagged,
 with a Wilson interval), and Cohen's κ between two reviewers. A "Review console" card in Data → Quality shows them.
 
+### Import batch: five more formats, legacy data, side-by-side review (22 November)
+
+**I3, more source formats.** Readers for Triple-S (XML), SPSS syntax (.sps: variable and value labels, missing values,
+multiple-response sets), SurveyMonkey and Alchemer survey JSON, and Forsta Plus project XML. Each is detected by
+content, not by the file extension, and feeds the same mapping, validation and report as the existing readers.
+
+**I4, legacy data migration.** A legacy data table (from an SPSS file, a CSV or a workbook) is mapped onto the imported
+survey: variable to question by name and label, codes to options, the weight to an embedded field, with a
+reconciliation of what was carried over, recoded or dropped. A preview route shows the plan and the reconciliation.
+**It writes nothing.** Storing migrated responses waits on your decision about whether they count as completes for
+billing.
+
+**I6, side-by-side review.** Each imported question is compared with the source part by part (type, text, options,
+rows, logic), and each part is marked same, converted, check or lost. "Accept all at or above" a confidence accepts in
+bulk. This is a "Side by side" tab on the import review screen. Acceptance is not saved yet. The tab's badges first
+used fixed colours and failed the theme test; 0279 fixed this.
+
+### Qualitative batch: highlight reel as video, interview booking (22 November)
+
+**Q4, one video of a highlight reel.** A reel is planned before anything is cut. A quote is shown as footage only if
+three things hold: its session records consent to recording, there is a recording, and the quote has a time range.
+Otherwise the quote is shown as a text card. Speakers appear as "Participant N" unless names are asked for. The
+render is 1280×720 at 30 fps with AAC audio, with a title card, burnt-in captions and cards drawn with the report
+fonts. A render allows up to 20 clips and 180 seconds.
+
+**Q6, interview booking.** Booking works like this:
+
+- The researcher adds bookable times from availability windows (length, buffer, capacity, moderator).
+- The researcher invites people from the survey's list or by typed addresses. Each person gets a personal link by
+  email; only its hash is stored.
+- On a public page, the invitee picks, moves or cancels a time in their own time zone.
+- An hourly job sends reminders 24 hours and 1 hour before each session.
+- After a session, the researcher marks attended or no-show. The incentive owed under the study's policy is recorded:
+  a late cancellation inside 24 hours earns a share or nothing.
+- The Studio says how many more people to invite to reach a target, using the study's own rates once it has enough.
+
+Not covered:
+
+- Panel members from the sample exchange are reached through their vendor, so they are not invited by email here.
+- The incentive is recorded, not paid.
+- There is no Studio screen yet; booking works through the API.
+
+### Reporting batch: one model, shared dashboards, viewer rules, client masters, schedules (22 November)
+
+**R1, one report model.** A report or a dashboard now goes through one renderer to PowerPoint, PDF, Word, Excel or
+CSV. Before building, it states how each block will come out in that format (as itself, expanded, as its data table,
+or left out) and which blocks have no data. Word is new: every block type is rendered, and a chart appears as its
+data table. Two things were fixed along the way:
+
+- PDF and CSV both left panel grids out without saying so; they now include them.
+- The export history table accepted only PowerPoint and Excel, so every PDF and CSV export's history row has been
+  refused. I checked this on the live database. Migration 0108 fixes it.
+
+**R2, shared dashboards.** A shared report was already a frozen version with pre-computed viewer filters. Added:
+
+- **Drill-down:** one variable a viewer may open by value, at most 12 values, each computed when the report is
+  published.
+- **Minimum base:** no figure from fewer than the minimum number of people leaves the server. A whole result is
+  withheld, a column is blanked in both the table and the chart, and a small segment is removed; each says so. This
+  applies to filters and drill values at 30 by default, and to the main results when the report sets a minimum. The
+  share route applies it again when a share is opened or downloaded, so versions published earlier are covered on
+  their next view.
+
+**R3, who sees what.** A share link can carry viewer rules. Each signed-in viewer, matched by email or by domain, sees
+everything, one filter, or one drill value. The server sends only that part; the other segments' numbers never reach
+the browser. People no rule names see nothing. A restricted viewer is not told the whole sample size.
+
+**R4, client PowerPoint masters.** A client's .pptx or .potx is read on our server. The deck theme takes from it:
+
+- the slide size;
+- the theme colours, fonts and theme part;
+- the master's background and pictures, with their positions;
+- where the title sits (taken from a layout when the master itself has none).
+
+Decks exported with that theme are built on a master rebuilt from the file:
+
+- their theme part;
+- titles in their heading font, where their title placeholder is;
+- text that reads on their background;
+- native, editable charts in their accent colours.
+
+Not carried over: drawn shapes on the master and layouts other than the master. The import lists both.
+
+**R5 and R6, refresh, schedules and alerts.** A schedule re-computes a report daily, weekly or monthly, or on demand.
+Each run:
+
+- renders the report through the one renderer and stores it;
+- records what changed since the last run: figures that moved by 3 points or more, KPIs, bases, and analyses added or
+  gone. Moves on fewer than 30 people are not called findings;
+- emails the recipients the change summary with a sign-in link to the file, plus the share link when one is named. No
+  file is attached.
+
+An alert watches one figure. It emails once when the figure crosses its threshold, not again while it stays over, and
+never on a small base. The hourly job claims each due schedule before running it, so overlapping runs never run one
+schedule twice.
+
 ## The scorecard after this
 
 14 benchmarks, 12 measured. 24 of 47 metrics with a target meet it.
@@ -374,6 +470,18 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | Trust score: stranger at 70, clean history, newcomer verified not quarantined, quarantine with evidence, risk cap, open case, cleared case | `trustScore.test.ts`, 6 tests | pass |
 | Review console: queue order, rule verdicts with interval, κ on a hand-worked case | `reviewConsole.test.ts`, 3 tests (quality suite: 140) | pass |
 | All benchmarks against the previous baseline | `pnpm bench` | no regression |
+| Import adapters: Triple-S, SPSS syntax, SurveyMonkey, Alchemer, Forsta Plus, detection by content | `i3Adapters.test.ts` (import suite: 164) | pass |
+| Legacy data: plan, migration keyed by question id, weight, reconciliation | `dataMigration.test.ts` | pass |
+| Side by side: part levels, bulk accept by confidence and by ids | `sideBySide.test.ts` | pass |
+| Highlight reel: plan by consent, media and timing; anonymised speakers; budget; a real render from a generated recording (3 segments, 1280×720, AAC, length within 0.35 s); frames checked by eye | `reel.test.ts` (reportvideo suite: 9) | pass |
+| Interview booking: slots, booking refusals, late cancel, reminders once, settlement, invites needed; token shape and hash, row mapping, a booking's whole life, mail text | `scheduling.test.ts` 6 (interviews suite: 184), `qualScheduling.test.ts` 4 | pass |
+| One report in all five formats; Word contains every block and passes its check; panel grids in PDF and CSV; a dashboard; an empty one refused | `render.test.ts`, 7 tests | pass |
+| Minimum base: column blanked in table and chart, whole result withheld, small segment removed, idempotent; drill plan; the drill filter really filters (North n = 144 of 400) | `dashboardData.test.ts`, 5 tests | pass |
+| Viewer rules: every refusal, email over domain, longest domain, no suffix match, no rule, signed out; a restricted payload holds nothing of another segment | `viewerAccess.test.ts`, 3 tests | pass |
+| Client master: everything read from a template saved the PowerPoint way; the deck carries the client's theme part, background, logo, a native chart in their accent, titles in their font; rendered through LibreOffice and checked by eye | `clientTemplate.test.ts`, 3 tests | pass |
+| Digests, change summary, next run times, alerts that fire once | `reportSchedule.test.ts`, 4 tests (analytics suite: 941) | pass |
+| One schedule run end to end against an in-memory database: Word rendered, stored, a sign-in link mailed and no file, the second run reports an 8-point move, an alert fires once, a deleted report, a failed computation | `reportSchedulesCore.test.ts`, 3 tests (Studio suite: 1,343) | pass |
+| The fake-provider AI eval after all of the above | `pnpm eval:ai` | 67 of 67 |
 
 ## What was NOT tested
 
@@ -394,6 +502,12 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 - **The fraud batch was not run against a database.** The hourly cross-survey pass, the trust route and the console
   route were type-checked and audited (Studio suite 1,332 passes), not called; the review console card was not opened in a browser. No
   reviewer has made decisions, so the rule verdicts and κ have no real figures yet.
+- **Nothing in the import, qualitative and reporting batches ran against a database.** Migrations 0107 to 0110
+  are not applied. The routes were type-checked and audited, not called over HTTP. No email was sent.
+- **Not opened in a browser:** the booking page, the side-by-side tab, the drill selector, the viewer-rules editor,
+  the master import button, and the schedules card.
+- **R4 was tested on a template I built, not on a real client's template.**
+- **A schedule's refresh does not republish a shared version.** Shared links keep showing the last published version.
 - **English only.**
 
 ## Phase 2 item by item
@@ -406,22 +520,32 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | AI design agents (8) | A3, A5, A6, A7, A15 | A2 (about 90 of 850 cases), A4 (loop built, no model), A8 (reasons in plans, not on screen) | |
 | Programming (6) | P2, P3 | P1 (edits faster, target not met), P5 (engine and route; no screen) | P4, P11 |
 | Analytics (6) | M5, M10 | M1 (measured only), M2, M3, M4 (engine and tests; no screen) | |
-| Import (6) | | I1 (10 of 300 files), I2 (exists, 58.3%, not examined) | I3, I4, I5, I6 |
-| Reporting (6) | | | R1 to R6 |
-| Qualitative (6) | | | Q2 to Q7 |
+| Import (6) | I3, I6 (review tab; acceptance not saved) | I1 (10 of 300 files), I2 (exists, 58.3%, not examined), I4 (preview only; storing waits on the billing decision) | I5 |
+| Reporting (6) | R1, R2, R3, R4, R5, R6 (not run against a database) | | |
+| Qualitative (6) | Q4, Q6 (no screen for booking) | | Q2, Q3, Q5, Q7 |
 | Fraud (6) | F3, F4 (typing and pointer summaries collected, sanitised and read by four rules), F6, F11 | F5 (typing rules only; open-end content not judged) | F2 |
 
 Some "not started" items have earlier work in the product that I have not assessed against the roadmap's
 definition (libraries, dashboards, the quality review screen, the import review screen). I have not counted them.
 
-**Next:** import (I3, I4, I6), then qualitative (Q4, Q6) and reporting (R1 to R6). F2 still waits on the
-build-or-license decision.
+**Next:** the 11 items asked for are built (I3, I4, I6, Q4, Q6, R1 to R6). F2 still waits on the
+build-or-license decision; I4's storage waits on the billing decision for migrated completes.
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages
 reviewed by people, P11 real devices, and anything needing the model, speech or vendor keys.
 
-Still open from Phase 1: the model baseline (`pnpm eval:ai`) has not been run.
+The model baseline was run once on 0273 (43 of 67, $2.99, [AI-EVAL-BASELINE-2026-11-22.md](AI-EVAL-BASELINE-2026-11-22.md)); 0274 holds the fixes and has not been re-run with the model.
 
-## Nothing to apply
+## To apply
 
-No migration. No setting.
+Four migrations, written and not applied (with 0105 and 0106 from before):
+
+| Migration | What |
+| --- | --- |
+| 0107 | interview slots and bookings; mail kinds for invitations and reminders |
+| 0108 | export history accepts PDF, CSV and Word (PDF and CSV rows are being refused today) |
+| 0109 | viewer rules on share links |
+| 0110 | report schedules and runs; mail kinds for deliveries and alerts |
+
+Two new hourly jobs are in `apps/studio/vercel.json` (interview reminders, report schedules); they need `CRON_SECRET`,
+like the others. Links in emails use `STUDIO_PUBLIC_URL` when it is set.
