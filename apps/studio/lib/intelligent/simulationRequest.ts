@@ -1,5 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import type { SimulationConfig, SimulationRunReport } from "@rescript/templates";
+import { observe } from "@rescript/templates";
 
 /**
  * "GENERATE 100 TEST RESPONSES AND TEST EVERYTHING" (2026-11-09) — Intelligent Mode's reading of a simulation request,
@@ -41,14 +42,22 @@ export function simulationAnswer(def: SurveyDefinition, r: SimulationRunReport):
   const q = r.coverage.questions;
   const ends = Object.entries(r.endings).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ");
   const bad = r.probes.filter((p) => !p.rejected);
-  const answer = `${r.produced} simulated test respondents went through the survey (run ${r.runId}, nothing saved yet): ${ends}. ${q.exercised} of ${q.total} questions were reached. ${r.verdict.ok ? "No problems found." : `${r.verdict.problems.length} problem${r.verdict.problems.length === 1 ? "" : "s"} found — listed below.`}`;
+  /* what the run SAW, as observations (which question, which condition, which simulated respondents) — not sentences to parse */
+  const seen = observe(def, r).observations;
+  const found = seen.filter((o) => o.severity !== "note").length;
+  const answer = `${r.produced} simulated test respondents went through the survey (run ${r.runId}, nothing saved yet): ${ends}. ${q.exercised} of ${q.total} questions were reached. ${found === 0 ? "No problems found." : `${found} problem${found === 1 ? "" : "s"} found — listed below, each with the condition and the simulated respondents it happened to.`}`;
   const label = (id?: string) => (id ? def.questions.find((x) => x.id === id)?.code ?? id : "");
   return {
     answer,
     sections: [
-      ...(r.verdict.problems.length ? [{ title: "Problems", items: r.verdict.problems.slice(0, 12).map((p) => ({ label: p })) }] : []),
-      ...(q.missing.length ? [{ title: "Never reached", items: q.missing.slice(0, 10).map((m) => ({ label: `${m.code}`, detail: m.text.slice(0, 80) })) }] : []),
-      ...(r.coverage.conditions.never.length ? [{ title: "Conditions that never fired", items: r.coverage.conditions.never.slice(0, 8).map((c) => ({ label: c })) }] : []),
+      ...(seen.length ? [{ title: "What was seen", items: seen.slice(0, 12).map((o) => ({
+        label: o.message,
+        detail: [
+          o.condition ? `${o.condition.where}: ${o.condition.text}` : "",
+          ...o.respondents.map((x) => `${x.code} (simulated, ended ${x.endStatus}${x.lastPage ? ` on ${x.lastPage}` : ""})${Object.keys(x.answers).length ? `: ${Object.entries(x.answers).map(([k, v]) => `${k} = ${Array.isArray(v) ? v.join("+") : String(v)}`).join(", ")}` : ""}`),
+          o.look,
+        ].filter(Boolean).join(" · "),
+      })) }] : []),
       { title: "Validation probes", items: [{ label: `${r.probes.length - bad.length} of ${r.probes.length} invalid answers were refused by the survey's own rules${bad.length ? ` — accepted: ${bad.slice(0, 4).map((b) => `${label(b.question)} (${b.probe})`).join("; ")}` : ""}` }] },
       ...(r.randomization.length ? [{ title: "Randomization", items: r.randomization.slice(0, 6).map((x) => ({ label: `${x.variable}: ${x.balanced ? "balanced" : "unbalanced"}`, detail: x.items.slice(0, 4).map((i) => `${i.item} first ${Math.round(i.firstShare * 100)}%`).join(", ") })) }] : []),
     ],

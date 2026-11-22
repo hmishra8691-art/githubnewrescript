@@ -36,4 +36,13 @@ test("the Manual form's fields become profiles, distributions and expectations â
   const a = simulationAnswer(def, run);
   assert.match(a.answer, /40 simulated test respondents/);
   assert.ok(a.sections.some((s) => s.title === "Validation probes"));
+  assert.match(a.answer, /No problems found/);
+  /* a broken expectation is reported with the simulated respondents it failed for, and what to look at */
+  const wrong = parseExpectations(def, "Q2 hidden when Q1 = 1");
+  const bad = simulationAnswer(def, runSimulation(def, { count: 40, seed: 1, expectations: wrong.expectations }));
+  assert.match(bad.answer, /1 problem found/);
+  const seen = bad.sections.find((s) => s.title === "What was seen");
+  assert.ok(seen && /broken for \d+ of \d+ simulated respondents/.test(seen.items[0].label), JSON.stringify(bad.sections));
+  assert.match(seen!.items[0].detail ?? "", /SIM-.*\(simulated, ended/);
+  assert.match(seen!.items[0].detail ?? "", /should be hidden here and was not/);
 });
