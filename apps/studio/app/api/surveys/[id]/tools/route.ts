@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SurveyDefinition as SurveyDefinitionSchema, normalizeAsParsed } from "@rescript/schema";
-import { approvalSatisfied, dryRunTool, runComputeTool, droppedFieldPaths, ensureElementIds, TOOLS, toolByName, toolCallRecord, type ToolApproval, type ToolApprovalGiven, type ToolCallRecord } from "@rescript/engine";
+import { approvalSatisfied, checkPlan, dryRunTool, planFromModel, runComputeTool, droppedFieldPaths, ensureElementIds, TOOLS, toolByName, toolCallRecord, type ToolApproval, type ToolApprovalGiven, type ToolCallRecord } from "@rescript/engine";
 import { customerDb } from "@/lib/db";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { loadDefinition } from "@/lib/analytics";
@@ -31,6 +31,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (isFailure(gate)) return gate.response;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
+  /*
+   * A WHOLE PLAN, CHECKED (Level 5 roadmap A3): POST { plan } runs every step on a copy of the draft, in order, and
+   * answers what each would do, what it would destroy and the approval the plan needs. Nothing is written; a plan
+   * is executed step by step through the calls below, each under its own approval.
+   */
+  if (body?.plan !== undefined) {
+    const read = planFromModel(body.plan);
+    if (!read.plan) return NextResponse.json({ ok: false, mode: "plan_check", problems: read.problems }, { status: 422 });
+    const planDb = customerDb(gate.survey.customer_id);
+    const planDef = await loadDefinition(planDb as never, params.id);
+    if ("error" in planDef) return NextResponse.json({ error: planDef.error }, { status: planDef.status });
+    const { after: _after, ...check } = checkPlan(planDef.def as never, read.plan);
+    await audit({ action: "tool.called", userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId: params.id, customerId: gate.user.customerId, entity: "tool", entityId: null, detail: { phase: "plan_check", steps: check.steps.map((x) => ({ tool: x.tool, outcome: x.outcome })), approval: check.approval, ok: check.ok } });
+    return NextResponse.json({ mode: "plan_check", goal: read.plan.goal, ...check, assumptions: read.plan.assumptions, questions: read.plan.questions }, { status: check.ok ? 200 : 422 });
+  }
   const tool = toolByName(String(body?.tool ?? ""));
   if (!tool) return NextResponse.json({ error: `Unknown tool. GET this endpoint for the list.` }, { status: 404 });
   const mode = body?.mode === "execute" ? "execute" : "dry_run";
