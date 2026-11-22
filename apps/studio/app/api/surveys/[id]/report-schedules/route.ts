@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { nextRunAt, type AlertRule, type Cadence } from "@rescript/analytics";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
 import { mediaDb } from "@/lib/mediaRoute";
-import { isMissing0110, MISSING_0110, runSchedule, SCHEDULE_COLUMNS, studioPublicUrl, timingOf } from "@/lib/reportSchedules";
+import { isMissing0110, isMissing0114, MISSING_0110, MISSING_0114, runSchedule, SCHEDULE_COLUMNS, studioPublicUrl, timingOf } from "@/lib/reportSchedules";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,7 +14,10 @@ export const maxDuration = 120;
  * GET                     ?reportId=   the schedules (of one report, or all) with their last runs
  * GET                     ?file=<runId>  a short-lived download link to the file a run stored (project access)
  * POST { action: "save", id?, reportId, name, kind: "report"|"alert", cadence, hourUtc, weekday?, dayOfMonth?,
- *        format?, recipients?, shareId?, alert?: { analysisId, metric, op, threshold, minBase? }, enabled? }
+ *        format?, recipients?, shareId?, alert?: { analysisId, metric, op, threshold, minBase? }, enabled?, republish? }
+ *        republish (kind "report", migration 0114): each run also publishes the fresh results as the report's next
+ *        version, so share links that follow the latest version show them; sent only when set, so a database
+ *        without 0114 can still save schedules
  * POST { action: "run", id }        run now (refresh on demand): recorded as a manual run, the schedule keeps its time
  * POST { action: "delete", id }
  *
@@ -24,7 +27,7 @@ export const maxDuration = 120;
 const json = (b: unknown, status = 200) => NextResponse.json(b, { status, headers: { "cache-control": "no-store" } });
 const UUID = /^[0-9a-f-]{36}$/i;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const fail = (e: unknown) => { const m = (e as Error).message; return json({ error: isMissing0110(m) ? MISSING_0110 : m }, isMissing0110(m) ? 503 : 500); };
+const fail = (e: unknown) => { const m = (e as Error).message; if (isMissing0114(m)) return json({ error: MISSING_0114 }, 503); return json({ error: isMissing0110(m) ? MISSING_0110 : m }, isMissing0110(m) ? 503 : 500); };
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "analytics.read");
@@ -48,7 +51,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (error) throw new Error(error.message);
     const ids = (data ?? []).map((s) => String(s.id));
     const { data: runs } = ids.length ? await gate.db.from("report_runs").select("id, schedule_id, trigger, status, headline, delivered, alert, error, bytes, ran_at").in("schedule_id", ids).order("ran_at", { ascending: false }).limit(200) : { data: [] };
-    return json({ schedules: (data ?? []).map((s) => ({ ...s, last_digest: undefined, runs: (runs ?? []).filter((r) => r.schedule_id === s.id).slice(0, 10) })) });
+    return json({ schedules: (data ?? []).map((s) => ({ ...s, last_digest: undefined, created_by: undefined, runs: (runs ?? []).filter((r) => r.schedule_id === s.id).slice(0, 10) })) });
   } catch (e) { return fail(e); }
 }
 
@@ -71,7 +74,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
     if (body.action === "run") {
       const out = await runSchedule(gate.db, s, { trigger: "manual", studioUrl: studioPublicUrl(new URL(req.url).origin) });
-      log(gate, "analytics.schedule_run", id, { name: s.name, status: out.status, delivered: out.delivered });
+      log(gate, "analytics.schedule_run", id, { name: s.name, status: out.status, delivered: out.delivered, ...(out.published ? { published: out.published } : {}) });
       return json(out, out.status === "failed" ? 500 : 200);
     }
     return json({ error: "action is one of save, run, delete." }, 400);
@@ -114,6 +117,9 @@ async function save(gate: ProjectContext, b: Record<string, unknown>) {
     alert = { analysisId: String(a.analysisId), metric: String(a.metric ?? "").trim().slice(0, 120), op: a.op === "below" ? "below" : "above", threshold: Number(a.threshold), ...(a.minBase != null ? { minBase: Math.max(0, Math.round(Number(a.minBase))) } : {}) };
   }
   const shareId = typeof b.shareId === "string" && UUID.test(b.shareId) ? b.shareId : null;
+  if (b.republish === true && kind !== "report") problems.push("Only a report schedule can republish; an alert only emails.");
+  /* the column is written only when the caller sends it (0114 may not be applied); an alert never republishes */
+  const republish = typeof b.republish === "boolean" ? { republish: kind === "report" && b.republish } : {};
   if (problems.length) return json({ error: `Not saved. ${problems.join(" ")}`, problems }, 400);
   const db = gate.db;
   const { data: rep } = await db.from("analytics_reports").select("id").eq("id", reportId!).eq("survey_id", gate.surveyId).is("deleted_at", null).maybeSingle();
@@ -121,11 +127,11 @@ async function save(gate: ProjectContext, b: Record<string, unknown>) {
   if (alert) { const { data: an } = await db.from("analytics_analyses").select("id").eq("id", alert.analysisId).eq("survey_id", gate.surveyId).is("deleted_at", null).maybeSingle(); if (!an) return json({ error: "The alert's analysis is not one of this project's analyses." }, 400); }
   if (shareId) { const { data: sh } = await db.from("analytics_shares").select("id").eq("id", shareId).eq("survey_id", gate.surveyId).eq("report_id", reportId!).maybeSingle(); if (!sh) return json({ error: "That share link is not a link to this report." }, 400); }
   const timing = { cadence: cadence!, hourUtc, weekday: weekday ?? undefined, dayOfMonth: dayOfMonth ?? undefined };
-  const row = { survey_id: gate.surveyId, report_id: reportId, share_id: shareId, name, kind, cadence, hour_utc: hourUtc, weekday: cadence === "weekly" ? weekday : null, day_of_month: cadence === "monthly" ? dayOfMonth : null, format: kind === "report" ? format : null, recipients, alert, enabled: b.enabled !== false, next_run_at: nextRunAt(timing, new Date()).toISOString(), updated_at: new Date().toISOString() };
+  const row = { survey_id: gate.surveyId, report_id: reportId, share_id: shareId, name, kind, cadence, hour_utc: hourUtc, weekday: cadence === "weekly" ? weekday : null, day_of_month: cadence === "monthly" ? dayOfMonth : null, format: kind === "report" ? format : null, recipients, alert, ...republish, enabled: b.enabled !== false, next_run_at: nextRunAt(timing, new Date()).toISOString(), updated_at: new Date().toISOString() };
   const id = typeof b.id === "string" && UUID.test(b.id) ? b.id : null;
   const q = id ? db.from("report_schedules").update(row).eq("id", id).eq("survey_id", gate.surveyId) : db.from("report_schedules").insert({ ...row, created_by: gate.user.userId });
   const { data, error } = await q.select(SCHEDULE_COLUMNS).single();
   if (error) throw new Error(error.message);
-  log(gate, "analytics.schedule_saved", String(data.id), { name, kind, cadence, recipients: recipients.length });
+  log(gate, "analytics.schedule_saved", String(data.id), { name, kind, cadence, recipients: recipients.length, republish: data.republish === true });
   return json({ ok: true, schedule: { ...data, last_digest: undefined }, nextRunAt: nextRunAt(timingOf(data), new Date()).toISOString() }, id ? 200 : 201);
 }

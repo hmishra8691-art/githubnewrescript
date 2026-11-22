@@ -1,6 +1,7 @@
-import { infographicDashboard, isReportFormat, drillPlan, drillCondition, minBasesFor, protectSnapshot, checkViewerRules, type DrillVariants, type ViewerRule } from "@rescript/analytics";
+import { infographicDashboard, isReportFormat, checkViewerRules, type ViewerRule } from "@rescript/analytics";
 import { shareView } from "@/lib/shareView";
 import { computeReport } from "@/lib/reportCompute";
+import { publishReportWith } from "@/lib/reportPublishCore";
 import { NextRequest, NextResponse } from "next/server";
 import { clientDb, platformDb, surveyDb, type Db } from "@/lib/db";
 import { assertNotReadOnly, getMeter, projectContext, projectLookup, recordUsage } from "@/lib/metering";
@@ -651,76 +652,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   if (head === "reports" && itemId && action === "publish") {
     const ctx = await gate(req, surveyId, "analytics.publish"); if (isFailure(ctx)) return ctx.response;
     if (!isUuid(itemId)) return bad("Unknown report.", 404);
-    const { data: r } = await db.from("analytics_reports").select("*").eq("id", itemId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
-    if (!r) return bad("Unknown report.", 404);
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
-    const definition = r.definition as ReportDefinition;
-    const snapshot = await computeReport(db, surveyId, loaded, definition);
-    const theme = await loadTheme(db, r.theme_id, themeScope(ctx));
-    const { data: last } = await db.from("analytics_report_versions").select("version").eq("report_id", itemId).order("version", { ascending: false }).limit(1);
-    const version = (last?.[0]?.version ?? 0) + 1;
-    /* never freeze a blank or partial report by accident — the researcher can still publish it on purpose */
-    const check = checkSnapshot(definition, snapshot);
-    if (!check.ok && body.force !== true) return NextResponse.json({ error: `Not published. ${check.problems.join(" ")}`, problems: check.problems, canForce: true }, { status: 409 });
-    const analysisDefs = await db.from("analytics_analyses").select("definition").in("id", Object.keys(snapshot));
-    const environments = [...new Set((analysisDefs.data ?? []).map((a) => (a.definition as AnalysisDefinition).dataset?.environment).filter(Boolean))];
-    const dataset = { surveyVersion: loaded.version, revision: loaded.revision, responses: check.responses, environments, computedAt: new Date().toISOString() };
-    /*
-     * §36 — every filter a viewer is allowed to apply is computed NOW and
-     * frozen beside the base results.
-     *
-     * A shared report is a snapshot with no dataset access, deliberately: its
-     * public page cannot compose a condition or reach a response row, and
-     * that does not change. What changes is that it can hold more than one
-     * frozen answer, so switching filter in a shared report reads a
-     * pre-computed result — the same bargain switching SEGMENT has always
-     * made. The cost is paid here, once, by the person publishing, instead of
-     * on every view by a stranger.
-     */
-    const viewerFilters = (definition.viewerFilters ?? []).filter(isUuid).slice(0, 12);
-    const filterResults: Record<string, Record<string, AnalysisResult>> = {};
-    for (const filterId of viewerFilters) {
-      filterResults[filterId] = await computeReport(db, surveyId, loaded, definition, [filterId]);
-    }
-    /*
-     * The filter NAMES are frozen too. A filter renamed — or redefined — in
-     * the workspace next month must not change the labels on a report
-     * published today: a published version is a record of what was said, and
-     * that includes what the buttons said.
-     */
-    const { data: filterRows } = viewerFilters.length
-      ? await db.from("analytics_segments").select("id, name").in("id", viewerFilters).eq("survey_id", surveyId)
-      : { data: [] as { id: string; name: string }[] };
-    /*
-     * R2 — THE DRILL-DOWN AND THE MINIMUM BASE. Each drill value the report lists is computed now and frozen, like a
-     * filter; then every frozen answer is protected: no number from fewer than the minimum base is written into the
-     * version (filters and drill values at 30 unless the report sets `minBase`; the main results only when it does).
-     */
-    const drill = drillPlan(definition);
-    if (drill.problems.length && body.force !== true) return NextResponse.json({ error: `Not published. ${drill.problems.join(" ")}`, problems: drill.problems, canForce: true }, { status: 409 });
-    const bases = minBasesFor(definition);
-    const withheld: string[] = [];
-    const guard = (rs: Record<string, AnalysisResult>, min: number, where: string) => { const p = protectSnapshot(rs, min); withheld.push(...p.withheld.map((w) => `${where}: ${w}`)); return p.results; };
-    for (const id of Object.keys(filterResults)) filterResults[id] = guard(filterResults[id], bases.variants, (filterRows ?? []).find((f) => f.id === id)?.name ?? "filter");
-    let drillVariants: DrillVariants | null = null;
-    if (drill.plan) {
-      const dr: DrillVariants["results"] = {};
-      for (const v of drill.plan.values) dr[String(v.value)] = guard(await computeReport(db, surveyId, loaded, definition, [], drillCondition(drill.plan.variable, v.value)), bases.variants, v.label);
-      drillVariants = { variable: drill.plan.variable, label: drill.plan.label ?? drill.plan.variable, values: drill.plan.values, results: dr };
-    }
-    const protectedSnapshot = bases.main ? guard(snapshot, bases.main, "main") : snapshot;
-    const variants = {
-      filters: viewerFilters.map((id) => ({ id, name: (filterRows ?? []).find((f) => f.id === id)?.name ?? "Filter" })),
-      results: filterResults,
-      ...(drillVariants ? { drill: drillVariants } : {}),
-      minBase: bases,
-    };
-    const { error } = await db.from("analytics_report_versions").insert({ report_id: itemId, survey_id: surveyId, version, definition, theme, snapshot: protectedSnapshot, dataset, ...(viewerFilters.length || drillVariants ? { variants } : {}), note: typeof body.note === "string" ? body.note : null, published_by: ctx.user.userId });
-    if (error) return bad(error.message, 500);
-    const { error: pointerError } = await db.from("analytics_reports").update({ published_version: version, updated_by: ctx.user.userId }).eq("id", itemId);
-    if (pointerError) return bad(`Version ${version} was written but the report could not be pointed at it (${pointerError.message}). Publish again.`, 500);
-    log(ctx, "analytics.report_published", itemId, { name: r.name, version, mode: r.mode, viewerFilters: viewerFilters.length, drillValues: drillVariants?.values.length ?? 0, withheld: withheld.length });
-    return json({ version, publishedAt: new Date().toISOString(), viewerFilters: viewerFilters.length, drillValues: drillVariants?.values.length ?? 0, minBase: bases, withheld: withheld.slice(0, 50) });
+    /* the publish itself lives in lib/reportPublishCore.ts, shared with a schedule that republishes on refresh */
+    const out = await publishReportWith(db, {
+      compute: (definition, filters, condition) => computeReport(db, surveyId, loaded, definition, filters, condition ?? null),
+      theme: (themeId) => loadTheme(db, themeId, themeScope(ctx)),
+      source: { version: loaded.version, revision: loaded.revision },
+    }, { surveyId, reportId: itemId, userId: ctx.user.userId, note: typeof body.note === "string" ? body.note : null, force: body.force === true });
+    if (!out.ok) return out.problems ? NextResponse.json({ error: out.error, problems: out.problems, canForce: out.canForce }, { status: out.status }) : bad(out.error, out.status);
+    log(ctx, "analytics.report_published", itemId, { name: out.name, version: out.version, mode: out.mode, viewerFilters: out.viewerFilters, drillValues: out.drillValues, withheld: out.withheld.length });
+    return json({ version: out.version, publishedAt: out.publishedAt, viewerFilters: out.viewerFilters, drillValues: out.drillValues, minBase: out.minBase, withheld: out.withheld });
   }
 
   /*

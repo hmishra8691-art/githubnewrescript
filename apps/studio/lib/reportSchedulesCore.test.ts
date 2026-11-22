@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { DEFAULT_THEME, runAnalysis, type AnalysisResult, type ReportDefinition } from "@rescript/analytics";
 import { synthDataset, D } from "../../../packages/analytics/dist/analyses/fixture.js";
 import { runScheduleWith, type RunDeps } from "./reportSchedulesCore.ts";
+import { publishReportWith } from "./reportPublishCore.ts";
 
 /*
  * R5 + R6 — ONE SCHEDULE RUN, END TO END, against an in-memory database: re-compute, compare with the last run, render
@@ -15,15 +16,21 @@ function memoryDb(tables: Record<string, Row[]>) {
     const rows = (tables[t] ??= []);
     let filters: ((r: Row) => boolean)[] = [];
     let op: { kind: "select" } | { kind: "insert"; row: Row } | { kind: "update"; patch: Row } = { kind: "select" };
+    let sort: { c: string; asc: boolean } | null = null, cap = Infinity;
     const q = {
       select() { return q; },
       eq(c: string, v: unknown) { filters.push((r) => r[c] === v); return q; },
       in(c: string, vs: unknown[]) { filters.push((r) => vs.includes(r[c])); return q; },
+      is(c: string, v: unknown) { filters.push((r) => (r[c] ?? null) === v); return q; },
+      order(c: string, o?: { ascending?: boolean }) { sort = { c, asc: o?.ascending !== false }; return q; },
+      limit(n: number) { cap = n; return q; },
       insert(row: Row) { op = { kind: "insert", row }; return q; },
       update(patch: Row) { op = { kind: "update", patch }; return q; },
       run() {
         if (op.kind === "insert") { const r = { id: `id-${++seq}`, ...op.row }; rows.push(r); return [r]; }
-        const hit = rows.filter((r) => filters.every((f) => f(r)));
+        let hit = rows.filter((r) => filters.every((f) => f(r)));
+        if (sort) { const { c, asc } = sort; hit = [...hit].sort((a, b) => (Number(a[c]) - Number(b[c])) * (asc ? 1 : -1)); }
+        if (op.kind === "select") hit = hit.slice(0, cap);
         if (op.kind === "update") for (const r of hit) Object.assign(r, op.patch);
         return hit;
       },
@@ -43,7 +50,8 @@ const report: ReportDefinition = { title: "Tracker", mode: "live", blocks: [{ id
 
 function setup(kind: "report" | "alert", recipients = ["client@example.com"]) {
   const tables: Record<string, Row[]> = {
-    analytics_reports: [{ id: "rep", survey_id: "sv", name: "Weekly tracker", definition: report, theme_id: null, deleted_at: null }],
+    analytics_reports: [{ id: "rep", survey_id: "sv", name: "Weekly tracker", mode: "live", definition: report, theme_id: null, deleted_at: null, published_version: 1 }],
+    analytics_report_versions: [{ id: "v1", report_id: "rep", survey_id: "sv", version: 1, snapshot: {} }],
     surveys: [{ id: "sv", title: "Brand study", customer_id: null }],
     report_runs: [],
     report_schedules: [],
@@ -127,4 +135,64 @@ test("a deleted report disables its schedule; a failing computation is recorded 
   assert.equal(out.status, "failed");
   assert.equal(f.tables.report_runs[0].error, "the dataset could not be read");
   assert.ok(f.schedule.last_run_at);
+});
+
+test("republish on refresh: each run publishes a new version that unpinned share links follow; a blank run is not published", async () => {
+  const t = setup("report");
+  t.schedule.republish = true;
+  /* a two-chart report, so a run can come back partial (one chart without data) and still render */
+  t.tables.analytics_reports[0].definition = { ...report, blocks: [...report.blocks, { id: "c2", type: "chart", title: "Region again", analysisId: "a2", chart: { type: "bar_vertical", options: {} } }] };
+  const full = t.deps.compute;
+  let compute: RunDeps["compute"] = async (d) => { const r = await full(d); return { ...r, a2: r[ANALYSIS] }; };
+  t.deps.compute = (d) => compute(d);
+  t.deps.publish = async (reportId, results, note) => {
+    const out = await publishReportWith(t.db, { compute: (d) => compute(d), theme: async () => DEFAULT_THEME, source: { version: 3, revision: 7 } }, { surveyId: "sv", reportId, userId: null, note, snapshot: results });
+    return out.ok ? { ok: true, version: out.version, withheld: out.withheld } : { ok: false, error: out.error };
+  };
+  const r1 = await runScheduleWith(t.db, t.deps, t.schedule, { trigger: "schedule", studioUrl: null });
+  assert.equal(r1.status, "ok", r1.error);
+  assert.deepEqual(r1.published, { version: 2, withheld: 0 });
+  assert.match(r1.headline!, /Published as version 2; share links that follow the latest version now show it\./);
+  assert.equal(t.tables.analytics_reports[0].published_version, 2, "the report now points at the new version");
+  const v2 = t.tables.analytics_report_versions.find((v) => v.version === 2)!;
+  assert.equal(v2.published_by, null);
+  assert.match(String(v2.note), /Republished by the schedule “Monday update” \(scheduled run\)/);
+  assert.ok((v2.snapshot as Record<string, unknown>)[ANALYSIS], "the fresh results are frozen into the version");
+  assert.equal((v2.dataset as Row).surveyVersion, 3);
+  assert.equal(t.tables.report_runs[0].headline, r1.headline);
+  assert.deepEqual((t.tables.report_runs[0].changes as Row).published, { version: 2, withheld: 0 });
+  assert.match(t.mails[0].text, /Published as version 2/);
+
+  const r2 = await runScheduleWith(t.db, t.deps, t.schedule, { trigger: "manual", studioUrl: null });
+  assert.deepEqual(r2.published, { version: 3, withheld: 0 });
+  assert.equal(t.tables.analytics_reports[0].published_version, 3);
+
+  /* one chart comes back without data: the run still renders and mails, but the last good version stays published */
+  compute = full;
+  const r3 = await runScheduleWith(t.db, t.deps, t.schedule, { trigger: "schedule", studioUrl: null });
+  assert.equal(r3.status, "ok", r3.error);
+  assert.ok(r3.published && "notPublished" in r3.published);
+  assert.match(r3.headline!, /Not republished: .* Share links still show the last published version\./);
+  assert.equal(t.tables.analytics_reports[0].published_version, 3);
+  assert.equal(t.tables.analytics_report_versions.length, 3);
+
+  /* nothing at all comes back: the file cannot be rendered, the run fails, and nothing is published */
+  compute = async () => ({});
+  const r4 = await runScheduleWith(t.db, t.deps, t.schedule, { trigger: "schedule", studioUrl: null });
+  assert.equal(r4.status, "failed");
+  assert.equal(t.tables.analytics_reports[0].published_version, 3);
+  assert.equal(t.tables.analytics_report_versions.length, 3);
+});
+
+test("without republish (or on an alert) a run never writes a version", async () => {
+  const t = setup("report");
+  let calls = 0;
+  t.deps.publish = async () => { calls++; return { ok: true, version: 9, withheld: [] }; };
+  await runScheduleWith(t.db, t.deps, t.schedule, { trigger: "schedule", studioUrl: null });
+  const a = setup("alert");
+  a.schedule.republish = true;
+  a.deps.publish = t.deps.publish;
+  await runScheduleWith(a.db, a.deps, a.schedule, { trigger: "schedule", studioUrl: null });
+  assert.equal(calls, 0);
+  assert.equal(t.tables.analytics_report_versions.length, 1);
 });

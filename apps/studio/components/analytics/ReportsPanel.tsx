@@ -784,18 +784,20 @@ function SchedulesCard({ surveyId, reportId, analyses, results }: { surveyId: st
   };
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const metricsOf = (id: string) => { const r = results[id]; return r ? [...(r.chart.kpis ?? []).map((k) => k.label), ...(r.chart.categories ?? [])].slice(0, 40) : []; };
-  const blank = { kind: "report", name: "Weekly update", cadence: "weekly", hourUtc: 7, weekday: 1, dayOfMonth: 1, format: "pptx", recipients: "", alert: { analysisId: String(analyses[0]?.id ?? ""), metric: "", op: "above", threshold: 0 } };
+  const blank = { kind: "report", name: "Weekly update", cadence: "weekly", hourUtc: 7, weekday: 1, dayOfMonth: 1, format: "pptx", republish: false, recipients: "", alert: { analysisId: String(analyses[0]?.id ?? ""), metric: "", op: "above", threshold: 0 } };
   return (
     <div data-testid="ax-schedules">
       <div className="flabel" style={{ marginTop: 12 }}>Schedules and alerts</div>
-      <div className="muted" style={{ fontSize: 12.5 }}>Re-computed from the data as it is at each run. The email says what changed and links to the file (sign-in needed); no file is attached.</div>
+      <div className="muted" style={{ fontSize: 12.5 }}>Re-computed from the data as it is at each run. The email says what changed and links to the file (sign-in needed); no file is attached. A schedule set to republish also publishes each run as a new version, so share links that follow the latest version show the fresh numbers.</div>
       {error && <div className="ax-error" style={{ fontSize: 12.5 }}>{error}</div>}
       {(list ?? []).map((s) => (
         <div key={String(s.id)} className="card" style={{ padding: 8, marginTop: 6, fontSize: 12.5 }}>
           <div className="row" style={{ gap: 6 }}><strong>{String(s.name)}</strong><span className="muted">{s.kind === "alert" ? "alert" : String(s.format).toUpperCase()} · {String(s.cadence)} · {String(s.hour_utc).padStart(2, "0")}:00 UTC</span><span className="grow" />
             <button className="btn small" disabled={!!busy} onClick={() => void post({ action: "run", id: s.id }, `run-${s.id}`)} data-testid="ax-schedule-run">{busy === `run-${s.id}` ? "Running…" : "Run now"}</button>
             <button className="btn small" disabled={!!busy} onClick={() => void post({ action: "delete", id: s.id }, `del-${s.id}`)}>Delete</button></div>
-          <div className="muted">Next: {new Date(String(s.next_run_at)).toLocaleString()} · {(s.recipients as string[]).length} recipient{(s.recipients as string[]).length === 1 ? "" : "s"}</div>
+          <div className="muted">Next: {new Date(String(s.next_run_at)).toLocaleString()} · {(s.recipients as string[]).length} recipient{(s.recipients as string[]).length === 1 ? "" : "s"}
+            {s.kind === "report" && "republish" in s && <> · <label title="Each run publishes a new version; share links that follow the latest version show it. Links pinned to a version do not change."><input type="checkbox" checked={s.republish === true} disabled={!!busy} data-testid="ax-schedule-republish-toggle"
+              onChange={(e) => void post({ action: "save", id: s.id, reportId, name: s.name, kind: s.kind, cadence: s.cadence, hourUtc: s.hour_utc, weekday: s.weekday, dayOfMonth: s.day_of_month, format: s.format, recipients: s.recipients, shareId: s.share_id ?? undefined, enabled: s.enabled !== false, republish: e.target.checked }, `rep-${s.id}`)} /> republishes the shared report</label></>}</div>
           {((s.runs as Row[]) ?? []).slice(0, 3).map((r) => (
             <div key={String(r.id)} style={{ marginTop: 4 }}>
               <span className={`ax-status ${r.status === "ok" ? "active" : "revoked"}`}>{String(r.status)}</span> {new Date(String(r.ran_at)).toLocaleString()} — {String(r.headline ?? r.error ?? "")}
@@ -816,7 +818,11 @@ function SchedulesCard({ surveyId, reportId, analyses, results }: { surveyId: st
             <input className="input small" type="number" min={0} max={23} style={{ width: 60 }} value={Number(draft.hourUtc)} onChange={(e) => setDraft({ ...draft, hourUtc: Number(e.target.value) })} title="Hour, UTC" /><span className="muted">:00 UTC</span>
           </div>
           {draft.kind === "report" ? (
-            <select className="select small" value={String(draft.format)} onChange={(e) => setDraft({ ...draft, format: e.target.value })}><option value="pptx">PowerPoint</option><option value="pdf">PDF</option><option value="docx">Word</option><option value="xlsx">Excel</option></select>
+            <>
+              <select className="select small" value={String(draft.format)} onChange={(e) => setDraft({ ...draft, format: e.target.value })}><option value="pptx">PowerPoint</option><option value="pdf">PDF</option><option value="docx">Word</option><option value="xlsx">Excel</option></select>
+              <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={draft.republish === true} onChange={(e) => setDraft({ ...draft, republish: e.target.checked })} data-testid="ax-schedule-republish" />
+                <span>Republish the shared report at each run <span className="muted">(a new version; links pinned to a version do not change; a blank or partial run is not published)</span></span></label>
+            </>
           ) : (
             <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
               <select className="select small" value={String((draft.alert as Row).analysisId)} onChange={(e) => setDraft({ ...draft, alert: { ...(draft.alert as Row), analysisId: e.target.value, metric: "" } })}>{analyses.map((a) => <option key={String(a.id)} value={String(a.id)}>{String(a.name)}</option>)}</select>
@@ -827,7 +833,7 @@ function SchedulesCard({ surveyId, reportId, analyses, results }: { surveyId: st
           )}
           <textarea className="input small" rows={2} placeholder="Recipients' emails, separated by commas" value={String(draft.recipients)} onChange={(e) => setDraft({ ...draft, recipients: e.target.value })} />
           <div className="row" style={{ gap: 6 }}><span className="grow" /><button className="btn small" onClick={() => setDraft(null)}>Cancel</button>
-            <button className="btn primary small" disabled={!!busy} onClick={async () => { const ok = await post({ action: "save", reportId, ...draft, recipients: String(draft.recipients).split(/[,\s]+/).filter(Boolean), alert: draft.kind === "alert" ? draft.alert : undefined, format: draft.kind === "report" ? draft.format : undefined }, "save"); if (ok) setDraft(null); }} data-testid="ax-schedule-save">Save</button></div>
+            <button className="btn primary small" disabled={!!busy} onClick={async () => { const ok = await post({ action: "save", reportId, ...draft, recipients: String(draft.recipients).split(/[,\s]+/).filter(Boolean), alert: draft.kind === "alert" ? draft.alert : undefined, format: draft.kind === "report" ? draft.format : undefined, republish: draft.kind === "report" && draft.republish === true ? true : undefined }, "save"); if (ok) setDraft(null); }} data-testid="ax-schedule-save">Save</button></div>
         </div>
       )}
     </div>
