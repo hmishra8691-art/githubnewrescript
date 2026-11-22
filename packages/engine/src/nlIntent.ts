@@ -1740,7 +1740,8 @@ const cleaningRequest: Recogniser = (r) => {
   const judge = /\b(?:use\s+(?:ai|the\s+model|a\s+model)|ask\s+(?:the\s+)?(?:ai|model)|with\s+(?:ai|the\s+model)|ai\s+(?:review|check|reading))\b/i.test(t) && /\bopen[-\s]?(?:ends?|ended|text)\b|\bcomments\b|\bverbatims?\b/i.test(t)
     || /^(?:read|judge|check|review|assess|score)\s+(?:the\s+|all\s+)?(?:open[-\s]?ends?|open[-\s]?ended\s+(?:answers|responses)|verbatims|comments)\s+(?:with|using)\s+(?:ai|the\s+model|a\s+model)\b/i.test(t);
   if (!CLEAN_OBJECTS.test(t) && !judge) return null;
-  if (!/^(?:remove|exclude|drop|delete|clean\s+out|filter\s+out|throw\s+out|flag|mark|review|keep|include|restore|find|show|list|which|how\s+many|use|ask|read|judge|check|assess|score)\b/i.test(t) && !/\b(?:and|then)\s+(?:remove|exclude|drop|flag)\b/i.test(t)) return null;
+  /* "ask" is "ask the AI to read the open ends" — "Ask the open-end Q6 ahead of the attention check Q5" is about the order of questions, not about responses (Level 5 baseline defect, 2026-11-25) */
+  if (!/^(?:remove|exclude|drop|delete|clean\s+out|filter\s+out|throw\s+out|flag|mark|review|keep|include|restore|find|show|list|which|how\s+many|use|ask\s+(?:the\s+|an?\s+)?(?:ai|model)|read|judge|check|assess|score)\b/i.test(t) && !/\b(?:and|then)\s+(?:remove|exclude|drop|flag)\b/i.test(t)) return null;
   const decision: CleaningRequest["decision"] = /\b(?:remove|exclude|drop|delete|clean\s+out|filter\s+out|throw\s+out)\b/i.test(t) ? "REMOVE" : /\b(?:keep|include|restore)\b/i.test(t) ? "KEEP" : "REVIEW_LATER";
   const verdicts = /\bflagged\s+(?:responses|respondents|completes|interviews)|suspicious/i.test(t) ? ["FLAGGED"] : undefined;
   const recommendation = /\blikely\s+exclud/i.test(t) ? ["LIKELY EXCLUDE"] : /\blow[-\s]quality\b/i.test(t) ? ["LIKELY EXCLUDE", "REVIEW BEFORE INCLUSION"] : undefined;
@@ -3790,6 +3791,9 @@ function interpret(r: Run): Interpretation {
   return withFallback(r, fallback(r));
 }
 
+/** "ask how many …", "ask them whether …", "ask for their age": words for a question that does not exist yet */
+const ASKS_NEW_WORDING = /\bask\s+(?:them\s+|people\s+|respondents\s+|everyone\s+|owners\s+)?(?:how|what|which|whether|if|why|when|where|who|for|about)\b/i;
+
 function semantic(r: Run): Interpretation | null {
   const reading = semanticReading(r.def, r.text, r.ctx);
   type Verified = Exclude<Interpretation, { kind: "model" }>;
@@ -3797,6 +3801,13 @@ function semantic(r: Run): Interpretation | null {
   let offered: Interpretation | null = null;
   for (const c of reading.candidates.slice(0, 6)) {
     const it = interpret({ def: r.def, text: c.text, ctx: r.ctx, depth: 1 });
+    /*
+     * NEW WORDING IS NOT A MOVE (Level 5 baseline defect, 2026-11-25). "After S1 ask how many cars they own, as a
+     * number between 0 and 10" was read as "Move S1 after Q10": the sentence asks for a question to be WRITTEN
+     * ("ask how many …"), and a reading that only rearranges or edits what exists is not that request. Such a
+     * sentence goes to the model, which drafts the wording.
+     */
+    if (ASKS_NEW_WORDING.test(r.text) && it.kind === "actions" && !it.actions.some((a) => /^(?:create|add|insert|duplicate)_/.test(a.op))) continue;
     if (it.kind === "actions" || it.kind === "answer" || it.kind === "query" || (it.kind === "refused" && it.noop)) verified.push({ c, it });
     /* a reading the model would finish, with what the engine offers instead (a standard item): kept as the answer when nothing deterministic reads */
     else if (it.kind === "model" && it.fallback && !offered) offered = it;
@@ -3882,7 +3893,11 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
     // a sentence whose "and …" is part of one request ("adapt it for X and remove the unnecessary questions") is read whole before it is split
     const whole = parts.length > 1 ? WHOLE_FIRST.map((rec) => rec({ def, text: clean, ctx, depth: 0 })).find((x) => x) : null;
     if (whole) return withFallback({ def, text: clean, ctx, depth: 0 }, whole);
-    return parts.length > 1 ? compound(def, clean, parts, ctx) : interpret({ def, text: clean, ctx, depth: 0 });
+    const read = parts.length > 1 ? compound(def, clean, parts, ctx) : interpret({ def, text: clean, ctx, depth: 0 });
+    /* a sentence that asks for a question to be WRITTEN, read by a recogniser as an edit to what exists (or refused by one that took its words for a question's name): the wording is the model's to draft */
+    if (parts.length === 1 && ASKS_NEW_WORDING.test(clean) && ((read.kind === "refused" && !read.noop) || (read.kind === "actions" && !read.actions.some((a) => /^(?:create|add|insert|duplicate)_/.test(a.op)))))
+      return { kind: "model", category: "question_creation", reason: "the question's wording has to be written — the language model drafts it, then it is applied as create_question through the same gate", detected: [] };
+    return read;
   } catch (e) {
     ctx.debug?.(String((e as Error).stack ?? e));
     return { kind: "model", category: null, reason: `the interpreter could not read this (${(e as Error).message}) — the language model takes it`, detected: [] };

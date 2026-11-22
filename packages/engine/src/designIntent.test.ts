@@ -59,3 +59,26 @@ test("Intelligent Mode answers these from the calculators, with the working, and
   /* the questionnaire's own sentences are still the grammar's */
   assert.equal(interpretRequest(def, "Make Q1 required").kind, "actions");
 });
+
+test("Level 5 baseline defects: new wording is not a move, and question order is not data cleaning", () => {
+  const d = SurveyDefinition.parse({
+    meta: { id: "bd", code: "BD", title: "Baseline defects", version: "1.0" },
+    questions: [
+      { id: "own", code: "S1", variableName: "S1", type: "single_select", text: "Do you own a car?", options: [{ code: "y", label: "Yes" }, { code: "n", label: "No" }] },
+      ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => ({ id: `q${i}`, code: `Q${i}`, variableName: `Q${i}`, type: i === 6 ? "long_text" : "single_select", text: i === 5 ? "To show you are reading, select Beta" : `Question ${i}`, ...(i === 6 ? {} : { options: [{ code: "a", label: "Alpha" }, { code: "b", label: "Beta" }] }) })),
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["own", "q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9", "q10"] }, { type: "end", id: "e", status: "complete" }],
+  });
+  /* was: move_question S1 after Q10 */
+  const add = interpretRequest(d, "After S1 ask how many cars they own, as a number between 0 and 10");
+  assert.equal(add.kind, "model", JSON.stringify(add));
+  /* was: a data-cleaning batch, because of the words "attention check" */
+  const move = interpretRequest(d, "Ask the open-end Q6 ahead of the attention check Q5");
+  assert.equal(move.kind, "actions");
+  if (move.kind === "actions") assert.deepEqual(move.actions, [{ op: "move_question", target: "Q6", after: "Q4" }]);
+  /* and the cleaning sentences that start with "ask" still are cleaning */
+  assert.equal(interpretRequest(d, "Ask the AI to read the open ends for gibberish").kind, "cleaning");
+  assert.equal(interpretRequest(d, "Remove the speeders").kind, "cleaning");
+  /* an existing question named after "ask" is still a move */
+  assert.equal(interpretRequest(d, "Ask Q6 before Q5").kind, "actions");
+});
