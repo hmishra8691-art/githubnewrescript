@@ -15,3 +15,4 @@ export * from "./csv.js";
 export * from "./tabBook.js";
 export * from "./reportDocx.js";
 export * from "./render.js";
+export * from "./clientTemplate.js";

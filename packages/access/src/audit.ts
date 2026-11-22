@@ -181,6 +181,7 @@ export const AUDIT_EVENTS = [
   "analytics.report_shared",
   "analytics.share_revoked",
   "analytics.share_viewer_rules",
+  "analytics.theme_imported",
   "analytics.share_accessed",
 
   /* metered usage & wallets (billing brief §17): every credit movement is an audited administrative act */
@@ -386,6 +387,7 @@ export function describeEvent(r: AuditRow): string {
     case "analytics.report_published": return `${who} published report “${str(d.name)}” v${str(d.version) || "?"}${d.mode ? ` (${str(d.mode)})` : ""}`;
     case "analytics.report_shared": return `${who} shared report “${str(d.name)}” (${str(d.access) || "link"}${d.permission ? `, ${str(d.permission)}` : ""})`;
     case "analytics.share_revoked": return `${who} revoked a share link for “${str(d.name)}”`;
+    case "analytics.theme_imported": return `${who} imported the PowerPoint master “${str(d.name)}” as a deck theme`;
     case "analytics.share_viewer_rules": return d.rules ? `${who} set who sees which part of a share link (${str(d.rules)} rule${d.rules === 1 ? "" : "s"})` : `${who} removed the viewer rules from a share link`;
     case "analytics.share_accessed": return `A shared report “${str(d.name)}” was opened${d.viewer ? ` by ${str(d.viewer)}` : ""}`;
     case "analytics.export_failed": return `${who} tried to export “${str(d.name)}” as ${str(d.format || "").toUpperCase()} and the file could not be built (ref ${str(d.ref)})`;

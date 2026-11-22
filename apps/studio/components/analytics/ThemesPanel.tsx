@@ -13,6 +13,21 @@ export function ThemesPanel({ api, items, onChange }: { api: AxApi; items: Row[]
   const [theme, setTheme] = React.useState<ReportTheme>(DEFAULT_THEME);
   const [scope, setScope] = React.useState<"workspace" | "survey">("workspace");
   const [error, setError] = React.useState<string | null>(null);
+  /* R4 — a client's PowerPoint master read on the server into a deck theme */
+  const [importing, setImporting] = React.useState(false);
+  const [masterNotes, setMasterNotes] = React.useState<string[] | null>(null);
+  const importMaster = async (f: File | null) => {
+    if (!f) return;
+    setImporting(true); setError(null); setMasterNotes(null);
+    try {
+      const fd = new FormData(); fd.append("file", f); fd.append("scope", scope);
+      const r = await fetch(`/api/surveys/${api.surveyId}/report-themes/master`, { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ?? `The master could not be imported (${r.status}).`);
+      setMasterNotes(j.notes?.length ? j.notes : ["Every deck exported with this theme is built on the client's master."]);
+      onChange();
+    } catch (e) { setError((e as Error).message); } finally { setImporting(false); }
+  };
   const start = (t?: Row) => { setEditing(t ?? { id: null }); setTheme(t ? { ...DEFAULT_THEME, ...(t.theme as ReportTheme), colors: { ...DEFAULT_THEME.colors, ...(t.theme as ReportTheme).colors }, name: t.name } : { ...DEFAULT_THEME, name: "New theme" }); setScope(t?.survey_id ? "survey" : "workspace"); setError(null); };
   const set = (patch: Partial<ReportTheme>) => setTheme((t) => ({ ...t, ...patch }));
   const setColor = (k: keyof ReportTheme["colors"], v: string) => setTheme((t) => ({ ...t, colors: { ...t.colors, [k]: v } }));
@@ -28,8 +43,14 @@ export function ThemesPanel({ api, items, onChange }: { api: AxApi; items: Row[]
         <h2 style={{ margin: 0 }}>Report themes</h2>
         <span className="muted" style={{ fontSize: 13 }}>Company or client branding for charts, reports, PowerPoint and Excel — independent of the survey's respondent-facing branding.</span>
         <span className="grow" />
+        <label className="btn small" data-testid="ax-import-master" title="A client's .pptx or .potx: its background, logo, title position, colours and fonts become a deck theme; charts stay native and editable">
+          {importing ? "Reading the master…" : "Import PowerPoint master"}
+          <input type="file" accept=".pptx,.potx,application/vnd.openxmlformats-officedocument.presentationml.presentation" hidden disabled={importing} onChange={(e) => { void importMaster(e.target.files?.[0] ?? null); e.target.value = ""; }} />
+        </label>
         <button className="btn primary small" onClick={() => start()} data-testid="ax-new-theme">+ New theme</button>
       </div>
+      {!editing && error && <div className="ax-error" style={{ marginBottom: 10 }}>{error}</div>}
+      {masterNotes && <div className="ax-note" data-testid="ax-master-notes" style={{ marginBottom: 10 }}><strong>Imported.</strong> {masterNotes.join(" ")} <button className="btn small" onClick={() => setMasterNotes(null)}>Close</button></div>}
       {/*
         * §42 — presets. A preset only FILLS the editor; everything in it stays
         * editable. The dark ones matter most: a dark theme is not one colour

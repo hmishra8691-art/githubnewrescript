@@ -173,6 +173,7 @@ What ReScript supports, partly supports and does not support — methodologies, 
 | Research proposal / plan — Word | supported |  |
 | Statistical analysis plan — Word | supported |  |
 | Findings report — Word | supported |  |
+| Decks built on a client's PowerPoint master (.pptx / .potx) | supported | the client's template is read on our server, no model: slide size, theme colours and fonts and the theme part itself, the master's background (colour or picture) and pictures with their positions, and where the title sits (from a layout when the master itself carries none). Saved as a deck theme; every deck exported with it is built on a master rebuilt from the file, with the client's own theme part, titles in their heading font where their title sits, text that reads on their background, and native, editable charts in their accent colours |
 | Report or dashboard — Word (the same report model as PowerPoint, PDF, Excel and CSV) | supported | every block of a saved report or a dashboard: cover, sections, text, executive summary, insights, KPIs, tables, panel grids (headline then panels) and the methodology; charts are their data tables, or the picture the Studio drew; one renderer for every format, which says before building how each block comes out and which have no data |
 | Tables — Excel | supported |  |
 | Report / deck — PowerPoint | supported |  |

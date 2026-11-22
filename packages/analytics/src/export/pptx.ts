@@ -17,6 +17,7 @@ import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock,
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
 import { summaryAnalysisIds } from "../blockRefs.js";
+import { applyClientTheme } from "./clientTemplate.js";
 import { chartTitleFor, reportForExport, seriesForChart, isEmbeddableImage, MAX_EMBEDDED_IMAGE_BYTES } from "./shared.js";
 import { chartPicture } from "../chartPictures.js";
 import { chartDecimals, chartFormatCode } from "../chartFormat.js";
@@ -206,8 +207,8 @@ export function drawAnalysisVisual(
     showValue: spec.options.dataLabels ?? theme.chart?.dataLabels ?? true,
     dataLabelFormatCode: chartFormatCode(decimals, !!pctAxis),
     dataLabelFontSize: fs, dataLabelColor: ctx.text, dataLabelFontFace: ctx.font,
-    showLegend: (spec.options.legend ?? (data.length > 1 ? "bottom" : "none")) !== "none", legendPos: (spec.options.legend === "right" ? "r" : spec.options.legend === "top" ? "t" : "b") as "r" | "t" | "b", legendFontSize: fs + 1, legendFontFace: ctx.font,
-    catAxisLabelFontSize: fs + 1, valAxisLabelFontSize: fs, catAxisLabelFontFace: ctx.font, valAxisLabelFontFace: ctx.font,
+    showLegend: (spec.options.legend ?? (data.length > 1 ? "bottom" : "none")) !== "none", legendPos: (spec.options.legend === "right" ? "r" : spec.options.legend === "top" ? "t" : "b") as "r" | "t" | "b", legendFontSize: fs + 1, legendFontFace: ctx.font, legendColor: ctx.text,
+    catAxisLabelFontSize: fs + 1, valAxisLabelFontSize: fs, catAxisLabelFontFace: ctx.font, valAxisLabelFontFace: ctx.font, catAxisLabelColor: ctx.text, valAxisLabelColor: ctx.text,
     valGridLine: (spec.options.gridLines ?? theme.chart?.gridLines) === false ? { style: "none" } : { color: "E5E9F0", style: "solid", size: 0.5 },
     catAxisTitle: spec.options.xLabel, showCatAxisTitle: !!spec.options.xLabel, valAxisTitle: spec.options.yLabel, showValAxisTitle: !!spec.options.yLabel,
     /* a percent-stacked axis in PowerPoint is already a 0-100% scale: forcing a maximum of 100 on it made every bar fill about 1% of the axis (audit C-2) */
@@ -276,7 +277,27 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
   const settings: ExportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...input.settings, include: { ...DEFAULT_EXPORT_SETTINGS.include, ...input.settings?.include }, pptx: { ...DEFAULT_EXPORT_SETTINGS.pptx, ...input.settings?.pptx } };
   const px = settings.pptx!;
   const p = new PptxCtor();
-  p.layout = px.slideSize === "4x3" ? "LAYOUT_4x3" : px.slideSize === "16x10" ? "LAYOUT_16x10" : "LAYOUT_16x9";
+  /*
+   * R4 — A CLIENT MASTER: every slide is built on a master rebuilt from the client's file (background, pictures where
+   * the client put them), at the client's aspect ratio. Geometry is scaled into the deck's 10-inch width, which
+   * PowerPoint shows at any size; titles sit where the client's title placeholder is.
+   */
+  const master = input.theme?.master ?? null;
+  const masterRatio = master ? master.size.w / master.size.h : 0;
+  const masterSize = !master ? null : Math.abs(masterRatio - 4 / 3) < 0.05 ? "4x3" : Math.abs(masterRatio - 1.6) < 0.05 ? "16x10" : "16x9";
+  const slideSize = masterSize ?? px.slideSize;
+  p.layout = slideSize === "4x3" ? "LAYOUT_4x3" : slideSize === "16x10" ? "LAYOUT_16x10" : "LAYOUT_16x9";
+  const k = master ? 10 / master.size.w : 1;
+  if (master) {
+    p.defineSlideMaster({
+      title: "CLIENT_MASTER",
+      background: master.background.image ? { data: master.background.image } : { color: hex(master.background.color ?? master.colors.lt1 ?? "#FFFFFF") },
+      objects: master.pictures.map((pic) => ({ image: { data: pic.dataUri, x: pic.x * k, y: pic.y * k, w: pic.w * k, h: pic.h * k } })),
+    });
+  }
+  const newSlide = () => (master ? p.addSlide({ masterName: "CLIENT_MASTER" }) : p.addSlide());
+  const titleBox = master?.title ? { x: master.title.x * k, y: Math.min(master.title.y * k, 0.45), w: Math.min(master.title.w * k, 10 - master.title.x * k), h: Math.min(master.title.h * k, 0.75) } : null;
+  const headingFont = (theme.headingFontFamily ?? "").split(",")[0].trim();
   p.title = input.report.title;
   p.author = input.report.author ?? "Rescript";
   const font = (px.fontFamily ?? theme.fontFamily).split(",")[0].trim();
@@ -287,21 +308,23 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
   let slideNo = 0;
   const decorate = (s: Slide, title?: string) => {
     slideNo++;
-    s.background = { color: hex(px.background ?? theme.colors.background) };
-    if (title) {
+    if (!master) s.background = { color: hex(px.background ?? theme.colors.background) };
+    if (title && titleBox) s.addText(title, { ...titleBox, fontSize: theme.typography?.titleSize ?? 20, bold: true, color: text, fontFace: headingFont || font, valign: "middle" });
+    else if (title) {
       s.addText(title, { x: 0.5, y: 0.25, w: W - 1, h: 0.6, fontSize: theme.typography?.titleSize ?? 20, bold: true, color: text, fontFace: font });
       s.addShape(p.ShapeType.rect, { x: 0.5, y: 0.9, w: 1.2, h: 0.05, fill: { color: primary }, line: { color: primary } });
     }
     if (footer) s.addText(footer, { x: 0.5, y: 5.25, w: W - 2.5, h: 0.3, fontSize: 8, color: subtle, fontFace: font });
     if (px.slideNumbers) s.addText(String(slideNo), { x: W - 1.2, y: 5.25, w: 0.7, h: 0.3, fontSize: 8, color: subtle, align: "right", fontFace: font });
-    if (theme.logoUrl && theme.logoUrl.startsWith("data:") && input.report.branding?.showLogo !== false) s.addImage({ data: theme.logoUrl, x: W - 1.6, y: 0.2, w: 1.1, h: 0.5 });
+    if (!master && theme.logoUrl && theme.logoUrl.startsWith("data:") && input.report.branding?.showLogo !== false) s.addImage({ data: theme.logoUrl, x: W - 1.6, y: 0.2, w: 1.1, h: 0.5 });
   };
 
   // cover
-  const cover = p.addSlide();
+  const cover = newSlide();
   slideNo++;
-  cover.background = { color: hex(theme.cover?.background ?? theme.colors.primary) };
-  const coverText = hex(theme.cover?.textColor ?? "#ffffff");
+  /* on a client master the cover keeps the master's background, with the master's dark colour for text */
+  if (!master) cover.background = { color: hex(theme.cover?.background ?? theme.colors.primary) };
+  const coverText = master ? text : hex(theme.cover?.textColor ?? "#ffffff");
   cover.addText(input.report.title, { x: 0.6, y: 1.6, w: W - 1.2, h: 1.2, fontSize: 34, bold: true, color: coverText, fontFace: font, align: theme.cover?.layout === "center" ? "center" : "left" });
   if (input.report.subtitle) cover.addText(input.report.subtitle, { x: 0.6, y: 2.8, w: W - 1.2, h: 0.6, fontSize: 16, color: coverText, fontFace: font, align: theme.cover?.layout === "center" ? "center" : "left" });
   cover.addText(`${input.report.date ?? new Date().toISOString().slice(0, 10)}${input.report.author ? " · " + input.report.author : ""}`, { x: 0.6, y: 4.6, w: W - 1.2, h: 0.4, fontSize: 11, color: coverText, fontFace: font, align: theme.cover?.layout === "center" ? "center" : "left" });
@@ -315,7 +338,7 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
       const chunks: typeof items[] = [];
       for (let i = 0; i < items.length; i += 5) chunks.push(items.slice(i, i + 5));
       chunks.forEach((chunk, ci) => {
-        const s = p.addSlide(); decorate(s, `Executive summary${chunks.length > 1 ? ` (${ci + 1}/${chunks.length})` : ""}`);
+        const s = newSlide(); decorate(s, `Executive summary${chunks.length > 1 ? ` (${ci + 1}/${chunks.length})` : ""}`);
         s.addText(chunk.map((it) => ({ text: `${it.analysis}: ${it.headline} (${it.base})`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, paraSpaceAfter: 6, breakLine: true } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" });
       });
     }
@@ -330,10 +353,10 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
    */
   const drawBlock = (block: (typeof input.report.blocks)[number]) => {
     if (block.type === "cover") return;
-    if (block.type === "section") { if (!px.sectionDividers) return; const s = p.addSlide(); slideNo++; s.background = { color: hex(theme.colors.secondary) }; s.addText(block.title, { x: 0.6, y: 2.0, w: W - 1.2, h: 1, fontSize: 28, bold: true, color: "FFFFFF", fontFace: font }); if (block.subtitle) s.addText(block.subtitle, { x: 0.6, y: 3.0, w: W - 1.2, h: 0.6, fontSize: 14, color: "FFFFFF", fontFace: font }); return; }
-    if (block.type === "text") { const s = p.addSlide(); decorate(s, block.title ?? ""); s.addText(block.markdown.replace(/[#*_`>]/g, ""), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, fontSize: 12, color: text, fontFace: font, valign: "top" }); return; }
-    if (block.type === "executive_summary") { const s = p.addSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(summaryAnalysisIds(block, input.report).map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
-    if (block.type === "insights") { const s = p.addSlide(); decorate(s, block.title ?? "Key insights"); const lines = summaryAnalysisIds(block, input.report).flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
+    if (block.type === "section") { if (!px.sectionDividers) return; const s = newSlide(); slideNo++; s.background = { color: hex(theme.colors.secondary) }; s.addText(block.title, { x: 0.6, y: 2.0, w: W - 1.2, h: 1, fontSize: 28, bold: true, color: "FFFFFF", fontFace: font }); if (block.subtitle) s.addText(block.subtitle, { x: 0.6, y: 3.0, w: W - 1.2, h: 0.6, fontSize: 14, color: "FFFFFF", fontFace: font }); return; }
+    if (block.type === "text") { const s = newSlide(); decorate(s, block.title ?? ""); s.addText(block.markdown.replace(/[#*_`>]/g, ""), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, fontSize: 12, color: text, fontFace: font, valign: "top" }); return; }
+    if (block.type === "executive_summary") { const s = newSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(summaryAnalysisIds(block, input.report).map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
+    if (block.type === "insights") { const s = newSlide(); decorate(s, block.title ?? "Key insights"); const lines = summaryAnalysisIds(block, input.report).flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
     /*
      * §36 — a page break is already a slide boundary here, since every block
      * gets its own slide; it is skipped rather than rendered. The METHODOLOGY
@@ -351,7 +374,7 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
     const result = input.results[block.analysisId];
     if (!result) return;
     if (block.type === "kpi") {
-      const s = p.addSlide(); decorate(s, block.title ?? result.name);
+      const s = newSlide(); decorate(s, block.title ?? result.name);
       const kpis = result.chart.kpis ?? [];
       kpis.slice(0, 4).forEach((k, i) => { const x = 0.6 + i * ((W - 1.2) / Math.min(4, kpis.length)); s.addShape(p.ShapeType.roundRect, { x, y: 1.6, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1.8, fill: { color: "F5F7FA" }, line: { color: "D9DEE6" }, rectRadius: 0.1 }); s.addText(`${typeof k.value === "number" ? k.value.toLocaleString(REPORT_LOCALE) : k.value}${k.unit ?? ""}`, { x, y: 1.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1, fontSize: 30, bold: true, color: primary, align: "center", fontFace: font }); s.addText(k.label, { x, y: 2.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 0.5, fontSize: 12, color: subtle, align: "center", fontFace: font }); });
       s.addText(result.advice?.basis ?? `Base: n = ${result.base.n}`, { x: 0.6, y: 4.8, w: W - 1.2, h: 0.3, fontSize: 9, color: subtle, fontFace: font });
@@ -359,7 +382,7 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
     }
     if (block.type === "chart" && settings.include.charts) {
       const spec = block.chart;
-      const s = p.addSlide(); decorate(s, block.title ?? chartTitleFor(result, spec));
+      const s = newSlide(); decorate(s, block.title ?? chartTitleFor(result, spec));
       const chartW = px.chartWidth ?? W - 1.2, chartH = px.chartHeight ?? 3.7;
       drawAnalysisVisual(p, s, result, spec, theme, { x: 0.6, y: 1.1, w: chartW, h: chartH }, { font, text, subtle, primary, palette }, { image: input.images?.[block.id] });
       const notes = [`Base: n = ${result.base.n}${result.base.weightedN !== result.base.n ? ` (weighted ${result.base.weightedN})` : ""}`, ...(block.caption ? [block.caption] : []), ...(spec.options.footnote ? [spec.options.footnote] : []), ...(settings.include.footnotes ? (result.tables[0]?.notes ?? []).slice(0, 2) : []), ...(settings.include.tests && result.tests[0] ? [`${result.tests[0].test.replace(/_/g, " ")}: p ${result.tests[0].p == null ? "—" : result.tests[0].p < 0.001 ? "< .001" : "= " + result.tests[0].p.toFixed(3)}`] : [])];
@@ -371,7 +394,7 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
       if (!table) return;
       const perSlide = 14;
       for (let start = 0; start < Math.max(1, table.rows.length); start += perSlide) {
-        const s = p.addSlide(); decorate(s, `${block.title ?? table.title}${table.rows.length > perSlide ? ` (${Math.floor(start / perSlide) + 1}/${Math.ceil(table.rows.length / perSlide)})` : ""}`);
+        const s = newSlide(); decorate(s, `${block.title ?? table.title}${table.rows.length > perSlide ? ` (${Math.floor(start / perSlide) + 1}/${Math.ceil(table.rows.length / perSlide)})` : ""}`);
         addTable(s, { ...table, rows: table.rows.slice(start, start + perSlide) }, theme, { x: 0.5, y: 1.1, w: 9 }, perSlide);
         s.addText([`Base: n = ${table.base?.n ?? result.base.n}`, ...(settings.include.footnotes ? table.notes ?? [] : [])].join("  ·  "), { x: 0.6, y: 4.95, w: W - 1.2, h: 0.3, fontSize: 8, color: subtle, fontFace: font });
       }
@@ -380,7 +403,7 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
   for (const block of input.report.blocks) {
     try { drawBlock(block); }
     catch (e) {
-      const s = p.addSlide();
+      const s = newSlide();
       decorate(s, ("title" in block && typeof block.title === "string" && block.title) || "Report block");
       s.addText(`This part of the report could not be drawn in PowerPoint (${(e as Error)?.message ?? "unknown error"}). The rest of the report is complete.`, { x: 0.6, y: 1.4, w: W - 1.2, h: 1.2, fontSize: 12, color: subtle, fontFace: font });
     }
@@ -388,7 +411,7 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
 
   // sample profile
   if (settings.include.sampleProfile && usedResults.length) {
-    const s = p.addSlide(); decorate(s, "Sample");
+    const s = newSlide(); decorate(s, "Sample");
     const first = usedResults[0].result;
     s.addText([
       { text: `Responses analysed: ${first.base.total}`, options: { bullet: true, breakLine: true } },
@@ -414,12 +437,14 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
      * that fills the block in stops shipping our assumptions as their method.
      */
     const authored = methodologyBlock(input.report.blocks);
-    const s = p.addSlide(); decorate(s, authored?.title ?? "Methodology & notes");
+    const s = newSlide(); decorate(s, authored?.title ?? "Methodology & notes");
     const lines = [
       ...methodologyLines(authored, { survey: input.meta?.survey, generatedBy: input.meta?.generatedBy }),
       ...usedResults.filter((x) => x.result.warnings.length).slice(0, 4).map((x) => `${x.name}: ${x.result.warnings[0]}`),
     ];
     s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 11, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" });
   }
-  return (await p.write({ outputType: "nodebuffer" })) as Buffer;
+  const built = (await p.write({ outputType: "nodebuffer" })) as Buffer;
+  /* R4 — the client's own theme part, so PowerPoint's theme colours and fonts are theirs */
+  return master ? applyClientTheme(built, master.themeXml) : built;
 }

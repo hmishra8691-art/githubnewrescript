@@ -357,7 +357,27 @@ export interface ReportTheme {
   cover?: { background?: string; textColor?: string; layout?: "left" | "center" };
   chart?: { gridLines?: boolean; dataLabels?: boolean; decimals?: number; cornerRadius?: number };
   typography?: { baseSize?: number; titleSize?: number };
+  /** R4 — a client's PowerPoint master the deck is built on (export/clientTemplate.ts `readClientMaster`) */
+  master?: DeckMaster;
 }
+
+/** R4 — what is read from a client's .pptx / .potx master: see export/clientTemplate.ts */
+export interface DeckMaster {
+  name: string;
+  /** inches, as the client's file has it */
+  size: { w: number; h: number };
+  background: { color?: string; image?: string };
+  pictures: { dataUri: string; x: number; y: number; w: number; h: number }[];
+  title?: { x: number; y: number; w: number; h: number };
+  body?: { x: number; y: number; w: number; h: number };
+  colors: { dk1?: string; lt1?: string; dk2?: string; lt2?: string; accents: string[] };
+  fonts: { heading?: string; body?: string };
+  /** the client's theme part, put back into each deck built on this master */
+  themeXml?: string;
+  layouts: string[];
+  notes: string[];
+}
+
 
 export const DEFAULT_THEME: ReportTheme = {
   name: "Rescript",
