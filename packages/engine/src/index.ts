@@ -220,6 +220,7 @@ export * from "./researchActions.js";
 export * from "./qualActions.js";
 /* F2 2026-10-22: qualitative synthesis requests in words (summaries, insights, comparisons, reels, double-coding, ask, auto-coding, group sessions) */
 export * from "./qualIntent.js";
+export * from "./opsIntent.js";
 /* G2 2026-10-22: live human-moderated sessions scheduled in words (zoned times, segments) */
 export * from "./liveSchedule.js";
 export * from "./aiInterviewSafety.js";

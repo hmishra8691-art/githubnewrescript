@@ -92,6 +92,8 @@ export type IntentCategory =
   | "visualization" | "export" | "debugging" | "dependency_analysis" | "impact_analysis"
   /** IM3: testing the survey — a production-like simulation */
   | "testing"
+  /** 2026-11-22: research operations — the people of a study, their accounts and their portal (opsIntent.ts) */
+  | "operations"
   /** clearly outside the platform ("write me a poem", "book a flight"): answered with UNSUPPORTED_MESSAGE, no model call */
   | "unsupported";
 
