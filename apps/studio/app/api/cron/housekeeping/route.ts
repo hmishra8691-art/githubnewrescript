@@ -1,6 +1,6 @@
 import "server-only";
 import { NextResponse } from "next/server";
-import { platformDb } from "@/lib/db";
+import { platformDb, everyDatabase } from "@/lib/db";
 import { timingSafeEqual } from "node:crypto";
 import { importSessionStore } from "@/lib/import/sessionsServer";
 
@@ -73,5 +73,33 @@ async function run(req: Request): Promise<NextResponse> {
       await store.dropSource(s); importSources++;
     }
   } catch (e) { importError = (e as Error).message; }
-  return NextResponse.json({ ok: true, passes, deleted: { ...totals, importSources }, more, elapsedMs: Date.now() - startedAt, ...(importError ? { importSourcesError: importError } : {}) });
+  const partitions = await ensureResponsePartitions();
+  return NextResponse.json({ ok: true, passes, deleted: { ...totals, importSources }, more, partitions, elapsedMs: Date.now() - startedAt, ...(importError ? { importSourcesError: importError } : {}) });
+}
+
+/**
+ * Migration 0111: `responses` is partitioned by month. Create the coming six months on every client database, so a
+ * month never starts without its partition (0111 itself creates them through the end of next year; the default
+ * partition catches anything that slips through, so a missed run never fails an insert). A database without 0111
+ * answers `skipped`; a failure is reported, never thrown — housekeeping's own result stands.
+ */
+async function ensureResponsePartitions(): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  for (const t of everyDatabase()) {
+    try {
+      const { data, error } = await t.db.rpc("rescript_responses_ensure_partitions", { p_months_ahead: 6 });
+      if (error) {
+        out[t.id] = /rescript_responses_ensure_partitions|does not exist|schema cache/i.test(error.message)
+          ? { skipped: "migration 0111 not applied" }
+          : { error: error.message };
+        continue;
+      }
+      out[t.id] = data;
+      const stray = (data as { default_rows?: number } | null)?.default_rows ?? 0;
+      if (stray > 0) console.warn("[rescript:partitions] rows in responses_default", JSON.stringify({ database: t.id, rows: stray }));
+    } catch (e) {
+      out[t.id] = { error: (e as Error).message };
+    }
+  }
+  return out;
 }

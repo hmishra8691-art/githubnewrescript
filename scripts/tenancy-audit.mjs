@@ -20,9 +20,13 @@ const fail = [];
 const created = new Set();
 for (const f of readdirSync(join(ROOT, "supabase/migrations")).filter((x) => x.endsWith(".sql")).sort()) {
   const sql = readFileSync(join(ROOT, "supabase/migrations", f), "utf8").toLowerCase().replace(/--[^\n]*/g, "");
-  for (const m of sql.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\(/g)) created.add(m[1]);
-  for (const m of sql.matchAll(/drop\s+table\s+(?:if\s+exists\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)/g)) created.delete(m[1]);
-  for (const m of sql.matchAll(/alter\s+table\s+(?:if\s+exists\s+)?(?:public\.)?([a-z_][a-z0-9_]*)\s+rename\s+to\s+([a-z_][a-z0-9_]*)/g)) { created.delete(m[1]); created.add(m[2]); }
+  /* in the order the statements appear: a table renamed away and then re-created under its old name (0111) exists */
+  const ops = [
+    ...[...sql.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\(/g)].map((m) => ({ at: m.index, run: () => created.add(m[1]) })),
+    ...[...sql.matchAll(/drop\s+table\s+(?:if\s+exists\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)/g)].map((m) => ({ at: m.index, run: () => created.delete(m[1]) })),
+    ...[...sql.matchAll(/alter\s+table\s+(?:if\s+exists\s+)?(?:public\.)?([a-z_][a-z0-9_]*)\s+rename\s+to\s+([a-z_][a-z0-9_]*)/g)].map((m) => ({ at: m.index, run: () => { created.delete(m[1]); created.add(m[2]); } })),
+  ].sort((a, b) => a.at - b.at);
+  for (const op of ops) op.run();
 }
 /* from 0097 on, a migration records itself in schema_marks (0098 backfilled 0093–0096) — the per-database status check reads them */
 for (const f of readdirSync(join(ROOT, "supabase/migrations")).filter((x) => /^\d{4}_.*\.sql$/.test(x))) {

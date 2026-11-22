@@ -83,9 +83,14 @@ const KNOWN_UNWRITTEN_TABLES = {
   design_files: "0058's decision: kept until a loader for designs[].file.storagePath exists",
   interview_exports: "the Interviews export queue, designed and not built (0092 says so on the table)",
   vendor_quotations: "written by the `quote` adapter capability, which no adapter yet declares (0092)",
+  responses_legacy_low: "a partition of responses (0111): written through the parent, never by name",
+  responses_legacy_high: "a partition of responses (0111): written through the parent, never by name",
+  responses_default: "a partition of responses (0111): written through the parent, never by name",
 };
 const KNOWN_UNREAD_TABLES = {
   identity_match_tokens: "written for the probabilistic matcher's future; the resolver reads trust ids (0083)",
+  responses_legacy_low: "a partition of responses (0111): read through the parent, never by name",
+  responses_legacy_high: "a partition of responses (0111): read through the parent, never by name",
 };
 
 const created = new Set([...sql.matchAll(/create table(?: if not exists)? public\.([a-z0-9_]+)/g)].map((m) => m[1]));
