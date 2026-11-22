@@ -26,7 +26,26 @@ reads plain or gzip (DecompressionStream) and caps the decompressed size at 32 M
 Demo: 196 KB → 37 KB (5.3×). Safe across deploy skew: an older server's refusal gets one plain retry, then plain
 for the rest of the tab; older editors still send plain JSON. 8 tests; Studio suite 1,341/1,341; `audit:code` clean.
 
-## Step 5 — built: `responses` partitioned by month (migration 0111, NOT YET APPLIED)
+## Step 4, phase A — built: published versions copied to object storage (migration 0112, NOT YET APPLIED)
+
+- `@rescript/media` `definitions.ts`: each version is stored gzipped under the sha256 of its **canonical** JSON
+  (keys sorted) in the private bucket `rescript-definitions` — R2 when configured, Supabase Storage otherwise.
+  Identical versions (templates, clones) are one object. Writes are idempotent; reads verify the hash and refuse a
+  corrupted or swapped object.
+- Migration 0112 adds `definition_hash / _bytes / _store / _stored_at` to `survey_versions`. A check keeps hash and
+  stored_at together; a trigger refuses to change or clear a recorded hash, so a non-null hash always names an object
+  the store confirmed. The 0012 immutability trigger is untouched and still freezes the jsonb.
+- `/api/cron/definition-store` (every 10 minutes, every client database) copies uncopied versions oldest first,
+  10 at a time inside a 40-second budget. The publish path is not touched: the copy is read from Postgres, the truth.
+- **Nothing reads the copies yet.** Phase B: the runtime definition route reads by hash (Postgres fallback) and
+  checks the two agree for a while. Phase C: new versions stop storing the jsonb (the immutability trigger then
+  allows `definition` to become null once a hash exists), and a backfill nulls the old jsonb; unreferenced objects
+  are garbage-collected by hash.
+- Tested: 6 store tests (Master Demo round trip at ~5× compression, dedup across key order, integrity refusal,
+  write race), 6 sweep tests (dedup, failure isolation, time budget, missing migration, slow store), 0112 replayed
+  with the whole chain on Postgres 16 and its constraints exercised.
+
+## Step 5 — done: `responses` partitioned by month (migration 0111, applied 2026-11-22)
 
 `supabase/migrations/0111_responses_partitioned.sql`, rollback `scripts/0111-rollback.sql`.
 

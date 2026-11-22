@@ -77,6 +77,11 @@ const PUBLIC = {
     "advances story-report video exports in the background: the same bearer-token credential as the media job, checked "
     + "against CRON_SECRET by `timingSafeEqual` in each handler's first statement, refusing everything when it is unset. "
     + "It touches only queued exports whose lease has lapsed, so there is no project to gate on — and no session",
+  "cron/definition-store/route.ts":
+    "copies published survey versions into the definition store (scale step 4, migration 0112): the same bearer-token "
+    + "credential as the media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's first statement and "
+    + "again in run(), refusing everything when it is unset. It copies every database's uncopied versions by a fixed rule, "
+    + "so there is no project to gate on — and no session, because a scheduler has none",
   "cron/housekeeping/route.ts":
     "the weekly retention sweep (migration 0058): the same bearer-token credential as the media job, checked against "
     + "CRON_SECRET by `timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It deletes "
