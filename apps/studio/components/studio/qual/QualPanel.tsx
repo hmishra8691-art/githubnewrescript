@@ -19,6 +19,8 @@ import { HighlightsTab } from "./HighlightsTab";
 import { GroupsTab } from "./GroupsTab";
 /* G3 2026-10-22: alerts (Slack / Teams / webhook / e-mail / bell) and panel recruitment */
 import { AlertsPanelsTab } from "./AlertsPanelsTab";
+/* Q6 2026-11-22: interview booking — times, invitations, bookings, attendance and incentives */
+import { BookingTab } from "./BookingTab";
 import { AutoCodePanel, CorrectableText, SynApiContext } from "./TranscriptTools";
 /* G2 2026-10-22: live human-moderated sessions (focus groups / IDIs) with multi-party video */
 import { LiveSessionsTab } from "./LiveSessionsTab";
@@ -45,9 +47,9 @@ import { ClipPlayer } from "./ClipPlayer";
  * by link, a back room of observers, recording per speaker → one transcript.
  */
 
-type Tab = "plan" | "guide" | "ai" | "sessions" | "transcripts" | "coding" | "themes" | "report" | "synthesis" | "double" | "highlights" | "groups" | "live" | "alerts";
+type Tab = "plan" | "guide" | "ai" | "booking" | "sessions" | "transcripts" | "coding" | "themes" | "report" | "synthesis" | "double" | "highlights" | "groups" | "live" | "alerts";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "plan", label: "Plan" }, { key: "guide", label: "Guide" }, { key: "ai", label: "AI interviews" }, { key: "sessions", label: "Sessions" }, { key: "transcripts", label: "Transcripts" },
+  { key: "plan", label: "Plan" }, { key: "guide", label: "Guide" }, { key: "ai", label: "AI interviews" }, { key: "booking", label: "Booking" }, { key: "sessions", label: "Sessions" }, { key: "transcripts", label: "Transcripts" },
   { key: "coding", label: "Coding" }, { key: "themes", label: "Themes" }, { key: "synthesis", label: "Synthesis" }, { key: "double", label: "Double coding" }, { key: "highlights", label: "Highlights" }, { key: "groups", label: "Group sessions" }, { key: "live", label: "Live sessions" }, { key: "alerts", label: "Alerts & panels" }, { key: "report", label: "Report" },
 ];
 const STATUS_BADGE: Record<string, string> = { ai_suggested: "warning", human_reviewed: "success", rejected: "error" };
@@ -106,6 +108,7 @@ export function QualPanel() {
         : tab === "guide" ? <GuideTab api={api} run={run} />
         : tab === "ai" ? <AiInterviewsTab qualApi={api} setWs={setWs} setNote={setNote} />
         : tab === "alerts" ? <AlertsPanelsTab />
+        : tab === "booking" ? <BookingTab />
         : !ws ? <div className="sk" style={{ height: 120 }} />
         : !ws.available ? <div className="alert warning" data-testid="qual-unavailable">{ws.note}</div>
         : tab === "sessions" ? <SessionsTab ws={ws} api={api} run={run} setWs={setWs} setNote={setNote} />
