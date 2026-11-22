@@ -15,6 +15,28 @@ import { AudienceSpecification } from "./recruitment.js";
 import { AssessmentSettings } from "./assessment.js";
 import { PortalSettings } from "./portal.js";
 
+export const LibraryLink = z.object({
+  id: z.string(),
+  /** the library survey the element came from */
+  library: z.object({ surveyId: z.string().optional(), title: z.string().optional() }),
+  /** the item in the library: a block's id, `q:<question id>` or `list:<question id>` */
+  itemId: z.string(),
+  kind: z.enum(["block", "question", "list"]),
+  version: z.union([z.number(), z.string()]),
+  /** fingerprint of the item's content when it was inserted or last updated */
+  hash: z.string(),
+  /** the local flow node a block became */
+  nodeId: z.string().optional(),
+  /** the local question whose options a list became */
+  optionsOf: z.string().optional(),
+  /** library question id → local question id */
+  keys: z.record(z.string()).default({}),
+  /** library question id → fingerprint of that question as inserted: tells which questions were edited here */
+  hashes: z.record(z.string()).optional(),
+  insertedAt: z.string().optional(),
+});
+export type LibraryLink = z.infer<typeof LibraryLink>;
+
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
   id: z.string(),
@@ -973,6 +995,13 @@ export const SurveyDefinition = z.object({
    * configuration its pinned version carries.
    */
   listFills: z.array(ListFill).default([]),
+  /**
+   * LIBRARY LINKS (Level 5 roadmap P5). Elements that came from a library — a block, a question or an option list
+   * kept in a library survey of the workspace — remember where they came from, the version, and a fingerprint of
+   * the content as it was inserted, so "update available" and "changed here" can be told apart later. Absent on
+   * every survey that never uses a library.
+   */
+  libraryLinks: z.array(LibraryLink).optional(),
   meta_extensions: z.record(z.any()).optional(),
   /**
    * WHERE THIS SURVEY CAME FROM (Intelligent import, §25–§26). One entry per
