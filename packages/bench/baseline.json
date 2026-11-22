@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "at": "2026-11-22T14:08:32.167Z",
-  "commit": "5179ec1f",
+  "at": "2026-11-22T15:39:57.214Z",
+  "commit": "67574f37",
   "suites": [
     {
       "id": "ai_agents.instructions_rules",
@@ -57,7 +57,7 @@
         {
           "id": "median_ms",
           "label": "Median time to a proposal",
-          "value": 16.1,
+          "value": 27.8,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -474,7 +474,7 @@
           "detail": "left alone (refused)"
         }
       ],
-      "ms": 1345
+      "ms": 2349
     },
     {
       "id": "ai_agents.operations_rules",
@@ -772,7 +772,7 @@
           "detail": "not read as a design question"
         }
       ],
-      "ms": 18
+      "ms": 16
     },
     {
       "id": "ai_agents.verifier",
@@ -809,7 +809,7 @@
         {
           "id": "verify_ms",
           "label": "One verification (60 simulated respondents, 14 questions)",
-          "value": 98,
+          "value": 136,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -872,7 +872,7 @@
           "detail": "nothing reported"
         }
       ],
-      "ms": 936
+      "ms": 1277
     },
     {
       "id": "ai_agents.loop_scripted",
@@ -962,7 +962,7 @@
           "detail": "planner_failed after 1 attempt"
         }
       ],
-      "ms": 1210
+      "ms": 1632
     },
     {
       "id": "ai_agents.model",
@@ -984,7 +984,7 @@
         {
           "id": "edit_ms",
           "label": "Apply one edit",
-          "value": 157.2,
+          "value": 213.1,
           "unit": "ms",
           "better": "lower",
           "target": 100,
@@ -993,7 +993,7 @@
         {
           "id": "read_ms",
           "label": "Read one instruction (rule path)",
-          "value": 158.5,
+          "value": 241.8,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -1002,7 +1002,7 @@
         {
           "id": "validate_ms",
           "label": "Parse and validate the whole definition",
-          "value": 86.9,
+          "value": 124.9,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -1011,7 +1011,7 @@
         {
           "id": "review_ms",
           "label": "Review the whole survey for contradictions",
-          "value": 104.5,
+          "value": 141.1,
           "unit": "ms",
           "better": "lower",
           "target": 10000,
@@ -1021,7 +1021,7 @@
         {
           "id": "page_ms",
           "label": "Working out one page for one simulated respondent",
-          "value": 15.3,
+          "value": 17.7,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -1031,7 +1031,7 @@
         {
           "id": "respondent_ms",
           "label": "One simulated respondent, start to end",
-          "value": 4699,
+          "value": 5448,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -1057,7 +1057,300 @@
           "detail": "4 of 4 simulated respondents produced; 9 issues"
         }
       ],
-      "ms": 32825
+      "ms": 35001
+    },
+    {
+      "id": "programming.path_coverage",
+      "area": "programming",
+      "title": "Path coverage on shipped surveys",
+      "status": "measured",
+      "caveat": "four surveys of 6 to 17 questions. A goal not met may be unreachable (a real finding about the survey) or need an answer combination the generator never drew; the benchmark counts both as not met. The 160-question demo survey takes over a minute and is left out.",
+      "metrics": [
+        {
+          "id": "goals_met",
+          "label": "Coverage goals met (pages, both sides of conditions, branches, skips, endings, quota cells)",
+          "value": 94.9,
+          "unit": "%",
+          "better": "higher",
+          "target": 100,
+          "tolerance": 2
+        },
+        {
+          "id": "script_size",
+          "label": "Test respondents in the smallest covering scripts, all four surveys",
+          "value": 17,
+          "unit": "count",
+          "better": "lower",
+          "target": 40,
+          "informational": true
+        },
+        {
+          "id": "cover_ms",
+          "label": "Time to cover one small survey",
+          "value": 241,
+          "unit": "ms",
+          "better": "lower",
+          "target": 30000,
+          "machineDependent": true
+        }
+      ],
+      "cases": [
+        {
+          "id": "Benchmark survey with a condition and a screen-out",
+          "pass": true,
+          "detail": "13 of 13 goals met by a script of 3"
+        },
+        {
+          "id": "Brand funnel template",
+          "pass": false,
+          "detail": "9 of 12 goals met by a script of 1; not met: CONSIDER is hidden by its display logic (Either the condition is always met, or the answers that would hide it were never drawn. No simulated respondent answered so that it would be); PURCHASED is hidden by its display logic (Either the condition is always met, or the answers that would hide it were never drawn. No simulated respondent answered so that it would be); PREFER is hidden by its display logic (Either the condition is always met, or the answers that would hide it were never drawn. No simulated respondent answered so that it would be)"
+        },
+        {
+          "id": "Segmentation template",
+          "pass": false,
+          "detail": "23 of 24 goals met by a script of 7; not met: An interview ends “quota_full” (No interview ended “quota_full”.)"
+        },
+        {
+          "id": "B2B template",
+          "pass": true,
+          "detail": "30 of 30 goals met by a script of 6"
+        }
+      ],
+      "ms": 1001
+    },
+    {
+      "id": "programming.source_round_trip",
+      "area": "programming",
+      "title": "Survey source format round trip on every fixture",
+      "status": "measured",
+      "caveat": "identity is checked after the schema's own normalisation, which is what the product stores. Readability is not measured; conditions that would not read back identically are written as JSON, and their share is reported.",
+      "metrics": [
+        {
+          "id": "identical",
+          "label": "Fixtures identical after a round trip (39)",
+          "value": 100,
+          "unit": "%",
+          "better": "higher",
+          "target": 100,
+          "tolerance": 0
+        },
+        {
+          "id": "conditions_as_text",
+          "label": "Conditions written as readable expressions rather than JSON",
+          "value": 92.7,
+          "unit": "%",
+          "better": "higher",
+          "target": 95,
+          "tolerance": 1
+        },
+        {
+          "id": "lines",
+          "label": "Lines of source, all fixtures",
+          "value": 22250,
+          "unit": "count",
+          "better": "lower",
+          "target": 0,
+          "informational": true
+        }
+      ],
+      "cases": [
+        {
+          "id": "benchmark survey",
+          "pass": true,
+          "detail": "123 lines, identical"
+        },
+        {
+          "id": "501-question survey",
+          "pass": true,
+          "detail": "4187 lines, identical"
+        },
+        {
+          "id": "buildAdTestSurvey",
+          "pass": true,
+          "detail": "59 lines, identical"
+        },
+        {
+          "id": "buildAdvAcbcSurvey",
+          "pass": true,
+          "detail": "85 lines, identical"
+        },
+        {
+          "id": "buildAdvAdConceptSurvey",
+          "pass": true,
+          "detail": "172 lines, identical"
+        },
+        {
+          "id": "buildAdvB2bSurvey",
+          "pass": true,
+          "detail": "200 lines, identical"
+        },
+        {
+          "id": "buildAdvCbcSurvey",
+          "pass": true,
+          "detail": "125 lines, identical"
+        },
+        {
+          "id": "buildAdvDiarySurvey",
+          "pass": true,
+          "detail": "135 lines, identical"
+        },
+        {
+          "id": "buildAdvHealthSurvey",
+          "pass": true,
+          "detail": "172 lines, identical"
+        },
+        {
+          "id": "buildAdvHybridSurvey",
+          "pass": true,
+          "detail": "156 lines, identical"
+        },
+        {
+          "id": "buildAdvJourneySurvey",
+          "pass": true,
+          "detail": "155 lines, identical"
+        },
+        {
+          "id": "buildAdvMaxDiffSurvey",
+          "pass": true,
+          "detail": "96 lines, identical"
+        },
+        {
+          "id": "buildAdvMenuSurvey",
+          "pass": true,
+          "detail": "108 lines, identical"
+        },
+        {
+          "id": "buildAdvMultiCountrySurvey",
+          "pass": true,
+          "detail": "185 lines, identical"
+        },
+        {
+          "id": "buildAdvPoliticalSurvey",
+          "pass": true,
+          "detail": "180 lines, identical"
+        },
+        {
+          "id": "buildAdvPricingSurvey",
+          "pass": true,
+          "detail": "109 lines, identical"
+        },
+        {
+          "id": "buildAdvProductTestSurvey",
+          "pass": true,
+          "detail": "115 lines, identical"
+        },
+        {
+          "id": "buildAdvSegmentationSurvey",
+          "pass": true,
+          "detail": "157 lines, identical"
+        },
+        {
+          "id": "buildBrandFunnelSurvey",
+          "pass": true,
+          "detail": "51 lines, identical"
+        },
+        {
+          "id": "buildBrandTrackerSurvey",
+          "pass": true,
+          "detail": "73 lines, identical"
+        },
+        {
+          "id": "buildCsatSurvey",
+          "pass": true,
+          "detail": "66 lines, identical"
+        },
+        {
+          "id": "buildEmployeeSurvey",
+          "pass": true,
+          "detail": "70 lines, identical"
+        },
+        {
+          "id": "buildMasterDemoSurvey",
+          "pass": true,
+          "detail": "1717 lines, identical"
+        },
+        {
+          "id": "buildNpsSurvey",
+          "pass": true,
+          "detail": "65 lines, identical"
+        },
+        {
+          "id": "buildPriceLadderSurvey",
+          "pass": true,
+          "detail": "17 lines, identical"
+        },
+        {
+          "id": "buildPricingPsmSurvey",
+          "pass": true,
+          "detail": "54 lines, identical"
+        },
+        {
+          "id": "buildScaleSurvey",
+          "pass": true,
+          "detail": "4325 lines, identical"
+        },
+        {
+          "id": "buildScreenerSurvey",
+          "pass": true,
+          "detail": "86 lines, identical"
+        },
+        {
+          "id": "buildSequentialMonadicSurvey",
+          "pass": true,
+          "detail": "81 lines, identical"
+        },
+        {
+          "id": "imported decipher/decipher_1.xml",
+          "pass": true,
+          "detail": "1261 lines, identical"
+        },
+        {
+          "id": "imported decipher/decipher_2.xml",
+          "pass": true,
+          "detail": "1077 lines, identical"
+        },
+        {
+          "id": "imported decipher/decipher_3.xml",
+          "pass": true,
+          "detail": "508 lines, identical"
+        },
+        {
+          "id": "imported decipher/decipher_4.xml",
+          "pass": true,
+          "detail": "1474 lines, identical"
+        },
+        {
+          "id": "imported decipher/decipher_5.xml",
+          "pass": true,
+          "detail": "803 lines, identical"
+        },
+        {
+          "id": "imported qualtrics/qualtrics_1.qsf",
+          "pass": true,
+          "detail": "755 lines, identical"
+        },
+        {
+          "id": "imported qualtrics/qualtrics_2.qsf",
+          "pass": true,
+          "detail": "1418 lines, identical"
+        },
+        {
+          "id": "imported qualtrics/qualtrics_3.qsf",
+          "pass": true,
+          "detail": "476 lines, identical"
+        },
+        {
+          "id": "imported qualtrics/qualtrics_4.qsf",
+          "pass": true,
+          "detail": "588 lines, identical"
+        },
+        {
+          "id": "imported qualtrics/qualtrics_5.qsf",
+          "pass": true,
+          "detail": "766 lines, identical"
+        }
+      ],
+      "ms": 9141
     },
     {
       "id": "analytics.large_data",
@@ -1069,7 +1362,7 @@
         {
           "id": "crosstab_ms",
           "label": "Crosstab with a two-variable banner, 200,000 responses",
-          "value": 97.5,
+          "value": 122.1,
           "unit": "ms",
           "better": "lower",
           "target": 400,
@@ -1079,7 +1372,7 @@
         {
           "id": "crosstab_1m_estimate_ms",
           "label": "The same, scaled linearly to 1,000,000",
-          "value": 488,
+          "value": 611,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -1089,7 +1382,7 @@
         {
           "id": "dataset_build_ms",
           "label": "Build the dataset from stored responses",
-          "value": 1507,
+          "value": 1674,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -1104,7 +1397,7 @@
           "detail": "200,000 cases in the dataset"
         }
       ],
-      "ms": 2017
+      "ms": 2379
     },
     {
       "id": "import.fidelity",
@@ -1158,7 +1451,7 @@
         {
           "id": "ms_per_file",
           "label": "Import time per file",
-          "value": 180,
+          "value": 158,
           "unit": "ms",
           "better": "lower",
           "target": 120000,
@@ -1332,7 +1625,7 @@
           "detail": "Block randomizers: 100% of 5"
         }
       ],
-      "ms": 86708
+      "ms": 95163
     },
     {
       "id": "qualitative.speech",
@@ -1397,7 +1690,7 @@
         {
           "id": "per_response_ms",
           "label": "Scoring time per response",
-          "value": 19.2,
+          "value": 21.3,
           "unit": "ms",
           "better": "lower",
           "target": 150,
@@ -1461,7 +1754,7 @@
           "detail": "Classic bot: 30 of 30 detected, 30 excluded"
         }
       ],
-      "ms": 9802
+      "ms": 10916
     },
     {
       "id": "fraud.recorded_automation",
@@ -1602,7 +1895,7 @@
           "detail": "Mouse moved in 25 equal steps to each target, then pressed: 3 of 3 excluded, 3 with evidence other than repeated text (as recorded: 3 excluded). Fired: bot.superhuman_typing 6, bot.impossible_sequence 3, matrix.signature_match 3, openend.duplicate 3, device.webdriver 3, bot.pointer_ruler 3, duplicate.answers 3, duplicate.multi_signal 3"
         }
       ],
-      "ms": 7106
+      "ms": 7925
     }
   ]
 }

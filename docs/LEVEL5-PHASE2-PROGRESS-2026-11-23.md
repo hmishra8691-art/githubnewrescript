@@ -1,4 +1,4 @@
-# Level 5 roadmap, Phase 2 (Essentials) — progress (updated 27 November 2026)
+# Level 5 roadmap, Phase 2 (Essentials) — progress (updated 28 November 2026)
 
 Phase 2 is the essentials for all seven areas, about twelve weeks of work in the roadmap. This document is kept
 as it goes: what is done, what was tested, what is next. AI design agents come first, as asked.
@@ -236,9 +236,39 @@ often people do.
 mouse. The overall exclusion rate fell from 90% to 83.3% because the set got harder; every style excluded before is
 still excluded at the same count. The baseline was re-kept on purpose and the commit says so.
 
+### Programming batch: path coverage, source format, libraries (28 November)
+
+**P2, path coverage.** A survey becomes a list of goals: every page reached, both sides of every conditional
+question, every branch path, skip, ending and quota cell. Simulated respondents are run, later rounds aimed at
+what is still missing, and the fewest of them that meet every met goal are picked as a test script a person can
+walk by hand. An unmet goal says why, including where the respondents who would have met it went instead. Quota
+feasibility: cells no complete entered, a target above its maximum, targets that do not add up, hard maximums that
+cannot fill. Intelligent Mode answers "test every path" with it.
+
+On four shipped surveys, 94.9% of goals were met by scripts of 17 respondents in all. The unmet goals are real
+findings or generator limits, and the tool does not tell which: for example, the brand funnel template's "shown if
+aided awareness is answered" can never hide anything because that question is required.
+
+**P3, survey source format.** A survey written as text: questions with options, logic and skips; the flow as an
+indented outline; quotas. A condition is written as the expression the logic editor shows only if reading that text
+back gives exactly the same condition; otherwise as JSON. Everything else goes on an `extra` line. All 39 fixtures
+(every template, the 501-question survey, the ten imported corpus surveys) come back identical. 92.7% of conditions
+are written as readable expressions. A line diff of two versions is what a review reads. The Studio serves the draft
+as source and reads an edited source back as a diff, without writing.
+
+**P5, reusable libraries.** A library is another survey of the workspace; its blocks, questions and option lists
+are the items, reused from its latest saved version. Inserting copies the item and records a link with a fingerprint
+of the whole item and of each question. The link later tells "up to date", "update available", "changed here" and
+"both" apart; for an update it lists what is added, removed and changed, the logic and quota cells elsewhere that
+would lose a question or option they read, and the local edits it would overwrite. The Studio route previews an
+insert or update as a source diff and saves it only with apply, under the edit lock and revision guard.
+
+What is not done: no screen to browse a library or see link status (route only); the routes were type-checked and
+audited, not called over HTTP; no database was used.
+
 ## The scorecard after this
 
-12 benchmarks, 10 measured. 22 of 43 metrics with a target meet it.
+14 benchmarks, 12 measured. 24 of 47 metrics with a target meet it.
 
 | Benchmark | Measured | Target |
 | --- | --- | --- |
@@ -250,6 +280,8 @@ still excluded at the same count. The baseline was re-kept on purpose and the co
 | Agent loop scenarios with a scripted planner (12) | 100% | 100% |
 | Loop runs that left the given survey unchanged | 100% | 100% |
 | One edit on a 501-question survey | 185 ms | 100 ms |
+| Path coverage goals met on four shipped surveys | 94.9% | 100% of reachable |
+| Fixtures identical after a source round trip (39) | 100% | 100% |
 | Recorded automated sessions excluded on behaviour alone (36) | 83.3% | 95% |
 | The agent paced like a person, and the careful agent: excluded (3 each) | 0% | 90% |
 
@@ -275,6 +307,9 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | 36 real automated sessions recorded through the runtime's collector, ten styles, all completed | `scripts/redteam-record.mjs` | 36 of 36 |
 | The typing and pointer summaries: kept as numbers only, implausible ones dropped, off with interaction telemetry | `telemetrySanitize.test.ts`, 1 new test (runtime suite: 178) | pass |
 | Whole-answer typing and the two pointer rules on hand-written summaries: fixed delay, fast, a person, corrected, jumps, ruler, a hand, a straight flick, few clicks, none | `typing.test.ts`, 2 new tests (quality suite: 124) | pass |
+| Path coverage: goals, a sound survey fully covered by a small script, an unused condition found, quota feasibility | `coverage.test.ts`, 4 tests (templates suite) | pass |
+| Source format: lossless round trip, readable lines, diff, edits read back, errors by line, JSON fallback | `surveySource.test.ts`, 4 tests | pass |
+| Libraries: items, insert with renumbering and logic, update with impact, local edits, lists, missing items | `library.test.ts`, 5 tests (engine suite: 3,009) | pass |
 | All benchmarks against the previous baseline | `pnpm bench` | no regression |
 
 ## What was NOT tested
@@ -301,7 +336,7 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | Area | Done | Partly | Not started |
 | --- | --- | --- | --- |
 | AI design agents (8) | A3, A5, A6, A7, A15 | A2 (about 90 of 850 cases), A4 (loop built, no model), A8 (reasons in plans, not on screen) | |
-| Programming (6) | | P1 (measured, edits faster, target not met) | P2, P3, P4, P5, P11 |
+| Programming (6) | P2, P3 | P1 (edits faster, target not met), P5 (engine and route; no screen) | P4, P11 |
 | Analytics (6) | | M1 (measured only) | M2, M3, M4, M5, M10 |
 | Import (6) | | I1 (10 of 300 files), I2 (exists, 58.3%, not examined) | I3, I4, I5, I6 |
 | Reporting (6) | | | R1 to R6 |
