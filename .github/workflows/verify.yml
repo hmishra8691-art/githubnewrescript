@@ -10,6 +10,8 @@
 #   test          every package (built from clean dist), the Studio's lib, the runtime's lib, the renderer —
 #                 with pyreadstat installed, so the two SPSS / SAS / Stata round-trip tests that prove the
 #                 files can actually be OPENED stop skipping
+#   bench         the Level 5 benchmarks (packages/bench): fraud red-team, import fidelity, the agent's instruction
+#                 corpus, large-survey and large-data timings — compared with the committed baseline
 #   audit:code    the Studio authorisation audit, the Interviews + runtime guard audit, the piping sweep
 #                 (SQL functions nothing calls, tables nothing reads or writes, exports nothing imports,
 #                 environment variables nobody documented), the dependency boundaries
@@ -75,6 +77,11 @@ jobs:
           echo "--- context of the first failure ---"
           n=$(grep -nE '^(packages|apps)/[a-z]+ test: not ok' test.log | head -1 | cut -d: -f1)
           [ -n "$n" ] && sed -n "$((n-5)),$((n+30))p" test.log || true
+
+      # the Level 5 benchmarks against packages/bench/baseline.json: a metric that got worse fails the run, a metric
+      # below its roadmap target does not (timings only warn — the runner is not the machine the baseline was made on)
+      - name: Level 5 benchmarks — no regression against the baseline
+        run: pnpm bench
 
       - name: Code audits — authorisation, app guards, the piping sweep, dependency boundaries
         run: pnpm audit:code
