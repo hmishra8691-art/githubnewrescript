@@ -26,13 +26,14 @@ test("every questionnaire action is a tool, classified, with a capability and a 
   }
   for (const t of TOOLS) {
     assert.ok(t.summary.length > 10, t.name);
+    if (t.executor === "compute") assert.deepEqual([t.risk, t.approval], ["read", "none"], `${t.name}: a calculation changes nothing`);
     if (t.executor === "route") assert.ok(t.route && /^\/api\//.test(t.route.path) && t.params.length > 0, `${t.name} declares its route and parameters`);
     if (t.risk !== "read") assert.notEqual(t.approval, "none", `${t.name}: a change never runs without a person`);
     if (["publish", "external", "spend", "data", "destructive_data", "destructive_draft"].includes(t.risk)) assert.equal(t.approval, "explicit", t.name);
   }
   assert.equal(surveyOpRisk("delete_question"), "destructive_draft");
   assert.equal(surveyOpRisk("connect_panel"), "external");
-  for (const engine of ["analytics", "quality", "data", "deployment", "translation", "recruitment"]) assert.ok(TOOLS.some((t) => t.engine === engine), `${engine} has tools`);
+  for (const engine of ["design", "analytics", "quality", "data", "deployment", "translation", "recruitment"]) assert.ok(TOOLS.some((t) => t.engine === engine), `${engine} has tools`);
 });
 
 test("a dry run says what would happen, returns the diff, and changes nothing", () => {

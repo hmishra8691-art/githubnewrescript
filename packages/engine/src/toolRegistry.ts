@@ -1,4 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
+import { fieldEstimate, interviewLength, precisionOf, quotaCells, sampleForDifference, sampleForMargin, type Calc } from "./designCalc.js";
 import { applySurveyActions, coerceSurveyActions, describeAction, diffSurveys, SURVEY_ACTION_OPS, type SurveyAction } from "./surveyActions.js";
 
 /**
@@ -27,7 +28,7 @@ import { applySurveyActions, coerceSurveyActions, describeAction, diffSurveys, S
 
 export type ToolRisk = "read" | "draft" | "destructive_draft" | "data" | "destructive_data" | "publish" | "external" | "spend";
 export type ToolApproval = "none" | "confirm" | "explicit";
-export type ToolEngine = "survey" | "analytics" | "quality" | "data" | "deployment" | "translation" | "recruitment";
+export type ToolEngine = "survey" | "design" | "analytics" | "quality" | "data" | "deployment" | "translation" | "recruitment";
 export interface ToolParam { name: string; type: "string" | "number" | "boolean" | "object" | "array"; required?: boolean; description: string }
 export interface ToolSpec {
   name: string;
@@ -37,8 +38,8 @@ export interface ToolSpec {
   approval: ToolApproval;
   /** can the effect be undone from inside the platform (draft history, a restore, a re-run)? */
   reversible: boolean;
-  /** survey_action: run through applySurveyActions (dry run available); route: a Studio endpoint */
-  executor: "survey_action" | "route";
+  /** survey_action: run through applySurveyActions (dry run available); route: a Studio endpoint; compute: a pure calculation, answered at once (runComputeTool) */
+  executor: "survey_action" | "route" | "compute";
   op?: string;
   route?: { method: "GET" | "POST" | "PUT" | "DELETE"; path: string };
   /** the project capability the caller needs (the same check the route makes) */
@@ -87,7 +88,39 @@ const ROUTE_TOOLS: ToolSpec[] = [
   { name: "recruitment.order", engine: "recruitment", summary: "Place or change a sample order with a vendor (spends money)", risk: "spend", approval: "explicit", reversible: false, executor: "route", route: { method: "POST", path: "/api/surveys/{id}/recruitment" }, capability: "deploy.manage", params: [{ name: "action", type: "string", required: true, description: "authorize | order | reallocate" }] },
 ];
 
-export const TOOLS: readonly ToolSpec[] = [...SURVEY_TOOLS, ...ROUTE_TOOLS];
+/*
+ * DESIGN CALCULATORS (Level 5 roadmap A7): pure arithmetic over the inputs given (and, for the interview length,
+ * the questionnaire). They read nothing but the draft, write nothing and call no model, so they need no approval —
+ * and every answer carries its working and the assumptions it made.
+ */
+const P = (name: string, type: ToolParam["type"], description: string, required = false): ToolParam => ({ name, type, description, ...(required ? { required } : {}) });
+const SHARE = "a share: 0.3 or 30 both mean 30%";
+type ComputeRun = (def: SurveyDefinition, input: Record<string, unknown>) => Calc<unknown>;
+const COMPUTE_DECLS: { name: string; summary: string; params: ToolParam[]; run: ComputeRun }[] = [
+  { name: "design.sample_size_margin", summary: "Completes needed to estimate a share to within a margin of error", params: [P("margin", "number", "the margin of error, in points (3 for ±3) or as a share (0.03)", true), P("share", "number", `the share expected (${SHARE}); 50% if not given`), P("confidence", "number", "confidence level; 95% if not given"), P("population", "number", "population size, for a small population"), P("designEffect", "number", "design effect from weighting or clustering; 1 if not given")], run: (_d, i) => sampleForMargin(i) },
+  { name: "design.sample_size_difference", summary: "Completes needed to detect a difference between groups: two shares, or a standardised difference between means", params: [P("share1", "number", `the first group's share (${SHARE})`), P("share2", "number", "the second group's share"), P("effect", "number", "instead of two shares: the standardised difference between two means (0.2 small, 0.5 medium, 0.8 large)"), P("alpha", "number", "significance level; 5% if not given"), P("power", "number", "power; 80% if not given"), P("groups", "number", "number of groups compared in pairs; 2 if not given"), P("designEffect", "number", "design effect; 1 if not given")], run: (_d, i) => sampleForDifference(i) },
+  { name: "design.precision", summary: "What a sample gives: the margin of error on a share and the smallest difference between groups it can detect", params: [P("completes", "number", "the sample size", true), P("share", "number", `the share (${SHARE}); 50% if not given`), P("confidence", "number", "confidence level; 95% if not given"), P("groups", "number", "equal groups to compare; gives the detectable difference"), P("power", "number", "power for the comparison; 80% if not given"), P("designEffect", "number", "design effect; 1 if not given"), P("population", "number", "population size, for a small population")], run: (_d, i) => precisionOf(i) },
+  { name: "design.quota_cells", summary: "Quota targets from shares, summing exactly to the completes, with cells too small to report flagged", params: [P("completes", "number", "total completes", true), P("dimensions", "array", "[{ name, cells: [{ label, share }] }] — shares as percentages or proportions", true), P("interlocked", "boolean", "true to cross the dimensions into one target per combination"), P("minimumCell", "number", "a cell under this many completes is flagged; 30 if not given")], run: (_d, i) => quotaCells(i) },
+  { name: "design.interview_length", summary: "Interview length the questionnaire implies: a typical respondent and one who sees everything, by kind of question", params: [P("rates", "object", "optional overrides of the planning rates (seconds per answer by question type, reading speed, reach of conditional questions)")], run: (d, i) => interviewLength(d, i.rates && typeof i.rates === "object" ? (i.rates as Record<string, number>) : {}) },
+  { name: "design.field_estimate", summary: "Starts and invitations needed for the completes, and the cost, from the rates and price given (none is assumed)", params: [P("completes", "number", "completes wanted", true), P("incidence", "number", `share of starters who qualify (${SHARE})`), P("completionRate", "number", "share of qualified starters who finish"), P("responseRate", "number", "share of invited people who start"), P("overQuotaRate", "number", "share of qualified starters turned away because their quota is full"), P("pricePerComplete", "number", "price per complete"), P("fixedCost", "number", "fixed costs to add"), P("currency", "string", "currency code or symbol, shown as given")], run: (_d, i) => fieldEstimate(i) },
+];
+const COMPUTE_TOOLS: (ToolSpec & { run: ComputeRun })[] = COMPUTE_DECLS.map((t) => ({ ...t, engine: "design" as const, risk: "read" as const, approval: "none" as const, reversible: true, executor: "compute" as const, capability: "project.read" }));
+
+export const TOOLS: readonly ToolSpec[] = [...SURVEY_TOOLS, ...COMPUTE_TOOLS.map(({ run: _run, ...spec }) => spec), ...ROUTE_TOOLS];
+
+export interface ToolComputation { ok: boolean; tool: string; refused?: string; value?: unknown; working: string[]; assumptions: string[] }
+/** answer a calculation tool: nothing is read but the draft given, nothing is written */
+export function runComputeTool(def: SurveyDefinition, name: string, input: unknown): ToolComputation {
+  const tool = COMPUTE_TOOLS.find((t) => t.name === name);
+  if (!tool) return { ok: false, tool: name, refused: toolByName(name) ? `${name} is not a calculation.` : `There is no tool called ${name}.`, working: [], assumptions: [] };
+  if (input != null && (typeof input !== "object" || Array.isArray(input))) return { ok: false, tool: name, refused: "The input must be an object with the calculation's fields.", working: [], assumptions: [] };
+  const known = new Set(tool.params.map((p) => p.name));
+  const unknown = Object.keys((input ?? {}) as object).filter((k) => !known.has(k));
+  if (unknown.length) return { ok: false, tool: name, refused: `${name} does not take ${unknown.map((k) => `“${k}”`).join(", ")}. It takes ${[...known].join(", ")}.`, working: [], assumptions: [] };
+  let r: Calc<unknown>;
+  try { r = tool.run(def, (input ?? {}) as Record<string, unknown>); } catch (e) { return { ok: false, tool: name, refused: (e as Error).message, working: [], assumptions: [] }; }
+  return r.ok ? { ok: true, tool: name, value: r.value, working: r.working, assumptions: r.assumptions } : { ok: false, tool: name, refused: r.reason, working: [], assumptions: [] };
+}
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 export const toolByName = (name: string): ToolSpec | null => BY_NAME.get(name) ?? null;
 
@@ -118,6 +151,7 @@ export function dryRunTool(def: SurveyDefinition, name: string, input: unknown):
   const tool = toolByName(name);
   const empty = { description: [], destructive: [], warnings: [], diff: { added: 0, removed: 0, changed: 0, summary: [] }, valid: false };
   if (!tool) return { ok: false, tool: name, refused: `There is no tool called ${name}.`, approval: "explicit", ...empty };
+  if (tool.executor === "compute") return { ok: false, tool: name, refused: `${name} is a calculation: it changes nothing, so it has no dry run. Run it.`, approval: tool.approval, ...empty };
   if (tool.executor !== "survey_action") return { ok: false, tool: name, refused: `${name} runs through ${tool.route?.method} ${tool.route?.path}; it has no dry run here.`, approval: tool.approval, ...empty };
   const raw = input && typeof input === "object" && !Array.isArray(input) ? { ...(input as Record<string, unknown>), op: tool.op } : null;
   if (!raw) return { ok: false, tool: name, refused: "The input must be an object with the action's fields.", approval: tool.approval, ...empty };

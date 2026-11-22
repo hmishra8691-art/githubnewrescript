@@ -28,3 +28,23 @@ test("starts from completes, incidence and completion; bad inputs are refused", 
   assert.throws(() => sampleSizeProportion({ margin: 0 }));
   assert.throws(() => sampleSizeTwoProportions({ p1: 0.4, p2: 0.4 }));
 });
+
+/* the engine's design calculators (the agent's tools) are the same formulas: they must give the same completes */
+test("the engine's design calculators agree with these formulas across a grid", async () => {
+  const { sampleForMargin, sampleForDifference } = await import("@rescript/engine");
+  for (const margin of [0.01, 0.02, 0.03, 0.05, 0.1]) for (const p of [0.1, 0.3, 0.5]) for (const confidence of [0.9, 0.95, 0.99]) for (const designEffect of [1, 1.5]) for (const population of [undefined, 5000]) {
+    const mine = sampleSizeProportion({ margin, p, confidence, designEffect, population });
+    const theirs = sampleForMargin({ margin, share: p, confidence, designEffect, population });
+    assert.ok(theirs.ok && theirs.value.completes === mine.n, `margin ${margin} p ${p} conf ${confidence} deff ${designEffect} pop ${population}: ${mine.n} vs ${theirs.ok ? theirs.value.completes : theirs.reason}`);
+  }
+  for (const [p1, p2] of [[0.4, 0.5], [0.1, 0.15], [0.6, 0.7], [0.25, 0.3]] as const) for (const power of [0.8, 0.9]) {
+    const mine = sampleSizeTwoProportions({ p1, p2, power });
+    const theirs = sampleForDifference({ share1: p1, share2: p2, power });
+    assert.ok(theirs.ok && theirs.value.perGroup === mine.perGroup, `${p1} v ${p2} power ${power}`);
+  }
+  for (const d of [0.2, 0.3, 0.5, 0.8]) for (const power of [0.8, 0.9]) {
+    const mine = sampleSizeTwoMeans({ d, power });
+    const theirs = sampleForDifference({ effect: d, power });
+    assert.ok(theirs.ok && theirs.value.perGroup === mine.perGroup, `d ${d} power ${power}`);
+  }
+});

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SurveyDefinition as SurveyDefinitionSchema, normalizeAsParsed } from "@rescript/schema";
-import { approvalSatisfied, dryRunTool, droppedFieldPaths, ensureElementIds, TOOLS, toolByName, toolCallRecord, type ToolApproval, type ToolApprovalGiven, type ToolCallRecord } from "@rescript/engine";
+import { approvalSatisfied, dryRunTool, runComputeTool, droppedFieldPaths, ensureElementIds, TOOLS, toolByName, toolCallRecord, type ToolApproval, type ToolApprovalGiven, type ToolCallRecord } from "@rescript/engine";
 import { customerDb } from "@/lib/db";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { loadDefinition } from "@/lib/analytics";
@@ -51,6 +51,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const db = customerDb(gate.survey.customer_id);
   const loaded = await loadDefinition(db as never, params.id);
   if ("error" in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
+
+  /* a calculation (design.*): reads the draft at most, writes nothing, needs no approval — answered at once, in either mode */
+  if (tool.executor === "compute") {
+    const r = runComputeTool(loaded.def as never, tool.name, body?.input ?? {});
+    await record(toolCallRecord(tool, r.ok ? "executed" : "refused", caller, body?.input, { ok: r.ok, description: r.working.slice(-1), destructive: [], ...(r.refused ? { refused: r.refused } : {}) }));
+    return NextResponse.json({ ...r, approval: tool.approval, mode: "compute" }, { status: r.ok ? 200 : 422 });
+  }
   const dry = dryRunTool(loaded.def as never, tool.name, body?.input);
   const outcome = { ok: dry.ok, description: dry.description, destructive: dry.destructive, ...(dry.refused ? { refused: dry.refused } : {}), diff: dry.diff };
   const view = { ok: dry.ok, tool: tool.name, approval: dry.approval, description: dry.description, destructive: dry.destructive, warnings: dry.warnings, diff: dry.diff, valid: dry.valid, ...(dry.refused ? { refused: dry.refused } : {}), revision: loaded.revision };
