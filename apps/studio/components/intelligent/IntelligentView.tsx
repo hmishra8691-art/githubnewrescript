@@ -1148,7 +1148,7 @@ export function IntelligentView() {
             placeholder={voice === "recording" ? "Listening… click the microphone again when you have finished." : voice === "transcribing" ? "Transcribing…" : copilot.proposal ? "Revise the proposal — “reduce this to 20 questions”, “remove demographics” — or apply it…" : open ? "Apply or cancel the proposal above, or describe another change…" : "Describe your research or a change — “Show Q5 only when Q3 = Yes”, “create a survey to test my hypothesis…” — or press the microphone"}
             rows={2} data-testid="iq-input" aria-label="Describe a change" disabled={busy || voice !== "idle"}
           />
-          <input ref={fileRef} type="file" hidden onChange={(e) => onFiles(e.target.files)} data-testid="iq-file" accept=".qsf,.xml,.docx,.xlsx,.xls,.csv,.tsv,.pdf,.txt,.json,.doc,application/json,text/xml,application/xml,text/plain,text/csv,application/pdf" />
+          <input ref={fileRef} type="file" hidden onChange={(e) => onFiles(e.target.files)} data-testid="iq-file" accept=".qsf,.xml,.sss,.sps,.sav,.docx,.xlsx,.xls,.csv,.tsv,.pdf,.txt,.json,.doc,application/json,text/xml,application/xml,text/plain,text/csv,application/pdf" />
           <input ref={themeImageRef} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void copilot.attachThemeImage(f); }} data-testid="cp-theme-image-file" />
           {(copilot.themeImage || copilot.themeImageError) && (
             <span className="cp-theme-chip" data-testid="cp-theme-image-chip">

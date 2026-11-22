@@ -8,6 +8,7 @@ import { readDocument } from "./adapters/document.js";
 import { readTable } from "./adapters/table.js";
 import { looksLikeDataFile, readCodebook, readDataFile, readSavDictionary, variablesFromRows } from "./adapters/dataFile.js";
 import { extractPdfText } from "./pdf.js";
+import { readAlchemer, readForsta, readSpssSyntax, readSurveyMonkey, readTripleS } from "./adapters/more.js";
 
 /**
  * THE SOURCE ADAPTER LAYER (§41): bytes → detection → the right adapter →
@@ -75,12 +76,17 @@ export async function readSource(bytes: Uint8Array, fileName: string): Promise<R
         }
         return { detection, canonical: readTable(sheets, meta), issues: [] };
       }
+      case "triples": return { detection, canonical: readTripleS(text(), meta), issues: [] };
+      case "sps": return { detection, canonical: readSpssSyntax(text(), meta), issues: [] };
+      case "surveymonkey": return { detection, canonical: readSurveyMonkey(JSON.parse(text()), meta), issues: [] };
+      case "alchemer": return { detection, canonical: readAlchemer(JSON.parse(text()), meta), issues: [] };
+      case "forsta": return { detection, canonical: readForsta(text(), meta), issues: [] };
       case "text": {
         const blocks: DocBlock[] = text().split(/\r?\n/).map((t) => ({ kind: "para" as const, text: t })).filter((b) => b.text.trim());
         return { detection, canonical: readDocument(blocks, meta), issues: [] };
       }
       default:
-        return { detection, canonical: null, issues: [{ location: fileName, type: "unsupported", severity: "high", message: `This file could not be imported: ${detection.label}.`, suggestion: "Supported: Qualtrics .qsf, Decipher .xml, Word .docx, Excel .xlsx, CSV, PDF and plain-text questionnaires.", autoAttempted: false }] };
+        return { detection, canonical: null, issues: [{ location: fileName, type: "unsupported", severity: "high", message: `This file could not be imported: ${detection.label}.`, suggestion: "Supported: Qualtrics .qsf, Decipher .xml, Forsta Plus project XML, SurveyMonkey and Alchemer survey JSON, Triple-S, SPSS .sav and .sps, Word .docx, Excel .xlsx, CSV, PDF and plain-text questionnaires.", autoAttempted: false }] };
     }
   } catch (e) {
     return { detection, canonical: null, issues: [{ location: fileName, type: "parse", severity: "high", message: `The ${detection.label} could not be read: ${(e as Error).message}`, autoAttempted: true }] };

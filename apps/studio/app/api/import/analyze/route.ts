@@ -18,7 +18,7 @@ export const maxDuration = 120;
  * (the import brief, phases 1–3 and 6).
  *
  * Multipart form:
- *   file       the source: .qsf, Decipher .xml, .docx, .xlsx, .csv, .pdf, .txt
+ *   file       the source: .qsf, Decipher or Forsta Plus .xml, SurveyMonkey / Alchemer .json, Triple-S, SPSS .sav / .sps, .docx, .xlsx, .csv, .pdf, .txt
  *              — read by CONTENT, the extension is only a hint (§3)
  *   surveyId   the project this is billed to (the one open in the Studio;
  *              `sandbox` for the fixture)

@@ -21,8 +21,8 @@
  * exactly what was not reproduced.
  */
 
-export type SourceFormat = "qsf" | "decipher" | "docx" | "xlsx" | "csv" | "pdf" | "text" | "json" | "sav" | "unknown";
-export type SourcePlatform = "qualtrics" | "decipher" | "document" | "spreadsheet" | "rescript" | "unknown";
+export type SourceFormat = "qsf" | "decipher" | "docx" | "xlsx" | "csv" | "pdf" | "text" | "json" | "sav" | "triples" | "sps" | "surveymonkey" | "alchemer" | "forsta" | "unknown";
+export type SourcePlatform = "qualtrics" | "decipher" | "document" | "spreadsheet" | "rescript" | "surveymonkey" | "alchemer" | "forsta" | "unknown";
 
 /** how sure the adapter is about one element (UI upgrade §23) */
 export type Confidence = "confirmed" | "high" | "review" | "ambiguous" | "unsupported";

@@ -1,4 +1,5 @@
 import { isZip, readZip } from "./zip.js";
+import { looksAlchemer, looksForsta, looksSpssSyntax, looksSurveyMonkey, looksTripleS } from "./adapters/more.js";
 import type { SourceFormat, SourcePlatform } from "./canonical.js";
 
 /**
@@ -68,7 +69,12 @@ export function detectFormat(bytes: Uint8Array, fileName = ""): Detection {
       reasons.push("JSON with meta, questions and flow — a Rescript survey definition");
       return d("json", "rescript", "Rescript definition", "Rescript survey JSON", "high");
     }
-    reasons.push("JSON, but neither a QSF nor a Rescript definition");
+    try {
+      const o = JSON.parse(text);
+      if (looksSurveyMonkey(o)) { reasons.push("JSON with pages of questions carrying a family (SurveyMonkey survey details)"); return d("surveymonkey", "surveymonkey", "Structured Survey Definition", "SurveyMonkey survey (JSON)", "high"); }
+      if (looksAlchemer(o)) { reasons.push("JSON with SurveyPage / SurveyQuestion objects (Alchemer API)"); return d("alchemer", "alchemer", "Structured Survey Definition", "Alchemer survey (JSON)", "high"); }
+    } catch { /* not whole JSON: fall through */ }
+    reasons.push("JSON, but neither a QSF, a Rescript definition, a SurveyMonkey nor an Alchemer survey");
     return d("unknown", "unknown", "Unsupported", "JSON of an unknown shape", "medium");
   }
 
@@ -82,6 +88,8 @@ export function detectFormat(bytes: Uint8Array, fileName = ""): Detection {
       reasons.push(`XML with a <survey> root and Decipher elements (${found.slice(0, 6).map((w) => `<${w}>`).join(", ")})${markers.length ? `; markers: ${markers.join(", ")}` : ""}`);
       return d("decipher", "decipher", "Structured Survey Definition", "Decipher project (XML)", found.length >= 3 || markers.length ? "high" : "medium");
     }
+    if (looksTripleS(text)) { reasons.push("XML with an <sss> root and <variable> elements (Triple-S)"); return d("triples", "spreadsheet", "Survey data definition", "Triple-S survey definition", "high"); }
+    if (looksForsta(text)) { reasons.push("XML with a <Project> root and Forsta Plus question elements (<Single>, <Multi>, <Open>…)"); return d("forsta", "forsta", "Structured Survey Definition", "Forsta Plus project (XML)", "medium"); }
     if (/<Workbook[\s>]/.test(text) && /urn:schemas-microsoft-com:office:spreadsheet/.test(text)) {
       reasons.push("SpreadsheetML (Excel 2003 XML)");
       return d("unknown", "unknown", "Unsupported", "Excel 2003 XML — save it as .xlsx and upload again", "high");
@@ -89,6 +97,9 @@ export function detectFormat(bytes: Uint8Array, fileName = ""): Detection {
     reasons.push(`XML with a <${root || "?"}> root that is not a Decipher project`);
     return d("unknown", "unknown", "Unsupported", "XML of an unknown vocabulary", "medium");
   }
+
+  // SPSS syntax: VARIABLE LABELS / VALUE LABELS commands
+  if (looksSpssSyntax(text)) { reasons.push("SPSS syntax with VARIABLE LABELS / VALUE LABELS commands"); return d("sps", "spreadsheet", "Survey data definition", "SPSS syntax (.sps)", "high"); }
 
   // plain text: a delimited table, or a questionnaire written as prose
   const lines = text.split(/\r?\n/).filter((l) => l.trim()).slice(0, 60);
