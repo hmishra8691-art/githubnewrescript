@@ -34,7 +34,7 @@ export default function BookPage({ params }: { params: { token: string } }) {
       const r = await fetch(`/api/book/${params.token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const j = await r.json();
       if (!r.ok) setNote(j.error ?? "That did not work; please try again.");
-      else setNote(done);
+      else setNote(done || null);
       await load();
     } finally { setBusy(false); }
   };
@@ -72,7 +72,7 @@ export default function BookPage({ params }: { params: { token: string } }) {
                       <div key={d} style={{ marginBottom: 10 }}>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>{d}</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                          {list.map((sl) => <button key={sl.id} className="btn" disabled={busy || s.booking?.slotId === sl.id} onClick={() => void act({ action: "book", slotId: sl.id }, `Booked for ${day(sl.startsAt)}, ${time(sl.startsAt)}.`)}>{time(sl.startsAt)}</button>)}
+                          {list.map((sl) => <button key={sl.id} className="btn" disabled={busy || s.booking?.slotId === sl.id} onClick={() => void act({ action: "book", slotId: sl.id }, "")}>{time(sl.startsAt)}</button>)}
                         </div>
                       </div>
                     ))}
