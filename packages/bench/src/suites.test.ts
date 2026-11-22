@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { allSuites } from "./run.js";
 import { EDIT_TASKS, OPS_TASKS, SAFE_TASKS, agentInstructions, agentOperations, runEdit } from "./suites/agent.js";
-import { LARGE, largeSurvey, manyRows } from "./suites/perf.js";
+import { LARGE, conditioned, largeSurvey, manyRows } from "./suites/perf.js";
 import { speechProviders } from "./suites/speech.js";
 import { agentModel } from "./suites/agent.js";
 
@@ -51,6 +51,8 @@ test("the large survey and the large data set are the size they say", () => {
   const def = largeSurvey();
   assert.equal(def.questions.length, LARGE.questions + 1);
   assert.equal(JSON.stringify(def.flow).split('"type":"loop"').length - 1, LARGE.loops);
+  /* the schema drops a field it does not know: the conditions must have survived the parse */
+  assert.ok(conditioned(def) >= 170, `${conditioned(def)} conditioned questions`);
   const rows = manyRows(1000);
   assert.equal(rows.length, 1000);
   assert.deepEqual(manyRows(50), manyRows(50));

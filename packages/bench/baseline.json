@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "at": "2026-11-22T07:04:54.444Z",
-  "commit": "16db15b7",
+  "at": "2026-11-22T08:39:04.925Z",
+  "commit": "7c5fadad",
   "suites": [
     {
       "id": "ai_agents.instructions_rules",
@@ -57,7 +57,7 @@
         {
           "id": "median_ms",
           "label": "Median time to a proposal",
-          "value": 32.9,
+          "value": 36.9,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -474,7 +474,7 @@
           "detail": "left alone (refused)"
         }
       ],
-      "ms": 2263
+      "ms": 2447
     },
     {
       "id": "ai_agents.operations_rules",
@@ -647,7 +647,132 @@
           "detail": "read as not an operation"
         }
       ],
-      "ms": 13
+      "ms": 12
+    },
+    {
+      "id": "ai_agents.design_questions",
+      "area": "ai_agents",
+      "title": "ResBench design questions, answered by the calculators",
+      "status": "measured",
+      "caveat": "sixteen sentences, no model. A design question in a phrasing the reader does not know goes to the model, which is not measured here.",
+      "metrics": [
+        {
+          "id": "answered",
+          "label": "Design questions answered with the right number and its working",
+          "value": 83.3,
+          "unit": "%",
+          "better": "higher",
+          "target": 95
+        },
+        {
+          "id": "wrongly_taken",
+          "label": "Other sentences answered as design questions",
+          "value": 0,
+          "unit": "count",
+          "better": "lower",
+          "target": 0,
+          "tolerance": 0
+        }
+      ],
+      "cases": [
+        {
+          "id": "margin_3",
+          "group": "calculation",
+          "pass": true,
+          "detail": "You need 1,068 completes for a margin of error of ±3 points."
+        },
+        {
+          "id": "margin_5_free",
+          "group": "calculation",
+          "pass": true,
+          "detail": "You need 385 completes for a margin of error of ±5 points."
+        },
+        {
+          "id": "margin_population",
+          "group": "calculation",
+          "pass": true,
+          "detail": "You need 323 completes for a margin of error of ±5 points."
+        },
+        {
+          "id": "difference",
+          "group": "calculation",
+          "pass": true,
+          "detail": "You need 388 completes in each group (776 in all) to tell 40% from 50%."
+        },
+        {
+          "id": "difference_free",
+          "group": "calculation",
+          "pass": false,
+          "detail": "not read as a design question"
+        },
+        {
+          "id": "precision",
+          "group": "calculation",
+          "pass": true,
+          "detail": "1,000 completes give a margin of error of ±3.1 points."
+        },
+        {
+          "id": "precision_free",
+          "group": "calculation",
+          "pass": true,
+          "detail": "400 completes give a margin of error of ±4.9 points."
+        },
+        {
+          "id": "detectable",
+          "group": "calculation",
+          "pass": true,
+          "detail": "776 completes give a margin of error of ±3.5 points, and can detect a difference of 10.1 p"
+        },
+        {
+          "id": "length",
+          "group": "calculation",
+          "pass": true,
+          "detail": "About 3.9 minutes for a typical respondent (14 questions). This is a planning estimate, no"
+        },
+        {
+          "id": "length_free",
+          "group": "calculation",
+          "pass": false,
+          "detail": "not read as a design question"
+        },
+        {
+          "id": "invitations",
+          "group": "calculation",
+          "pass": true,
+          "detail": "1,000 completes need about 4,000 starts and 40,000 invitations. Not worked out: cost (no p"
+        },
+        {
+          "id": "cost",
+          "group": "calculation",
+          "pass": true,
+          "detail": "Cost: 2,250 $. Not worked out: starts and invitations (no incidence given)."
+        },
+        {
+          "id": "not_data",
+          "group": "left alone",
+          "pass": true,
+          "detail": "not read as a design question"
+        },
+        {
+          "id": "not_edit",
+          "group": "left alone",
+          "pass": true,
+          "detail": "not read as a design question"
+        },
+        {
+          "id": "not_fieldwork",
+          "group": "left alone",
+          "pass": true,
+          "detail": "not read as a design question"
+        },
+        {
+          "id": "not_count",
+          "group": "left alone",
+          "pass": true,
+          "detail": "not read as a design question"
+        }
+      ],
+      "ms": 16
     },
     {
       "id": "ai_agents.model",
@@ -669,7 +794,7 @@
         {
           "id": "edit_ms",
           "label": "Apply one edit",
-          "value": 376.1,
+          "value": 393.7,
           "unit": "ms",
           "better": "lower",
           "target": 100,
@@ -678,7 +803,7 @@
         {
           "id": "read_ms",
           "label": "Read one instruction (rule path)",
-          "value": 355.1,
+          "value": 352.7,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -687,7 +812,7 @@
         {
           "id": "validate_ms",
           "label": "Parse and validate the whole definition",
-          "value": 97.9,
+          "value": 116.4,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -696,7 +821,7 @@
         {
           "id": "review_ms",
           "label": "Review the whole survey for contradictions",
-          "value": 129.8,
+          "value": 152.1,
           "unit": "ms",
           "better": "lower",
           "target": 10000,
@@ -706,7 +831,7 @@
         {
           "id": "page_ms",
           "label": "Working out one page for one simulated respondent",
-          "value": 16.5,
+          "value": 13.8,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -716,7 +841,7 @@
         {
           "id": "respondent_ms",
           "label": "One simulated respondent, start to end",
-          "value": 5068,
+          "value": 4255,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -729,7 +854,7 @@
         {
           "id": "survey_size",
           "pass": true,
-          "detail": "501 questions, 50 loops"
+          "detail": "501 questions, 50 loops, 178 with a display condition"
         },
         {
           "id": "edit_applies",
@@ -739,10 +864,10 @@
         {
           "id": "simulation_completes",
           "pass": true,
-          "detail": "4 of 4 simulated respondents produced; 0 issues"
+          "detail": "4 of 4 simulated respondents produced; 9 issues"
         }
       ],
-      "ms": 34677
+      "ms": 32793
     },
     {
       "id": "analytics.large_data",
@@ -754,7 +879,7 @@
         {
           "id": "crosstab_ms",
           "label": "Crosstab with a two-variable banner, 200,000 responses",
-          "value": 125,
+          "value": 132.8,
           "unit": "ms",
           "better": "lower",
           "target": 400,
@@ -764,7 +889,7 @@
         {
           "id": "crosstab_1m_estimate_ms",
           "label": "The same, scaled linearly to 1,000,000",
-          "value": 625,
+          "value": 664,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -774,7 +899,7 @@
         {
           "id": "dataset_build_ms",
           "label": "Build the dataset from stored responses",
-          "value": 1640,
+          "value": 1619,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -789,7 +914,7 @@
           "detail": "200,000 cases in the dataset"
         }
       ],
-      "ms": 2390
+      "ms": 2299
     },
     {
       "id": "import.fidelity",
@@ -1017,7 +1142,7 @@
           "detail": "Block randomizers: 100% of 5"
         }
       ],
-      "ms": 99645
+      "ms": 100672
     },
     {
       "id": "qualitative.speech",
@@ -1082,7 +1207,7 @@
         {
           "id": "per_response_ms",
           "label": "Scoring time per response",
-          "value": 21.2,
+          "value": 24.5,
           "unit": "ms",
           "better": "lower",
           "target": 150,
@@ -1146,7 +1271,7 @@
           "detail": "Classic bot: 30 of 30 detected, 30 excluded"
         }
       ],
-      "ms": 10813
+      "ms": 12511
     }
   ]
 }

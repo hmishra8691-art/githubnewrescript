@@ -1,8 +1,8 @@
 # Level 5 scorecard
 
-Run at 2026-11-22T07:04:54.444Z, commit 16db15b7.
+Run at 2026-11-22T08:39:04.925Z, commit 7c5fadad.
 
-6 of 8 benchmarks measured. 12 of 27 metrics meet their Level 5 target.
+7 of 9 benchmarks measured. 13 of 29 metrics meet their Level 5 target.
 
 ## AI design agents
 
@@ -15,7 +15,7 @@ Run at 2026-11-22T07:04:54.444Z, commit 16db15b7.
 | Proposals that were not what was asked | 1.7% | at most 1% | no |
 | Instructions the rules hand to the model (the model's share of the work) | 48.3% | none set | – |
 | Out-of-scope or unanswerable requests that changed the survey | 0 | at most 0 | yes |
-| Median time to a proposal | 32.9 ms | at most 2000 ms | yes |
+| Median time to a proposal | 36.9 ms | at most 2000 ms | yes |
 
 68 cases, 30 not passing. First: add_text.plain (handed to the model: model); add_text.free (handed to the model: model); reword.free (handed to the model: model); move.free (handed to the model: cleaning); type.free (handed to the model: model).
 
@@ -32,6 +32,17 @@ What this does not show: no language model was called. "Handed to the model" sen
 
 What this does not show: this checks that the sentence is read as the right operation with the right list and settings. Carrying it out (the people file, the accounts, the email) is tested in the browser suite, never against a hosted database.
 
+### ResBench design questions, answered by the calculators
+
+| Metric | Measured | Level 5 target | Meets it |
+| --- | --- | --- | --- |
+| Design questions answered with the right number and its working | 83.3% | at least 95% | no |
+| Other sentences answered as design questions | 0 | at most 0 | yes |
+
+16 cases, 2 not passing. First: difference_free (not read as a design question); length_free (not read as a design question).
+
+What this does not show: sixteen sentences, no model. A design question in a phrasing the reader does not know goes to the model, which is not measured here.
+
 ### ResBench with a language model, on two models
 
 **Not measured.** no model key is configured. Set EVAL_AI_API_URL, EVAL_AI_API_KEY and EVAL_AI_MODEL and run `pnpm eval:ai`, once per model; the brief-to-survey, logic-path, injection and cost thresholds are scored there. Nothing about a model's quality is known until that has run.
@@ -42,12 +53,12 @@ What this does not show: this checks that the sentence is read as the right oper
 
 | Metric | Measured | Level 5 target | Meets it |
 | --- | --- | --- | --- |
-| Apply one edit | 376.1 ms | at most 100 ms | no |
-| Read one instruction (rule path) | 355.1 ms | at most 2000 ms | yes |
-| Parse and validate the whole definition | 97.9 ms | at most 1000 ms | yes |
-| Review the whole survey for contradictions (the roadmap's 10 seconds is for publish) | 129.8 ms | at most 10000 ms | yes |
-| Working out one page for one simulated respondent (about 308 pages each; the roadmap's 1 second is a page on a phone, which this is not) | 16.5 ms | at most 1000 ms | yes |
-| One simulated respondent, start to end (at this rate 1,000 simulated respondents take over an hour) | 5068 ms | none set | – |
+| Apply one edit | 393.7 ms | at most 100 ms | no |
+| Read one instruction (rule path) | 352.7 ms | at most 2000 ms | yes |
+| Parse and validate the whole definition | 116.4 ms | at most 1000 ms | yes |
+| Review the whole survey for contradictions (the roadmap's 10 seconds is for publish) | 152.1 ms | at most 10000 ms | yes |
+| Working out one page for one simulated respondent (about 308 pages each; the roadmap's 1 second is a page on a phone, which this is not) | 13.8 ms | at most 1000 ms | yes |
+| One simulated respondent, start to end (at this rate 1,000 simulated respondents take over an hour) | 4255 ms | none set | – |
 
 3 cases, 0 not passing.
 
@@ -59,9 +70,9 @@ What this does not show: this is the engine in Node, not the editor in a browser
 
 | Metric | Measured | Level 5 target | Meets it |
 | --- | --- | --- | --- |
-| Crosstab with a two-variable banner, 200,000 responses (400 ms here is the 2-second target scaled to a fifth of the rows) | 125 ms | at most 400 ms | yes |
-| The same, scaled linearly to 1,000,000 (estimate) | 625 ms | at most 2000 ms | yes |
-| Build the dataset from stored responses | 1640 ms | none set | – |
+| Crosstab with a two-variable banner, 200,000 responses (400 ms here is the 2-second target scaled to a fifth of the rows) | 132.8 ms | at most 400 ms | yes |
+| The same, scaled linearly to 1,000,000 (estimate) | 664 ms | at most 2000 ms | yes |
+| Build the dataset from stored responses | 1619 ms | none set | – |
 
 1 cases, 0 not passing.
 
@@ -106,7 +117,7 @@ No benchmark yet.
 | Language-model agents detected | 75% | at least 90% | no |
 | Real people wrongly excluded | 0% | at most 1% | yes |
 | Real people sent to review | 8.8% | at most 5% | no |
-| Scoring time per response (after the fact; the roadmap's 150 ms is for the entry decision) | 21.2 ms | at most 150 ms | yes |
+| Scoring time per response (after the fact; the roadmap's 150 ms is for the entry decision) | 24.5 ms | at most 150 ms | yes |
 
 9 cases, 6 not passing. First: llm_agent_typed (Language-model agent, typing: 16 of 30 detected, 0 excluded); llm_agent_pasted (Language-model agent, pasting: 29 of 30 detected, 0 excluded); device_farm (Device farm: 3 of 30 detected, 0 excluded); click_farm_humans (Click-farm workers: 0 of 30 detected, 0 excluded); translated_paste (Copied open ends: 29 of 30 detected, 1 excluded).
 

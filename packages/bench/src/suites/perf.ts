@@ -28,7 +28,7 @@ export function largeSurvey(): SurveyDefinition {
       const kind = n % 5 === 0 ? "multi_select" : n % 7 === 0 ? "numeric" : "single_select";
       questions.push({
         id, code: `Q${n + 1}`, variableName: `Q${n + 1}`, type: kind, text: `Question ${n + 1} of the tracker`, ...(kind === "numeric" ? {} : { options: scale }),
-        ...(n > 4 && n % 5 < 2 ? { displayCondition: { op: "and", rules: [{ type: "rule", source: { kind: "question", ref: `q${n - 3}` }, operator: "neq", value: "1" }] } } : {}),
+        ...(n > 4 && n % 5 < 2 ? { displayLogic: { type: "rule", source: { kind: "question", ref: `q${n - 3}` }, operator: "ne", value: "1" } } : {}),
       });
       ids.push(id);
     }
@@ -42,6 +42,8 @@ export function largeSurvey(): SurveyDefinition {
   flow.push({ type: "end", id: "end", status: "complete" });
   return SurveyDefinition.parse({ meta: { id: "bench-large", code: "BENCH", title: "Large tracker (benchmark)", version: "1.0" }, questions, flow });
 }
+
+export const conditioned = (def: SurveyDefinition): number => def.questions.filter((q) => (q as { displayLogic?: unknown }).displayLogic != null).length;
 
 /** the median of several runs, in ms, after one warm-up */
 function timed(f: () => unknown, runs = 5): number {
@@ -85,7 +87,7 @@ export const programmingPerf: Suite = {
         { id: "respondent_ms", label: "One simulated respondent, start to end", value: Math.round(perRespondent), unit: "ms", better: "lower", target: 5000, machineDependent: true, informational: true, note: "at this rate 1,000 simulated respondents take over an hour" },
       ],
       cases: [
-        { id: "survey_size", pass: def.questions.length === LARGE.questions + 1, detail: `${def.questions.length} questions, ${LARGE.loops} loops` },
+        { id: "survey_size", pass: def.questions.length === LARGE.questions + 1 && conditioned(def) >= 170, detail: `${def.questions.length} questions, ${LARGE.loops} loops, ${conditioned(def)} with a display condition` },
         { id: "edit_applies", pass: !!applied.def || !(applied.errors?.length), detail: "the timed edit is a real, accepted change" },
         { id: "simulation_completes", pass: sim.produced === respondents && one.produced === 1, detail: `${sim.produced + one.produced} of ${respondents + 1} simulated respondents produced; ${sim.issues.length} issues` },
       ],

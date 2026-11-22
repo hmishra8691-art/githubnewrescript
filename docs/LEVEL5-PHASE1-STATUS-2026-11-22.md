@@ -62,6 +62,12 @@ cleaning request because of the words "attention check".
 
 A survey of 501 questions over 100 pages with 50 loops and a display condition on two questions in five.
 
+**Correction, 23 November 2026.** In the first baseline the display conditions were written in a field the survey
+schema does not have, so the schema dropped them: the survey measured had 501 questions and 50 loops but **no**
+display conditions. The fixture now writes them where the schema reads them (178 conditioned questions), a test
+checks they survive, and the numbers below are from the first run. The corrected figures are in
+`docs/LEVEL5-SCORECARD.md`: one edit about 394 ms, one simulated respondent about 4.3 s. The conclusions do not change.
+
 | Metric | Measured | Level 5 target |
 | --- | --- | --- |
 | Apply one edit | 376 ms | 100 ms |

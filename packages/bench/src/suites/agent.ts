@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { applySurveyActions, interpretOpsRequest, interpretRequest, OPS_CAPABILITIES, type OpsRequest } from "@rescript/engine";
+import { answerDesignRequest, applySurveyActions, interpretOpsRequest, interpretRequest, OPS_CAPABILITIES, type OpsRequest } from "@rescript/engine";
 import { validationSurvey } from "@rescript/quality";
 import { pct, type CaseResult, type Suite } from "../core.js";
 
@@ -197,6 +197,52 @@ export const agentModel: Suite = {
       status: "blocked",
       reason: "no model key is configured. Set EVAL_AI_API_URL, EVAL_AI_API_KEY and EVAL_AI_MODEL and run `pnpm eval:ai`, once per model; the brief-to-survey, logic-path, injection and cost thresholds are scored there. Nothing about a model's quality is known until that has run.",
       metrics: [], cases: [],
+    };
+  },
+};
+
+/**
+ * RESBENCH, PART THREE — design questions (roadmap A7): a question with one right number. The expected answers are
+ * the textbook values, worked by hand in the engine's own tests; here the sentence has to be read AND the number
+ * has to be right. The last four must be left alone: they are not design questions.
+ */
+const DESIGN_TASKS: { id: string; text: string; want: RegExp | null }[] = [
+  { id: "margin_3", text: "How many completes do I need for a margin of error of 3%?", want: /1,068 completes/ },
+  { id: "margin_5_free", text: "If I want to be within 5 points either way, how big a sample is that?", want: /385 completes/ },
+  { id: "margin_population", text: "How many respondents for ±5% out of 2,000 customers?", want: /323 completes/ },
+  { id: "difference", text: "What sample size do I need to detect 40% vs 50%?", want: /388 completes in each group/ },
+  { id: "difference_free", text: "We expect awareness to go from 40% to 50%. How many people per wave to see that?", want: /388 completes in each group/ },
+  { id: "precision", text: "What margin of error does 1,000 completes give?", want: /±3\.1 points/ },
+  { id: "precision_free", text: "How accurate is a sample of 400?", want: /±4\.9 points/ },
+  { id: "detectable", text: "What difference can 776 completes detect between two groups?", want: /10\.1 points between 2 equal groups/ },
+  { id: "length", text: "How long is this survey?", want: /minutes for a typical respondent/ },
+  { id: "length_free", text: "Roughly how many minutes will people spend on this?", want: /minutes for a typical respondent/ },
+  { id: "invitations", text: "How many invitations do I need for 1000 completes at 25% incidence and 10% response rate?", want: /4,000 starts and 40,000 invitations/ },
+  { id: "cost", text: "How much will 500 completes cost at $4.50 per complete?", want: /2,250/ },
+  { id: "not_data", text: "How many respondents chose Alpha?", want: null },
+  { id: "not_edit", text: "Set the sample size to 1,000", want: null },
+  { id: "not_fieldwork", text: "How long will the fieldwork take?", want: null },
+  { id: "not_count", text: "How many questions are in this survey?", want: null },
+];
+
+export const agentDesign: Suite = {
+  id: "ai_agents.design_questions", area: "ai_agents", title: "ResBench design questions, answered by the calculators",
+  run() {
+    const def = validationSurvey();
+    const cases: CaseResult[] = DESIGN_TASKS.map((t) => {
+      const a = answerDesignRequest(def, t.text);
+      const pass = t.want === null ? a === null : !!a && a.ok && t.want.test(a.answer) && a.working.length > 0;
+      return { id: t.id, group: t.want === null ? "left alone" : "calculation", pass, detail: a ? a.answer.slice(0, 90) : "not read as a design question" };
+    });
+    const calc = cases.filter((c) => c.group === "calculation"), alone = cases.filter((c) => c.group === "left alone");
+    return {
+      status: "measured",
+      caveat: "sixteen sentences, no model. A design question in a phrasing the reader does not know goes to the model, which is not measured here.",
+      metrics: [
+        { id: "answered", label: "Design questions answered with the right number and its working", value: pct(calc.filter((c) => c.pass).length, calc.length), unit: "%", better: "higher", target: 95 },
+        { id: "wrongly_taken", label: "Other sentences answered as design questions", value: alone.filter((c) => !c.pass).length, unit: "count", better: "lower", target: 0, tolerance: 0 },
+      ],
+      cases,
     };
   },
 };
