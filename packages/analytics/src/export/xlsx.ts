@@ -31,7 +31,7 @@ function safeSheetName(name: string, used: Set<string>): string {
   return out;
 }
 
-function writeTable(ws: ExcelJS.Worksheet, table: ResultTable, theme: ReportTheme, x: ExportSettings["xlsx"], startRow: number, title?: string): number {
+export function writeTable(ws: ExcelJS.Worksheet, table: ResultTable, theme: ReportTheme, x: ExportSettings["xlsx"], startRow: number, title?: string): number {
   let r = startRow;
   if (title) { ws.getCell(r, 1).value = title; ws.getCell(r, 1).font = { bold: true, size: 12, color: { argb: argb(theme.colors.primary) } }; r++; }
   if (table.base) { ws.getCell(r, 1).value = `Base: n = ${table.base.n}${table.base.weightedN != null && table.base.weightedN !== table.base.n ? ` (weighted ${table.base.weightedN})` : ""}${table.base.label ? ` — ${table.base.label}` : ""}`; ws.getCell(r, 1).font = { italic: true, size: 9, color: { argb: "FF64748B" } }; r++; }

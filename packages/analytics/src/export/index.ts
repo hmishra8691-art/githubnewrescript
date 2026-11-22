@@ -12,3 +12,4 @@ export * from "./qualSlides.js";
 export * from "./conjointSimulator.js";
 export * from "./pdf.js";
 export * from "./csv.js";
+export * from "./tabBook.js";

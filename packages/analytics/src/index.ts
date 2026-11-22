@@ -25,6 +25,7 @@ export * from "./posthoc.js";
 export * from "./dataAdvice.js";
 export * from "./modelChecks.js";
 export * from "./whyNumber.js";
+export * from "./tabPlan.js";
 export * from "./synthesis.js";
 export * from "./dataQuery.js";
 export * from "./chartPurpose.js";
