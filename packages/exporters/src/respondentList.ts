@@ -186,7 +186,8 @@ export function prepareRespondentList(
        */
       if (target === "email") rec.email = text.toLowerCase();
       else if (target === "external_id") rec.external_id = text;
-      else rec.name = text.slice(0, 200);
+      /* two columns can both be the name (first name, last name): they are joined in the mapping's own order */
+      else rec.name = (rec.name ? `${rec.name} ${text}` : text).slice(0, 200);
     }
 
     if (!rec.email && !rec.external_id && !rec.name) {

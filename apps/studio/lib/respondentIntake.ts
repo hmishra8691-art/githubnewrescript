@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  guessRespondentMapping, parseDelimitedList, parseSpreadsheet, prepareRespondentList, summariseRespondentList,
+  parseDelimitedList, parseSpreadsheet, prepareRespondentList, readPeopleColumns, summariseRespondentList,
   type ColumnTarget, type PreparedRespondent,
 } from "@rescript/exporters";
 
@@ -60,7 +60,10 @@ export async function runIntake(store: IntakeStore, body: any, environment: "TES
   if (!rows.length) return { status: 422, body: { error: "that file has a header row and no people in it" } };
   if (rows.length > MAX_ROWS) return { status: 413, body: { error: `${rows.length} rows is more than this can take at once (${MAX_ROWS}). Split the file.` } };
 
-  const mapping: Record<string, ColumnTarget> = body?.mapping && typeof body.mapping === "object" ? body.mapping : guessRespondentMapping(headers);
+  /* which column is what is read from the headings AND the cells (2026-11-22), with the reason for each and a
+     question wherever two columns could be the same thing; a mapping the researcher set always wins */
+  const reading = readPeopleColumns(headers, rows);
+  const mapping: Record<string, ColumnTarget> = body?.mapping && typeof body.mapping === "object" ? body.mapping : reading.mapping;
   const parsed = prepareRespondentList(rows, mapping);
   const { people: prepared, issues, duplicates, problems } = parsed;
   const summary = summariseRespondentList(rows.length, parsed, mapping);
@@ -75,6 +78,7 @@ export async function runIntake(store: IntakeStore, body: any, environment: "TES
   if (stage === "preview") {
     return { status: 200, body: {
       stage: "preview", environment, listName, headers, mapping, ...sheetInfo, summary,
+      reading: { columns: reading.columns, questions: reading.questions },
       issues: issues.slice(0, 20), duplicates: duplicates.slice(0, 20), problems,
       alreadyOnList: { count: onList.length, examples: onList.slice(0, 10).map((p) => p.email ?? p.external_id ?? p.name ?? "") },
       sample: prepared.slice(0, 10), rows,

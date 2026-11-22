@@ -27,3 +27,4 @@ export * from "./paradataExport.js";
 export * from "./assessmentDocx.js";
 export { programmingAuditXlsx } from "./programmingAuditXlsx.js";
 export * from "./respondentTemplate.js";
+export * from "./peopleColumns.js";
