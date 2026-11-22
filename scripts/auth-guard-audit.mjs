@@ -120,6 +120,10 @@ const PUBLIC = {
     "interview reminders (Q6, migration 0107): the same bearer-token credential as the other jobs, checked against CRON_SECRET by "
     + "`timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It reminds booked invitees "
     + "across every organisation, so there is no project to gate on — and no session",
+  "cron/report-schedules/route.ts":
+    "scheduled reports and metric alerts (R5/R6, migration 0110): the same bearer-token credential as the other jobs, checked against "
+    + "CRON_SECRET by `timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It runs the due "
+    + "schedules of every organisation, each claimed before it runs, so there is no project to gate on — and no session",
   "webhooks/vendors/[vendor]/route.ts":
     "vendor event deliveries (0086): not a person and no session, and the sender is the public internet. "
     + "Authenticated by the vendor's own HMAC signature over the RAW body plus its signed timestamp, checked "

@@ -69,7 +69,9 @@ export type MailKind =
   | "portal_notice"
   /* Q6 2026-11-29: an invitation to pick an interview time, and the reminder before it (0107 widens the log's kinds) */
   | "interview_invitation"
-  | "interview_reminder";
+  | "interview_reminder"
+  | "report_delivery"
+  | "metric_alert";
 
 export interface MailMessage {
   to: string;

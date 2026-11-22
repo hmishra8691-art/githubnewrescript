@@ -182,6 +182,9 @@ export const AUDIT_EVENTS = [
   "analytics.share_revoked",
   "analytics.share_viewer_rules",
   "analytics.theme_imported",
+  "analytics.schedule_saved",
+  "analytics.schedule_deleted",
+  "analytics.schedule_run",
   "analytics.share_accessed",
 
   /* metered usage & wallets (billing brief §17): every credit movement is an audited administrative act */
@@ -387,6 +390,9 @@ export function describeEvent(r: AuditRow): string {
     case "analytics.report_published": return `${who} published report “${str(d.name)}” v${str(d.version) || "?"}${d.mode ? ` (${str(d.mode)})` : ""}`;
     case "analytics.report_shared": return `${who} shared report “${str(d.name)}” (${str(d.access) || "link"}${d.permission ? `, ${str(d.permission)}` : ""})`;
     case "analytics.share_revoked": return `${who} revoked a share link for “${str(d.name)}”`;
+    case "analytics.schedule_saved": return `${who} saved the report schedule “${str(d.name)}” (${str(d.kind)}, ${str(d.cadence)}, ${str(d.recipients)} recipient${d.recipients === 1 ? "" : "s"})`;
+    case "analytics.schedule_deleted": return `${who} deleted the report schedule “${str(d.name)}”`;
+    case "analytics.schedule_run": return `${who} ran the report schedule “${str(d.name)}” now (${str(d.status)})`;
     case "analytics.theme_imported": return `${who} imported the PowerPoint master “${str(d.name)}” as a deck theme`;
     case "analytics.share_viewer_rules": return d.rules ? `${who} set who sees which part of a share link (${str(d.rules)} rule${d.rules === 1 ? "" : "s"})` : `${who} removed the viewer rules from a share link`;
     case "analytics.share_accessed": return `A shared report “${str(d.name)}” was opened${d.viewer ? ` by ${str(d.viewer)}` : ""}`;

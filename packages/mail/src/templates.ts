@@ -371,3 +371,36 @@ export function interviewReminderEmail(args: { name?: string | null; senderName:
   const html = shell(`<p style="margin:0 0 12px">${escapeHtml(who)}</p><p style="margin:0">A reminder: your conversation with <strong>${escapeHtml(args.senderName)}</strong> about ${escapeHtml(args.studyTitle)} is ${soon}, at ${escapeHtml(args.when)}.</p>` + (args.url ? linkBlock(args.url, "Change or cancel") : `<p style="margin:16px 0 0">To change or cancel your time, use the link in your invitation email.</p>`));
   return { subject: `Reminder: ${args.studyTitle}, ${args.when}`, text, html };
 }
+
+/**
+ * SCHEDULED REPORTS AND METRIC ALERTS (R5 / R6, 2026-11-22). The email says what changed and links to the report —
+ * the Studio file (sign-in needed) and, when the schedule names one, the share link. No file is attached and no
+ * bearer link to a file is sent.
+ */
+export function reportDeliveryEmail(args: { reportName: string; studyTitle: string; headline: string; changes: string[]; fileUrl?: string | null; shareUrl?: string | null; format?: string | null }): Rendered {
+  const lines = args.changes.slice(0, 8);
+  const text = [
+    `${args.reportName} — ${args.studyTitle}`, "",
+    args.headline, "",
+    ...(lines.length ? ["What changed:", ...lines.map((l) => `- ${l}`), ""] : []),
+    ...(args.fileUrl ? [`The ${String(args.format ?? "report").toUpperCase()} (sign in to download):`, args.fileUrl, ""] : []),
+    ...(args.shareUrl ? ["The shared report:", args.shareUrl, ""] : []),
+    "You get this email because you are on this report's schedule. Ask the research team to change it.",
+  ].join("\n");
+  const html = shell(
+    `<p style="margin:0 0 6px;font-size:13px;color:#6b7690">${escapeHtml(args.studyTitle)}</p>` +
+      `<p style="margin:0 0 12px"><strong>${escapeHtml(args.reportName)}</strong></p>` +
+      `<p style="margin:0 0 12px">${escapeHtml(args.headline)}</p>` +
+      (lines.length ? `<ul style="margin:0 0 12px;padding-left:18px">${lines.map((l) => `<li style="margin:0 0 4px">${escapeHtml(l)}</li>`).join("")}</ul>` : "") +
+      (args.fileUrl ? linkBlock(args.fileUrl, `Download the ${String(args.format ?? "report").toUpperCase()}`) : "") +
+      (args.shareUrl ? linkBlock(args.shareUrl, "Open the shared report") : ""),
+    "You get this email because you are on this report's schedule.",
+  );
+  return { subject: `${args.reportName}: ${args.headline.length > 90 ? `${args.headline.slice(0, 87)}…` : args.headline}`, text, html };
+}
+
+export function metricAlertEmail(args: { reportName: string; studyTitle: string; sentence: string; url?: string | null }): Rendered {
+  const text = [`Alert on ${args.reportName} — ${args.studyTitle}`, "", args.sentence, "", ...(args.url ? ["Open the report:", args.url, ""] : []), "You are told once when the figure crosses the threshold, not again while it stays there."].join("\n");
+  const html = shell(`<p style="margin:0 0 6px;font-size:13px;color:#6b7690">${escapeHtml(args.studyTitle)}</p><p style="margin:0 0 12px"><strong>Alert on ${escapeHtml(args.reportName)}</strong></p><p style="margin:0 0 12px">${escapeHtml(args.sentence)}</p>` + (args.url ? linkBlock(args.url, "Open the report") : ""), "You are told once when the figure crosses the threshold.");
+  return { subject: `Alert: ${args.sentence.length > 100 ? `${args.sentence.slice(0, 97)}…` : args.sentence}`, text, html };
+}

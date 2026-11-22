@@ -702,6 +702,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
             <button className="btn small" style={{ marginTop: 6 }} data-testid="ax-band-add" onClick={addBand}>+ band</button>
           </>}
           {versions.length > 0 && <><div className="flabel" style={{ marginTop: 12 }}>Published versions</div><ul className="ax-versions">{versions.map((v) => <li key={v.version}>v{v.version} · {new Date(v.published_at).toLocaleString()}{v.note ? ` — ${v.note}` : ""}{v.dataset?.responses != null ? ` · ${v.dataset.responses} responses` : ""}</li>)}</ul></>}
+          {open?.id && <SchedulesCard surveyId={api.surveyId} reportId={String(open.id)} analyses={analyses.filter((a) => reportAnalysisIds(rd as ReportDefinition).includes(String(a.id)))} results={results} />}
         </aside>
         <div className="ax-rb-main">
           {loading && <div className="muted" style={{ padding: 8 }}>Computing…</div>}
@@ -756,6 +757,79 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
       {share && <ShareDialog api={api} report={open} onClose={() => setShare(false)} onCreated={onChange} />}
       {exp && <ExportDialog api={api} reportId={open.id} themes={themes} versions={publishedVersions} onClose={() => setExp(false)} />}
       <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>{surveyTitle}</div>
+    </div>
+  );
+}
+
+
+/*
+ * R5 + R6 — SCHEDULES: re-compute this report on a schedule (or now), render it, keep what changed since the last run,
+ * and email the recipients; or watch one figure and email when it crosses a threshold. /api/surveys/[id]/report-schedules.
+ */
+function SchedulesCard({ surveyId, reportId, analyses, results }: { surveyId: string; reportId: string; analyses: Row[]; results: Record<string, AnalysisResult> }) {
+  const [list, setList] = React.useState<Row[] | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState<string | null>(null);
+  const [draft, setDraft] = React.useState<Row | null>(null);
+  const base = `/api/surveys/${surveyId}/report-schedules`;
+  const load = React.useCallback(async () => {
+    try { const r = await fetch(`${base}?reportId=${reportId}`, { cache: "no-store" }); const j = await r.json(); if (!r.ok) throw new Error(j.error ?? `(${r.status})`); setList(j.schedules); setError(null); }
+    catch (e) { setError((e as Error).message); setList([]); }
+  }, [base, reportId]);
+  React.useEffect(() => { void load(); }, [load]);
+  const post = async (body: Record<string, unknown>, tag: string) => {
+    setBusy(tag); setError(null);
+    try { const r = await fetch(base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); const j = await r.json(); if (!r.ok) throw new Error(j.error ?? `(${r.status})`); await load(); return j; }
+    catch (e) { setError((e as Error).message); return null; } finally { setBusy(null); }
+  };
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const metricsOf = (id: string) => { const r = results[id]; return r ? [...(r.chart.kpis ?? []).map((k) => k.label), ...(r.chart.categories ?? [])].slice(0, 40) : []; };
+  const blank = { kind: "report", name: "Weekly update", cadence: "weekly", hourUtc: 7, weekday: 1, dayOfMonth: 1, format: "pptx", recipients: "", alert: { analysisId: String(analyses[0]?.id ?? ""), metric: "", op: "above", threshold: 0 } };
+  return (
+    <div data-testid="ax-schedules">
+      <div className="flabel" style={{ marginTop: 12 }}>Schedules and alerts</div>
+      <div className="muted" style={{ fontSize: 12.5 }}>Re-computed from the data as it is at each run. The email says what changed and links to the file (sign-in needed); no file is attached.</div>
+      {error && <div className="ax-error" style={{ fontSize: 12.5 }}>{error}</div>}
+      {(list ?? []).map((s) => (
+        <div key={String(s.id)} className="card" style={{ padding: 8, marginTop: 6, fontSize: 12.5 }}>
+          <div className="row" style={{ gap: 6 }}><strong>{String(s.name)}</strong><span className="muted">{s.kind === "alert" ? "alert" : String(s.format).toUpperCase()} · {String(s.cadence)} · {String(s.hour_utc).padStart(2, "0")}:00 UTC</span><span className="grow" />
+            <button className="btn small" disabled={!!busy} onClick={() => void post({ action: "run", id: s.id }, `run-${s.id}`)} data-testid="ax-schedule-run">{busy === `run-${s.id}` ? "Running…" : "Run now"}</button>
+            <button className="btn small" disabled={!!busy} onClick={() => void post({ action: "delete", id: s.id }, `del-${s.id}`)}>Delete</button></div>
+          <div className="muted">Next: {new Date(String(s.next_run_at)).toLocaleString()} · {(s.recipients as string[]).length} recipient{(s.recipients as string[]).length === 1 ? "" : "s"}</div>
+          {((s.runs as Row[]) ?? []).slice(0, 3).map((r) => (
+            <div key={String(r.id)} style={{ marginTop: 4 }}>
+              <span className={`ax-status ${r.status === "ok" ? "active" : "revoked"}`}>{String(r.status)}</span> {new Date(String(r.ran_at)).toLocaleString()} — {String(r.headline ?? r.error ?? "")}
+              {r.bytes ? <> · <a href={`${base}?file=${r.id}`}>file</a></> : null}{Number(r.delivered) ? ` · emailed ${r.delivered}` : ""}
+            </div>
+          ))}
+        </div>
+      ))}
+      {!draft && <button className="btn small" style={{ marginTop: 6 }} onClick={() => setDraft(blank)} data-testid="ax-schedule-new">Add a schedule or alert</button>}
+      {draft && (
+        <div className="card" style={{ padding: 8, marginTop: 6, display: "grid", gap: 6, fontSize: 12.5 }}>
+          <select className="select small" value={String(draft.kind)} onChange={(e) => setDraft({ ...draft, kind: e.target.value, name: e.target.value === "alert" ? "Alert" : "Weekly update" })}><option value="report">Send the report</option><option value="alert">Alert on a figure</option></select>
+          <input className="input small" value={String(draft.name)} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Name" />
+          <div className="row" style={{ gap: 6 }}>
+            <select className="select small" value={String(draft.cadence)} onChange={(e) => setDraft({ ...draft, cadence: e.target.value })}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+            {draft.cadence === "weekly" && <select className="select small" value={Number(draft.weekday)} onChange={(e) => setDraft({ ...draft, weekday: Number(e.target.value) })}>{days.map((d, i) => <option key={d} value={i}>{d}</option>)}</select>}
+            {draft.cadence === "monthly" && <input className="input small" type="number" min={1} max={31} style={{ width: 60 }} value={Number(draft.dayOfMonth)} onChange={(e) => setDraft({ ...draft, dayOfMonth: Number(e.target.value) })} />}
+            <input className="input small" type="number" min={0} max={23} style={{ width: 60 }} value={Number(draft.hourUtc)} onChange={(e) => setDraft({ ...draft, hourUtc: Number(e.target.value) })} title="Hour, UTC" /><span className="muted">:00 UTC</span>
+          </div>
+          {draft.kind === "report" ? (
+            <select className="select small" value={String(draft.format)} onChange={(e) => setDraft({ ...draft, format: e.target.value })}><option value="pptx">PowerPoint</option><option value="pdf">PDF</option><option value="docx">Word</option><option value="xlsx">Excel</option></select>
+          ) : (
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+              <select className="select small" value={String((draft.alert as Row).analysisId)} onChange={(e) => setDraft({ ...draft, alert: { ...(draft.alert as Row), analysisId: e.target.value, metric: "" } })}>{analyses.map((a) => <option key={String(a.id)} value={String(a.id)}>{String(a.name)}</option>)}</select>
+              <select className="select small" value={String((draft.alert as Row).metric)} onChange={(e) => setDraft({ ...draft, alert: { ...(draft.alert as Row), metric: e.target.value } })}><option value="">Figure…</option>{metricsOf(String((draft.alert as Row).analysisId)).map((m) => <option key={m} value={m}>{m}</option>)}</select>
+              <select className="select small" value={String((draft.alert as Row).op)} onChange={(e) => setDraft({ ...draft, alert: { ...(draft.alert as Row), op: e.target.value } })}><option value="above">goes above</option><option value="below">goes below</option></select>
+              <input className="input small" type="number" style={{ width: 80 }} value={Number((draft.alert as Row).threshold)} onChange={(e) => setDraft({ ...draft, alert: { ...(draft.alert as Row), threshold: Number(e.target.value) } })} />
+            </div>
+          )}
+          <textarea className="input small" rows={2} placeholder="Recipients' emails, separated by commas" value={String(draft.recipients)} onChange={(e) => setDraft({ ...draft, recipients: e.target.value })} />
+          <div className="row" style={{ gap: 6 }}><span className="grow" /><button className="btn small" onClick={() => setDraft(null)}>Cancel</button>
+            <button className="btn primary small" disabled={!!busy} onClick={async () => { const ok = await post({ action: "save", reportId, ...draft, recipients: String(draft.recipients).split(/[,\s]+/).filter(Boolean), alert: draft.kind === "alert" ? draft.alert : undefined, format: draft.kind === "report" ? draft.format : undefined }, "save"); if (ok) setDraft(null); }} data-testid="ax-schedule-save">Save</button></div>
+        </div>
+      )}
     </div>
   );
 }
