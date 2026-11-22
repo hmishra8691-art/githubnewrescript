@@ -17,7 +17,7 @@ import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock,
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
 import { summaryAnalysisIds } from "../blockRefs.js";
-import { chartTitleFor, reportForExport, seriesForChart } from "./shared.js";
+import { chartTitleFor, reportForExport, seriesForChart, MAX_EMBEDDED_IMAGE_BYTES } from "./shared.js";
 import { chartPicture } from "../chartPictures.js";
 import { chartDecimals, chartFormatCode } from "../chartFormat.js";
 import { divergingLayout, divergingSeriesOrder, stackShares } from "../chartLayout.js";
@@ -52,7 +52,7 @@ export interface PptxInput {
  * Anything failing that is dropped rather than embedded — the export is a
  * document the customer sends on, not a channel for arbitrary bytes.
  */
-export const MAX_EMBEDDED_IMAGE_BYTES = 6 * 1024 * 1024;
+export { MAX_EMBEDDED_IMAGE_BYTES };
 export function isEmbeddableImage(uri: unknown): uri is string {
   if (typeof uri !== "string") return false;
   if (!/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(uri)) return false;

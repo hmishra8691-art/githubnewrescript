@@ -13,7 +13,8 @@ import { TURF_EXHAUSTIVE_ITEMS, NPS_MIN_CI_N } from "./analyses/business.js";
 import { MAX_SHAPLEY } from "./stats/relativeImportance.js";
 import { BENCHMARK_FLOOR } from "./benchmark.js";
 import { MODEL_MIN_CELL } from "./redact.js";
-import { MAX_EMBEDDED_IMAGE_BYTES } from "./export/pptx.js";
+/* from shared.ts, never pptx.ts: pptx pulls pptxgenjs (node:https) into every page that imports this package */
+import { MAX_EMBEDDED_IMAGE_BYTES } from "./export/shared.js";
 import { TRANSCRIPT_MAX_CHARS, TRANSCRIPT_MAX_TURNS } from "./qual/transcripts.js";
 import { REEL_MAX_ITEMS } from "./qual/highlights.js";
 
@@ -33,7 +34,7 @@ export const PUBLISHED_LIMITS: PublishedLimit[] = [
   { area: "Models", limit: "Drivers in Shapley / LMG relative importance", value: MAX_SHAPLEY, unit: "drivers", whenExceeded: "Shapley is left out (it enumerates 2^p subsets); relative weights are still given.", source: "stats/relativeImportance.ts" },
   { area: "Models", limit: "Complete cases for hierarchical clustering", value: HIERARCHICAL_MAX_ROWS, unit: "cases", whenExceeded: "Refused with a message naming k-means, which handles the size.", source: "analyses/statistics.ts" },
   { area: "Models", limit: "Items searched exhaustively by TURF", value: TURF_EXHAUSTIVE_ITEMS, unit: "items", whenExceeded: "Greedy forward selection instead of every combination; the best set may be missed.", source: "analyses/business.ts" },
-  { area: "Export", limit: "Image embedded in a PowerPoint slide", value: MAX_EMBEDDED_IMAGE_BYTES, unit: "bytes", whenExceeded: "The image is left out of the slide.", source: "export/pptx.ts" },
+  { area: "Export", limit: "Image embedded in a PowerPoint slide", value: MAX_EMBEDDED_IMAGE_BYTES, unit: "bytes", whenExceeded: "The image is left out of the slide.", source: "export/shared.ts" },
   { area: "Qualitative", limit: "Characters in one transcript", value: TRANSCRIPT_MAX_CHARS, unit: "characters", whenExceeded: "Only the first part is imported, with a warning.", source: "qual/transcripts.ts" },
   { area: "Qualitative", limit: "Turns in one transcript", value: TRANSCRIPT_MAX_TURNS, unit: "turns", whenExceeded: "Only the first turns are imported, with a warning.", source: "qual/transcripts.ts" },
   { area: "Qualitative", limit: "Clips in one highlight reel", value: REEL_MAX_ITEMS, unit: "clips", whenExceeded: "Adding more is refused.", source: "qual/highlights.ts" },

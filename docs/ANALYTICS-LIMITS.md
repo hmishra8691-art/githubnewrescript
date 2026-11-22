@@ -16,7 +16,7 @@ product cannot disagree; a test fails if this file is not regenerated after a ch
 | Models | Drivers in Shapley / LMG relative importance | 12 drivers | Shapley is left out (it enumerates 2^p subsets); relative weights are still given. | `stats/relativeImportance.ts` |
 | Models | Complete cases for hierarchical clustering | 1,500 cases | Refused with a message naming k-means, which handles the size. | `analyses/statistics.ts` |
 | Models | Items searched exhaustively by TURF | 12 items | Greedy forward selection instead of every combination; the best set may be missed. | `analyses/business.ts` |
-| Export | Image embedded in a PowerPoint slide | 6,291,456 bytes | The image is left out of the slide. | `export/pptx.ts` |
+| Export | Image embedded in a PowerPoint slide | 6,291,456 bytes | The image is left out of the slide. | `export/shared.ts` |
 | Qualitative | Characters in one transcript | 2,000,000 characters | Only the first part is imported, with a warning. | `qual/transcripts.ts` |
 | Qualitative | Turns in one transcript | 20,000 turns | Only the first turns are imported, with a warning. | `qual/transcripts.ts` |
 | Qualitative | Clips in one highlight reel | 100 clips | Adding more is refused. | `qual/highlights.ts` |

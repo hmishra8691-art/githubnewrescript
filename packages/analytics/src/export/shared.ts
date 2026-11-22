@@ -56,3 +56,7 @@ export function reportForExport<R extends { title: string }>(input: R): R & Pick
   if (blocks.length === 1) throw new ExportUnsupportedError("This dashboard has no charts, tables or KPIs with an analysis chosen yet, so there is nothing to export. Pick an analysis for at least one widget.");
   return { ...input, title, ...(r.title && r.hero?.title ? { subtitle: r.title } : {}), blocks };
 }
+
+/** the largest image a PowerPoint slide embeds (pptx.ts drops bigger ones). Kept here, not in pptx.ts, so the published
+ * limits (limits.ts, in the browser-safe main entry) can read it without pulling the PowerPoint writer into a page. */
+export const MAX_EMBEDDED_IMAGE_BYTES = 6 * 1024 * 1024;
