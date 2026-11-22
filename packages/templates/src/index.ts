@@ -163,6 +163,8 @@ export type { ProductionTestOptions, ProductionTestReport, ProductionQuotaCell, 
 export { explorePaths, comparePaths, summarizePaths } from "./paths.js";
 export type { PathExploration, PathComparison, ElementReach } from "./paths.js";
 export { runSimulation, simulationRows, simulationStates, journeyLines, invalidProbes, newRunId } from "./simulationRun.js";
+export { observe, verifySurvey, observationLines } from "./observations.js";
+export type { Observation, ObservationKind, ObservationSeverity, ObservedRespondent, Verification } from "./observations.js";
 export type { SimulationConfig, SimulationRunReport, Journey, SimProfile, SimExpectation, ExpectationResult, ProbeResult } from "./simulationRun.js";
 export * from "./scriptLifecycle.js";
 export * from "./validatedScales.js";
