@@ -23,3 +23,4 @@ export * from "./impact.js";
 export * from "./redTeam.js";
 export * from "./crossSurvey.js";
 export * from "./trustScore.js";
+export * from "./reviewConsole.js";

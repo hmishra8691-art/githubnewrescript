@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { Loading } from "@/components/ui/Loading";
-import { CATEGORY_LABELS, VALIDATION_RECORD, DIMENSIONS, OUTCOME_LABELS, type CleaningImpact } from "@rescript/quality";
+import { CATEGORY_LABELS, VALIDATION_RECORD, DIMENSIONS, OUTCOME_LABELS, reviewQueue, ruleVerdicts, type CleaningImpact, type Agreement } from "@rescript/quality";
 import { useStudio } from "./store";
 import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
@@ -236,6 +236,7 @@ export function QualityPanel({ include }: { include: Include }) {
       <ConfigCard data={data} include={include} busy={busy} onRecompute={recompute} onSettings={() => s.goToTab?.("settings")} />
       <ValidationGateCard />
       <CleaningImpactCard include={include} />
+      <ReviewConsoleCard rows={data.rows} onOpen={setOpen} />
       {!data.enabled && (
         <div className="chip warn qd-note" data-testid="quality-disabled-note">
           Quality checks are off for this survey — enable them under Survey settings → Quality checks. Responses finished while off are unscored; “Re-assess” scores them with the current settings.
@@ -350,6 +351,55 @@ export function QualityPanel({ include }: { include: Include }) {
  * two gaps worth knowing about: responses assessed under older settings, and a
  * live link still running an older version's settings.
  */
+/**
+ * THE REVIEW CONSOLE (F11): what to look at next, what reviewers have decided about each rule, and whether two
+ * reviewers agree. The order and the rule figures come from the rows already loaded (reviewQueue, ruleVerdicts);
+ * agreement needs the decision log and is fetched when the card is opened.
+ */
+function ReviewConsoleCard({ rows, onOpen }: { rows: Row[]; onOpen(sessionId: string): void }) {
+  const s = useStudio();
+  const [opened, setOpened] = React.useState(false);
+  const [agreement, setAgreement] = React.useState<Agreement | null>(null);
+  const queue = React.useMemo(() => reviewQueue(rows, 10), [rows]);
+  const verdicts = React.useMemo(() => ruleVerdicts(rows).slice(0, 8), [rows]);
+  React.useEffect(() => {
+    if (!opened || !s.surveyDbId) return;
+    fetch(`/api/surveys/${s.surveyDbId}/quality/console`, { cache: "no-store" }).then(async (r) => { if (r.ok) setAgreement(((await r.json()) as { agreement: Agreement }).agreement); }).catch(() => undefined);
+  }, [opened, s.surveyDbId]);
+  return (
+    <details className="card" style={{ padding: "10px 14px", marginTop: 8 }} data-testid="review-console" onToggle={(e) => setOpened((e.target as HTMLDetailsElement).open)}>
+      <summary style={{ cursor: "pointer" }}><b>Review console</b> <span className="muted" style={{ fontSize: 12.5 }}>· {queue.remaining} to review · {queue.decided} decided</span></summary>
+      <div className="row" style={{ gap: 18, alignItems: "flex-start", flexWrap: "wrap", marginTop: 8 }}>
+        <div style={{ flex: "1 1 320px" }}>
+          <div className="row" style={{ gap: 8, alignItems: "center" }}>
+            <b style={{ fontSize: 13 }}>Next</b>
+            <button className="btn small primary" disabled={!queue.items.length} data-testid="review-next" onClick={() => queue.items[0] && onOpen(queue.items[0].sessionId)}>Review next</button>
+          </div>
+          {!queue.items.length && <p className="muted" style={{ fontSize: 12.5 }}>Nothing waiting: every flagged or review-class response has a decision.</p>}
+          <ol style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5 }}>
+            {queue.items.map((q) => (
+              <li key={q.sessionId} style={{ marginBottom: 3 }}>
+                <button className="btn tiny" onClick={() => onOpen(q.sessionId)} data-testid="review-queue-item">{q.sessionId.slice(0, 8)}</button>
+                <span className="muted"> — {q.why}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+        <div style={{ flex: "1 1 320px" }}>
+          <b style={{ fontSize: 13 }}>What reviewers decided, by rule</b>
+          {!verdicts.length && <p className="muted" style={{ fontSize: 12.5 }}>No decisions yet. Once responses are kept or removed, each rule shows how often reviewers agreed with it.</p>}
+          <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5 }} data-testid="review-rule-verdicts">
+            {verdicts.map((v) => <li key={v.ruleId} style={{ marginBottom: 3 }}><b>{v.title}</b>: {v.reading}</li>)}
+          </ul>
+          <div style={{ marginTop: 8, fontSize: 12.5 }} data-testid="review-agreement">
+            <b>Reviewer agreement</b>: {agreement ? agreement.reading : opened ? "loading…" : ""}
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function ConfigCard({ data, include, busy, onRecompute, onSettings }: { data: Payload; include: Include; busy: boolean; onRecompute(): void; onSettings(): void }) {
   const c = data.config;
   if (!c) return null;
