@@ -81,3 +81,27 @@ test("S5b idle: periods and per-visit idle time kept when on, nothing when off",
   assert.equal(off.pages[0].idleMs, undefined);
   assert.ok(off.disabled.includes("idle"));
 });
+
+test("F4: the typing and pointer summaries are kept as numbers only, dropped when implausible, and off with the interaction category", () => {
+  const t = base() as any;
+  t.questions.q1.typing = { keys: 140, gaps: 139, meanMs: 181.2, sdMs: 4.1, minMs: 172, pauses: 0, corrections: 2, text: "SECRET", keysPressed: ["a", "b"] };
+  t.interaction.pointer = { approaches: 30, moves: 480, teleports: 1, straight: 3, evenSteps: 0, meanStraightness: 0.87, path: [[1, 2], [3, 4]] };
+  const s = sanitizeTelemetry(t, {});
+  assert.deepEqual(s.questions.q1.typing, { keys: 140, gaps: 139, meanMs: 181.2, sdMs: 4.1, minMs: 172, pauses: 0, corrections: 2 });
+  assert.deepEqual(s.interaction.pointer, { approaches: 30, moves: 480, teleports: 1, straight: 3, evenSteps: 0, meanStraightness: 0.87 });
+  assert.ok(!JSON.stringify(s).includes("SECRET") && !JSON.stringify(s).includes("keysPressed") && !JSON.stringify(s).includes("path"));
+  /* a summary that cannot be true is dropped whole, not repaired */
+  t.questions.q1.typing = { keys: 5, gaps: 139, meanMs: 181, sdMs: 4, minMs: 172, pauses: 0, corrections: 0 };
+  t.interaction.pointer = { approaches: 3, moves: 10, teleports: 9, straight: 0, evenSteps: 0, meanStraightness: 0.5 };
+  const bad = sanitizeTelemetry(t, {});
+  assert.equal(bad.questions.q1.typing, undefined);
+  assert.equal(bad.interaction.pointer, undefined);
+  t.questions.q1.typing = { keys: 140, gaps: 139, meanMs: "fast", sdMs: 4, minMs: 172, pauses: 0, corrections: 0 };
+  assert.equal(sanitizeTelemetry(t, {}).questions.q1.typing, undefined);
+  /* the survey switched interaction telemetry off: neither is kept */
+  t.questions.q1.typing = { keys: 140, gaps: 139, meanMs: 181, sdMs: 4, minMs: 172, pauses: 0, corrections: 0 };
+  t.interaction.pointer = { approaches: 30, moves: 480, teleports: 1, straight: 3, evenSteps: 0, meanStraightness: 0.87 };
+  const off = sanitizeTelemetry(t, { interaction: false });
+  assert.equal(off.questions.q1.typing, undefined);
+  assert.equal(off.interaction.pointer, undefined);
+});

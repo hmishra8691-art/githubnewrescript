@@ -33,6 +33,43 @@ export interface PageVisit {
   idleMs?: number;
 }
 
+/**
+ * HOW AN ANSWER WAS TYPED, for the whole answer (Level 5 roadmap F4): counts and timing of printable keys in the
+ * question's text field. No key, no character and no text is kept — only how many keys, how far apart, how many
+ * pauses and how many corrections.
+ */
+export interface TypingSummary {
+  /** printable keys pressed */
+  keys: number;
+  /** gaps between consecutive keys that were under five seconds — what the mean and spread are over */
+  gaps: number;
+  meanMs: number;
+  sdMs: number;
+  minMs: number;
+  /** gaps of 1.5 seconds or more (thinking), the ones over five seconds included */
+  pauses: number;
+  /** Backspace and Delete presses */
+  corrections: number;
+}
+/**
+ * HOW THE MOUSE REACHED WHAT IT CLICKED (Level 5 roadmap F4): a summary over "approaches", the path between one
+ * mouse click and the next. Mouse only — a finger has no path between taps. No coordinate is kept.
+ */
+export interface PointerSummary {
+  /** clicks made with a mouse that had an earlier mouse position to come from */
+  approaches: number;
+  /** pointermove events seen, all approaches together */
+  moves: number;
+  /** approaches that covered 80 px or more with at most one move event: the pointer jumped */
+  teleports: number;
+  /** approaches of four or more moves whose path was a straight line (direct distance at least 99.9% of the path) */
+  straight: number;
+  /** approaches of four or more moves whose steps were all the same length, to within 5% */
+  evenSteps: number;
+  /** mean of direct distance ÷ path length, over approaches with two or more moves (1 = a ruler) */
+  meanStraightness: number;
+}
+
 export interface QuestionTiming {
   /** first change to the answer, ms since survey start */
   firstChangeAt?: number;
@@ -44,6 +81,7 @@ export interface QuestionTiming {
   pasteChars: number;
   /** characters typed (key events) into text inputs of this question */
   typedChars: number;
+  typing?: TypingSummary;
   copies: number;
   /** S5b (TE-04): total ms the question's card was at least half inside the viewport (all visits) */
   visibleMs?: number;
@@ -86,7 +124,7 @@ export interface ResponseTelemetry {
   focus: { blurs: number; totalOutOfFocusMs: number; longestOutOfFocusMs: number };
   clipboard: { copies: number; pastes: number; pasteChars: number; largePastes: number; pasteQuestions: number };
   navigation: { back: number; forward: number; reloads: number; jumps: number; sequence: string[] };
-  interaction: { pointerEvents: number; keyEvents: number; scrollEvents: number };
+  interaction: { pointerEvents: number; keyEvents: number; scrollEvents: number; pointer?: PointerSummary };
   device?: DeviceInfo;
   /** telemetry categories the survey disabled — recorded so the engine knows a zero is "not measured" */
   disabled: string[];

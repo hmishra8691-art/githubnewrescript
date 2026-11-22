@@ -175,12 +175,69 @@ export function createTelemetryCollector(cfg: TelemetryConfig | undefined, sessi
       listen(document, "copy", (e) => { data.clipboard.copies++; const qid = questionOf(e); if (qid) qt(qid).copies++; }, { capture: true });
     }
     if (on("interaction")) {
-      listen(document, "pointerdown", () => { data.interaction.pointerEvents++; if (current) current.pointerEvents++; }, { capture: true, passive: true });
+      /*
+       * F4 (2026-11-27): how the mouse reached what it clicked. Between one mouse click and the next the path's
+       * length, its number of move events and the evenness of its steps are added up; at the click they become one
+       * "approach" in a summary. No coordinate leaves this closure. Mouse only: a finger has no path between taps.
+       */
+      const ptr = { x: 0, y: 0, has: false, downX: 0, downY: 0, hadDown: false, path: 0, moves: 0, stepSum: 0, stepSq: 0, straightSum: 0, straightN: 0 };
+      const summary = (): NonNullable<ResponseTelemetry["interaction"]["pointer"]> => (data.interaction.pointer ??= { approaches: 0, moves: 0, teleports: 0, straight: 0, evenSteps: 0, meanStraightness: 0 });
+      listen(document, "pointermove", (e) => {
+        const pe = e as PointerEvent;
+        if (pe.pointerType !== "mouse") return;
+        if (ptr.has) { const step = Math.hypot(pe.clientX - ptr.x, pe.clientY - ptr.y); if (step > 0) { ptr.path += step; ptr.moves++; ptr.stepSum += step; ptr.stepSq += step * step; } }
+        ptr.x = pe.clientX; ptr.y = pe.clientY; ptr.has = true;
+      }, { capture: true, passive: true });
+      listen(document, "pointerdown", (e) => {
+        data.interaction.pointerEvents++; if (current) current.pointerEvents++;
+        const pe = e as PointerEvent;
+        if (pe.pointerType !== "mouse") return;
+        if (ptr.hadDown) {
+          const p = summary();
+          const direct = Math.hypot(pe.clientX - ptr.downX, pe.clientY - ptr.downY);
+          p.approaches++; p.moves += ptr.moves;
+          if (direct >= 80 && ptr.moves <= 1) p.teleports++;
+          if (ptr.moves >= 2 && ptr.path > 0) { ptr.straightSum += Math.min(1, direct / ptr.path); ptr.straightN++; p.meanStraightness = Math.round((ptr.straightSum / ptr.straightN) * 1000) / 1000; }
+          if (ptr.moves >= 4 && ptr.path > 0) {
+            if (direct / ptr.path >= 0.999) p.straight++;
+            const mean = ptr.stepSum / ptr.moves, sd = Math.sqrt(Math.max(0, ptr.stepSq / ptr.moves - mean * mean));
+            if (mean > 0 && sd / mean < 0.05) p.evenSteps++;
+          }
+        }
+        ptr.downX = pe.clientX; ptr.downY = pe.clientY; ptr.hadDown = true; ptr.x = pe.clientX; ptr.y = pe.clientY; ptr.has = true;
+        ptr.path = 0; ptr.moves = 0; ptr.stepSum = 0; ptr.stepSq = 0;
+      }, { capture: true, passive: true });
+      /* F4: how a text answer was typed, for the whole answer — gaps between printable keys, pauses, corrections. Never which keys */
+      const lastKey = new Map<string, number>();
+      const typingSq = new Map<string, number>();
+      const typingSum = new Map<string, number>();
       listen(document, "keydown", (e) => {
         data.interaction.keyEvents++;
         if (current) current.keyEvents++;
         const ke = e as KeyboardEvent;
+        const field = (e.target as Element | null)?.matches?.("textarea, input:not([type=radio]):not([type=checkbox]):not([type=range]), [contenteditable]");
+        const printable = ke.key?.length === 1 && !ke.ctrlKey && !ke.metaKey;
         if (ke.key?.length === 1) { const qid = questionOf(e); if (qid) qt(qid).typedChars++; }
+        if (!field || !(printable || ke.key === "Backspace" || ke.key === "Delete")) return;
+        const qid = questionOf(e);
+        if (!qid) return;
+        const ty = (qt(qid).typing ??= { keys: 0, gaps: 0, meanMs: 0, sdMs: 0, minMs: 0, pauses: 0, corrections: 0 });
+        if (!printable) { ty.corrections++; return; }
+        const t = now(), last = lastKey.get(qid);
+        ty.keys++;
+        if (last !== undefined) {
+          const gap = t - last;
+          if (gap >= 1500) ty.pauses++;
+          if (gap < 5000) {
+            /* exact sums are kept here; the summary holds rounded figures and must not be added to */
+            const sum = (typingSum.get(qid) ?? 0) + gap, sq = (typingSq.get(qid) ?? 0) + gap * gap;
+            ty.gaps++; typingSum.set(qid, sum); typingSq.set(qid, sq);
+            ty.meanMs = Math.round((sum / ty.gaps) * 10) / 10;
+            ty.sdMs = Math.round(Math.sqrt(Math.max(0, sq / ty.gaps - (sum / ty.gaps) ** 2)) * 10) / 10;
+            ty.minMs = ty.gaps === 1 ? gap : Math.min(ty.minMs, gap);
+          }
+        }
+        lastKey.set(qid, t);
       }, { capture: true, passive: true });
       listen(window, "scroll", () => { data.interaction.scrollEvents++; if (current) current.scrollEvents++; }, { passive: true });
     }

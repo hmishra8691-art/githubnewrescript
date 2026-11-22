@@ -17,6 +17,21 @@ const MEASURABLE = ["visibility", "answerHistory", "idle"];
  * never the client's word: a closed type keeps validated codes / numbers / cells, typed text `{ len }` only, any
  * other (or unknown) question nothing.
  */
+/* F4: the typing and pointer summaries are counts and durations only; anything that is not a finite, non-negative number of a plausible size is dropped whole */
+const bounded = (v: unknown, max: number): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max ? v : null);
+function typingSummary(t: any): { keys: number; gaps: number; meanMs: number; sdMs: number; minMs: number; pauses: number; corrections: number } | undefined {
+  if (!t || typeof t !== "object") return undefined;
+  const f = { keys: bounded(t.keys, 1e6), gaps: bounded(t.gaps, 1e6), meanMs: bounded(t.meanMs, 5000), sdMs: bounded(t.sdMs, 5000), minMs: bounded(t.minMs, 5000), pauses: bounded(t.pauses, 1e6), corrections: bounded(t.corrections, 1e6) };
+  if (Object.values(f).some((v) => v === null) || f.gaps! > f.keys!) return undefined;
+  return { keys: Math.round(f.keys!), gaps: Math.round(f.gaps!), meanMs: f.meanMs!, sdMs: f.sdMs!, minMs: f.minMs!, pauses: Math.round(f.pauses!), corrections: Math.round(f.corrections!) };
+}
+function pointerSummary(p: any): { approaches: number; moves: number; teleports: number; straight: number; evenSteps: number; meanStraightness: number } | undefined {
+  if (!p || typeof p !== "object") return undefined;
+  const f = { approaches: bounded(p.approaches, 1e6), moves: bounded(p.moves, 1e8), teleports: bounded(p.teleports, 1e6), straight: bounded(p.straight, 1e6), evenSteps: bounded(p.evenSteps, 1e6), meanStraightness: bounded(p.meanStraightness, 1) };
+  if (Object.values(f).some((v) => v === null) || f.teleports! > f.approaches! || f.straight! > f.approaches! || f.evenSteps! > f.approaches!) return undefined;
+  return { approaches: Math.round(f.approaches!), moves: Math.round(f.moves!), teleports: Math.round(f.teleports!), straight: Math.round(f.straight!), evenSteps: Math.round(f.evenSteps!), meanStraightness: f.meanStraightness! };
+}
+
 function sanitizeHistory(h: unknown, type: string | undefined): [number, unknown][] | undefined {
   if (!Array.isArray(h) || !type || !(HISTORY_CLOSED_TYPES.has(type) || HISTORY_TEXT_TYPES.has(type))) return undefined;
   const out: [number, unknown][] = [];
@@ -67,6 +82,7 @@ export function sanitizeTelemetry(t: any, cfg: any, types?: Record<string, strin
         changes: num(q?.changes), latencyMs: typeof q?.latencyMs === "number" ? q.latencyMs : undefined,
         pastes: on("clipboard") ? num(q?.pastes) : 0, pasteChars: on("clipboard") ? num(q?.pasteChars) : 0,
         typedChars: on("interaction") ? num(q?.typedChars) : 0, copies: on("clipboard") ? num(q?.copies) : 0,
+        typing: on("interaction") ? typingSummary(q?.typing) : undefined,
         visibleMs: on("visibility") ? optNum(q?.visibleMs, 0) : undefined,
         firstSeenAt: on("visibility") ? optNum(q?.firstSeenAt, 0) : undefined,
         history: on("answerHistory") ? sanitizeHistory(q?.history, types?.[String(k)]) : undefined,
@@ -94,7 +110,7 @@ export function sanitizeTelemetry(t: any, cfg: any, types?: Record<string, strin
     focus: on("focus") ? { blurs: num(t.focus?.blurs), totalOutOfFocusMs: num(t.focus?.totalOutOfFocusMs), longestOutOfFocusMs: num(t.focus?.longestOutOfFocusMs) } : { blurs: 0, totalOutOfFocusMs: 0, longestOutOfFocusMs: 0 },
     clipboard: on("clipboard") ? { copies: num(t.clipboard?.copies), pastes: num(t.clipboard?.pastes), pasteChars: num(t.clipboard?.pasteChars), largePastes: num(t.clipboard?.largePastes), pasteQuestions: num(t.clipboard?.pasteQuestions) } : { copies: 0, pastes: 0, pasteChars: 0, largePastes: 0, pasteQuestions: 0 },
     navigation: on("navigation") ? { back: num(t.navigation?.back), forward: num(t.navigation?.forward), reloads: num(t.navigation?.reloads), jumps: num(t.navigation?.jumps), sequence: Array.isArray(t.navigation?.sequence) ? t.navigation.sequence.slice(0, 500).map((x: unknown) => String(x).slice(0, 90)) : [] } : { back: 0, forward: 0, reloads: 0, jumps: 0, sequence: [] },
-    interaction: on("interaction") ? { pointerEvents: num(t.interaction?.pointerEvents), keyEvents: num(t.interaction?.keyEvents), scrollEvents: num(t.interaction?.scrollEvents) } : { pointerEvents: 0, keyEvents: 0, scrollEvents: 0 },
+    interaction: on("interaction") ? { pointerEvents: num(t.interaction?.pointerEvents), keyEvents: num(t.interaction?.keyEvents), scrollEvents: num(t.interaction?.scrollEvents), ...(pointerSummary(t.interaction?.pointer) ? { pointer: pointerSummary(t.interaction?.pointer) } : {}) } : { pointerEvents: 0, keyEvents: 0, scrollEvents: 0 },
     device: d,
     disabled: [...disabled],
     measured,
