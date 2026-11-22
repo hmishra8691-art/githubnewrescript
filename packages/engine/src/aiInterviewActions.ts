@@ -35,7 +35,7 @@ export interface AiInterviewAction {
   maxTurns?: number;
   defaultProbing?: AiProbingDepth;
   /** per guide question: its id or the start of its text */
-  probing?: { question: string; depth: AiProbingDepth; maxFollowUps?: number }[];
+  probing?: { question: string; depth: AiProbingDepth; maxFollowUps?: number; /** Q3 */ ladder?: number }[];
   /** drop every per-question rule first (the Studio's form sends the whole list) */
   resetProbing?: boolean;
   objectives?: string[];
@@ -63,6 +63,9 @@ export interface AiInterviewAction {
   maxFollowUps?: number | null;
   exploreBeyondGuide?: boolean;
   patience?: "quick" | "balanced" | "patient";
+  /** Q3 */
+  stopWhenExhausted?: boolean;
+  sectionTiming?: boolean;
 }
 export interface ScreenerInput { text?: string; kind?: "single" | "multi" | "number"; options?: { label: string; qualifies?: boolean; segment?: string }[]; min?: number; max?: number; fromQuestion?: string; qualifying?: string[]; segments?: Record<string, string> }
 
@@ -118,15 +121,20 @@ function screenerIn(v: unknown, what: string): ScreenerInput[] | { error: string
 }
 function stimuliIn(v: unknown): AiStimulus[] | { error: string } | undefined {
   if (v === undefined) return undefined;
-  if (!Array.isArray(v)) return { error: "stimuli is a list of {name, kind: image|video|text, url | text}" };
+  if (!Array.isArray(v)) return { error: "stimuli is a list of {name, kind: image|video|text|concept|screen_share, url | text}" };
   const out: AiStimulus[] = [];
   for (const x of v) {
     const o = obj(x); const name = str(o?.name ?? o?.title, 200);
     if (!o || !name) return { error: "a stimulus needs a name (the name the guide's section uses)" };
-    const kind = o.kind === "image" || o.kind === "video" ? o.kind : o.kind === "text" || !o.url ? "text" : /\.(?:mp4|webm|mov)(?:\?|$)/i.test(String(o.url)) ? "video" : "image";
+    /* Q3: a concept board (title, text, an optional picture) and a screen-share task (what to show) */
+    const k = String(o.kind ?? "").toLowerCase().replace(/[\s-]+/g, "_");
+    const kind = k === "image" || k === "video" ? k : k === "concept" || k === "concept_board" ? "concept" : k === "screen_share" || k === "screenshare" || k === "screen" ? "screen_share" : k === "text" || !o.url ? "text" : /\.(?:mp4|webm|mov)(?:\?|$)/i.test(String(o.url)) ? "video" : "image";
     const url = str(o.url, 2000);
-    if (kind !== "text" && (!url || !safeHttpsUrl(url))) return { error: `stimulus “${name}”: an ${kind} needs an https URL` };
-    out.push({ name, kind, ...(kind !== "text" && url ? { url } : {}), ...(kind === "text" ? { text: str(o.text ?? o.description, 4000) ?? name } : {}), ...(str(o.alt, 300) ? { alt: str(o.alt, 300) } : {}) });
+    if ((kind === "image" || kind === "video") && (!url || !safeHttpsUrl(url))) return { error: `stimulus “${name}”: an ${kind} needs an https URL` };
+    if (kind === "concept" && url && !safeHttpsUrl(url)) return { error: `stimulus “${name}”: a concept's picture needs an https URL` };
+    const text = str(o.text ?? o.description ?? o.task, 4000);
+    if (kind === "screen_share" && !text) return { error: `stimulus “${name}”: a screen share says what to show (text)` };
+    out.push({ name, kind, ...((kind === "image" || kind === "video" || kind === "concept") && url ? { url } : {}), ...(kind === "text" || kind === "concept" || kind === "screen_share" ? { text: text ?? name } : {}), ...(str(o.alt, 300) ? { alt: str(o.alt, 300) } : {}) });
   }
   return out.slice(0, 20);
 }
@@ -145,7 +153,7 @@ export function coerceAiInterviewAction(op: string, o: Record<string, unknown>):
   if (dp !== undefined) { const d = depthOf(dp); if (!d) return `${op}: probing depth is none, light or deep`; a.defaultProbing = d; }
   if (Array.isArray(o.probing)) {
     const rules: NonNullable<AiInterviewAction["probing"]> = [];
-    for (const x of o.probing) { const r = obj(x); const q = str(r?.question ?? r?.questionId ?? r?.target, 400); const d = depthOf(r?.depth); if (!q || !d) return `${op}: a probing rule is {question: id or text, depth: none|light|deep}`; const m = num(r?.maxFollowUps); rules.push({ question: q, depth: d, ...(m !== undefined ? { maxFollowUps: Math.max(0, Math.min(5, Math.round(m))) } : {}) }); }
+    for (const x of o.probing) { const r = obj(x); const q = str(r?.question ?? r?.questionId ?? r?.target, 400); const d = depthOf(r?.depth); if (!q || !d) return `${op}: a probing rule is {question: id or text, depth: none|light|deep}`; const m = num(r?.maxFollowUps); const l = num(r?.ladder ?? r?.ladderRungs); rules.push({ question: q, depth: d, ...(m !== undefined ? { maxFollowUps: Math.max(0, Math.min(5, Math.round(m))) } : {}), ...(l !== undefined && l > 0 ? { ladder: Math.max(1, Math.min(5, Math.round(l))) } : {}) }); }
     a.probing = rules;
   }
   for (const k of ["objectives", "addObjectives"] as const) { const v = list(o[k], 20); if (v) a[k] = v; }
@@ -202,6 +210,8 @@ export function coerceAiInterviewAction(op: string, o: Record<string, unknown>):
   }
   if (o.maxFollowUps === null) a.maxFollowUps = null; else if (o.maxFollowUps !== undefined) { const n = num(o.maxFollowUps); if (n === undefined || n < 0 || n > 5) return `${op}: maxFollowUps is 0–5 follow-ups per question`; a.maxFollowUps = Math.round(n); }
   if (typeof o.exploreBeyondGuide === "boolean") a.exploreBeyondGuide = o.exploreBeyondGuide;
+  if (typeof o.stopWhenExhausted === "boolean") a.stopWhenExhausted = o.stopWhenExhausted;
+  if (typeof o.sectionTiming === "boolean") a.sectionTiming = o.sectionTiming;
   if (o.patience !== undefined) { const v = String(o.patience).toLowerCase(); if (!["quick", "balanced", "patient"].includes(v)) return `${op}: patience is quick, balanced or patient`; a.patience = v as "quick" | "balanced" | "patient"; }
   if (Object.keys(a).length === 1) return `${op} names nothing to configure`;
   return a;
@@ -257,8 +267,8 @@ export function applyAiInterviewAction(def: SurveyDefinition, a: AiInterviewActi
   for (const r of a.probing ?? []) {
     const qid = guideQuestion(study, r.question);
     next.probing = next.probing.filter((x) => x.questionId !== qid);
-    next.probing.push({ questionId: qid, depth: r.depth, ...(r.maxFollowUps !== undefined ? { maxFollowUps: r.maxFollowUps } : {}) });
-    changes.push(`${qid}: ${r.depth} probing`);
+    next.probing.push({ questionId: qid, depth: r.depth, ...(r.maxFollowUps !== undefined ? { maxFollowUps: r.maxFollowUps } : {}), ...(r.ladder ? { ladder: r.ladder } : {}) });
+    changes.push(`${qid}: ${r.depth} probing${r.ladder ? `, laddered up to ${r.ladder} rungs` : ""}`);
   }
   if (a.objectives) { next.objectives = a.objectives; changes.push(`${a.objectives.length} objectives to cover`); }
   for (const o of a.addObjectives ?? []) if (!next.objectives.some((x) => norm(x) === norm(o))) { if (!next.objectives.length) next.objectives = [...study.objectives]; next.objectives.push(o); changes.push(`+objective “${o.slice(0, 40)}”`); }
@@ -288,6 +298,8 @@ export function applyAiInterviewAction(def: SurveyDefinition, a: AiInterviewActi
   if (a.maxFollowUps === null) { delete next.maxFollowUps; changes.push("follow-ups: the depth's default"); } else if (a.maxFollowUps !== undefined) { next.maxFollowUps = a.maxFollowUps; changes.push(`up to ${a.maxFollowUps} follow-up${a.maxFollowUps === 1 ? "" : "s"} per question`); }
   if (a.exploreBeyondGuide !== undefined) { next.exploreBeyondGuide = a.exploreBeyondGuide; changes.push(a.exploreBeyondGuide ? "may explore unexpected topics" : "stays within the guide"); }
   if (a.patience) { next.patience = a.patience; changes.push(`${a.patience} turn-taking`); }
+  if (a.stopWhenExhausted !== undefined) { next.stopWhenExhausted = a.stopWhenExhausted; changes.push(a.stopWhenExhausted ? "stops probing an exhausted topic" : "keeps probing to the follow-up cap"); }
+  if (a.sectionTiming !== undefined) { next.sectionTiming = a.sectionTiming; changes.push(a.sectionTiming ? "keeps each section to its minutes" : "no per-section timing"); }
   const parsed = AiModerationSchema.safeParse(next);
   if (!parsed.success) fail(`the AI interview settings are not valid: ${parsed.error.issues[0]?.path.join(".")} ${parsed.error.issues[0]?.message ?? ""}`);
   def.qualStudy = { ...study, aiModeration: parsed.data! };

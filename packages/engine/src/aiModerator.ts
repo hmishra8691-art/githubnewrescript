@@ -65,6 +65,8 @@ export interface PlanStep {
   stimuli: AiStimulus[];
   note?: string;
   closing: boolean;
+  /** Q3: ladder this question — up to this many "why does that matter to you" rungs */
+  ladder?: number;
 }
 
 export interface ModeratorPlan {
@@ -90,6 +92,12 @@ export interface ModeratorPlan {
   explore?: boolean;
   /** 2026-11-08: how long a voice interview waits through a pause (the page's turn-taking) */
   patience?: "quick" | "balanced" | "patient";
+  /** Q3: each section's minutes (the guide's, else its share of the interview by its steps) */
+  sectionMinutes?: Record<string, number>;
+  /** Q3: stop probing once follow-ups bring nothing new (absent = yes) */
+  stopWhenExhausted?: boolean;
+  /** Q3: keep sections to their minutes (absent = yes) */
+  sectionTiming?: boolean;
 }
 
 const clean = (s: string | undefined, max = 1200) => neutralizeUntrusted(String(s ?? "").replace(/\s+/g, " ").trim(), { maxChars: max });
@@ -126,10 +134,14 @@ export function buildModeratorPlan(study: QualStudy, opts: { guideLanguage?: str
     }
     for (const q of sec.questions) {
       const depth = depthFor(q.id);
-      first.push({ ...base, key: q.id, kind: "question", text: clean(q.text, 1000), probes: q.probes.map((p) => clean(p, 400)).filter(Boolean), conditional: q.conditionalProbes.map((c) => ({ ifMentions: clean(c.ifMentions, 200), ask: clean(c.ask, 400) })), depth, maxFollowUps: rule(q.id)?.maxFollowUps ?? (depth === "none" ? 0 : cfg.maxFollowUps ?? PROBE_DEPTH_FOLLOW_UPS[depth]), stimuli: [], ...(q.moderatorNote ? { note: clean(q.moderatorNote, 400) } : {}) });
+      const ladder = rule(q.id)?.ladder;
+      first.push({ ...base, key: q.id, kind: "question", text: clean(q.text, 1000), probes: q.probes.map((p) => clean(p, 400)).filter(Boolean), conditional: q.conditionalProbes.map((c) => ({ ifMentions: clean(c.ifMentions, 200), ask: clean(c.ask, 400) })), depth: ladder && depth === "none" ? "light" : depth, maxFollowUps: Math.max(rule(q.id)?.maxFollowUps ?? (depth === "none" ? 0 : cfg.maxFollowUps ?? PROBE_DEPTH_FOLLOW_UPS[depth]), ladder ?? 0), stimuli: [], ...(q.moderatorNote ? { note: clean(q.moderatorNote, 400) } : {}), ...(ladder ? { ladder } : {}) });
     }
     if (!first.length && stimuli.length) {
-      first.push({ ...base, key: `${sec.id}:stimulus`, kind: "stimulus", text: `Please take a look at ${stimuli.map((s) => s.name).join(" and ")}. What are your first impressions?`, probes: [], conditional: [], depth: cfg.defaultProbing, maxFollowUps: PROBE_DEPTH_FOLLOW_UPS[cfg.defaultProbing], stimuli: [] });
+      /* Q3: a screen-share task is asked as the task itself; a concept or picture for first impressions */
+      const share = stimuli.find((x) => x.kind === "screen_share");
+      const text = share ? `${clean(share.text || share.name, 600)} Please share your screen and talk me through what you do as you go.` : `Please take a look at ${stimuli.map((s) => s.name).join(" and ")}. What are your first impressions?`;
+      first.push({ ...base, key: `${sec.id}:stimulus`, kind: "stimulus", text, probes: [], conditional: [], depth: cfg.defaultProbing, maxFollowUps: PROBE_DEPTH_FOLLOW_UPS[cfg.defaultProbing], stimuli: [] });
     }
     if (!first.length) continue;
     first[0].stimuli = stimuli;
@@ -138,6 +150,15 @@ export function buildModeratorPlan(study: QualStudy, opts: { guideLanguage?: str
     steps.push(...first);
   }
   const objectives = (cfg.objectives.length ? cfg.objectives : study.objectives).map((t, i) => ({ id: `O${i + 1}`, text: clean(t, 400) })).filter((o) => o.text);
+  /* Q3: each section's minutes — the guide's own where it gives them, the rest of the interview shared by steps */
+  const targetMinutes = cfg.targetMinutes ?? study.durationMinutes ?? 20;
+  const sectionMinutes: Record<string, number> = {};
+  const secIds = [...new Set(steps.map((x) => x.sectionId))];
+  const given = new Map(study.sections.filter((x) => typeof x.minutes === "number" && x.minutes > 0).map((x) => [x.id, x.minutes as number]));
+  const givenTotal = secIds.reduce((n, id) => n + (given.get(id) ?? 0), 0);
+  const restSteps = steps.filter((x) => !given.has(x.sectionId)).length;
+  const restMinutes = Math.max(0, targetMinutes - givenTotal);
+  for (const id of secIds) sectionMinutes[id] = given.get(id) ?? (restSteps ? Math.max(1, Math.round((restMinutes * steps.filter((x) => x.sectionId === id).length / restSteps) * 10) / 10) : 1);
   return {
     title: clean(opts.title ?? study.title ?? "Interview", 200),
     persona: { name: clean(cfg.persona.name, 40) || "Alex", tone: cfg.persona.tone, ...(cfg.persona.style ? { style: clean(cfg.persona.style, 200) } : {}) },
@@ -147,7 +168,10 @@ export function buildModeratorPlan(study: QualStudy, opts: { guideLanguage?: str
     opening: clean(opening, 1200),
     closingScript,
     steps,
-    targetMinutes: cfg.targetMinutes ?? study.durationMinutes ?? 20,
+    targetMinutes,
+    sectionMinutes,
+    stopWhenExhausted: cfg.stopWhenExhausted !== false,
+    sectionTiming: cfg.sectionTiming !== false,
     maxTurns: cfg.maxTurns,
     costCapUsd: cfg.costCapUsd,
     silenceSeconds: cfg.silenceSeconds,
@@ -234,6 +258,21 @@ export interface ModeratorState {
   lastAnswer?: string;
   /** G1: how a voice interview talks, and what it measured (interruptions, end of speech → first audio) */
   voice?: VoiceStats;
+  /* Q3 (moderator v2) — all optional, so a state saved before reads as it did */
+  /** the section the interview is in, and when it entered it */
+  sectionId?: string;
+  sectionStartedAt?: number;
+  /** guide steps the interview has asked, in order */
+  visited?: string[];
+  /** laddering on this step: rungs asked, and whether a personal value was named */
+  rung?: number;
+  valueReached?: boolean;
+  /** each laddered step: how far it went */
+  ladders?: { step: string; rungs: number; value: boolean }[];
+  /** steps where probing stopped because the answers had nothing new */
+  exhausted?: string[];
+  /** sections that ran over their minutes (and what was skipped for it) */
+  sectionsOver?: { sectionId: string; minutes: number; budget: number; skipped: string[] }[];
 }
 
 export type ReplyIntent = "open" | "probe" | "clarify" | "conditional_probe" | "next" | "cover" | "check_in" | "resume" | "boundary" | "nudge" | "close" | "repeat";
@@ -295,6 +334,10 @@ interface TurnContext {
   interrupted?: InterruptInfo;
   /** the participant said, in their own words, that they have nothing more to add on this question */
   done?: boolean;
+  /** Q3: probing stopped — the last answer brought nothing new */
+  exhausted?: boolean;
+  /** Q3: this step ladders: the rung that would be asked next, of how many */
+  ladder?: { rung: number; of: number };
 }
 
 export type PreparedTurn =
@@ -357,8 +400,20 @@ function targetAfter(plan: ModeratorPlan, state: ModeratorState, now: number): T
   const skipped: string[] = [];
   let i = next;
   while (i < plan.steps.length && overTime && !plan.steps[i].closing) { skipped.push(plan.steps[i].key); i++; }
+  /* Q3: a section well over its minutes moves on to the next section (the rest of it is skipped and recorded) */
+  const over = sectionOver(plan, state, now);
+  if (!overTime && over && over.ratio >= 1.5) while (i < plan.steps.length && plan.steps[i].sectionId === state.sectionId && !plan.steps[i].closing) { skipped.push(plan.steps[i].key); i++; }
   if (i >= plan.steps.length) return { kind: "end", skipped };
   return { kind: "step", index: i, skipped };
+}
+
+/** Q3: how far the current section is over its minutes (null when timing is off or it has no budget) */
+function sectionOver(plan: ModeratorPlan, state: ModeratorState, now: number): { minutes: number; budget: number; ratio: number } | null {
+  if (plan.sectionTiming === false || !state.sectionId || state.sectionStartedAt === undefined) return null;
+  const budget = plan.sectionMinutes?.[state.sectionId];
+  if (!budget) return null;
+  const minutes = Math.max(0, (now - state.sectionStartedAt) / 60_000);
+  return { minutes, budget, ratio: minutes / budget };
 }
 
 function targetText(plan: ModeratorPlan, state: ModeratorState, t: Target): string {
@@ -368,7 +423,7 @@ function targetText(plan: ModeratorPlan, state: ModeratorState, t: Target): stri
   const s = plan.steps[t.index];
   const prev = plan.steps[t.index - 1];
   const lead = s.lead && (!prev || prev.sectionId !== s.sectionId) ? `${s.lead} ` : "";
-  const look = s.stimuli.length && s.kind === "question" ? `${w.look} ` : "";
+  const look = s.stimuli.length && s.kind === "question" ? `${s.stimuli.some((x) => x.kind === "screen_share") && shortLanguage(state.language) === "en" ? "When you're ready, please share your screen." : w.look} ` : "";
   return `${lead}${look}${s.text}`.trim();
 }
 
@@ -380,6 +435,7 @@ function closingText(plan: ModeratorPlan, state: ModeratorState, why: InterviewE
 
 /** move the state onto a target; returns the stimuli to show with it */
 function applyTarget(plan: ModeratorPlan, state: ModeratorState, t: Target, say: string): AiStimulus[] {
+  const prevStep = state.coverage ? -1 : state.step;
   if (t.kind !== "coverage") for (const k of t.skipped) if (!state.skipped.includes(k)) state.skipped.push(k);
   if (t.kind === "coverage") {
     state.coverage = { objectiveId: t.objective.id, text: say };
@@ -389,6 +445,8 @@ function applyTarget(plan: ModeratorPlan, state: ModeratorState, t: Target, say:
     state.coverage = null;
     state.step = t.index;
   } else {
+    const last = plan.steps[prevStep];
+    if (last?.ladder && (state.rung ?? 0) > 0) state.ladders = [...(state.ladders ?? []), { step: last.key, rungs: state.rung ?? 0, value: !!state.valueReached }].slice(-40);
     state.coverage = null;
     state.step = plan.steps.length;
     finish(plan, state, "completed");
@@ -399,9 +457,24 @@ function applyTarget(plan: ModeratorPlan, state: ModeratorState, t: Target, say:
   if (state.lastAnswer && answered[answered.length - 1] !== state.lastAnswer) answered.push(state.lastAnswer);
   if (state.asked[0] && answered.some(Boolean)) state.history = [...(state.history ?? []), { q: state.asked[0].slice(0, 200), a: answered.filter(Boolean).join(" / ").replace(/\s+/g, " ").slice(0, 400) }].slice(-10);
   state.lastAnswer = undefined;
+  /* Q3: the step that closes — how far its ladder went; the section the interview now enters */
+  const leaving = plan.steps[prevStep];
+  if (leaving?.ladder && (state.rung ?? 0) > 0) state.ladders = [...(state.ladders ?? []), { step: leaving.key, rungs: state.rung ?? 0, value: !!state.valueReached }].slice(-40);
+  state.rung = 0; state.valueReached = false;
+  if (t.kind === "step") {
+    const to = plan.steps[t.index];
+    const prevSection = state.sectionId;
+    if (prevSection && prevSection !== to.sectionId) {
+      const over = sectionOver(plan, state, state.lastAt);
+      const skippedHere = t.skipped.filter((k) => plan.steps.find((x) => x.key === k)?.sectionId === prevSection);
+      if (over && over.ratio > 1.15) state.sectionsOver = [...(state.sectionsOver ?? []), { sectionId: prevSection, minutes: Math.round(over.minutes * 10) / 10, budget: over.budget, skipped: skippedHere }].slice(-20);
+    }
+    if (to.sectionId !== state.sectionId) { state.sectionId = to.sectionId; state.sectionStartedAt = state.lastAt; }
+    if (!(state.visited ?? []).includes(to.key)) state.visited = [...(state.visited ?? []), to.key];
+  }
   state.followUps = 0; state.asked = [say]; state.usedProbes = []; state.fired = []; state.stepAnswers = [];
   state.lastQuestion = say;
-  if (t.kind === "step" && t.skipped.length) flag(state, "over_time", "info", `Over the ${plan.targetMinutes}-minute budget: skipped ${t.skipped.join(", ")}`);
+  if (t.kind === "step" && t.skipped.length) flag(state, "over_time", "info", `${t.skipped.every((k) => plan.steps.find((x) => x.key === k)?.sectionId === leaving?.sectionId) && !(elapsedMin(state, state.lastAt) > plan.targetMinutes * 1.05) ? `The section “${leaving?.sectionTitle ?? ""}” ran well over its minutes` : `Over the ${plan.targetMinutes}-minute budget`}: skipped ${t.skipped.join(", ")}`);
   return t.kind === "step" ? plan.steps[t.index].stimuli : [];
 }
 
@@ -437,9 +510,16 @@ function closeNow(plan: ModeratorPlan, state: ModeratorState, now: number, why: 
 }
 
 /** the probe the rules ask: the next unused scripted probe, else a default one in the participant's language */
-function rulesProbe(plan: ModeratorPlan, state: ModeratorState, answer: string): { say: string; scripted: number | null } {
+function rulesProbe(plan: ModeratorPlan, state: ModeratorState, answer: string): { say: string; scripted: number | null; rung?: boolean } {
   const s = currentStep(plan, state);
   const w = moderatorWords(state.language, plan);
+  /* Q3: a laddered question asks the next rung — why what they just said matters to them */
+  if (s?.ladder && (state.rung ?? 0) < s.ladder && !state.valueReached) {
+    const lang = shortLanguage(state.language);
+    const lines = lang === "en" ? LADDER_EN : [w.probes[2], w.probes[2], w.probes[2]];
+    const say = lines[Math.min(state.rung ?? 0, lines.length - 1)];
+    return { say: state.asked.includes(say) ? (lines.find((x) => !state.asked.includes(x)) ?? say) : say, scripted: null, rung: true };
+  }
   if (s) {
     const i = s.probes.findIndex((p, k) => !state.usedProbes.includes(k) && !state.asked.includes(p));
     if (i >= 0) return { say: s.probes[i], scripted: i };
@@ -449,6 +529,26 @@ function rulesProbe(plan: ModeratorPlan, state: ModeratorState, answer: string):
   return { say: generic, scripted: null };
 }
 
+/** Q3: the laddering rungs, from the attribute to what it does for them to why that matters (English; other languages: the model, else "what makes you say that") */
+const LADDER_EN = ["Why is that important to you?", "And what does that do for you?", "And why does that matter to you, personally?", "What would it mean for you if you didn't have that?", "And how does that make you feel about yourself?"];
+
+/**
+ * Q3: has the participant named a PERSONAL VALUE — the top of a ladder (a feeling, security, identity, family, a life
+ * goal)? English words and a few common phrasings; another language relies on the model's judgement.
+ */
+export function namesPersonalValue(answer: string): boolean {
+  return /\b(?:peace of mind|feel(?:ing)? (?:good|safe|secure|confident|in control|free|proud|respected|happy|calm|relaxed|myself)|(?:financial |job |my )security|my (?:own )?safety|freedom|independence|self[- ]?(?:esteem|respect|worth|confidence)|respect|belong(?:ing)?|my family|my kids|my children|happiness|enjoy(?:ing)? life|quality of life|who i am|being a good|accomplish(?:ment|ed)|achiev(?:e|ement)|success|stay(?:ing)? healthy|my health|wellbeing|well-being|stress[- ]free|less stress|control over my|in control)\b/i.test(answer);
+}
+
+/** Q3: how much of an answer is new on this question — share of its content words not said in earlier answers to it (1 when it is the first) */
+export function answerNovelty(answer: string, earlier: readonly string[]): number {
+  const words = (s: string) => (s.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? []).map((w) => w.slice(0, 6));
+  const now = [...new Set(words(answer))];
+  if (!earlier.length || !now.length) return earlier.length ? 0 : 1;
+  const seen = new Set(earlier.flatMap(words));
+  return now.filter((w) => !seen.has(w)).length / now.length;
+}
+
 /** the depth this step gets now: shallower when behind schedule, none past the cost cap */
 function effectiveDepth(plan: ModeratorPlan, state: ModeratorState, now: number): { depth: AiProbingDepth; max: number; why?: string } {
   const s = currentStep(plan, state);
@@ -456,6 +556,10 @@ function effectiveDepth(plan: ModeratorPlan, state: ModeratorState, now: number)
   const mins = elapsedMin(state, now);
   const done = plan.steps.length ? state.step / plan.steps.length : 1;
   if (mins > plan.targetMinutes * 0.9) return { depth: "none", max: 0, why: "time nearly used" };
+  /* Q3: a section over its minutes gets no more follow-ups; one nearly at them, at most one */
+  const over = sectionOver(plan, state, now);
+  if (over && over.ratio > 1.15) return { depth: "none", max: 0, why: `the section is over its ${over.budget} minutes` };
+  if (over && over.ratio > 0.9 && s.maxFollowUps > 1 && !s.ladder) return { depth: "light", max: Math.min(1, s.maxFollowUps), why: "the section is nearly at its minutes" };
   if (mins / plan.targetMinutes > done + 0.25 && s.depth === "deep") return { depth: "light", max: Math.min(1, s.maxFollowUps), why: "behind schedule" };
   /* a respondent giving one- or two-word answers is not pressed: at most one follow-up, so the interview stays bearable */
   if (state.shortAnswers >= 3 && s.maxFollowUps > 1) return { depth: "light", max: 1, why: "low engagement" };
@@ -531,10 +635,11 @@ export function moderatorGuideBlock(plan: ModeratorPlan): string {
     const extra = [
       s.probes.length ? `probes: ${s.probes.join(" | ")}` : "",
       s.conditional.length ? `if they mention ${s.conditional.map((c) => `“${c.ifMentions}” → ask “${c.ask}”`).join("; ")}` : "",
-      s.stimuli.length ? `shown: ${s.stimuli.map((x) => `${x.name}${x.kind === "text" && x.text && x.text !== x.name ? ` (“${x.text.slice(0, 300)}”)` : ` (${x.kind})`}`).join(", ")}` : "",
+      s.stimuli.length ? `shown: ${s.stimuli.map((x) => x.kind === "screen_share" ? `a screen share — the participant shows: ${(x.text || x.name).slice(0, 300)} (you cannot see it; ask them to describe what they do)` : `${x.name}${(x.kind === "text" || x.kind === "concept") && x.text && x.text !== x.name ? ` (${x.kind === "concept" ? "concept: " : ""}“${x.text.slice(0, 400)}”)` : ` (${x.kind})`}`).join(", ")}` : "",
+      s.ladder ? `LADDER up to ${s.ladder} rungs` : "",
       s.note ? `note: ${s.note}` : "",
     ].filter(Boolean).join("; ");
-    lines.push(`[${s.key}] ${s.kind === "exercise" ? "EXERCISE: " : ""}${s.text} (probing ${s.depth}, up to ${s.maxFollowUps} follow-up${s.maxFollowUps === 1 ? "" : "s"})${extra ? ` — ${extra}` : ""}`);
+    lines.push(`[${s.key}] ${s.kind === "exercise" ? "EXERCISE: " : ""}${s.text} (probing ${s.depth}, up to ${s.maxFollowUps} follow-up${s.maxFollowUps === 1 ? "" : "s"}${plan.sectionMinutes?.[s.sectionId] && plan.steps.find((x) => x.sectionId === s.sectionId) === s ? `; section about ${plan.sectionMinutes[s.sectionId]} min` : ""})${extra ? ` — ${extra}` : ""}`);
   }
   return lines.join("\n");
 }
@@ -559,6 +664,8 @@ function modelRequest(plan: ModeratorPlan, state: ModeratorState, now: number, c
     if (state.history?.length) parts.push(`EARLIER IN THE INTERVIEW (do not ask again; notice contradictions):\n${state.history.map((h) => `- Q: ${h.q}\n  A: ${fenceUntrusted(h.a, { source: "the participant's earlier answer", nonce: newFenceNonce(), maxChars: 420 })}`).join("\n")}`);
     parts.push(`THIS QUESTION SO FAR:\n${transcript}`);
     if (ctx.done) parts.push("DONE SIGNAL: the participant said they have nothing more to add on this question. Do not probe it again: thank them briefly and move on.");
+    if (ctx.exhausted) parts.push("EXHAUSTED: the last answer added nothing new to what they already said on this question. Do not probe it again: move on.");
+    if (ctx.ladder) parts.push(`LADDER (rung ${ctx.ladder.rung} of ${ctx.ladder.of}): this question ladders. Probe (intent probe) by asking why what they just said matters to them — from the feature, to what it does for them, to the personal value behind it (a feeling, security, identity, family, a life goal). Use their own words; one short "why" question. If they have already named a personal value, move on instead.`);
     parts.push(plan.explore === false ? "EXPLORING: not allowed — stay within the guide's questions and its probes; acknowledge a tangent briefly and return." : "EXPLORING: allowed — an unexpected point that matters to the objectives may get one short follow-up (intent probe) before you return to the guide.");
     parts.push(`NEXT STEP if you move on: ${next}`);
     if (ctx.interrupted) {
@@ -715,17 +822,24 @@ function prepareTurnInner(plan: ModeratorPlan, prior: ModeratorState, input: Par
   const saidDone = signalsDone(raw);
   const d = effectiveDepth(plan, state, now);
   const target = targetAfter(plan, state, now);
-  const canProbe = !saidDone && !state.coverage && d.depth !== "none" && state.followUps < d.max;
+  /* Q3: a ladder that reached a personal value is done; follow-ups that bring nothing new have exhausted the topic */
+  const laddering = !!step?.ladder && !state.coverage;
+  if (laddering && namesPersonalValue(raw)) state.valueReached = true;
+  const novelty = answerNovelty(raw, state.stepAnswers);
+  const exhausted = plan.stopWhenExhausted !== false && !state.coverage && state.followUps >= 1 && (novelty < 0.34 || words < 4) && !(laddering && !state.valueReached && novelty >= 0.2);
+  if (exhausted && step && !(state.exhausted ?? []).includes(step.key)) state.exhausted = [...(state.exhausted ?? []), step.key];
+  const ladderDone = laddering && (state.valueReached || (state.rung ?? 0) >= (step?.ladder ?? 0));
+  const canProbe = !saidDone && !exhausted && !(laddering && ladderDone && state.followUps >= (step?.ladder ?? 0)) && !state.coverage && d.depth !== "none" && state.followUps < d.max && !(laddering && state.valueReached);
   const allowed: ReplyIntent[] = canProbe ? ["probe", "clarify", target.kind === "end" ? "close" : "next", "check_in"] : [target.kind === "end" ? "close" : "next", "check_in"];
   const vague = !saidDone && (isVague(raw) || (d.depth === "deep" && hasEmotion(raw) && state.followUps === 0));
   const fallbackState = clone(state);
-  const fallback = rulesDecision(plan, fallbackState, now, { raw, canProbe, vague, target, flagsNow, depth: d, injected });
+  const fallback = rulesDecision(plan, fallbackState, now, { raw, canProbe, vague: vague || (laddering && !ladderDone), target, flagsNow, depth: exhausted ? { depth: d.depth, why: "the topic is exhausted — the last answer brought nothing new" } : laddering && state.valueReached ? { depth: d.depth, why: "the ladder reached a personal value" } : d, injected });
 
   if (injected || state.costUsd >= plan.costCapUsd || state.modelOff || opts.modelAvailable === false) {
     const why = injected ? "the answer read like instructions to the AI, so no model saw it" : state.costUsd >= plan.costCapUsd ? "AI cost cap reached" : "the AI provider is unavailable";
     return { kind: "final", state: fallbackState, reply: { ...fallback, decision: { ...fallback.decision, source: injected ? "rules" : "fallback", reason: `${fallback.decision.reason} (${why})` } } };
   }
-  const ctx: TurnContext = { allowed, answer: masked.text, target, depth: d.depth, questionText: currentText(plan, state), ...(input.interrupted?.said ? { interrupted: input.interrupted } : {}), ...(saidDone ? { done: true } : {}) };
+  const ctx: TurnContext = { allowed, answer: masked.text, target, depth: d.depth, questionText: currentText(plan, state), ...(input.interrupted?.said ? { interrupted: input.interrupted } : {}), ...(saidDone ? { done: true } : {}), ...(exhausted ? { exhausted: true } : {}), ...(laddering && canProbe ? { ladder: { rung: (state.rung ?? 0) + 1, of: step!.ladder! } } : {}) };
   return { kind: "model", state, request: modelRequest(plan, state, now, ctx, stepTranscript(plan, state, masked.text)), fallback, fallbackState, ctx };
 }
 
@@ -742,9 +856,10 @@ function rulesDecision(plan: ModeratorPlan, state: ModeratorState, now: number, 
   if (x.canProbe && x.vague && !x.injected) {
     const p = rulesProbe(plan, state, x.raw);
     if (p.scripted !== null) state.usedProbes.push(p.scripted);
+    if (p.rung) state.rung = (state.rung ?? 0) + 1;
     state.followUps++; state.asked.push(p.say); state.stepAnswers.push(x.raw); state.lastQuestion = p.say;
     moderatorTurn(state);
-    return reply(plan, state, now, { say: p.say, intent: "probe", source: "rules", reason: "a short or vague answer", flags: x.flagsNow, depth: x.depth.depth });
+    return reply(plan, state, now, { say: p.say, intent: "probe", source: "rules", reason: p.rung ? `laddering: rung ${state.rung} of ${currentStep(plan, state)?.ladder}` : "a short or vague answer", flags: x.flagsNow, depth: x.depth.depth });
   }
   const text = targetText(plan, state, x.target);
   const stimuli = applyTarget(plan, state, x.target, text);
@@ -835,6 +950,7 @@ export function finishTurn(plan: ModeratorPlan, prepared: Extract<PreparedTurn, 
     state.followUps++; state.asked.push(say); state.stepAnswers.push(ctx.answer); state.lastQuestion = say;
     const step = currentStep(plan, state);
     if (step) { const k = step.probes.findIndex((p) => norm(p) === norm(say)); if (k >= 0) state.usedProbes.push(k); }
+    if (ctx.ladder) state.rung = (state.rung ?? 0) + 1;
   } else if (ctx.target.kind === "coverage" && state.covered.includes(ctx.target.objective.id)) {
     /* the model reports the objective the coverage question was for as covered: skip it, go where the guide goes next */
     const t = targetAfter(plan, { ...state, coverageDone: true }, now);
@@ -877,6 +993,12 @@ export function fakeModeratorReply(plan: ModeratorPlan, prepared: Extract<Prepar
   const w = moderatorWords(state.language, plan);
   if (ctx.open) return { intent: "open", say: prepared.fallback.say, reason: "opening" };
   const covered = plan.objectives.filter((o) => keywordCover(ctx.answer, o.text)).map((o) => o.id);
+  /* Q3: a laddered question climbs: why what they said matters to them */
+  if (ctx.allowed.includes("probe") && ctx.ladder) {
+    const clause = ctx.answer.split(/[.!?\n।,]/)[0].trim().slice(0, 50);
+    const say = shortLanguage(state.language) === "en" ? `You said “${clause}” — why does that matter to you?` : `“${clause}” — ${w.probes[2]}`;
+    return { intent: "probe", say, reason: `ladder rung ${ctx.ladder.rung}`, covered };
+  }
   if (ctx.allowed.includes("probe") && isVague(ctx.answer)) {
     const clause = ctx.answer.split(/[.!?\n।]/)[0].trim().slice(0, 60);
     const lang = shortLanguage(state.language);
@@ -911,4 +1033,41 @@ export function listenRequest(plan: ModeratorPlan, state: ModeratorState, answer
 export function readListen(raw: unknown): "complete" | "continuing" | "unclear" {
   const v = raw && typeof raw === "object" ? String((raw as { state?: unknown }).state ?? "").toLowerCase() : "";
   return v === "complete" || v === "continuing" ? v : "unclear";
+}
+
+/* ------------------------------------------------------------ Q3: how closely an interview kept to its guide */
+
+export interface GuideAdherence {
+  /** 0–100: the guide steps asked (60%) and the objectives covered (40%); the steps alone when there are no objectives */
+  score: number;
+  stepsAsked: number;
+  steps: number;
+  /** guide steps not reached, and why (over time, a section over its minutes, the interview ended first) */
+  missed: { key: string; why: "skipped_for_time" | "not_reached" }[];
+  objectivesCovered: number;
+  objectives: number;
+  /** were the steps asked in the guide's order */
+  inOrder: boolean;
+  ladders: { step: string; rungs: number; value: boolean }[];
+  exhausted: string[];
+  sectionsOver: { sectionId: string; minutes: number; budget: number; skipped: string[] }[];
+}
+
+/**
+ * THE GUIDE-ADHERENCE RECORD of one interview, from its state: which steps of the guide were asked, in order or not,
+ * which were missed and why, the objectives covered, how far each ladder went, where probing stopped because the topic
+ * was exhausted, and which sections ran over their minutes. The closing section is not counted as a step to ask.
+ */
+export function guideAdherence(plan: ModeratorPlan, state: ModeratorState): GuideAdherence {
+  const steps = plan.steps.filter((s) => !s.closing);
+  const visited = (state.visited ?? []).filter((k) => steps.some((s) => s.key === k));
+  const asked = new Set(visited);
+  const missed = steps.filter((s) => !asked.has(s.key)).map((s) => ({ key: s.key, why: state.skipped.includes(s.key) ? "skipped_for_time" as const : "not_reached" as const }));
+  const order = steps.map((s) => s.key).filter((k) => asked.has(k));
+  const inOrder = visited.every((k, i) => k === order[i]);
+  const objectives = plan.objectives.length;
+  const covered = plan.objectives.filter((o) => state.covered.includes(o.id)).length;
+  const stepShare = steps.length ? asked.size / steps.length : 1;
+  const score = Math.round((objectives ? 0.6 * stepShare + 0.4 * (covered / objectives) : stepShare) * 1000) / 10;
+  return { score, stepsAsked: asked.size, steps: steps.length, missed, objectivesCovered: covered, objectives, inOrder, ladders: state.ladders ?? [], exhausted: state.exhausted ?? [], sectionsOver: state.sectionsOver ?? [] };
 }

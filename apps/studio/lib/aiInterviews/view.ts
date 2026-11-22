@@ -1,5 +1,5 @@
 import { AiLanguagePack, type SurveyDefinition } from "@rescript/schema";
-import { estimateInterviewCostUsd, buildModeratorPlan, launchProblems, moderationOf, interviewCounts, voiceSummaryOf, SERVICES, type InterviewSummary, type ModeratorFlag } from "@rescript/engine";
+import { estimateInterviewCostUsd, buildModeratorPlan, launchProblems, moderationOf, interviewCounts, voiceSummaryOf, guideAdherence, SERVICES, type InterviewSummary, type ModeratorFlag, type ModeratorState } from "@rescript/engine";
 import { redactText } from "@rescript/analytics";
 
 /**
@@ -41,7 +41,8 @@ export interface LiveView {
   counts: ReturnType<typeof interviewCounts>["counts"] | null;
   quotas: ReturnType<typeof interviewCounts>["quotas"];
   target: number | null;
-  interviews: InterviewSummary[];
+  /** Q3: each interview with how closely it kept to the guide (from its moderator state) */
+  interviews: (InterviewSummary & { adherence?: { score: number; stepsAsked: number; steps: number; missed: number; ladders: number; exhausted: number; sectionsOver: number } | null })[];
   available: boolean;
   note?: string;
   /** G1: can this installation offer realtime voice interviews (AI_REALTIME_*), and if not why */
@@ -60,7 +61,17 @@ export function liveView(study: StudyRow | null, sessions: SessionRow[], runtime
   const guide = study.guide as SurveyDefinition["qualStudy"];
   const cfg = moderationOf(guide!);
   const plan = buildModeratorPlan(guide!, { guideLanguage: study.guide_language, title: study.title });
-  const interviews = sessions.map(summaryOf);
+  const interviews = sessions.map((r) => {
+    const st = r.state && typeof r.state === "object" ? (r.state as ModeratorState) : null;
+    let adherence = null;
+    try {
+      if (st && Array.isArray(st.skipped) && Array.isArray(st.covered)) {
+        const a = guideAdherence(plan, st);
+        adherence = { score: a.score, stepsAsked: a.stepsAsked, steps: a.steps, missed: a.missed.length, ladders: a.ladders.length, exhausted: a.exhausted.length, sectionsOver: a.sectionsOver.length };
+      }
+    } catch { adherence = null; }
+    return { ...summaryOf(r), adherence };
+  });
   const base = runtimeBase.replace(/\/+$/, "");
   return {
     study: { id: study.id, title: study.title, status: study.status, link: `${base}/i/${study.link_token}`, testLink: `${base}/i/${study.link_token}?test=${study.test_token}`, spentUsd: Number(study.spent_usd ?? 0), launchedAt: study.launched_at, objectives: plan.objectives, modes: cfg.modes, languages: plan.languages, budgetUsd: cfg.studyBudgetUsd ?? null },

@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import {
-  applySurveyActions, coerceSurveyActions, buildModeratorPlan, estimateInterviewCostUsd, fakeModeratorReply, finishTurn, launchProblems, moderationOf, prepareTurn, startInterview,
+  applySurveyActions, coerceSurveyActions, buildModeratorPlan, estimateInterviewCostUsd, fakeModeratorReply, finishTurn, launchProblems, moderationOf, prepareTurn, startInterview, guideAdherence,
   type ModeratorPlan, type ModeratorState,
 } from "@rescript/engine";
 import { AI_PROBING_DEPTHS, interviewFormatOf, modesForFormat, type AiModeration } from "@rescript/schema";
@@ -166,8 +166,13 @@ function Setup({ realtime }: { realtime?: { available: boolean; reason?: string 
         <label className="f"><span>Redirect when done (https; {"{{pid}}"} = the panel id)</span><input className="input" value={form.redirect} onChange={(e) => set("redirect", e.target.value)} placeholder="https://panel.example.com/complete?pid={{pid}}" /></label>
       </div>
       <details><summary>Probing per question</summary>
-        {questions.filter((x) => !x.closing).map((x) => <div key={x.id} className="ql-row"><span className="ql-muted" style={{ minWidth: 60 }}>{x.id}</span><span style={{ flex: 1 }}>{x.text}</span><select className="select small" data-testid="ai-setup-question-probing" data-question={x.id} value={form.perQuestion[x.id] ?? ""} onChange={(e) => set("perQuestion", { ...form.perQuestion, [x.id]: e.target.value })}><option value="">default</option>{AI_PROBING_DEPTHS.map((d) => <option key={d}>{d}</option>)}</select></div>)}
+        {questions.filter((x) => !x.closing).map((x) => <div key={x.id} className="ql-row"><span className="ql-muted" style={{ minWidth: 60 }}>{x.id}</span><span style={{ flex: 1 }}>{x.text}</span><select className="select small" data-testid="ai-setup-question-probing" data-question={x.id} value={form.perQuestion[x.id] ?? ""} onChange={(e) => set("perQuestion", { ...form.perQuestion, [x.id]: e.target.value })}><option value="">default</option>{AI_PROBING_DEPTHS.map((d) => <option key={d}>{d}</option>)}<option value="ladder:2">deep + ladder (2 rungs)</option><option value="ladder:3">deep + ladder (3 rungs)</option></select></div>)}
+        <p className="ql-muted">Laddering asks why what the participant said matters to them, rung by rung, until they name a personal value (a feeling, security, family, a life goal) or the rungs are used.</p>
       </details>
+      <div className="ql-grid">
+        <label className="f"><span>Exhausted topics</span><select className="select" data-testid="ai-setup-exhausted" value={form.exhausted ? "stop" : "keep"} onChange={(e) => set("exhausted", e.target.value === "stop")}><option value="stop">stop probing when answers bring nothing new</option><option value="keep">probe up to the follow-up cap</option></select></label>
+        <label className="f"><span>Section timing</span><select className="select" data-testid="ai-setup-section-timing" value={form.sectionTiming ? "on" : "off"} onChange={(e) => set("sectionTiming", e.target.value === "on")}><option value="on">keep each section to its minutes (the guide's, or a share)</option><option value="off">only the interview's total time</option></select></label>
+      </div>
       <details><summary>Screener and quotas</summary>
         <p className="ql-muted">One question per block: the question on the first line, then one answer per line as “answer =&gt; segment”; end an answer with “ (screen out)” to turn that answer away. Quotas: “segment: number” per line.</p>
         <textarea className="ta" rows={5} data-testid="ai-setup-screener" value={form.screener} onChange={(e) => set("screener", e.target.value)} placeholder={"Who pays the household broadband bill?\nI do => Payers\nSomeone else (screen out)"} />
@@ -187,14 +192,15 @@ function Setup({ realtime }: { realtime?: { available: boolean; reason?: string 
   );
 }
 
-interface FormState { format: "voice" | "chat" | "hybrid"; maxFollowUps: string; patience: string; explore: boolean; voiceStyles: ("turn_based" | "conversation" | "realtime")[]; modes: ("text" | "voice" | "video")[]; minutes: string; maxTurns: string; probing: string; target: string; languages: string; persona: string; tone: string; cap: string; recording: string; thanks: string; incentive: string; redirect: string; perQuestion: Record<string, string>; screener: string; quotas: string; objectives: string }
+interface FormState { format: "voice" | "chat" | "hybrid"; maxFollowUps: string; patience: string; explore: boolean; voiceStyles: ("turn_based" | "conversation" | "realtime")[]; modes: ("text" | "voice" | "video")[]; minutes: string; maxTurns: string; probing: string; target: string; languages: string; persona: string; tone: string; cap: string; recording: string; thanks: string; incentive: string; redirect: string; perQuestion: Record<string, string>; screener: string; quotas: string; objectives: string; exhausted: boolean; sectionTiming: boolean }
 function toForm(c: AiModeration, configured: boolean): FormState {
   return {
     format: configured ? interviewFormatOf(c) : "chat", maxFollowUps: c.maxFollowUps !== undefined ? String(c.maxFollowUps) : "", patience: c.patience ?? "balanced", explore: c.exploreBeyondGuide !== false,
     voiceStyles: c.voiceStyles?.length ? [...c.voiceStyles] : ["turn_based", "conversation"],
     modes: configured ? c.modes : ["text"], minutes: c.targetMinutes ? String(c.targetMinutes) : "", maxTurns: String(c.maxTurns), probing: c.defaultProbing, target: c.targetCompletes ? String(c.targetCompletes) : "",
     languages: c.languages.join(", "), persona: c.persona.name, tone: c.persona.tone, cap: String(c.costCapUsd), recording: c.recordingConsent, thanks: c.thankYouMessage ?? "", incentive: c.incentive ?? "", redirect: c.redirectUrl ?? "",
-    perQuestion: Object.fromEntries(c.probing.map((r) => [r.questionId, r.depth])),
+    perQuestion: Object.fromEntries(c.probing.map((r) => [r.questionId, r.ladder ? `ladder:${r.ladder}` : r.depth])),
+    exhausted: c.stopWhenExhausted !== false, sectionTiming: c.sectionTiming !== false,
     screener: c.screener.map((sq) => [sq.text, ...sq.options.map((o) => `${o.label}${o.segment ? ` => ${o.segment}` : ""}${o.qualifies ? "" : " (screen out)"}`)].join("\n")).join("\n\n"),
     quotas: c.quotas.map((x) => `${x.segment}: ${x.target}`).join("\n"), objectives: c.objectives.join("\n"),
   };
@@ -207,9 +213,9 @@ function fromForm(f: FormState, questionIds: string[]): { ok: true; action: Reco
   if (screener.some((q) => q.options.length < 2)) return { ok: false, error: "Each screener question needs at least two answers, one per line." };
   const quotas = f.quotas.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const m = l.match(/^(.+?)\s*:\s*(\d+)$/); return m ? { segment: m[1], target: Number(m[2]) } : null; });
   if (quotas.some((x) => !x)) return { ok: false, error: "Quotas are “segment: number”, one per line." };
-  const perQuestion = Object.entries(f.perQuestion).filter(([id, d]) => d && questionIds.includes(id)).map(([question, depth]) => ({ question, depth }));
+  const perQuestion = Object.entries(f.perQuestion).filter(([id, d]) => d && questionIds.includes(id)).map(([question, depth]) => (depth.startsWith("ladder:") ? { question, depth: "deep", ladder: Number(depth.slice(7)) } : { question, depth }));
   return { ok: true, action: {
-    op: "configure_ai_interviews", enabled: true, format: f.format, maxFollowUps: num(f.maxFollowUps) ?? null, exploreBeyondGuide: f.explore, patience: f.patience, modes: f.modes, targetMinutes: num(f.minutes) ?? null, maxTurns: num(f.maxTurns), defaultProbing: f.probing,
+    op: "configure_ai_interviews", enabled: true, format: f.format, maxFollowUps: num(f.maxFollowUps) ?? null, exploreBeyondGuide: f.explore, patience: f.patience, stopWhenExhausted: f.exhausted, sectionTiming: f.sectionTiming, modes: f.modes, targetMinutes: num(f.minutes) ?? null, maxTurns: num(f.maxTurns), defaultProbing: f.probing,
     resetProbing: true, ...(perQuestion.length ? { probing: perQuestion } : {}), languages: f.languages.split(/[,\s]+/).filter(Boolean), targetCompletes: num(f.target) ?? null,
     persona: { name: f.persona || "Alex", tone: f.tone }, costCapUsd: num(f.cap), recordingConsent: f.recording,
     ...(f.modes.includes("voice") && f.voiceStyles.length ? { voiceStyles: f.voiceStyles } : {}),
@@ -297,7 +303,7 @@ function Simulator() {
         <>
           <div className="ai-sim-log">{turns.map((t, i) => <div key={i} className="ql-row" data-testid={`ai-sim-${t.who}`}><b style={{ minWidth: 80 }}>{t.who === "moderator" ? plan.persona.name : "You"}</b><span style={{ flex: 1 }}>{t.text}{t.why && <span className="ql-muted" title="why the moderator said this"> — {t.why}</span>}</span></div>)}</div>
           {state.phase !== "done" ? <div className="ql-row"><input className="input" style={{ flex: 1 }} data-testid="ai-sim-input" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) answer("answer"); }} placeholder="Answer as a participant would…" /><button type="button" className="btn small primary" data-testid="ai-sim-send" disabled={!text.trim()} onClick={() => answer("answer")}>Send</button><button type="button" className="btn small" onClick={() => answer("stop")}>Stop</button></div>
-            : <div className="ql-row"><span className="badge success" data-testid="ai-sim-done">Finished</span><span className="ql-muted">covered {state.covered.length} of {plan.objectives.length} objectives · {state.turns} moderator turns{state.flags.length ? ` · flags: ${state.flags.map((f) => f.kind).join(", ")}` : ""}</span><button type="button" className="btn small" onClick={begin}>Again</button></div>}
+            : <div className="ql-row"><span className="badge success" data-testid="ai-sim-done">Finished</span><span className="ql-muted">covered {state.covered.length} of {plan.objectives.length} objectives · {state.turns} moderator turns · guide adherence {guideAdherence(plan, state).score}%{state.ladders?.length ? ` · ${state.ladders.length} laddered` : ""}{state.exhausted?.length ? ` · ${state.exhausted.length} topics exhausted` : ""}{state.flags.length ? ` · flags: ${state.flags.map((f) => f.kind).join(", ")}` : ""}</span><button type="button" className="btn small" onClick={begin}>Again</button></div>}
         </>
       )}
     </div>
@@ -328,12 +334,13 @@ function Live({ view, api, busy, refresh, open, setOpen }: { view: AiView; api: 
       {view.quotas.length > 0 && <div className="ql-row" data-testid="ai-quotas">{view.quotas.map((q) => <span key={q.segment} className="chip" data-testid="ai-quota" data-segment={q.segment}>{q.segment}: {q.completed}/{q.target}{q.inProgress ? ` (+${q.inProgress} in progress)` : ""}</span>)}</div>}
       {!view.interviews.length && <div className="empty">No interviews yet — share the link.</div>}
       {view.interviews.length > 0 && (
-        <div className="table-wrap"><table className="grid" data-testid="ai-table"><thead><tr><th>Participant</th><th>Segment</th><th>Mode</th><th>Status</th><th>Flags</th><th>Turns</th><th>Minutes</th><th>AI $</th><th /></tr></thead><tbody>
+        <div className="table-wrap"><table className="grid" data-testid="ai-table"><thead><tr><th>Participant</th><th>Segment</th><th>Mode</th><th>Status</th><th>Flags</th><th title="How closely the interview kept to the guide: steps asked (60%) and objectives covered (40%)">Guide</th><th>Turns</th><th>Minutes</th><th>AI $</th><th /></tr></thead><tbody>
           {[...real, ...tests].map((x) => (
             <tr key={x.id} data-testid="ai-row" data-status={x.status} data-participant={x.participant} data-test={x.isTest ? "1" : "0"} data-excluded={x.excluded ? "1" : "0"}>
               <td>{x.participant}{x.isTest ? " (test)" : ""}<PanelChip e={entryFor(panelEntries, x.id)} /></td><td>{x.segment ?? ""}</td><td>{x.mode}{x.language ? ` · ${x.language}` : ""} <VoiceStats v={x.voice} /></td>
               <td><span className={`badge ${STATUS_BADGE[x.status] ?? "neutral"}`}>{STATUS_WORD[x.status] ?? x.status}</span>{x.excluded && <span className="badge neutral">Excluded</span>}</td>
               <td>{x.flags.filter((f) => f.kind !== "provider_fallback").map((f, i) => <span key={i} className={`badge ${f.severity === "alert" ? "error" : f.severity === "warning" ? "warning" : "neutral"}`} title={f.note} data-testid="ai-flag" data-kind={f.kind}>{FLAG_WORD[f.kind] ?? f.kind}</span>)}</td>
+              <td data-testid="ai-adherence">{x.adherence ? <span title={`${x.adherence.stepsAsked} of ${x.adherence.steps} guide steps asked${x.adherence.missed ? `, ${x.adherence.missed} missed` : ""}${x.adherence.ladders ? ` · ${x.adherence.ladders} laddered` : ""}${x.adherence.exhausted ? ` · ${x.adherence.exhausted} topics exhausted` : ""}${x.adherence.sectionsOver ? ` · ${x.adherence.sectionsOver} sections over time` : ""}`}>{Math.round(x.adherence.score)}%</span> : "—"}</td>
               <td>{x.turns}</td><td>{x.minutes}</td><td>{x.costUsd.toFixed(3)}</td>
               <td><button type="button" className="btn small" data-testid="ai-open" onClick={() => setOpen(open === x.id ? null : x.id)}>{open === x.id ? "Close" : "Open"}</button></td>
             </tr>

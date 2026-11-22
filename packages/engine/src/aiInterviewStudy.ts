@@ -250,6 +250,9 @@ export function transcriptForQual(turns: readonly InterviewTurnRecord[], o: { st
 /** a stimulus the participant's page may show: https media or text only */
 export function displayableStimulus(s: AiStimulus): AiStimulus | null {
   if (s.kind === "text") return { name: s.name, kind: "text", text: (s.text ?? s.name).slice(0, 2000) };
+  /* Q3: a concept board (its picture only when https) and a screen-share task (what to show) */
+  if (s.kind === "concept") { const url = s.url ? safeHttpsUrl(s.url) : null; return { name: s.name, kind: "concept", text: (s.text ?? s.name).slice(0, 2000), ...(url ? { url } : {}), ...(s.alt ? { alt: s.alt.slice(0, 300) } : {}) }; }
+  if (s.kind === "screen_share") return { name: s.name, kind: "screen_share", text: (s.text ?? s.name).slice(0, 1000) };
   const url = safeHttpsUrl(s.url);
   return url ? { name: s.name, kind: s.kind, url, ...(s.alt ? { alt: s.alt.slice(0, 300) } : {}) } : { name: s.name, kind: "text", text: s.name };
 }

@@ -32,6 +32,11 @@
 .ai-stim img, .ai-stim video { max-width: 100%; max-height: 50vh; border-radius: 10px; display: block; }
 .ai-stim figcaption { font-size: .85em; color: var(--rs-subtle, #4b5563); margin-top: 4px; }
 .ai-stim.text { background: #fff; border-left: 4px solid var(--rs-primary, #2563eb); padding: 8px 12px; border-radius: 6px; }
+.ai-stim.concept { background: #fff; border: 1px solid var(--rs-border, #e5e7eb); border-top: 4px solid var(--rs-primary, #2563eb); padding: 10px 14px; border-radius: 8px; }
+.ai-stim.concept h3 { margin: 0 0 6px; font-size: 1.05em; }
+.ai-stim.concept img { margin: 6px 0; }
+.ai-stim.screen { background: #fff; border: 1px dashed var(--rs-primary, #2563eb); padding: 10px 14px; border-radius: 8px; }
+.ai-screen-preview { max-width: 100%; max-height: 30vh; border-radius: 8px; display: block; margin: 8px 0; }
 .ai-compose { border-top: 1px solid #e5e7eb; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
 .ai-row { display: flex; align-items: center; gap: 8px; }
 .ai-voice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

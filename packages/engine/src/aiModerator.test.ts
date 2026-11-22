@@ -92,10 +92,10 @@ test("probing: a vague answer → the model probes; follow-ups are counted; at t
   assert.equal(f.reply.decision.source, "model"); assert.equal(f.state.costUsd, 0.01);
   st = f.state;
   for (let i = 0; i < 2; i++) {
-    f = finishTurn(plan, model(prepareTurn(plan, st, answer("The router kept dropping the connection every evening when we streamed."), { now: min(2 + i) })), { say: "What happened after the connection dropped again?", intent: "probe" }, { now: min(2 + i) });
+    f = finishTurn(plan, model(prepareTurn(plan, st, answer(["The router kept dropping the connection every evening when we streamed.", "Support blamed our wiring, then promised an engineer visit that never happened."][i]), { now: min(2 + i) })), { say: "What happened after the connection dropped again?", intent: "probe" }, { now: min(2 + i) });
     st = f.state;
   }
-  assert.equal(st.followUps, 3);
+  assert.equal(st.followUps, 3, "each follow-up brought something new, so none counted as exhausted");
   const p4 = model(prepareTurn(plan, st, answer("We called them and nothing changed, so I started comparing offers online."), { now: min(4) }));
   assert.deepEqual(p4.ctx.allowed, ["next", "check_in"]);
   const refused = finishTurn(plan, p4, { say: "Why did nothing change, do you think?", intent: "probe" }, { now: min(4) });

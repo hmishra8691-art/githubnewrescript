@@ -53,7 +53,7 @@ import { joinWavs } from "@/lib/voice/wav";
 type Mode = "text" | "voice" | "video";
 type Choice = "text" | "voice" | "conversation" | "realtime" | "video";
 type Style = "turn_based" | "conversation" | "realtime";
-interface Stimulus { name: string; kind: "image" | "video" | "text"; url?: string; text?: string; alt?: string }
+interface Stimulus { name: string; kind: "image" | "video" | "text" | "concept" | "screen_share"; url?: string; text?: string; alt?: string }
 interface Turn { seq: number; speaker: "moderator" | "participant"; text: string; stimuli?: Stimulus[] }
 interface Info { title: string; persona: string; modes: Mode[]; languages: string[]; targetMinutes: number; consent: { statement: string; recordingDisclosure?: string; dataUse?: string }; recordingConsent: "optional" | "required"; screener: { id: string; text: string; kind: "single" | "multi" | "number"; options: string[] }[]; incentive?: string; silenceSeconds: number; voiceStyles?: Style[]; format?: "voice" | "chat" | "hybrid"; dictation?: boolean; patience?: "quick" | "balanced" | "patient"; purpose?: string; invitedBecause?: string }
 interface Interview { participant: string; mode: Mode; language: string; status: string; done: boolean; turns: Turn[]; redirect: string | null; lastSeq: number; silenceSeconds: number; recording: boolean; note?: string; code?: string | null; voice?: Style }
@@ -553,6 +553,7 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
   const turnBasedVoice = voice && !showConv && !showRealtime;
   /* a chat (or hybrid) study: a typed session may dictate any answer — speak, check the words, send */
   const dictation = iv.mode === "text" && !!info.dictation && !conv.on;
+  const lastModeratorSeq = [...iv.turns].reverse().find((x) => x.speaker === "moderator")?.seq ?? -1;
   return (
     <Shell lang={lang} dir={dir}>
       <div className="ai-chat" data-testid="ai-chat" data-mode={iv.mode} data-voice={iv.voice ?? ""} data-status={iv.status} data-done={iv.done ? "1" : "0"} data-lang={lang} data-dir={dir}>
@@ -567,7 +568,9 @@ export function AiInterview({ token, test, pid, params, acceptLanguage, forcedLa
             <div key={x.seq} className={`ai-turn ${x.speaker}`} data-testid={`ai-turn-${x.speaker}`} data-seq={x.seq}>
               <span className="ai-sr">{x.speaker === "moderator" ? `${info.persona}: ` : `${t.you}: `}</span>
               <p dir="auto">{x.text}</p>
-              {x.stimuli?.map((s, i) => <StimulusView key={i} s={s} />)}
+              {x.stimuli?.map((s, i) => s.kind === "screen_share"
+                ? <ScreenShareTask key={i} s={s} active={!iv.done && x.seq === lastModeratorSeq} recording={iv.recording} sessionToken={sessionToken} onStored={(id) => setMediaIds((m) => ({ ...m, video: id }))} />
+                : <StimulusView key={i} s={s} />)}
             </div>
           ))}
           {hold && <div className="ai-turn participant pending" data-testid="ai-held" data-signal={hold.signal ?? ""}><span className="ai-sr">{`${t.you}: `}</span><p dir="auto">{hold.text}</p></div>}
@@ -642,6 +645,8 @@ function choicesOf(info: Info): Choice[] {
 }
 
 function StimulusView({ s }: { s: Stimulus }) {
+  /* Q3: a concept board — its title, the concept in the researcher's words, its picture when it has one */
+  if (s.kind === "concept") return <article className="ai-stim concept" data-testid="ai-stimulus" data-kind="concept" dir="auto"><h3>{s.name}</h3>{s.url ? <img src={s.url} alt={s.alt ?? s.name} referrerPolicy="no-referrer" /> : null}{s.text ? <p>{s.text}</p> : null}</article>;
   if (s.kind === "image" && s.url) return <figure className="ai-stim" data-testid="ai-stimulus"><img src={s.url} alt={s.alt ?? s.name} referrerPolicy="no-referrer" /><figcaption dir="auto">{s.name}</figcaption></figure>;
   if (s.kind === "video" && s.url) return <figure className="ai-stim" data-testid="ai-stimulus"><video src={s.url} controls playsInline preload="metadata" aria-label={s.name} /><figcaption dir="auto">{s.name}</figcaption></figure>;
   return <blockquote className="ai-stim text" data-testid="ai-stimulus" dir="auto"><b>{s.name}</b>{s.text && s.text !== s.name ? <p>{s.text}</p> : null}</blockquote>;
@@ -651,4 +656,66 @@ function Shell({ children, lang, dir }: { children: React.ReactNode; lang: strin
   /* G1: the document follows the page's language and direction (screen readers, Urdu / Arabic layout) */
   React.useEffect(() => { try { document.documentElement.lang = lang; document.documentElement.dir = dir; } catch { /* no document */ } }, [lang, dir]);
   return <main className="ai-shell" lang={lang} dir={dir} data-testid="ai-shell">{children}</main>;
+}
+
+/**
+ * Q3 — A SCREEN-SHARE TASK: the participant shares their screen (the browser asks which window), does the task and talks
+ * the moderator through it. With their recording consent the screen is recorded and stored privately with this answer
+ * (the turn names it); without it, nothing leaves the browser. The AI moderator cannot see the screen — it hears what
+ * they say about it.
+ */
+function ScreenShareTask({ s, active, recording, sessionToken, onStored }: { s: Stimulus; active: boolean; recording: boolean; sessionToken: string | null; onStored: (mediaId: string) => void }) {
+  const [state, setState] = React.useState<"idle" | "sharing" | "saving" | "saved" | "error">("idle");
+  const [note, setNote] = React.useState<string | null>(null);
+  const ref = React.useRef<{ stream: MediaStream; rec: MediaRecorder | null; chunks: Blob[]; started: number } | null>(null);
+  const preview = React.useRef<HTMLVideoElement>(null);
+  React.useEffect(() => () => { ref.current?.stream.getTracks().forEach((t) => t.stop()); }, []);
+  const start = async () => {
+    setNote(null);
+    const md = navigator.mediaDevices as MediaDevices & { getDisplayMedia?: (c: unknown) => Promise<MediaStream> };
+    if (!md?.getDisplayMedia) { setState("error"); setNote("This browser cannot share a screen — describe what you would do instead."); return; }
+    let stream: MediaStream;
+    try { stream = await md.getDisplayMedia({ video: true, audio: false }); } catch { setNote("Screen sharing was not started — you can try again, or describe what you would do."); return; }
+    const r = { stream, rec: null as MediaRecorder | null, chunks: [] as Blob[], started: Date.now() };
+    if (recording && typeof MediaRecorder === "function") {
+      const mime = ["video/webm;codecs=vp8", "video/webm"].find((m) => MediaRecorder.isTypeSupported?.(m));
+      try { const m = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), videoBitsPerSecond: 600_000 }); m.ondataavailable = (e) => { if (e.data.size) r.chunks.push(e.data); }; m.start(2000); r.rec = m; } catch { /* shared, not recorded */ }
+    }
+    stream.getVideoTracks()[0]?.addEventListener("ended", () => { void stop(); });
+    ref.current = r;
+    setState("sharing");
+    setTimeout(() => { if (preview.current) { preview.current.srcObject = stream; void preview.current.play().catch(() => {}); } }, 0);
+  };
+  const stop = async () => {
+    const r = ref.current; if (!r) return;
+    ref.current = null;
+    const done = new Promise<void>((res) => { if (!r.rec || r.rec.state === "inactive") return res(); r.rec.addEventListener("stop", () => setTimeout(res, 0), { once: true }); r.rec.stop(); });
+    await done;
+    r.stream.getTracks().forEach((t) => t.stop());
+    if (!r.chunks.length || !sessionToken) { setState("saved"); return; }
+    setState("saving");
+    const blob = new Blob(r.chunks, { type: r.chunks[0].type || "video/webm" });
+    const seconds = Math.round((Date.now() - r.started) / 1000);
+    try {
+      const up = new RecordingUploader({ endpoints: { begin: "/api/ai-interview/media/ticket", parts: "/api/ai-interview/media/parts", complete: "/api/ai-interview/media/confirm" }, mimeType: blob.type, estimatedBytes: blob.size, beginExtra: { sessionToken, kind: "screen", durationSeconds: seconds }, completeExtra: { sessionToken }, onState: () => {} });
+      await up.begin(); up.push(blob);
+      const out = await up.finish(seconds);
+      if (out.ok) { onStored(out.mediaId); setState("saved"); } else { setState("error"); setNote("The screen recording could not be saved; your answer still counts."); }
+    } catch { setState("error"); setNote("The screen recording could not be saved; your answer still counts."); }
+  };
+  return (
+    <div className="ai-stim screen" data-testid="ai-screen-share" data-state={state} dir="auto">
+      <b>{s.name}</b>{s.text ? <p>{s.text}</p> : null}
+      {active && state === "idle" && <button type="button" className="ai-btn" data-testid="ai-screen-start" onClick={() => void start()}>Share your screen</button>}
+      {state === "sharing" && <>
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+        <video ref={preview} muted playsInline className="ai-screen-preview" aria-label="Your shared screen" />
+        <p className="ai-muted">{recording ? "Your screen is being shared and recorded for the research team. Talk us through what you do." : "Your screen is being shared (not recorded). Talk us through what you do."}</p>
+        <button type="button" className="ai-btn" data-testid="ai-screen-stop" onClick={() => void stop()}>Stop sharing</button>
+      </>}
+      {state === "saving" && <p className="ai-muted">Saving the screen recording…</p>}
+      {state === "saved" && <p className="ai-muted" data-testid="ai-screen-done">Screen sharing ended. Now tell the interviewer how it went.</p>}
+      {note && <p className="ai-muted" role="status">{note}</p>}
+    </div>
+  );
 }

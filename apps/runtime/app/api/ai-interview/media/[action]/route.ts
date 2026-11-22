@@ -15,7 +15,8 @@ export const runtime = "nodejs";
  * unless the participant agreed to recording. The turn names the media id; the turn route keeps it
  * only when this interview owns it.
  */
-const KIND = { audio: "answer_audio", video: "answer_upload" } as const;
+/* Q3: "screen" — a screen-share task's recording (any mode: the participant chose to share and agreed to recording) */
+const KIND = { audio: "answer_audio", video: "answer_upload", screen: "answer_upload" } as const;
 
 export async function POST(req: NextRequest, { params }: { params: { action: string } }) {
   try {
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: { action: str
     const db = handle.db;
     if (params.action === "ticket") {
       const kind = KIND[String(body.kind ?? "audio") as keyof typeof KIND];
-      if (!kind || (kind === "answer_upload" && session.mode !== "video")) return NextResponse.json({ error: "audio, or video in a camera interview" }, { status: 400 });
+      if (!kind || (kind === "answer_upload" && session.mode !== "video" && body.kind !== "screen")) return NextResponse.json({ error: "audio, video in a camera interview, or a screen share" }, { status: 400 });
       const ticket = await beginUpload(db, { kind, customerId: study.customerId, surveyId: study.surveyId, questionId: "ai_interview", sessionId: session.id, responseId: null, answerKey: null, fileName: typeof body.fileName === "string" ? body.fileName : null, mimeType: typeof body.mimeType === "string" ? body.mimeType : null, bytes: Number(body.bytes) || null, durationSeconds: Number(body.durationSeconds) || null, clientToken: typeof body.clientToken === "string" ? body.clientToken : null });
       if (!(await registerKey("media", ticket.mediaId, study.surveyId))) return NextResponse.json({ error: "The upload could not be started just now — it will be retried." }, { status: 503 });
       return NextResponse.json({ ok: true, ...ticket });

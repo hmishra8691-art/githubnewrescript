@@ -37,6 +37,11 @@ export const AiProbingRule = z.object({
   depth: AiProbingDepth,
   /** overrides the depth's default (none 0, light 1, deep 3) */
   maxFollowUps: z.number().int().min(0).max(5).optional(),
+  /**
+   * Q3 (moderator v2) — LADDERING: after the first answer, ask why what they said matters to them, rung by rung
+   * (attribute → consequence → personal value), up to this many rungs; stops early once they name a personal value.
+   */
+  ladder: z.number().int().min(1).max(5).optional(),
 });
 export type AiProbingRule = z.infer<typeof AiProbingRule>;
 
@@ -65,10 +70,14 @@ export type AiScreenerQuestion = z.infer<typeof AiScreenerQuestion>;
 export const AiQuota = z.object({ segment: z.string(), target: z.number().int().nonnegative() });
 export type AiQuota = z.infer<typeof AiQuota>;
 
-/** what the guide's `stimuli` names point at: an image or a video (https or the project's asset), or a concept text */
+/**
+ * what the guide's `stimuli` names point at: an image or a video (https or the project's asset), a concept text,
+ * Q3: a CONCEPT board (a title, the concept's text and, optionally, its picture) or a SCREEN SHARE task (the
+ * participant is asked to share their screen and show something; `text` says what — recorded with their consent)
+ */
 export const AiStimulus = z.object({
   name: z.string(),
-  kind: z.enum(["image", "video", "text"]),
+  kind: z.enum(["image", "video", "text", "concept", "screen_share"]),
   url: z.string().optional(),
   text: z.string().optional(),
   alt: z.string().optional(),
@@ -162,6 +171,10 @@ export const AiModeration = z.object({
   exploreBeyondGuide: z.boolean().default(true),
   /** how long the moderator waits through a pause before taking an answer as finished (voice) */
   patience: z.enum(["quick", "balanced", "patient"]).default("balanced"),
+  /** Q3: stop probing a question once follow-ups bring nothing new (the topic is exhausted) */
+  stopWhenExhausted: z.boolean().default(true),
+  /** Q3: keep each section to its minutes (the guide's, or a share of the interview by its questions); a section well over moves on */
+  sectionTiming: z.boolean().default(true),
 });
 export type AiModeration = z.infer<typeof AiModeration>;
 
