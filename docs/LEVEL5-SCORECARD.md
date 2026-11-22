@@ -1,8 +1,8 @@
 # Level 5 scorecard
 
-Run at 2026-11-22T08:39:04.925Z, commit 7c5fadad.
+Run at 2026-11-22T10:03:04.122Z, commit 8170f65f.
 
-7 of 9 benchmarks measured. 13 of 29 metrics meet their Level 5 target.
+8 of 10 benchmarks measured. 17 of 33 metrics meet their Level 5 target.
 
 ## AI design agents
 
@@ -15,7 +15,7 @@ Run at 2026-11-22T08:39:04.925Z, commit 7c5fadad.
 | Proposals that were not what was asked | 1.7% | at most 1% | no |
 | Instructions the rules hand to the model (the model's share of the work) | 48.3% | none set | – |
 | Out-of-scope or unanswerable requests that changed the survey | 0 | at most 0 | yes |
-| Median time to a proposal | 36.9 ms | at most 2000 ms | yes |
+| Median time to a proposal | 36.3 ms | at most 2000 ms | yes |
 
 68 cases, 30 not passing. First: add_text.plain (handed to the model: model); add_text.free (handed to the model: model); reword.free (handed to the model: model); move.free (handed to the model: cleaning); type.free (handed to the model: model).
 
@@ -43,6 +43,19 @@ What this does not show: this checks that the sentence is read as the right oper
 
 What this does not show: sixteen sentences, no model. A design question in a phrasing the reader does not know goes to the model, which is not measured here.
 
+### The verifier on surveys with a planted defect
+
+| Metric | Measured | Level 5 target | Meets it |
+| --- | --- | --- | --- |
+| Planted defects reported on the right question | 100% | at least 99% | yes |
+| Of those that should carry them: reported with the condition and the simulated respondents | 100% | at least 99% | yes |
+| Problems reported on sound surveys | 0 | at most 0 | yes |
+| One verification (60 simulated respondents, 14 questions) | 118 ms | at most 2000 ms | yes |
+
+9 cases, 0 not passing.
+
+What this does not show: seven planted defects on one 14-question survey, 60 simulated respondents each. A defect that needs a rare combination of answers, a quota, a script or a loop is not in this set.
+
 ### ResBench with a language model, on two models
 
 **Not measured.** no model key is configured. Set EVAL_AI_API_URL, EVAL_AI_API_KEY and EVAL_AI_MODEL and run `pnpm eval:ai`, once per model; the brief-to-survey, logic-path, injection and cost thresholds are scored there. Nothing about a model's quality is known until that has run.
@@ -53,12 +66,12 @@ What this does not show: sixteen sentences, no model. A design question in a phr
 
 | Metric | Measured | Level 5 target | Meets it |
 | --- | --- | --- | --- |
-| Apply one edit | 393.7 ms | at most 100 ms | no |
-| Read one instruction (rule path) | 352.7 ms | at most 2000 ms | yes |
-| Parse and validate the whole definition | 116.4 ms | at most 1000 ms | yes |
-| Review the whole survey for contradictions (the roadmap's 10 seconds is for publish) | 152.1 ms | at most 10000 ms | yes |
-| Working out one page for one simulated respondent (about 308 pages each; the roadmap's 1 second is a page on a phone, which this is not) | 13.8 ms | at most 1000 ms | yes |
-| One simulated respondent, start to end (at this rate 1,000 simulated respondents take over an hour) | 4255 ms | none set | – |
+| Apply one edit | 431.6 ms | at most 100 ms | no |
+| Read one instruction (rule path) | 427 ms | at most 2000 ms | yes |
+| Parse and validate the whole definition | 120.7 ms | at most 1000 ms | yes |
+| Review the whole survey for contradictions (the roadmap's 10 seconds is for publish) | 154.3 ms | at most 10000 ms | yes |
+| Working out one page for one simulated respondent (about 308 pages each; the roadmap's 1 second is a page on a phone, which this is not) | 14.6 ms | at most 1000 ms | yes |
+| One simulated respondent, start to end (at this rate 1,000 simulated respondents take over an hour) | 4480 ms | none set | – |
 
 3 cases, 0 not passing.
 
@@ -70,9 +83,9 @@ What this does not show: this is the engine in Node, not the editor in a browser
 
 | Metric | Measured | Level 5 target | Meets it |
 | --- | --- | --- | --- |
-| Crosstab with a two-variable banner, 200,000 responses (400 ms here is the 2-second target scaled to a fifth of the rows) | 132.8 ms | at most 400 ms | yes |
-| The same, scaled linearly to 1,000,000 (estimate) | 664 ms | at most 2000 ms | yes |
-| Build the dataset from stored responses | 1619 ms | none set | – |
+| Crosstab with a two-variable banner, 200,000 responses (400 ms here is the 2-second target scaled to a fifth of the rows) | 122.2 ms | at most 400 ms | yes |
+| The same, scaled linearly to 1,000,000 (estimate) | 611 ms | at most 2000 ms | yes |
+| Build the dataset from stored responses | 1650 ms | none set | – |
 
 1 cases, 0 not passing.
 
@@ -89,7 +102,7 @@ What this does not show: measured at 200,000 responses by 4 variables, not the r
 | Behaviour scenarios identical to the source (419 built, 0 not run) | 58.3% | at least 99% | no |
 | Files importing to a survey that passes the publish check | 90% | at least 100% | no |
 | References the importer could not resolve | 4 | at most 0 | no |
-| Import time per file | 195 ms | at most 120000 ms | yes |
+| Import time per file | 189 ms | at most 120000 ms | yes |
 | Files in the corpus | 10 | at least 300 | no |
 
 26 cases, 16 not passing. First: decipher/decipher_1.xml (98.1% of 52 items; 32/61 behaviours); decipher/decipher_2.xml (100% of 32 items; 12/25 behaviours); decipher/decipher_3.xml (100% of 20 items; 9/19 behaviours); decipher/decipher_4.xml (97.6% of 82 items; 39/61 behaviours); decipher/decipher_5.xml (100% of 33 items; 23/47 behaviours).
@@ -117,7 +130,7 @@ No benchmark yet.
 | Language-model agents detected | 75% | at least 90% | no |
 | Real people wrongly excluded | 0% | at most 1% | yes |
 | Real people sent to review | 8.8% | at most 5% | no |
-| Scoring time per response (after the fact; the roadmap's 150 ms is for the entry decision) | 24.5 ms | at most 150 ms | yes |
+| Scoring time per response (after the fact; the roadmap's 150 ms is for the entry decision) | 21.3 ms | at most 150 ms | yes |
 
 9 cases, 6 not passing. First: llm_agent_typed (Language-model agent, typing: 16 of 30 detected, 0 excluded); llm_agent_pasted (Language-model agent, pasting: 29 of 30 detected, 0 excluded); device_farm (Device farm: 3 of 30 detected, 0 excluded); click_farm_humans (Click-farm workers: 0 of 30 detected, 0 excluded); translated_paste (Copied open ends: 29 of 30 detected, 1 excluded).
 

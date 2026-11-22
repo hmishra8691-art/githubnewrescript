@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "at": "2026-11-22T08:39:04.925Z",
-  "commit": "7c5fadad",
+  "at": "2026-11-22T10:03:04.122Z",
+  "commit": "8170f65f",
   "suites": [
     {
       "id": "ai_agents.instructions_rules",
@@ -57,7 +57,7 @@
         {
           "id": "median_ms",
           "label": "Median time to a proposal",
-          "value": 36.9,
+          "value": 36.3,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -474,7 +474,7 @@
           "detail": "left alone (refused)"
         }
       ],
-      "ms": 2447
+      "ms": 2252
     },
     {
       "id": "ai_agents.operations_rules",
@@ -775,6 +775,106 @@
       "ms": 16
     },
     {
+      "id": "ai_agents.verifier",
+      "area": "ai_agents",
+      "title": "The verifier on surveys with a planted defect",
+      "status": "measured",
+      "caveat": "seven planted defects on one 14-question survey, 60 simulated respondents each. A defect that needs a rare combination of answers, a quota, a script or a loop is not in this set.",
+      "metrics": [
+        {
+          "id": "found",
+          "label": "Planted defects reported on the right question",
+          "value": 100,
+          "unit": "%",
+          "better": "higher",
+          "target": 99
+        },
+        {
+          "id": "evidence",
+          "label": "Of those that should carry them: reported with the condition and the simulated respondents",
+          "value": 100,
+          "unit": "%",
+          "better": "higher",
+          "target": 99
+        },
+        {
+          "id": "false_alarms",
+          "label": "Problems reported on sound surveys",
+          "value": 0,
+          "unit": "count",
+          "better": "lower",
+          "target": 0,
+          "tolerance": 0
+        },
+        {
+          "id": "verify_ms",
+          "label": "One verification (60 simulated respondents, 14 questions)",
+          "value": 118,
+          "unit": "ms",
+          "better": "lower",
+          "target": 2000,
+          "machineDependent": true
+        }
+      ],
+      "cases": [
+        {
+          "id": "condition_cannot_be_true",
+          "group": "planted",
+          "pass": true,
+          "detail": "found, with its condition and respondents"
+        },
+        {
+          "id": "screened_before_the_question",
+          "group": "planted",
+          "pass": true,
+          "detail": "found, with its condition and respondents"
+        },
+        {
+          "id": "everyone_screened_out",
+          "group": "planted",
+          "pass": true,
+          "detail": "found, with its condition and respondents"
+        },
+        {
+          "id": "expectation_contradicted",
+          "group": "planted",
+          "pass": true,
+          "detail": "found, with its condition and respondents"
+        },
+        {
+          "id": "skipped_past_by_everyone",
+          "group": "planted",
+          "pass": true,
+          "detail": "found, with its condition and respondents"
+        },
+        {
+          "id": "question_without_options",
+          "group": "planted",
+          "pass": true,
+          "detail": "found, with its condition and respondents"
+        },
+        {
+          "id": "hidden_behind_two_conditions",
+          "group": "planted",
+          "pass": true,
+          "detail": "found, with its condition and respondents"
+        },
+        {
+          "id": "sound_plain",
+          "group": "sound",
+          "pass": true,
+          "detail": "nothing reported"
+        },
+        {
+          "id": "sound_with_logic",
+          "group": "sound",
+          "pass": true,
+          "detail": "nothing reported"
+        }
+      ],
+      "ms": 1158
+    },
+    {
       "id": "ai_agents.model",
       "area": "ai_agents",
       "title": "ResBench with a language model, on two models",
@@ -794,7 +894,7 @@
         {
           "id": "edit_ms",
           "label": "Apply one edit",
-          "value": 393.7,
+          "value": 431.6,
           "unit": "ms",
           "better": "lower",
           "target": 100,
@@ -803,7 +903,7 @@
         {
           "id": "read_ms",
           "label": "Read one instruction (rule path)",
-          "value": 352.7,
+          "value": 427,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -812,7 +912,7 @@
         {
           "id": "validate_ms",
           "label": "Parse and validate the whole definition",
-          "value": 116.4,
+          "value": 120.7,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -821,7 +921,7 @@
         {
           "id": "review_ms",
           "label": "Review the whole survey for contradictions",
-          "value": 152.1,
+          "value": 154.3,
           "unit": "ms",
           "better": "lower",
           "target": 10000,
@@ -831,7 +931,7 @@
         {
           "id": "page_ms",
           "label": "Working out one page for one simulated respondent",
-          "value": 13.8,
+          "value": 14.6,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -841,7 +941,7 @@
         {
           "id": "respondent_ms",
           "label": "One simulated respondent, start to end",
-          "value": 4255,
+          "value": 4480,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -867,7 +967,7 @@
           "detail": "4 of 4 simulated respondents produced; 9 issues"
         }
       ],
-      "ms": 32793
+      "ms": 36101
     },
     {
       "id": "analytics.large_data",
@@ -879,7 +979,7 @@
         {
           "id": "crosstab_ms",
           "label": "Crosstab with a two-variable banner, 200,000 responses",
-          "value": 132.8,
+          "value": 122.2,
           "unit": "ms",
           "better": "lower",
           "target": 400,
@@ -889,7 +989,7 @@
         {
           "id": "crosstab_1m_estimate_ms",
           "label": "The same, scaled linearly to 1,000,000",
-          "value": 664,
+          "value": 611,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -899,7 +999,7 @@
         {
           "id": "dataset_build_ms",
           "label": "Build the dataset from stored responses",
-          "value": 1619,
+          "value": 1650,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -914,7 +1014,7 @@
           "detail": "200,000 cases in the dataset"
         }
       ],
-      "ms": 2299
+      "ms": 2355
     },
     {
       "id": "import.fidelity",
@@ -968,7 +1068,7 @@
         {
           "id": "ms_per_file",
           "label": "Import time per file",
-          "value": 195,
+          "value": 189,
           "unit": "ms",
           "better": "lower",
           "target": 120000,
@@ -1142,7 +1242,7 @@
           "detail": "Block randomizers: 100% of 5"
         }
       ],
-      "ms": 100672
+      "ms": 91472
     },
     {
       "id": "qualitative.speech",
@@ -1207,7 +1307,7 @@
         {
           "id": "per_response_ms",
           "label": "Scoring time per response",
-          "value": 24.5,
+          "value": 21.3,
           "unit": "ms",
           "better": "lower",
           "target": 150,
@@ -1271,7 +1371,7 @@
           "detail": "Classic bot: 30 of 30 detected, 30 excluded"
         }
       ],
-      "ms": 12511
+      "ms": 10886
     }
   ]
 }
