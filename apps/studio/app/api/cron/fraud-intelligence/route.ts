@@ -2,7 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { platformDb } from "@/lib/db";
 import { timingSafeEqual } from "node:crypto";
-import { detectClusters, DEFAULT_CLUSTER_CONFIG, type ClusterIdentity, type SignalKind } from "@rescript/quality";
+import { detectClusters, DEFAULT_CLUSTER_CONFIG, crossSurveyDuplicates, textsFromAnswers, type ClusterIdentity, type SignalKind, type CrossSurveyRecord, type VendorMapping } from "@rescript/quality";
 import { forecast } from "@rescript/recruitment";
 import { supabaseService } from "@/lib/authServer";
 
@@ -18,6 +18,10 @@ import { supabaseService } from "@/lib/authServer";
  *                       turns orders into a score — if it does not run, every vendor is honestly unknown.
  *   3. FORECASTS        project completion and final cost for every fielding project — or write down why not.
  *   4. VENDOR HEALTH    ok / degraded / failing / unknown from the API calls actually made in the last hour.
+ *   5. CROSS-SURVEY     the same open-ended paragraph from different respondents in different surveys, and one
+ *                       identity behind several participant IDs of one vendor (F3, @rescript/quality crossSurvey).
+ *                       Opens a 'duplicate' case per finding, once (by signature), WITHOUT holding payment: it is
+ *                       "show me this", and a reviewer decides.
  *                       Without it `vendor_integrations.health` keeps whatever it last said, which is worse
  *                       than saying nothing: a vendor that failed at nine still reads "ok" at five.
  *
@@ -77,6 +81,8 @@ interface CustomerResult {
   /** integrations whose health was recomputed from calls actually made; 0 means nobody called anybody */
   vendorsHealthChecked: number;
   evaluation: string | null;
+  /** cross-survey duplicates (F3): completes compared, findings, and the cases this pass opened */
+  crossSurvey?: { sessions: number; findings: number; casesOpened: number };
   skipped?: string;
 }
 
@@ -185,6 +191,11 @@ async function oneCustomer(db: Db, customerId: string): Promise<CustomerResult> 
     if (row && (row as { case_id?: string }).case_id && (row as { created?: boolean }).created) out.casesOpened++;
   }
 
+
+  /* ---------------------------------------------------------------- 1b. cross-survey duplicates (F3) */
+
+  out.crossSurvey = await crossSurveyPass(db, customerId, since);
+
   /* ---------------------------------------------------------------- 2. vendor quality */
 
   const { data: scored } = await db.rpc("rescript_vendor_quality_recompute", {
@@ -280,4 +291,54 @@ async function oneCustomer(db: Db, customerId: string): Promise<CustomerResult> 
   out.evaluation = evalRow ? String((evalRow as { status: string }).status) : null;
 
   return out;
+}
+
+/** completes compared per organisation per pass; beyond this the comparison is a job for a worker */
+const MAX_CROSS_SURVEY_RESPONSES = 4000;
+
+async function crossSurveyPass(db: Db, customerId: string, since: string): Promise<{ sessions: number; findings: number; casesOpened: number }> {
+  const res = { sessions: 0, findings: 0, casesOpened: 0 };
+  /* the organisation's own surveys only — the tenant boundary is the survey list, never a global response scan */
+  const { data: surveys } = await db.from("surveys").select("id").eq("customer_id", customerId).in("status", ["live", "closed"]).limit(500);
+  const surveyIds = (surveys ?? []).map((s) => String((s as { id: string }).id));
+  if (surveyIds.length < 2) return res;
+  const { data: rows } = await db.from("responses")
+    .select("id, survey_id, session_id, answers, completed_at")
+    .in("survey_id", surveyIds).eq("status", "complete").eq("is_test", false).is("deleted_at", null)
+    .gte("completed_at", since).order("completed_at", { ascending: false }).limit(MAX_CROSS_SURVEY_RESPONSES);
+  const responses = (rows ?? []) as { id: string; survey_id: string; session_id: string; answers: Record<string, unknown>; completed_at: string | null }[];
+  if (!responses.length) return res;
+  /* identities from the participation ledger, when identity resolution is in use; otherwise each session stands alone */
+  const identityOf = new Map<string, string>();
+  for (let i = 0; i < responses.length; i += 500) {
+    const ids = responses.slice(i, i + 500).map((r) => r.id);
+    const { data: ledger } = await db.from("participation_ledger").select("response_id, trust_id").eq("customer_id", customerId).in("response_id", ids);
+    for (const l of ledger ?? []) { const x = l as { response_id: string | null; trust_id: string }; if (x.response_id) identityOf.set(x.response_id, String(x.trust_id)); }
+  }
+  const records: CrossSurveyRecord[] = responses.map((r) => ({
+    customerId, surveyId: String(r.survey_id), sessionId: String(r.session_id), responseId: String(r.id),
+    identity: identityOf.get(String(r.id)) ?? null, completedAt: r.completed_at, texts: textsFromAnswers(r.answers),
+  }));
+  res.sessions = records.length;
+  const { data: maps } = await db.from("vendor_participant_mappings").select("trust_id, integration_id, participant_id").eq("customer_id", customerId).gte("last_seen_at", since).limit(20_000);
+  const mappings: VendorMapping[] = (maps ?? []).map((m) => { const x = m as { trust_id: string; integration_id: string; participant_id: string }; return { customerId, identity: String(x.trust_id), integrationId: String(x.integration_id), participantId: String(x.participant_id) }; });
+  const report = crossSurveyDuplicates(records, mappings);
+  const actionable = report.findings.filter((f) => f.strength !== "informational");
+  res.findings = actionable.length;
+  for (const f of actionable) {
+    const { data: existing } = await db.from("fraud_cases").select("id").eq("customer_id", customerId).eq("kind", "duplicate").contains("evidence", { signature: f.signature }).limit(1);
+    if (existing && existing.length) continue;
+    const { error } = await db.from("fraud_cases").insert({
+      customer_id: customerId,
+      survey_id: f.surveys[0] ?? null,
+      trust_id: f.members.find((m) => m.identity)?.identity ?? null,
+      kind: "duplicate",
+      risk_score: f.riskScore,
+      reasons: [f.reason],
+      evidence: { source: "cross_survey", signature: f.signature, finding: f.kind, strength: f.strength, surveys: f.surveys, members: f.members, ...(f.sample ? { sample: f.sample } : {}), ...(f.participantIds ? { participantIds: f.participantIds } : {}) },
+      holds_payment: false,
+    });
+    if (!error) res.casesOpened++;
+  }
+  return res;
 }
