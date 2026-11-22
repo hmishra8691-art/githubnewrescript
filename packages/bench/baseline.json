@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "at": "2026-11-22T10:03:04.122Z",
-  "commit": "8170f65f",
+  "at": "2026-11-22T10:45:49.617Z",
+  "commit": "f8b3be40",
   "suites": [
     {
       "id": "ai_agents.instructions_rules",
@@ -21,7 +21,7 @@
         {
           "id": "free_correct",
           "label": "The same instructions in free phrasing, applied correctly first time",
-          "value": 20,
+          "value": 23.3,
           "unit": "%",
           "better": "higher",
           "target": 95
@@ -29,7 +29,7 @@
         {
           "id": "wrong",
           "label": "Proposals that were not what was asked",
-          "value": 1.7,
+          "value": 0,
           "unit": "%",
           "better": "lower",
           "target": 1
@@ -57,7 +57,7 @@
         {
           "id": "median_ms",
           "label": "Median time to a proposal",
-          "value": 36.3,
+          "value": 23.1,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -134,8 +134,8 @@
         {
           "id": "move.free",
           "group": "question",
-          "pass": false,
-          "detail": "handed to the model: cleaning"
+          "pass": true,
+          "detail": "correct: move_question"
         },
         {
           "id": "type.plain",
@@ -303,7 +303,7 @@
           "id": "numeric_range.free",
           "group": "validation",
           "pass": false,
-          "detail": "wrong: move_question; the survey is not as asked"
+          "detail": "handed to the model: model"
         },
         {
           "id": "min_chars.plain",
@@ -474,7 +474,7 @@
           "detail": "left alone (refused)"
         }
       ],
-      "ms": 2252
+      "ms": 1732
     },
     {
       "id": "ai_agents.operations_rules",
@@ -772,7 +772,7 @@
           "detail": "not read as a design question"
         }
       ],
-      "ms": 16
+      "ms": 21
     },
     {
       "id": "ai_agents.verifier",
@@ -809,7 +809,7 @@
         {
           "id": "verify_ms",
           "label": "One verification (60 simulated respondents, 14 questions)",
-          "value": 118,
+          "value": 117,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -872,7 +872,97 @@
           "detail": "nothing reported"
         }
       ],
-      "ms": 1158
+      "ms": 1084
+    },
+    {
+      "id": "ai_agents.loop_scripted",
+      "area": "ai_agents",
+      "title": "The agent loop, with a scripted planner and the real verifier",
+      "status": "measured",
+      "caveat": "the planner is a script. This shows the loop's control (hand back, stop, ask, approve, never write), not the quality of a model's plans, which needs a model key.",
+      "metrics": [
+        {
+          "id": "behaves",
+          "label": "Scenarios where the loop did what it should",
+          "value": 100,
+          "unit": "%",
+          "better": "higher",
+          "target": 100,
+          "tolerance": 0
+        },
+        {
+          "id": "input_untouched",
+          "label": "Runs that left the survey they were given unchanged",
+          "value": 100,
+          "unit": "%",
+          "better": "higher",
+          "target": 100,
+          "tolerance": 0
+        }
+      ],
+      "cases": [
+        {
+          "id": "verifies_first_time",
+          "pass": true,
+          "detail": "verified after 1 attempt"
+        },
+        {
+          "id": "defect_seen_and_repaired",
+          "pass": true,
+          "detail": "verified after 2 attempts"
+        },
+        {
+          "id": "engine_refusal_handed_back",
+          "pass": true,
+          "detail": "verified after 2 attempts"
+        },
+        {
+          "id": "unknown_tool_handed_back",
+          "pass": true,
+          "detail": "verified after 2 attempts"
+        },
+        {
+          "id": "never_repaired_stops",
+          "pass": true,
+          "detail": "no_progress after 3 attempts"
+        },
+        {
+          "id": "cost_ceiling",
+          "pass": true,
+          "detail": "cost after 2 attempts"
+        },
+        {
+          "id": "attempt_limit",
+          "pass": true,
+          "detail": "attempts after 2 attempts"
+        },
+        {
+          "id": "deletion_needs_explicit_approval",
+          "pass": true,
+          "detail": "verified after 1 attempt"
+        },
+        {
+          "id": "asks_before_building",
+          "pass": true,
+          "detail": "needs_answers after 1 attempt"
+        },
+        {
+          "id": "builds_once_answered",
+          "pass": true,
+          "detail": "verified after 1 attempt"
+        },
+        {
+          "id": "step_without_a_reason_is_refused",
+          "pass": true,
+          "detail": "verified after 2 attempts"
+        },
+        {
+          "id": "planner_down",
+          "pass": true,
+          "detail": "planner_failed after 1 attempt"
+        }
+      ],
+      "ms": 1484
     },
     {
       "id": "ai_agents.model",
@@ -894,7 +984,7 @@
         {
           "id": "edit_ms",
           "label": "Apply one edit",
-          "value": 431.6,
+          "value": 185.4,
           "unit": "ms",
           "better": "lower",
           "target": 100,
@@ -903,7 +993,7 @@
         {
           "id": "read_ms",
           "label": "Read one instruction (rule path)",
-          "value": 427,
+          "value": 195.6,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -912,7 +1002,7 @@
         {
           "id": "validate_ms",
           "label": "Parse and validate the whole definition",
-          "value": 120.7,
+          "value": 111,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -921,7 +1011,7 @@
         {
           "id": "review_ms",
           "label": "Review the whole survey for contradictions",
-          "value": 154.3,
+          "value": 128.4,
           "unit": "ms",
           "better": "lower",
           "target": 10000,
@@ -931,7 +1021,7 @@
         {
           "id": "page_ms",
           "label": "Working out one page for one simulated respondent",
-          "value": 14.6,
+          "value": 17.2,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -941,7 +1031,7 @@
         {
           "id": "respondent_ms",
           "label": "One simulated respondent, start to end",
-          "value": 4480,
+          "value": 5306,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -967,7 +1057,7 @@
           "detail": "4 of 4 simulated respondents produced; 9 issues"
         }
       ],
-      "ms": 36101
+      "ms": 32384
     },
     {
       "id": "analytics.large_data",
@@ -979,7 +1069,7 @@
         {
           "id": "crosstab_ms",
           "label": "Crosstab with a two-variable banner, 200,000 responses",
-          "value": 122.2,
+          "value": 160.8,
           "unit": "ms",
           "better": "lower",
           "target": 400,
@@ -989,7 +1079,7 @@
         {
           "id": "crosstab_1m_estimate_ms",
           "label": "The same, scaled linearly to 1,000,000",
-          "value": 611,
+          "value": 804,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -999,7 +1089,7 @@
         {
           "id": "dataset_build_ms",
           "label": "Build the dataset from stored responses",
-          "value": 1650,
+          "value": 1755,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -1014,7 +1104,7 @@
           "detail": "200,000 cases in the dataset"
         }
       ],
-      "ms": 2355
+      "ms": 2621
     },
     {
       "id": "import.fidelity",
@@ -1068,7 +1158,7 @@
         {
           "id": "ms_per_file",
           "label": "Import time per file",
-          "value": 189,
+          "value": 201,
           "unit": "ms",
           "better": "lower",
           "target": 120000,
@@ -1242,7 +1332,7 @@
           "detail": "Block randomizers: 100% of 5"
         }
       ],
-      "ms": 91472
+      "ms": 101079
     },
     {
       "id": "qualitative.speech",
@@ -1252,7 +1342,7 @@
       "reason": "three things are missing: a speech-to-text and a text-to-speech provider (none is chosen, no key exists), a benchmark set of recorded speech with checked transcripts for each of the ten main languages, and a machine with a microphone path to time a voice turn. The word-error-rate and percentile arithmetic is written and tested; no provider has been heard.",
       "metrics": [],
       "cases": [],
-      "ms": 0
+      "ms": 1
     },
     {
       "id": "fraud.red_team",
@@ -1307,7 +1397,7 @@
         {
           "id": "per_response_ms",
           "label": "Scoring time per response",
-          "value": 21.3,
+          "value": 21.1,
           "unit": "ms",
           "better": "lower",
           "target": 150,
@@ -1371,7 +1461,7 @@
           "detail": "Classic bot: 30 of 30 detected, 30 excluded"
         }
       ],
-      "ms": 10886
+      "ms": 10796
     }
   ]
 }
