@@ -266,6 +266,38 @@ insert or update as a source diff and saves it only with apply, under the edit l
 What is not done: no screen to browse a library or see link status (route only); the routes were type-checked and
 audited, not called over HTTP; no database was used.
 
+### Analytics batch: assumption checks, "why this number", tab plans, simulators, published limits (29 November)
+
+**M5, assumption checks.** Linear regression reports cases per predictor, collinearity (VIF), normality of residuals
+(Jarque–Bera), constant variance (Breusch–Pagan) and influence (Cook's distance); logistic regression reports events
+per predictor, convergence, separation and collinearity; crosstabs, tests and correlations carry the existing data
+advice (expected counts, small bases) in the same form. Each check gives the observed value, the threshold, holds /
+caution / fails, and what to do. Failed checks also appear in the result's warnings.
+
+**M4, "why this number".** Any cell of a table, explained from the result and its provenance record without
+recomputing: the kind of figure, the count over the column base ("8 of the 32 respondents in North chose 2 —
+25.0%"), base, filter and scope, the test, level and Holm correction, the columns it is significantly higher than,
+whether a small column was left untested, small-base cautions, and the engine version, data version, input hash and
+time. Function only; no screen shows it yet.
+
+**M2, tab plan engine.** One banner, a list of stubs, run-wide filter, weighting, significance level, decimals and
+minimum base. Each table stub is the existing crosstab (nets, boxes, means, NPS, sorting), so a tab book figure is
+the figure on screen; summary stubs put one statistic of many questions side by side, optionally ranked. A draft
+plan is made from the data. The run lists every stub it could not make. The tab book is an Excel workbook with a
+linked contents sheet and one formatted sheet per table. On the 360-respondent synthetic corpus the draft plan made
+24 tables with no problems. No screen or route yet.
+
+**M3, simulators.** The conjoint simulator already existed (shares, revenue, willingness to pay, demand,
+sensitivity, optimisation, segments). Added: MaxDiff share of preference within any subset of items (by default the
+rule of the result's own share column, so all items reproduce it; or the logit rule); a TURF line-up simulator
+(reach, frequency, each item's unique reach, gain from each candidate, best single swap); a price what-if (would-buy
+share and revenue index from Gabor–Granger or NMS, interpolated between tested prices and refused outside them, and
+the price's place on the Van Westendorp curves). Functions only; no screen yet.
+
+**M10, published limits.** [ANALYTICS-LIMITS.md](ANALYTICS-LIMITS.md) lists 13 enforced limits, each the engine's own
+constant, with what happens when it is exceeded, and 9 checks against outside references with the tolerance each
+test uses, plus what has no outside reference. A test fails if the page and the code disagree.
+
 ## The scorecard after this
 
 14 benchmarks, 12 measured. 24 of 47 metrics with a target meet it.
@@ -310,6 +342,11 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | Path coverage: goals, a sound survey fully covered by a small script, an unused condition found, quota feasibility | `coverage.test.ts`, 4 tests (templates suite) | pass |
 | Source format: lossless round trip, readable lines, diff, edits read back, errors by line, JSON fallback | `surveySource.test.ts`, 4 tests | pass |
 | Libraries: items, insert with renumbering and logic, update with impact, local edits, lists, missing items | `library.test.ts`, 5 tests (engine suite: 3,009) | pass |
+| Assumption checks: a clean fit holds, collinear, heteroscedastic and influential data fail, logistic separation | `modelChecks.test.ts`, 5 tests | pass |
+| "Why this number": count over base, letters mapped to columns, totals, base rows, untested small columns, bad references | `whyNumber.test.ts`, 4 tests | pass |
+| Tab plan: cells identical to a direct crosstab, summary rows equal each question's own, ranking, refusals reported, draft plan, workbook sheets, links and formats | `tabPlan.test.ts`, 5 tests | pass |
+| Simulators: MaxDiff shares reproduce the engine's within 0.1 point, logit formula, TURF reach equals TURF's own, price interpolation and refusal, Van Westendorp range | `simulators.test.ts`, 4 tests | pass |
+| Published limits: sources and reference tests exist, the page matches the generator, a truncated dataset warns | `limits.test.ts`, 4 tests (analytics suite: 916) | pass |
 | All benchmarks against the previous baseline | `pnpm bench` | no regression |
 
 ## What was NOT tested
@@ -326,6 +363,8 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 - **The server simulation route still returns the old verdict sentences.** Only the in-conversation simulation
   shows observations.
 - **Quota cells are not yet written into the survey from a sentence.**
+- **The analytics batch has no screens.** "Why this number", the tab plan, the simulators and the assumption checks
+  are engine functions with tests; no Studio screen or route shows them yet, and none was opened in a browser.
 - **English only.**
 
 ## Phase 2 item by item
@@ -337,7 +376,7 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | --- | --- | --- | --- |
 | AI design agents (8) | A3, A5, A6, A7, A15 | A2 (about 90 of 850 cases), A4 (loop built, no model), A8 (reasons in plans, not on screen) | |
 | Programming (6) | P2, P3 | P1 (edits faster, target not met), P5 (engine and route; no screen) | P4, P11 |
-| Analytics (6) | | M1 (measured only) | M2, M3, M4, M5, M10 |
+| Analytics (6) | M5, M10 | M1 (measured only), M2, M3, M4 (engine and tests; no screen) | |
 | Import (6) | | I1 (10 of 300 files), I2 (exists, 58.3%, not examined) | I3, I4, I5, I6 |
 | Reporting (6) | | | R1 to R6 |
 | Qualitative (6) | | | Q2 to Q7 |
@@ -346,8 +385,8 @@ Done means built and tested as described above, not that its Level 5 threshold i
 Some "not started" items have earlier work in the product that I have not assessed against the roadmap's
 definition (libraries, dashboards, the quality review screen, the import review screen). I have not counted them.
 
-**Next:** path coverage (P2) and the survey source format (P3), then "why this number" (M4) and assumption checks
-(M5). Fraud waits on the F2 decision and on recordings of people.
+**Next:** fraud (F3 cross-survey duplicates, F6 trust score with actions, F11 review console), then import (I3, I4,
+I6), qualitative (Q4, Q6) and reporting (R1 to R6). F2 still waits on the build-or-license decision.
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages
 reviewed by people, P11 real devices, and anything needing the model, speech or vendor keys.
