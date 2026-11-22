@@ -208,17 +208,17 @@ export function validationSurvey(): SurveyDefinition {
 const PAGES = ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"];
 const PAGE_Q: Record<string, string[]> = { p1: ["own"], p2: ["brand", "freq"], p3: ["grid"], p4: ["grid2"], p5: ["att"], p6: ["oe", "oe2"], p7: ["s1", "s2", "s3"], p8: ["s4", "s5", "s6"] };
 /** a careful human's seconds per page (median ≈ 210 s) */
-const BASE_SECS = [6, 10, 45, 30, 8, 70, 20, 22];
+export const BASE_SECS = [6, 10, 45, 30, 8, 70, 20, 22];
 
 /** a small seeded generator: the corpus is the same on every run */
-function rng(seed: number) {
+export function rng(seed: number) {
   let s = seed >>> 0;
   return () => { s = (s + 0x6d2b79f5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 
-interface TelOpts { secs: number[]; device: "desktop" | "mobile" | "tablet"; locale: string; timezone: string; tzOffset: number; webdriver?: boolean; pointer?: number; keys?: number; pastes?: Record<string, number>; outOfFocusMs?: number; uniform?: boolean; typed?: number }
+export interface TelOpts { secs: number[]; device: "desktop" | "mobile" | "tablet"; locale: string; timezone: string; tzOffset: number; webdriver?: boolean; pointer?: number; keys?: number; pastes?: Record<string, number>; outOfFocusMs?: number; uniform?: boolean; typed?: number }
 
-function telemetry(o: TelOpts, startAt: number): ResponseTelemetry {
+export function corpusTelemetry(o: TelOpts, startAt: number): ResponseTelemetry {
   let t = startAt;
   const pages: ResponseTelemetry["pages"] = [];
   const questions: ResponseTelemetry["questions"] = {};
@@ -256,7 +256,7 @@ const SHORT_OK = ["Reliable and cheap to run.", "Good value, never broke down.",
 const POLISHED = "As a discerning consumer, I selected this brand because it seamlessly combines reliability, performance, and value. Furthermore, its commitment to innovation and customer satisfaction makes it an excellent choice for my lifestyle.";
 const GIBBERISH = ["asdf jkl qwe", "sdfsdf", "good good good", "nice", "jjjjjj kkk"];
 
-const SEGMENTS: { device: TelOpts["device"]; locale: string; timezone: string; tzOffset: number }[] = [
+export const SEGMENTS: { device: TelOpts["device"]; locale: string; timezone: string; tzOffset: number }[] = [
   { device: "desktop", locale: "en-GB", timezone: "Europe/London", tzOffset: 0 },
   { device: "mobile", locale: "en-IN", timezone: "Asia/Kolkata", tzOffset: -330 },
   { device: "mobile", locale: "en-US", timezone: "America/New_York", tzOffset: 300 },
@@ -280,7 +280,7 @@ export function syntheticLabelledCorpus(opts: { seed?: number; genuine?: number;
   const add = (label: QualityLabel, persona: string, answers: Record<string, unknown>, tel: TelOpts, ids?: { ip?: string; dev?: string }) => {
     const i = ++seq;
     const startAt = base + i * 611_000 + Math.floor(R() * 300_000);
-    const t = telemetry(tel, startAt);
+    const t = corpusTelemetry(tel, startAt);
     const segIdx = SEGMENTS.findIndex((s) => s.device === tel.device && s.locale === tel.locale);
     out.push({
       label, persona, source: "synthetic",
