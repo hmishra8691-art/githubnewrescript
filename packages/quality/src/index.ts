@@ -22,3 +22,4 @@ export { VALIDATION_RECORD } from "./validationRecord.js";
 export * from "./impact.js";
 export * from "./redTeam.js";
 export * from "./crossSurvey.js";
+export * from "./trustScore.js";

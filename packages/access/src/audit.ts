@@ -228,6 +228,7 @@ export const AUDIT_EVENTS = [
      name the reviewer and the reason. §20 gives the respondent an appeal, which needs a record to appeal against. */
   "fraud.case.resolve",
   "fraud.cluster.resolve",
+  "fraud.trust.review",
 
   /* Help escalation (2026-11-10): a user hands a Help conversation to the support team, and an administrator works the
      ticket. The detail names the ticket reference and the status — never the conversation's content. */
@@ -303,6 +304,7 @@ export function describeEvent(r: AuditRow): string {
     case "recruitment.reallocation_proposed": return `${who} asked for a reallocation: ${str(d.deviations) || "0"} deviation(s), ${str(d.moves) || "0"} move(s) proposed`;
     case "recruitment.mapping_set": return `${who} set the vendor parameter mapping: ${str(d.parameters) || "0"} parameter(s) resolving to ${str(d.criteria) || "nothing"}`;
     case "fraud.case.resolve": return `${who} ${str(d.status) === "upheld" ? "upheld" : str(d.status) === "cleared" ? "cleared" : "withdrew"} a fraud case${d.note ? `: ${str(d.note)}` : ""}`;
+    case "fraud.trust.review": return `${who} opened a review of a respondent (trust ${str(d.score) || "?"}, recommended ${str(d.action) || "?"})${d.note ? `: ${str(d.note)}` : ""}`;
     case "fraud.cluster.resolve": return `${who} ${str(d.status) === "upheld" ? "upheld" : "cleared"} a suspected network of ${str(d.resolved) || "?"} cases${d.note ? `: ${str(d.note)}` : ""}`;
     case "panel.secret_changed": return `${who} ${d.cleared ? "cleared" : "set"} the signing secret of the panel ${str(d.panel) || ""}`.trim();
     case "user.ai_credential_saved": return `${who} saved an API key for ${str(d.provider) || "an AI provider"}`;
