@@ -49,7 +49,11 @@ function heatStyle(v: unknown, max: number): React.CSSProperties | undefined {
   return { background: `rgba(79, 70, 229, ${(0.04 + t * 0.32).toFixed(3)})`, color: t > 0.7 ? "#1e1b4b" : undefined };
 }
 
-export function ProTable({ table, formatting, testId = "ax-table", maxHeight, scope }: { table?: Table; formatting?: TableFormatting; testId?: string; maxHeight?: number;
+export function ProTable({ table, formatting, testId = "ax-table", maxHeight, scope, onCell, picked }: { table?: Table; formatting?: TableFormatting; testId?: string; maxHeight?: number;
+  /** M4 — a number cell was chosen ("why this number"): the row's index in table.rows and the column key */
+  onCell?: (rowIndex: number, columnKey: string) => void;
+  /** the cell whose explanation is open, so it can be marked */
+  picked?: { row: number; column: string } | null;
   /** the result's base caption (audit OR-03) — printed with the table's own base so the footer says what its n is a count of; a table whose base differs from the result's keeps its own n in front */
   scope?: string }) {
   const f = formatting ?? {};
@@ -164,7 +168,9 @@ export function ProTable({ table, formatting, testId = "ax-table", maxHeight, sc
                     const heat = f.heat && !isGroup && !isSection && kind !== "base" && kind !== "total" && type === "pct" ? heatStyle(v, heatMax) : undefined;
                     const cls = ["num", typeof v === "number" ? "" : "txt", c.suppressed ? "sup" : "", (sig || vs) && f.highlightSig !== false ? "has-sig" : "", vs === "+" ? "up" : vs === "−" ? "down" : ""].filter(Boolean).join(" ");
                     return (
-                      <td key={c.key} className={cls} style={heat} title={typeof n === "number" ? `n = ${n}` : undefined}>
+                      <td key={c.key} className={`${cls}${onCell && typeof v === "number" && !isSection ? " ax-why-cell" : ""}${picked && picked.column === c.key && picked.row === table.rows.indexOf(r) ? " ax-why-on" : ""}`} style={heat}
+                        title={onCell && typeof v === "number" && !isSection ? `${typeof n === "number" ? `n = ${n} · ` : ""}click: why this number` : typeof n === "number" ? `n = ${n}` : undefined}
+                        {...(onCell && typeof v === "number" && !isSection ? { role: "button", tabIndex: 0, "data-testid": "ax-why-cell", onClick: () => onCell(table.rows.indexOf(r), c.key), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onCell(table.rows.indexOf(r), c.key); } } } : {})}>
                         {isSection ? "" : v == null && c.suppressed ? <span className="ax-pro-supp">·</span> : fmtCell(v, type, decimalsOf(c, r))}
                         {sig ? <sup className="ax-sig">{String(sig)}</sup> : null}
                         {vs ? <span className={`ax-vs ${vs === "+" ? "up" : "down"}`}>{vs === "+" ? "▲" : "▼"}</span> : null}

@@ -1,15 +1,16 @@
 "use client";
+import { SimulatorsPanel, TabBookPanel } from "./AnalyticsTools";
 import { TableDialog, TablePreview } from "./TableViews";
 import { Warnings } from "./Warnings";
 import { AssessmentCard } from "./AssessmentCard";
 import React from "react";
-import type { AnalysisDefinition, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
+import type { AnalysisDefinition, AnalysisResult, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
 import { ANALYSIS_KINDS } from "@rescript/analytics";
 import { AskPanel } from "./AskPanel";
 import { AxApi, type Row, type RunResult, timeAgo } from "./api";
 import { AnalysisBuilder } from "./AnalysisBuilder";
 import { AnalysesRail } from "./AnalysesRail";
-import { ResultView } from "./ResultView";
+import { ResultView, WhyPanel } from "./ResultView";
 import { SegmentsPanel } from "./SegmentsPanel";
 import { ThemesPanel } from "./ThemesPanel";
 import { ReportsPanel, ExportDialog } from "./ReportsPanel";
@@ -188,6 +189,8 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         )}
         {tab === "charts" && <ChartsLibrary api={api} charts={charts} analyses={analyses} themes={themeList} refresh={refresh} onOpen={(a) => openBuilder({ analysis: a })} />}
         {tab === "tables" && <TablesLibrary api={api} analyses={analyses} onOpen={(a) => openBuilder({ analysis: a })} onNew={() => openBuilder({ kind: "crosstab" })} />}
+        {tab === "tabbook" && <TabBookPanel api={api} variables={vars} dataset={dataset} canExport={p.canExport} />}
+        {tab === "simulators" && <SimulatorsPanel api={api} analyses={analyses} variables={vars} dataset={dataset} />}
         {tab === "segments" && <SegmentsPanel api={api} variables={vars} items={segments} kind="segment" onChange={() => void refresh()} />}
         {tab === "filters" && <SegmentsPanel api={api} variables={vars} items={segments} kind="filter" onChange={() => void refresh()} />}
         {tab === "findings" && <FindingsView api={api} dataset={dataset} analyses={analyses} onOpenAnalysis={(a) => openBuilder({ analysis: a })} onTab={(t) => setTab(t)} />}
@@ -426,6 +429,9 @@ function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses:
   const res = sel ? results[sel] ?? null : null;
   React.useEffect(() => { setTableId(res?.tables[0]?.id ?? ""); setSort(null); setFilterText(""); }, [sel, res]);
   const table = res?.tables.find((t) => t.id === tableId) ?? res?.tables[0];
+  /* M4 — "why this number" on the active table: the cell is found in the result's own rows (sorting keeps the row objects) */
+  const [why, setWhy] = React.useState<{ table: string; row: number; column: string } | null>(null);
+  React.useEffect(() => { setWhy(null); }, [sel, tableId]);
   const view = React.useMemo(() => {
     if (!table) return table;
     let rows = table.rows;
@@ -462,7 +468,8 @@ function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses:
             <>
               <div className="ax-tv-sorthint muted">{view.title} · click a column header to sort</div>
               <div className="ax-table-wrap ax-tv-active-table"><table className="ax-table" data-testid="ax-builder-table"><thead><tr>{view.columns.map((c) => <th key={c.key} className={c.type && c.type !== "text" ? "num sortable" : "sortable"} onClick={() => setSort(sort?.key === c.key ? { key: c.key, dir: sort.dir === 1 ? -1 : 1 } : { key: c.key, dir: -1 })}>{c.label}{sort?.key === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}</th>)}</tr></thead>
-                <tbody>{view.rows.map((r, i) => <tr key={i}>{view.columns.map((c) => { const v = r[c.key]; const sig = r[`${c.key}__sig`]; const ct = (r.__format as string | undefined) ?? c.type; return <td key={c.key} className={typeof v === "number" ? "num" : ""}>{v == null ? "" : typeof v === "number" ? (ct === "pct" ? `${v.toFixed(c.decimals ?? 1)}%` : ct === "count" ? Math.round(v).toLocaleString(DEFAULT_NUMBER_LOCALE) : v.toLocaleString("en-US", { maximumFractionDigits: c.decimals ?? 2 })) : String(v)}{sig ? <sup className="ax-sig">{String(sig)}</sup> : null}</td>; })}</tr>)}</tbody></table></div>
+                <tbody>{view.rows.map((r, i) => <tr key={i}>{view.columns.map((c) => { const v = r[c.key]; const sig = r[`${c.key}__sig`]; const ct = (r.__format as string | undefined) ?? c.type; const ri = table ? table.rows.indexOf(r) : -1; const whyable = typeof v === "number" && ri >= 0 && r.__kind !== "section"; const isOn = !!why && why.row === ri && why.column === c.key && why.table === table?.id; return <td key={c.key} className={`${typeof v === "number" ? "num" : ""}${whyable ? " ax-why-cell" : ""}${isOn ? " ax-why-on" : ""}`} {...(whyable ? { role: "button", tabIndex: 0, title: "Click: why this number", "data-testid": "ax-why-cell", onClick: () => setWhy(isOn ? null : { table: table!.id, row: ri, column: c.key }), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setWhy(isOn ? null : { table: table!.id, row: ri, column: c.key }); } } } : {})}>{v == null ? "" : typeof v === "number" ? (ct === "pct" ? `${v.toFixed(c.decimals ?? 1)}%` : ct === "count" ? Math.round(v).toLocaleString(DEFAULT_NUMBER_LOCALE) : v.toLocaleString("en-US", { maximumFractionDigits: c.decimals ?? 2 })) : String(v)}{sig ? <sup className="ax-sig">{String(sig)}</sup> : null}</td>; })}</tr>)}</tbody></table></div>
+              {why && res && why.table === table?.id && <WhyPanel result={res as unknown as AnalysisResult} cell={why} onClose={() => setWhy(null)} />}
               <div className="ax-table-notes">{view.base ? `Base: n = ${view.base.n}${view.base.weightedN != null && view.base.weightedN !== view.base.n ? ` · weighted n = ${view.base.weightedN}` : ""}` : ""}{view.notes?.map((n, i) => <div key={i}>{n}</div>)}<Warnings items={res?.warnings ?? []} testId="ax-table-warnings" /></div>
             </>
           )}

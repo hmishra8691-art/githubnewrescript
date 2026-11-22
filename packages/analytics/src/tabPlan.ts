@@ -129,6 +129,8 @@ export function autoTabPlan(ds: Dataset, banner: TabBanner, opts: { name?: strin
   const grids = new Map<string, string[]>();
   for (const v of ds.variables) {
     if (isSystem(v.name) || v.hidden || inBanner.has(v.name)) continue;
+    /* a multi-select's option flags (Q6 — Alpha, Q6 — Beta…) are already the rows of the question's own table */
+    if (v.optionCode && ds.byName.get(v.name.replace(/_[^_]+$/, ""))?.role === "multi") continue;
     if (v.role !== "categorical" && v.role !== "multi" && v.role !== "scale") continue;
     const scale = (v.role === "scale" || v.role === "categorical") && orderedNumeric(v.categories);
     const stub: TableStub = { variable: v.name };

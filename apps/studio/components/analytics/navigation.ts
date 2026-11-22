@@ -16,7 +16,7 @@
  *
  * Kept free of React and of `@/` aliases so it is tested on its own.
  */
-export type WsTab = "home" | "findings" | "plan" | "architect" | "board" | "analysis" | "charts" | "tables" | "segments" | "filters" | "present" | "reports" | "ask" | "themes" | "exports" | "sharing";
+export type WsTab = "home" | "findings" | "plan" | "architect" | "board" | "analysis" | "charts" | "tables" | "tabbook" | "simulators" | "segments" | "filters" | "present" | "reports" | "ask" | "themes" | "exports" | "sharing";
 export type PlaceKey = "overview" | "explore" | "architect" | "present";
 
 export interface View { key: Exclude<WsTab, "ask">; label: string }
@@ -24,7 +24,7 @@ export interface Place { key: PlaceKey; label: string; /** the question the mode
 
 export const PLACES: Place[] = [
   { key: "overview", label: "Overview", question: "What did the study find?", views: [{ key: "home", label: "Overview" }, { key: "findings", label: "Findings" }] },
-  { key: "explore", label: "Explore", question: "What does the data show?", views: [{ key: "board", label: "Explore" }, { key: "analysis", label: "Analysis" }, { key: "tables", label: "Tables" }, { key: "charts", label: "Charts" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" }] },
+  { key: "explore", label: "Explore", question: "What does the data show?", views: [{ key: "board", label: "Explore" }, { key: "analysis", label: "Analysis" }, { key: "tables", label: "Tables" }, { key: "tabbook", label: "Tab book" }, { key: "charts", label: "Charts" }, { key: "simulators", label: "Simulators" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" }] },
   { key: "architect", label: "Architect", question: "Every analysis, in research terms, under full control", views: [{ key: "architect", label: "Workspace" }, { key: "plan", label: "Analysis plan" }] },
   { key: "present", label: "Present", question: "How do we get this to people?", views: [{ key: "present", label: "Present" }, { key: "reports", label: "Reports" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" }] },
 ];

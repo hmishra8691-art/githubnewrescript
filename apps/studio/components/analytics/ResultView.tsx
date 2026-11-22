@@ -2,7 +2,7 @@
 import { Warnings } from "./Warnings";
 import React from "react";
 import type { AnalysisResult, ChartAdvice, ChartRecommendation, ChartSpec, ChartType, ReportTheme } from "@rescript/analytics";
-import { CHART_CATALOG, CHART_FAMILIES, chartsAvailable, isOwnPicture } from "@rescript/analytics";
+import { CHART_CATALOG, CHART_FAMILIES, chartsAvailable, isOwnPicture, whyLines, whyThisNumber } from "@rescript/analytics";
 import { Chart } from "./charts/Chart";
 import { ProTable, tableToTsv, type TableFormatting } from "./ProTable";
 import { downloadBlob } from "./api";
@@ -243,6 +243,8 @@ export function ResultView(p: ResultViewProps) {
   const [segSel, setSegSel] = React.useState<number[]>([]);
   const segIdx = segSel.length === 1 ? segSel[0] : null;
   const [copied, setCopied] = React.useState<string | null>(null);
+  /* M4 — "why this number": the cell chosen in a table, explained from the result itself (no new computation) */
+  const [why, setWhy] = React.useState<{ table: string; row: number; column: string } | null>(null);
   const r = p.result;
   const view = p.view ?? "results";
   const spec = segIdx == null ? p.spec : { ...p.spec, options: { ...p.spec.options, segmentIndex: segIdx } };
@@ -340,7 +342,8 @@ export function ResultView(p: ResultViewProps) {
           {r.tables.map((t) => (
             <div key={t.id} className="card ax-table-card">
               <div className="ax-table-card-head"><div className="card-title">{t.title}</div><span className="grow" /><button type="button" className="btn small ghost" onClick={() => copy(t)} title="Copy as tab-separated text for a spreadsheet">{copied === t.id ? "Copied" : "Copy"}</button></div>
-              <ProTable table={t} formatting={f} scope={scopeText(r)} />
+              <ProTable table={t} formatting={f} scope={scopeText(r)} onCell={(row, column) => setWhy(why && why.table === t.id && why.row === row && why.column === column ? null : { table: t.id, row, column })} picked={why?.table === t.id ? why : null} />
+              {why?.table === t.id && <WhyPanel result={r} cell={why} onClose={() => setWhy(null)} />}
             </div>
           ))}
           {!r.tables.length && <div className="ax-empty"><div className="ax-empty-t">No tables</div><div className="ax-empty-d">This analysis produced charts and statistics but no table.</div></div>}
@@ -348,6 +351,26 @@ export function ResultView(p: ResultViewProps) {
       )}
       {view === "results" && tab === "tests" && <div className="card">{r.tests.length ? <table className="ax-table"><thead><tr><th>Test</th><th className="num">Statistic</th><th>df</th><th>p-value</th><th>Effect size</th><th>Note</th></tr></thead><tbody>{r.tests.map((t, i) => <tr key={i}><td>{t.test.replace(/_/g, " ")}</td><td className="num">{t.statistic == null ? "—" : t.statistic.toFixed(3)}</td><td>{Array.isArray(t.df) ? t.df.map((d) => Math.round(d * 10) / 10).join(", ") : t.df == null ? "" : Math.round(t.df * 10) / 10}</td><td className={t.p != null && t.p < 0.05 ? "ax-sig-p" : ""}>{t.p == null ? "—" : t.p < 0.001 ? "< .001" : t.p.toFixed(3)}</td><td>{t.effectSize ? `${t.effectSize.name} = ${t.effectSize.value?.toFixed(3) ?? "—"}` : ""}</td><td className="muted">{t.note ?? ""}</td></tr>)}</tbody></table> : <div className="muted">No statistical tests for this analysis.</div>}</div>}
       {view === "results" && tab === "insights" && <div className="card"><ul className="ax-insights">{r.insights.map((s, i) => <li key={i}>{s}</li>)}</ul>{!r.insights.length && <div className="muted">No insights were generated.</div>}<div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>Every statement above is computed from the tables of this analysis (n = {r.base.n}).</div></div>}
+    </div>
+  );
+}
+
+
+/** M4 — the explanation of one table cell: what it is a share of, the base, the significance letters, cautions, provenance */
+export function WhyPanel({ result, cell, onClose }: { result: AnalysisResult; cell: { table: string; row: number; column: string }; onClose: () => void }) {
+  const x = whyThisNumber(result, cell);
+  return (
+    <div className="ax-why" data-testid="ax-why" role="region" aria-label="Why this number">
+      <div className="row" style={{ alignItems: "baseline" }}>
+        <strong>Why {"error" in x ? "this number" : x.shown}</strong>
+        <span className="grow" />
+        <button type="button" className="btn small ghost" onClick={onClose} aria-label="Close the explanation">Close</button>
+      </div>
+      {"error" in x ? <div className="muted">{x.error}</div> : (
+        <ul className="ax-why-lines">
+          {whyLines(x).map((l, i) => <li key={i} className={x.caution.includes(l) ? "ax-why-caution" : i === whyLines(x).length - 1 ? "muted" : undefined}>{l}</li>)}
+        </ul>
+      )}
     </div>
   );
 }

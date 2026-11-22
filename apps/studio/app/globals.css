@@ -2577,6 +2577,19 @@ p.qs-help { margin: -2px 0 10px; }
 .ax-vs { font-size: 10px; margin-left: 3px; vertical-align: 1px; }
 .ax-vs.up { color: var(--c-success); } .ax-vs.down { color: var(--c-error); }
 .ax-pro-n { display: block; font-size: 11px; color: var(--c-text-3); font-weight: 400; line-height: 1.1; margin-top: 1px; }
+/* M4 — "why this number": a number cell can be chosen; the explanation opens under its table */
+/* M2 — the tab book: the table list beside the open table */
+.ax-tabbook-layout { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; gap: 10px; margin-top: 8px; align-items: start; }
+.ax-tabbook-list { margin: 0; padding: 0; list-style: none; max-height: 70vh; overflow: auto; }
+.ax-tabbook-list .btn { width: 100%; justify-content: flex-start; text-align: left; white-space: normal; }
+.ax-tabbook-list .btn.on { background: var(--panel2); }
+@media (max-width: 760px) { .ax-tabbook-layout { grid-template-columns: 1fr; } .ax-tabbook-list { max-height: 30vh; } }
+.ax-why-cell { cursor: pointer; }
+.ax-why-cell:hover, .ax-why-cell:focus-visible { outline: 1px dashed var(--accent); outline-offset: -2px; }
+.ax-why-on { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ax-why { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); font-size: 13px; }
+.ax-why-lines { margin: 6px 0 0 18px; padding: 0; display: grid; gap: 4px; }
+.ax-why-caution { color: var(--warning, var(--c-warning-fg)); }
 .ax-pro-caret { background: none; border: none; cursor: pointer; color: var(--c-text-3); font-size: 12px; width: 18px; padding: 0; margin-left: -18px; margin-right: 2px; }
 .ax-pro.dense .ax-pro-table th, .ax-pro.dense .ax-pro-table td { padding: 3px 8px; font-size: 12.5px; }
 .ax-pro .ax-table-notes { padding: 6px 10px 8px; border-top: 1px solid var(--c-border); margin: 0; background: var(--c-surface); }

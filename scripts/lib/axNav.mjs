@@ -6,7 +6,7 @@
  * suite says what it means ("the Reports view") and not which place holds it.
  */
 /* the four modes (Analytics M1): Overview, Explore, Architect, Present */
-export const PLACE_OF = { home: "overview", findings: "overview", board: "explore", analysis: "explore", tables: "explore", charts: "explore", segments: "explore", filters: "explore", architect: "architect", plan: "architect", present: "present", reports: "present", themes: "present", exports: "present", sharing: "present" };
+export const PLACE_OF = { home: "overview", findings: "overview", board: "explore", analysis: "explore", tables: "explore", tabbook: "explore", simulators: "explore", charts: "explore", segments: "explore", filters: "explore", architect: "architect", plan: "architect", present: "present", reports: "present", themes: "present", exports: "present", sharing: "present" };
 
 export async function axTab(page, key) {
   if (key === "ask") {
