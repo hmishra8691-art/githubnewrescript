@@ -45,3 +45,32 @@ export function lintVideoRecording(q: Pick<Question, "settings" | "code">): stri
   if (!(st.consentText ?? "").trim()) out.push(`${q.code}: no consent text — respondents are asked to turn on their camera without being told how the video is used`);
   return out;
 }
+
+/**
+ * Q7 — WHAT A RECORDED VIDEO ANSWER SAID. The answer stays the upload base type's file list; the transcript of the
+ * take's audio track rides on its first file (`transcript`: text, language, source), written by the server when the
+ * transcription job finishes (migration 0115) and by the recorder when it sees the result. Whether to transcribe
+ * follows the voice answers' setting (`transcribeAnswer`, default on).
+ */
+export interface VideoAnswerTranscript { text?: string; language?: string; source?: "provider" | "manual" | "none"; status?: string; mediaId?: string; transcribedAt?: string }
+
+export function videoAnswerTranscript(value: unknown): VideoAnswerTranscript | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  const t = first && typeof first === "object" ? (first as { transcript?: unknown }).transcript : undefined;
+  if (!t || typeof t !== "object") return null;
+  const x = t as Record<string, unknown>;
+  return {
+    ...(typeof x.text === "string" ? { text: x.text } : {}),
+    ...(typeof x.language === "string" ? { language: x.language } : {}),
+    ...(x.source === "provider" || x.source === "manual" || x.source === "none" ? { source: x.source } : {}),
+    ...(typeof x.status === "string" ? { status: x.status } : {}),
+    ...(typeof x.mediaId === "string" ? { mediaId: x.mediaId } : {}),
+    ...(typeof x.transcribedAt === "string" ? { transcribedAt: x.transcribedAt } : {}),
+  };
+}
+
+/** the text of a recorded video answer, for coding and search ("" when there is none yet) */
+export const videoAnswerText = (value: unknown): string => videoAnswerTranscript(value)?.text?.trim() ?? "";
+
+/** whether a video question's takes are transcribed (the voice answers' own setting; default on) */
+export const transcribesVideo = (q: Pick<Question, "variant" | "settings">): boolean => isVideoRecording(q) && q.settings.saveTranscript !== false && q.settings.transcribeAnswer !== false;

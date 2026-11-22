@@ -1,4 +1,5 @@
 import { fixedAlternativesOf, isFixedOtherKey, FIXED_OTHER_SUFFIX } from "./conjointFixed.js";
+import { isVideoRecording, videoAnswerTranscript } from "./videoRecording.js";
 import { maxdiffTaskOptOut } from "./maxdiffOptOut.js";
 import { dontKnowEnabled, responseStatus } from "./dontKnow.js";
 import type { SurveyDefinition, Question } from "@rescript/schema";
@@ -462,6 +463,12 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
         out[`${stem}_URL`] = exportMediaUrl(f?.url, opts);
         out[`${stem}_NAME`] = f?.name ?? "";
         out[`${stem}_SIZE`] = f?.size ?? "";
+      }
+      /* Q7: a recorded video answer carries what was said — the transcript of its audio track (videoRecording.ts) */
+      if (isVideoRecording(q)) {
+        const t = videoAnswerTranscript(value);
+        out[`${varName}_TRANSCRIPT`] = t?.text ?? "";
+        out[`${varName}_TRANSCRIPT_SOURCE`] = t ? (t.source ?? "provider") : (files.length ? "none" : "");
       }
       break;
     }

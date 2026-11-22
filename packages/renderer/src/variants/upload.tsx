@@ -38,6 +38,8 @@ export interface UploadedFile {
   mediaId?: string;
   /** true when the file never left the browser (preview) */
   local?: boolean;
+  /** Q7: a recorded video answer's transcript (engine videoAnswerTranscript) */
+  transcript?: { text?: string; language?: string; status?: string; source?: "provider" | "manual" | "none"; mediaId?: string; transcribedAt?: string };
 }
 
 /**

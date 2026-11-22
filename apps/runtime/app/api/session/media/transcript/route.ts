@@ -4,7 +4,7 @@ import { surveyDb } from "@/lib/db";
 import { mediaDbOrResponse, sessionStt } from "@/lib/mediaRoute";
 import { sttConfigured, sttProviderName } from "@/lib/ai";
 import { transcribe } from "@rescript/ai";
-import { savesAudio } from "@rescript/engine";
+import { savesAudio, isVideoRecording } from "@rescript/engine";
 import {
   runTranscription, transcriptFor, queueTranscript, removeMedia, stageLogger,
   mergeTranscriptIntoAnswer,
@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
   const db = handle.db;
 
   try {
-    const { data: owned } = await db.from("media_objects").select("id, session_id, status, bucket, path, answer_key, question_id").eq("id", mediaId).maybeSingle();
+    const { data: owned } = await db.from("media_objects").select("id, session_id, status, bucket, path, answer_key, question_id, kind").eq("id", mediaId).maybeSingle();
     if (!owned || owned.session_id !== gate.row!.sessionId) return NextResponse.json({ error: "no such recording" }, { status: 404 });
     if (owned.status !== "stored") return NextResponse.json({ error: "that recording has not finished uploading yet" }, { status: 409 });
 
@@ -126,7 +126,10 @@ export async function POST(req: NextRequest) {
      * direction a sweep can repair (`rescript_unmerged_transcripts` lists
      * exactly that disagreement).
      */
-    if (row?.status === "completed" && row.text) {
+    /* Q7: a video answer kept as a list of files (maxFiles > 1) is not an object the merge can write into — the recorder writes it */
+    const videoQ = !!q && isVideoRecording(q);
+    const mergeable = !(videoQ && (q!.settings.maxFiles ?? 1) > 1);
+    if (row?.status === "completed" && row.text && mergeable) {
       const answerKey = String(owned.answer_key ?? owned.question_id ?? questionId ?? "");
       if (answerKey) {
         try {
@@ -156,7 +159,8 @@ export async function POST(req: NextRequest) {
      * the voice. The clip had to exist to be read; now that the words are
      * kept it goes, which is the only point at which discarding it is safe.
      */
-    if (q && !savesAudio(q) && row?.status === "completed") {
+    /* Q7: a video answer's audio track existed only to be read — the video is the evidence — so it goes once the words are kept */
+    if (q && (!savesAudio(q) || (videoQ && owned.kind === "answer_audio")) && row?.status === "completed") {
       await removeMedia(db, [{ id: owned.id, bucket: owned.bucket, path: owned.path }]);
     }
 

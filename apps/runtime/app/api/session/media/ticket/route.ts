@@ -3,7 +3,7 @@ import { sessionForMedia } from "@/lib/aiSession";
 import { registerKey, surveyDb } from "@/lib/db";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { beginUpload, MediaError, stageLogger, answerVideoRule, type MediaKind } from "@rescript/media";
-import { isVideoRecording, videoRecordingConfig } from "@rescript/engine";
+import { isVideoRecording, videoRecordingConfig, transcribesVideo } from "@rescript/engine";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -41,7 +41,9 @@ export async function POST(req: NextRequest) {
    * size cap (≤ 50 MB), refused here before a URL is handed out; the stored bytes are sniffed again on confirm.
    */
   const q = gate.def.questions.find((x) => x.id === questionId);
-  if (q && isVideoRecording(q)) {
+  /* Q7: the take's AUDIO track (answer_audio) is what is transcribed; the video itself is a respondent file */
+  if (q && isVideoRecording(q) && kind === "answer_audio" && !transcribesVideo(q)) return NextResponse.json({ error: "this video question is not transcribed" }, { status: 400 });
+  if (q && isVideoRecording(q) && kind !== "answer_audio") {
     if (kind !== "answer_upload") return NextResponse.json({ error: "a video answer is stored as a respondent file" }, { status: 400 });
     const verdict = answerVideoRule(typeof body.mimeType === "string" ? body.mimeType : null, Number(body.bytes) || null, videoRecordingConfig(q).maxSizeMb);
     if (!verdict.ok) return NextResponse.json({ error: verdict.message }, { status: /MB/.test(verdict.message ?? "") ? 413 : 415 });

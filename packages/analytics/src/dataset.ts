@@ -59,6 +59,8 @@ export interface VariableMeta {
   loopId?: string;
   loopVar?: string;
   iteration?: number;
+  /** a sentence about how the column was made (Q7: coded answers — how many codes a person reviewed) */
+  note?: string;
 }
 
 export interface Case {

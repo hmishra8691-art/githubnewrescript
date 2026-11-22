@@ -4,7 +4,7 @@ import { surveyDb } from "@/lib/db";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { recordSessionUsage } from "@/lib/metering";
 import { sttConfigured } from "@/lib/ai";
-import { transcribes, savesAudio, isVideoRecording, videoRecordingConfig } from "@rescript/engine";
+import { transcribes, transcribesVideo, savesAudio, isVideoRecording, videoRecordingConfig } from "@rescript/engine";
 import { confirmUpload, queueTranscript, MediaError, stageLogger, verifyAnswerVideo } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
     log("storage_confirmed", { mediaId, questionId, bytes: stored.bytes, seconds: stored.durationSeconds });
     /* S5a (MM2-09): a respondent video is proven by its bytes (type, size, container sniffed) or removed */
     const vq = questionId ? gate.def.questions.find((x) => x.id === questionId) : undefined;
-    if (vq && isVideoRecording(vq)) {
+    if (vq && isVideoRecording(vq) && owned.kind === "answer_upload") {
       await verifyAnswerVideo(db, stored, videoRecordingConfig(vq).maxSizeMb);
     }
 
@@ -75,7 +75,8 @@ export async function POST(req: NextRequest) {
      * which the runner does, rather than never being stored at all.
      */
     const keepAudio = q ? savesAudio(q) : true;
-    const wantTranscript = q ? transcribes(q) : false;
+    /* Q7: of a video answer only the take's audio track is transcribed (queued here, so a respondent who leaves still gets one) */
+    const wantTranscript = q ? (isVideoRecording(q) ? owned.kind === "answer_audio" && transcribesVideo(q) : transcribes(q)) : false;
 
     let transcriptStatus: string | null = null;
     if (wantTranscript && sttConfigured()) {

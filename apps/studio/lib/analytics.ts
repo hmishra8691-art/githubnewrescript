@@ -6,10 +6,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, adviseChart, DEFAULT_THEME, ANALYTICS_MAX_ROWS,
-  unionVariableMetadata, definitionResolver, reviewAgainstSaved, surveyKnownNames, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf, inputHashOf, runScopeOf,
+  withCodedVariables, unionVariableMetadata, definitionResolver, reviewAgainstSaved, surveyKnownNames, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf, inputHashOf, runScopeOf,
   type ChartAdvice, type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
+import { codingStamp, loadCodedVariables } from "./codedAnswers";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { loadQualityDefinition } from "./qualityDef";
 import { ensurePlannedAnalyses as ensureCore } from "./analysisPlanCore";
@@ -221,10 +222,10 @@ const DATASET_CACHE_MAX = 8;
 export function datasetCacheStats() { return { entries: datasetCache.size, max: DATASET_CACHE_MAX }; }
 
 export async function buildFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, def: AnalysisDefinition): Promise<Dataset> {
-  const stamp = await dataStamp(db, surveyId, def.dataset);
+  const [stamp, coding] = await Promise.all([dataStamp(db, surveyId, def.dataset), codingStamp(db, surveyId)]);
   const key = JSON.stringify([
     surveyId, stamp, def.dataset, def.weighting ?? null,
-    ctx.versionId ?? ctx.version ?? null, ctx.revision ?? null,
+    ctx.versionId ?? ctx.version ?? null, ctx.revision ?? null, coding,
   ]);
   const hit = datasetCache.get(key);
   if (hit && Date.now() - hit.at < DATASET_TTL_MS) return hit.ds;
@@ -243,7 +244,9 @@ export async function buildFor(db: SupabaseClient, surveyId: string, ctx: Loaded
    * ordered scale, a segment too small to read) is kept on the dataset.
    */
   const planned = withPlannedVariables(ctx.def as SurveyDefinition, built);
-  const ds = planned.dataset;
+  /* Q7: open-ended answers coded in the qualitative workspace (typed, voice or video transcripts) as columns */
+  const coded = coding ? await loadCodedVariables(db, surveyId, ctx.def as SurveyDefinition) : null;
+  const ds = coded ? withCodedVariables(planned.dataset, coded) : planned.dataset;
   if (planned.warnings.length) ds.warnings = [...(ds.warnings ?? []), ...planned.warnings];
   if (wasTruncated(rows)) ds.truncatedAt = MAX_ROWS;
   /* every result computed from this dataset records what the data was and which questionnaire it was read through (audit S-14) */
@@ -357,7 +360,8 @@ export async function modelInputKey(db: SupabaseClient, surveyId: string, ctx: L
 
 /** Variable picker payload: dictionary-derived metadata, grouped by question, plus dataset counts. */
 export async function variablesPayload(db: SupabaseClient, surveyId: string, ctx: LoadedContext) {
-  const variables: VariableMeta[] = variableMetadata(ctx.def).filter((v) => !v.hidden);
+  const coded = (await codingStamp(db, surveyId)) ? await loadCodedVariables(db, surveyId, ctx.def as SurveyDefinition) : null;
+  const variables: VariableMeta[] = [...variableMetadata(ctx.def).filter((v) => !v.hidden), ...(coded?.variables ?? [])];
   const counts = await Promise.all((["LIVE", "TEST"] as const).map(async (env) => {
     let q = db.from("responses").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).is("deleted_at", null).eq("status", "complete");
     q = env === "TEST" ? q.eq("is_test", true) : q.eq("is_test", false);

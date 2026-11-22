@@ -1,4 +1,5 @@
 import { fixedAlternativesOf } from "./conjointFixed.js";
+import { isVideoRecording } from "./videoRecording.js";
 import { maxdiffOptOutsOf, MAXDIFF_OPT_OUT_MEANING } from "./maxdiffOptOut.js";
 import { GAMIFICATION_VARIABLES } from "./gamification.js";
 import { IAT_VARIABLES } from "./iatScore.js";
@@ -543,6 +544,15 @@ export function questionVariables(
         push({ name: `${stem}_URL`, label: `${q.code} — file ${n === 1 ? "" : i + " "}URL`.replace("  ", " "), dataType: "text" });
         push({ name: `${stem}_NAME`, label: `${q.code} — file ${n === 1 ? "" : i + " "}name`.replace("  ", " "), dataType: "text" });
         push({ name: `${stem}_SIZE`, label: `${q.code} — file ${n === 1 ? "" : i + " "}size (bytes)`.replace("  ", " "), dataType: "numeric" });
+      }
+      /* Q7: a recorded video answer's transcript — what an analyst reads, codes and searches */
+      if (isVideoRecording(q)) {
+        push({ name: `${q.variableName}_TRANSCRIPT`, label: `${q.code} — what was said (transcript of the video)`, dataType: "text" });
+        push({
+          name: `${q.variableName}_TRANSCRIPT_SOURCE`, label: `${q.code} — transcript source`, dataType: "text",
+          valueCodes: ["provider", "manual", "none"],
+          valueLabels: { provider: "Transcribed automatically", manual: "Typed or corrected", none: "Not transcribed" },
+        });
       }
       break;
     }

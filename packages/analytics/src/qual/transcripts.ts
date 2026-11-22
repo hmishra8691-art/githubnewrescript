@@ -169,11 +169,25 @@ export function transcriptSegments(sourceId: string, turns: TranscriptTurn[], sp
 }
 
 /** open-ended answers as segments: one per answered response × question */
+/**
+ * The words of an answer, for coding: a typed answer, a `{text}` answer, or what a recorded answer SAID — a voice
+ * answer's or a recorded video answer's `transcript.text` (Q7: the transcript rides on the video file's answer).
+ */
+export function answerText(v: unknown): string {
+  if (typeof v === "string") return v.trim();
+  const first = Array.isArray(v) ? v[0] : v;
+  if (!first || typeof first !== "object") return "";
+  const o = first as { text?: unknown; transcript?: { text?: unknown } };
+  if (typeof o.text === "string") return o.text.trim();
+  if (o.transcript && typeof o.transcript.text === "string") return o.transcript.text.trim();
+  return "";
+}
+
 export function openEndSegments(sourceId: string, rows: { responseId: string; answers: Record<string, unknown>; group?: string }[], questions: { id: string; code?: string }[]): QualSegment[] {
   const out: QualSegment[] = [];
   for (const r of rows) for (const q of questions) {
     const v = r.answers[q.id] ?? (q.code ? r.answers[q.code] : undefined);
-    const text = typeof v === "string" ? v.trim() : v && typeof v === "object" && typeof (v as { text?: unknown }).text === "string" ? String((v as { text: string }).text).trim() : "";
+    const text = answerText(v);
     if (!text) continue;
     out.push({ id: `${r.responseId}:${q.id}`, sourceKind: "response", sourceId, index: out.length, responseId: r.responseId, questionId: q.id, speaker: `R-${r.responseId.slice(0, 8)}`, role: "participant", ...(r.group ? { group: r.group } : {}), text });
   }

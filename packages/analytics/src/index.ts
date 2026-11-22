@@ -60,6 +60,7 @@ export * from "./storyHtml.js";
 export * from "./baseCaption.js";
 export * from "./models/index.js";
 export * from "./qual/index.js";
+export * from "./codedVariables.js";
 export * from "./reportThemes.js";
 export * from "./advancedNarrative.js";
 export * from "./advancedStale.js";
