@@ -63,3 +63,11 @@ test("an action's targets: target, source, destinations, refs and grid axes", ()
   assert.deepEqual(actionTargets({ op: "create_list_fill", name: "BRANDS", source: "Q1", destinations: ["Q2", "Q3"] }), ["BRANDS", "Q1", "Q2", "Q3"]);
   assert.deepEqual(actionTargets({ op: "add_crosstab", rows: ["Q1"], columns: ["Q6"] }), ["Q1", "Q6"]);
 });
+
+test("a long brief answered as a durable task counts its steps as the plan, and a stage list accepts it", () => {
+  const out: TurnOutcome = { status: 200, latencyMs: 1, calls: [], body: { ok: true, stage: "task", task: { steps: [{ status: "pending" }, { status: "pending" }, { status: "pending" }, { status: "tombstoned" }] }, reply: { kind: "answer", reply: "Planned as a task of 3 steps.", actions: [] }, context: { mode: "task", modelCalled: false } } };
+  const { checks } = scoreTurn({ message: "brief", expect: { stage: ["plan", "task"], planItemsMin: 3, appliedExactly: 0, clarify: "forbidden" } }, out, { defBefore: {} });
+  assert.ok(checks.every((c) => c.ok), JSON.stringify(checks.filter((c) => !c.ok)));
+  const { checks: strict } = scoreTurn({ message: "brief", expect: { stage: "plan" } }, out, { defBefore: {} });
+  assert.ok(strict.some((c) => c.name === "stage" && !c.ok));
+});

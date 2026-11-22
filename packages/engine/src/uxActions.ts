@@ -703,7 +703,10 @@ function optionCodes(def: SurveyDefinition, t: UxTarget, raw: string[]): string[
   if (!q) return raw;
   return raw.map((r) => {
     const o = q.options?.find((x) => String(x.code) === r) ?? q.options?.find((x) => x.label.replace(/<[^>]+>/g, "").trim().toLowerCase() === r.toLowerCase()) ?? (r.toLowerCase() === "other" ? q.options?.find((x) => x.flags?.includes("other_specify")) : undefined);
-    return o ? String(o.code) : fail(`${q.code} has no option “${r}”`);
+    if (o) return String(o.code);
+    /* a 0–10 / rating / number question has values, not options: the model's usual slip on an NPS (eval ux-popup-hindi) — say what works */
+    if (!q.options?.length) return fail(`${q.code} has no option “${r}”: it is a ${q.type} question with values, not options — trigger on its answer instead: "on": "answer" with a "when" comparing the value, for example "when": "${q.code} <= 6"`);
+    return fail(`${q.code} has no option “${r}”`);
   });
 }
 const eventWords = (b: UxBehavior) => ({ answer: "answered", change: "changed", select_option: `${b.options?.length ? `option ${b.options.join(" or ")} is` : "an option is"} selected`, deselect_option: "an option is unselected", page_complete: "every question on the page is answered", block_complete: "every question of the block on the page is answered", appear: "it appears", page_enter: "the page opens", click: "clicked", hover: "hovered" } as Record<string, string>)[b.on ?? ""] ?? String(b.on);

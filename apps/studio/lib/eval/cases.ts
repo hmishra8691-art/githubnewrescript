@@ -44,8 +44,8 @@ export interface TurnExpect {
   scope?: string;
   /** reply.kind */
   kind?: string | string[];
-  /** the response's stage: a plan, a built plan, a checkpoint */
-  stage?: "plan" | "executed" | "none";
+  /** the response's stage: a plan, a built plan, a durable task (plan-first, lib/tasks/turnTask.ts), a checkpoint — one value or any of a list */
+  stage?: "plan" | "executed" | "task" | "none" | ("plan" | "executed" | "task" | "none")[];
   /** action ops that must be in the final proposal / must not */
   opsPresent?: string[];
   opsAbsent?: string[];
@@ -274,7 +274,9 @@ export const GOLDEN_CASES: EvalCase[] = [
   {
     id: "brief-plan-first", category: "long_brief", title: "A pasted 2,500-character brief is planned, not built in one reply", fixture: "blank",
     turns: [{ message: LONG_BRIEF, fake: BRIEF_PLAN,
-      expect: { modelCalled: true, stage: "plan", planItemsMin: 3, appliedExactly: 0, clarify: "forbidden" } }],
+      /* with a real provider a long brief becomes a durable task of steps (plan-first, 2026-10-29) — the product's
+         route for it; the scripted fake reply keeps the older single-turn plan. Either way: planned, nothing built. */
+      expect: { stage: ["plan", "task"], planItemsMin: 3, appliedExactly: 0, clarify: "forbidden" } }],
   },
 
   /* ---------------------------------------------------------------- staged generation: plan, then build item by item */

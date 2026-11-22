@@ -85,7 +85,8 @@ export function factsOf(out: TurnOutcome): TurnFacts {
     modelCalled: ctx.modelCalled === false ? false : out.calls.length > 0 || ctxCalls > 0,
     mode: typeof ctx.mode === "string" ? ctx.mode : null, scope: typeof ctx.scope === "string" ? ctx.scope : null,
     stage: typeof b.stage === "string" ? b.stage : "none",
-    planItems: Array.isArray(plan.items) ? plan.items.length : 0,
+    /* a single-turn plan's items, or a durable task's live steps */
+    planItems: Array.isArray(plan.items) ? plan.items.length : Array.isArray(obj(b.task).steps) ? (obj(b.task).steps as unknown[]).map(obj).filter((s) => s.status !== "tombstoned").length : 0,
     repairRan: !!repair && repair.skipped !== "policy", repaired: !!repair && repair.fixed === true,
     oneShotParse: out.calls.every((c) => c.requests <= 1),
     clarify: kind === "clarify",
@@ -140,7 +141,7 @@ export function scoreTurn(turn: EvalTurn, out: TurnOutcome, ctx: { defBefore: un
   if (e.mode !== undefined) c("mode", anyOf(e.mode, f.mode), `mode ${f.mode}, expected ${[e.mode].flat().join("|")}`);
   if (e.scope !== undefined) c("scope", f.scope === e.scope, `scope ${f.scope}, expected ${e.scope}`);
   if (e.kind !== undefined) c("kind", anyOf(e.kind, f.kind), `reply kind ${f.kind}, expected ${[e.kind].flat().join("|")}`);
-  if (e.stage !== undefined) c("stage", f.stage === e.stage, `stage ${f.stage}, expected ${e.stage}`);
+  if (e.stage !== undefined) c("stage", anyOf(e.stage, f.stage), `stage ${f.stage}, expected ${[e.stage].flat().join("|")}`);
   for (const op of e.opsPresent ?? []) c(`op_present:${op}`, f.ops.includes(op), `no ${op} in [${f.ops.join(", ")}]`);
   for (const op of e.opsAbsent ?? []) c(`op_absent:${op}`, !f.ops.includes(op), `${op} was proposed`);
   if (e.targets?.length) {
