@@ -615,6 +615,31 @@ const HYPOTHESIS_OPS = new Set(["add_hypothesis", "set_hypothesis", "remove_hypo
  * before, and the result must still pass the schema; only `warnings` is reduced to the UX warnings and
  * `structureUnchanged` is not computed (false).
  */
+/*
+ * WHAT IS ALREADY KNOWN ABOUT A SURVEY (Level 5 baseline, 2026-11-25). Every edit judged the survey it was given
+ * from scratch — a full schema parse and a full quality check of "before" — although "before" is nearly always the
+ * survey the previous edit returned and judged a moment ago. The judgement is kept with the object, under a
+ * fingerprint of its content: the same object edited in place since (tests do it; nothing in the product should)
+ * has another fingerprint and is judged again.
+ */
+interface Judged { normalized: SurveyDefinition | null; errors: Set<string> }
+const JUDGED = new WeakMap<object, { print: string; judged: Judged }>();
+function fingerprint(def: SurveyDefinition): string {
+  const s = JSON.stringify(def);
+  let h1 = 0x811c9dc5, h2 = 0x1000193;
+  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 0x01000193); h2 = Math.imul(h2 + c, 0x5bd1e995) ^ (h2 >>> 13); }
+  return `${s.length}:${(h1 >>> 0).toString(36)}:${(h2 >>> 0).toString(36)}`;
+}
+function rememberJudged(def: SurveyDefinition, judged: Judged): void { JUDGED.set(def, { print: fingerprint(def), judged }); }
+function judgedBefore(before: SurveyDefinition): Judged {
+  const hit = JUDGED.get(before);
+  if (hit && hit.print === fingerprint(before)) return hit.judged;
+  const baseline = SurveyDefinitionSchema.safeParse(before);
+  const judged: Judged = { normalized: baseline.success ? baseline.data : null, errors: new Set(runQualityCheck(before).areas.flatMap((x) => x.issues).filter((i) => i.level === "error").map((i) => i.message)) };
+  JUDGED.set(before, { print: fingerprint(before), judged });
+  return judged;
+}
+
 export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean; uxBehaviour?: boolean; lite?: boolean } = {}): ApplyActionsOutcome {
   const before = input;
   let def = structuredClone(input) as SurveyDefinition;
@@ -736,12 +761,15 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
     }
   }
   if (opts.lite) return { def: after, results, errors, warnings: [...new Set(ctx.uxWarnings)].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly: results.filter((r) => r.ok).length > 0 && results.filter((r) => r.ok).every((r) => isUxOp(r.op)), structureUnchanged: false };
-  const baseline = SurveyDefinitionSchema.safeParse(before);
-  const structureUnchanged = JSON.stringify(withoutPresentation(baseline.success ? baseline.data : before)) === JSON.stringify(withoutPresentation(after));
+  const was = judgedBefore(before);
+  const structureUnchanged = JSON.stringify(withoutPresentation(was.normalized ?? before)) === JSON.stringify(withoutPresentation(after));
   const applied = results.filter((r) => r.ok);
   const uxOnly = applied.length > 0 && applied.every((r) => isUxOp(r.op));
-  const beforeIssues = new Set(runQualityCheck(before).areas.flatMap((x) => x.issues).filter((i) => i.level === "error").map((i) => i.message));
-  const warnings = runQualityCheck(after).areas.flatMap((x) => x.issues).filter((i) => i.level === "error" && !beforeIssues.has(i.message)).map((i) => `${i.questionCode ? `${i.questionCode}: ` : ""}${i.message}`);
+  const beforeIssues = was.errors;
+  const afterErrors = runQualityCheck(after).areas.flatMap((x) => x.issues).filter((i) => i.level === "error");
+  /* the survey this call returns is the next call's "before": what was just worked out about it is kept with it */
+  rememberJudged(after, { normalized: after, errors: new Set(afterErrors.map((i) => i.message)) });
+  const warnings = afterErrors.filter((i) => !beforeIssues.has(i.message)).map((i) => `${i.questionCode ? `${i.questionCode}: ` : ""}${i.message}`);
   const validationWarnings = results.flatMap((r) => (r.issues ?? []).filter((i) => i.level === "warning").map((i) => i.message));
   /*
    * WHAT THE BATCH DID TO THE ANALYSIS PLAN. A type change, a removed option,

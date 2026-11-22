@@ -30,7 +30,26 @@ import { audioFor, K } from "./localization.js";
  * `layout.voice` — so a survey saved before this object existed behaves
  * exactly as it did.
  */
+/*
+ * Memoised per survey object (Level 5 baseline, 2026-11-25): `questionAi` asks for the survey-level settings once
+ * per QUESTION, and each ask was a schema parse — on a 500-question survey that was a tenth of every edit. The
+ * answer depends only on the three branding fields in the key, so a survey edited in place still gets the right
+ * one. The result is frozen: it is shared, and a caller that wants to change it must copy it.
+ */
+const AI_CONV_CACHE = new WeakMap<object, { key: string; value: AiConversation }>();
 export function effectiveAiConversation(def: SurveyDefinition): AiConversation {
+  const key = JSON.stringify([def.branding?.aiConversation ?? null, def.branding?.layout?.voice ?? null, def.branding?.layout?.presentation ?? null]);
+  const hit = AI_CONV_CACHE.get(def);
+  if (hit && hit.key === key) return hit.value;
+  const value = deepFreeze(computeAiConversation(def));
+  AI_CONV_CACHE.set(def, { key, value });
+  return value;
+}
+function deepFreeze<T>(o: T): T {
+  if (o && typeof o === "object" && !Object.isFrozen(o)) { Object.freeze(o); for (const v of Object.values(o as object)) deepFreeze(v); }
+  return o;
+}
+function computeAiConversation(def: SurveyDefinition): AiConversation {
   const explicit = def.branding?.aiConversation;
   if (explicit) return AiConversationSchema.parse(explicit);
   const layout = def.branding?.layout;
