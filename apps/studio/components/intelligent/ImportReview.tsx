@@ -43,10 +43,40 @@ const RANK: Record<Level, number> = { same: 3, converted: 2, check: 1, lost: 0 }
 /** the same rule as bulkAccept in packages/import: never a lost part or an unresolved reference */
 const acceptable = (p: SidePair) => !p.unresolved.length && !p.parts.some((x) => x.level === "lost");
 
-function SideBySide({ pairs, onOpen }: { pairs: SidePair[]; onOpen(source: string): void }) {
+function SideBySide({ pairs, onOpen, sessionId }: { pairs: SidePair[]; onOpen(source: string): void; sessionId?: string | null }) {
   const [accepted, setAccepted] = React.useState<Set<string>>(new Set());
   const [show, setShow] = React.useState<Level | "all">("all");
-  const acceptWhere = (min: Level) => setAccepted((a) => new Set([...a, ...pairs.filter((p) => RANK[p.level] >= RANK[min] && acceptable(p)).map((p) => p.sourceId)]));
+  /* I6 (2026-11-22): acceptance is kept with the import (/api/import/sessions/[id]/review, migration 0113) */
+  const [saved, setSaved] = React.useState<{ state: "idle" | "saving" | "saved" | "local"; note?: string }>({ state: "idle" });
+  React.useEffect(() => {
+    if (!sessionId) { setSaved({ state: "local", note: "This preview has no import record, so acceptance is for this review only." }); return; }
+    let live = true;
+    fetch(`/api/import/sessions/${encodeURIComponent(sessionId)}/review`).then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (!live) return;
+      if (!r.ok) { setSaved({ state: "local", note: j.error ?? "Acceptance could not be read; it is for this review only." }); return; }
+      setAccepted(new Set((j.accepted ?? []).map((a: { sourceId: string }) => a.sourceId)));
+      setSaved({ state: "saved", note: j.dropped?.length ? `${j.dropped.length} earlier acceptance${j.dropped.length === 1 ? " no longer applies" : "s no longer apply"}: the question changed since.` : undefined });
+    }).catch(() => { if (live) setSaved({ state: "local", note: "Acceptance could not be read; it is for this review only." }); });
+    return () => { live = false; };
+  }, [sessionId]);
+  const persist = async (change: { accept?: string[]; unaccept?: string[] }) => {
+    if (!sessionId || saved.state === "local") return;
+    setSaved({ state: "saving" });
+    try {
+      const r = await fetch(`/api/import/sessions/${encodeURIComponent(sessionId)}/review`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(change) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.saved === false) { setSaved({ state: "local", note: j.error ?? "Acceptance could not be saved; it is for this review only." }); return; }
+      setAccepted(new Set((j.accepted ?? []).map((a: { sourceId: string }) => a.sourceId)));
+      setSaved({ state: "saved", note: j.held?.length ? `Not accepted: ${j.held.slice(0, 3).map((h: { sourceId: string; why: string }) => `${h.sourceId} (${h.why})`).join("; ")}.` : undefined });
+    } catch { setSaved({ state: "local", note: "Acceptance could not be saved; it is for this review only." }); }
+  };
+  const acceptWhere = (min: Level) => {
+    const ids = pairs.filter((p) => RANK[p.level] >= RANK[min] && acceptable(p) && !accepted.has(p.sourceId)).map((p) => p.sourceId);
+    setAccepted((a) => new Set([...a, ...ids]));
+    if (ids.length) void persist({ accept: ids });
+  };
+  const toggle = (id: string, on: boolean) => { setAccepted((a) => { const n = new Set(a); if (on) n.add(id); else n.delete(id); return n; }); void persist(on ? { accept: [id] } : { unaccept: [id] }); };
   const counts = (["same", "converted", "check", "lost"] as Level[]).map((l) => [l, pairs.filter((p) => p.level === l).length] as const);
   const left = pairs.filter((p) => !accepted.has(p.sourceId)).length;
   const shown = pairs.filter((p) => show === "all" || p.level === show);
@@ -58,7 +88,8 @@ function SideBySide({ pairs, onOpen }: { pairs: SidePair[]; onOpen(source: strin
         <button type="button" className="iq-btn" onClick={() => acceptWhere("same")} data-testid="iqr-side-accept-same">Accept all as written</button>
         <button type="button" className="iq-btn" onClick={() => acceptWhere("converted")} data-testid="iqr-side-accept-converted">Accept converted too</button>
       </p>
-      <p className="iqi-dim" data-testid="iqr-side-left">{accepted.size} accepted · {left} still to review. A question with a lost part or an unresolved reference cannot be accepted in bulk; open it and fix it. (Acceptance is for this review; it is not stored with the import yet.)</p>
+      <p className="iqi-dim" data-testid="iqr-side-left">{accepted.size} accepted · {left} still to review. A question with a lost part or an unresolved reference cannot be accepted in bulk; open it and fix it. {saved.state === "saving" ? "Saving…" : saved.state === "saved" ? "Kept with the import." : ""}</p>
+      {saved.note && <p className="iqi-dim" data-testid="iqr-side-saved-note">{saved.note}</p>}
       <table className="iqr-table iqr-side">
         <thead><tr><th scope="col">Source</th><th scope="col">Rescript</th><th scope="col">Parts</th><th scope="col">Accept</th></tr></thead>
         <tbody>
@@ -67,7 +98,7 @@ function SideBySide({ pairs, onOpen }: { pairs: SidePair[]; onOpen(source: strin
               <td><button type="button" className="iqr-link" onClick={() => onOpen(p.sourceId)}><b>{p.source.variable}</b></button> <span className="iqi-dim">{p.source.type}</span><div>{p.source.text}</div>{p.source.options.length ? <div className="iqi-dim">{p.source.options.join(" · ")}</div> : null}{p.source.logic ? <div className="iqi-dim">shown when {p.source.logic}</div> : null}</td>
               <td>{p.result ? <><b>{p.result.code}</b> <span className="iqi-dim">{p.result.type}</span><div>{p.result.text}</div>{p.result.options.length ? <div className="iqi-dim">{p.result.options.join(" · ")}</div> : null}</> : <span className="iqi-dim">not created</span>}</td>
               <td>{p.parts.map((x) => <div key={x.part}><span className={`iqi-badge lv-${x.level}`}>{x.part} · {LEVEL_WORDS[x.level]}</span> <span className="iqi-dim">{x.detail}</span></div>)}{p.unresolved.map((u, i) => <div key={i} className="iqi-dim">unresolved: {u}</div>)}</td>
-              <td><input type="checkbox" aria-label={`Accept ${p.source.variable}`} disabled={!acceptable(p)} checked={accepted.has(p.sourceId)} onChange={(e) => setAccepted((a) => { const n = new Set(a); if (e.target.checked) n.add(p.sourceId); else n.delete(p.sourceId); return n; })} data-testid="iqr-side-accept" /></td>
+              <td><input type="checkbox" aria-label={`Accept ${p.source.variable}`} disabled={!acceptable(p)} checked={accepted.has(p.sourceId)} onChange={(e) => toggle(p.sourceId, e.target.checked)} data-testid="iqr-side-accept" /></td>
             </tr>
           ))}
         </tbody>
@@ -219,7 +250,7 @@ export function ImportReview({ job, onClose, onRerun, renderQuestions }: {
               </ol>
             )}
             {tab === "questions" && <div data-testid="iqr-questions">{clar.length ? renderQuestions() : <p className="iqi-dim">No open questions — the source decided everything it could be read for.</p>}</div>}
-            {tab === "side" && (r.sideBySide?.length ? <SideBySide pairs={r.sideBySide} onOpen={(src) => void open(src)} /> : <p className="iqi-dim" data-testid="iqr-side">No questions to compare.</p>)}
+            {tab === "side" && (r.sideBySide?.length ? <SideBySide pairs={r.sideBySide} sessionId={job.sessionId} onOpen={(src) => void open(src)} /> : <p className="iqi-dim" data-testid="iqr-side">No questions to compare.</p>)}
             {tab === "blocks" && (
               <div data-testid="iqr-blocks">
                 <p className="iqi-dim">Import only some blocks. What the chosen blocks refer to outside the selection is reported after the re-run, never rewritten.</p>

@@ -28,7 +28,7 @@ const toSession = (r: Row): ImportSession => ({
   fileName: String(r.file_name), format: String(r.format), platform: (r.platform as string | null) ?? null, fingerprint: String(r.fingerprint), sizeBytes: Number(r.size_bytes ?? 0),
   storageProvider: (r.storage_provider as string | null) ?? null, bucket: (r.bucket as string | null) ?? null, storageKey: (r.storage_key as string | null) ?? null,
   sourceExpiresAt: String(r.source_expires_at), status: r.status as ImportSession["status"],
-  reportDigest: (r.report_digest ?? {}) as ImportSession["reportDigest"], canonical: r.canonical ?? null, decisions: Array.isArray(r.decisions) ? r.decisions : [],
+  reportDigest: (r.report_digest ?? {}) as ImportSession["reportDigest"], canonical: r.canonical ?? null, decisions: Array.isArray(r.decisions) ? r.decisions : [], reviewAccepted: Array.isArray(r.review_accepted) ? (r.review_accepted as ImportSession["reviewAccepted"]) : [],
   priorDefinition: r.prior_definition ?? null, error: (r.error as string | null) ?? null,
   createdAt: String(r.created_at), appliedAt: (r.applied_at as string | null) ?? null, rolledBackAt: (r.rolled_back_at as string | null) ?? null,
 });
@@ -80,9 +80,12 @@ function databaseStore(db: Db): SessionStore {
       if (patch.appliedAt !== undefined) row.applied_at = patch.appliedAt;
       if (patch.rolledBackAt !== undefined) row.rolled_back_at = patch.rolledBackAt;
       if (patch.decisions) row.decisions = patch.decisions;
+      if (patch.reviewAccepted) row.review_accepted = patch.reviewAccepted;
       if (patch.reportDigest) row.report_digest = patch.reportDigest;
       if (patch.error !== undefined) row.error = patch.error;
-      const { data } = await db.from("import_sessions").update(row).eq("id", id).select("*").maybeSingle();
+      const { data, error } = await db.from("import_sessions").update(row).eq("id", id).select("*").maybeSingle();
+      /* a column this database does not have yet (review_accepted before 0113) is said, not swallowed */
+      if (error && patch.reviewAccepted) throw new Error(/review_accepted/.test(error.message) ? "Keeping review acceptance needs migration 0113, which has not been applied to this database." : error.message);
       return data ? toSession(data as Row) : null;
     },
     async expired(limit) {

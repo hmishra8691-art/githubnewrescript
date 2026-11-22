@@ -1,4 +1,5 @@
-import type { MigrationReport } from "@rescript/import";
+import type { MigrationReport, SidePair } from "@rescript/import";
+import { bulkAccept } from "@rescript/import";
 
 /**
  * IMPORT SESSIONS (I4, migration 0080): one record per import run — what file, what the reader made of it,
@@ -51,6 +52,8 @@ export interface ImportSession {
   reportDigest: ReportDigest;
   canonical: unknown | null;
   decisions: unknown[];
+  /** I6: the questions accepted in the side-by-side review — who and when, and the level each was at (migration 0113) */
+  reviewAccepted?: ReviewAcceptance[];
   priorDefinition: unknown | null;
   error: string | null;
   createdAt: string;
@@ -124,7 +127,7 @@ export interface SessionStore {
   create(s: NewSession, source: Uint8Array | null): Promise<ImportSession>;
   get(id: string): Promise<ImportSession | null>;
   list(filter: { customerId: string | null; surveyId?: string | null; limit?: number }): Promise<ImportSession[]>;
-  update(id: string, patch: Partial<Pick<ImportSession, "status" | "surveyId" | "appliedAt" | "rolledBackAt" | "decisions" | "error" | "reportDigest">>): Promise<ImportSession | null>;
+  update(id: string, patch: Partial<Pick<ImportSession, "status" | "surveyId" | "appliedAt" | "rolledBackAt" | "decisions" | "error" | "reportDigest" | "reviewAccepted">>): Promise<ImportSession | null>;
   /** sessions whose source is due for removal (expired), oldest first */
   expired(limit: number): Promise<ImportSession[]>;
   /** remove the stored file and clear its key; idempotent */
@@ -161,3 +164,30 @@ export function memorySessionStore(now: () => Date = () => new Date()): SessionS
   };
 }
 
+
+/* ------------------------------------------------------------------------------------------------------------------
+ * I6 — ACCEPTANCE IN THE SIDE-BY-SIDE REVIEW, KEPT WITH THE IMPORT. A question is accepted by a person, with the level
+ * it was at; the same rule as one bulk action (packages/import bulkAccept): never a question with a lost part or an
+ * unresolved reference. An acceptance that no longer matches the current comparison (the question is gone, or now has
+ * a lost part after a decision) is dropped when the review is read, and said.
+ * ------------------------------------------------------------------------------------------------------------------ */
+export interface ReviewAcceptance { sourceId: string; level: string; at: string; by: string | null }
+export const MAX_REVIEW_ACCEPTED = 5000;
+
+export function applyReviewAcceptance(
+  current: ReviewAcceptance[],
+  pairs: SidePair[],
+  change: { accept?: string[]; unaccept?: string[] },
+  who: { by: string | null; at: string },
+): { accepted: ReviewAcceptance[]; held: { sourceId: string; why: string }[]; dropped: string[] } {
+  const byId = new Map(pairs.map((p) => [p.sourceId, p]));
+  const un = new Set(change.unaccept ?? []);
+  const kept = current.filter((a) => !un.has(a.sourceId));
+  const { accept, held } = bulkAccept(pairs, { sourceIds: (change.accept ?? []).filter((id) => !kept.some((a) => a.sourceId === id)) });
+  const unknown = (change.accept ?? []).filter((id) => !byId.has(id)).map((id) => ({ sourceId: id, why: "not a question of this import" }));
+  const next = [...kept, ...accept.map((sourceId) => ({ sourceId, level: byId.get(sourceId)!.level, at: who.at, by: who.by }))];
+  /* what no longer stands against the current comparison */
+  const valid = new Set(bulkAccept(pairs, { sourceIds: next.map((a) => a.sourceId) }).accept);
+  const dropped = next.filter((a) => !valid.has(a.sourceId)).map((a) => a.sourceId);
+  return { accepted: next.filter((a) => valid.has(a.sourceId)).slice(0, MAX_REVIEW_ACCEPTED), held: [...held, ...unknown], dropped };
+}

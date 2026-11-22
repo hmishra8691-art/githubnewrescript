@@ -55,3 +55,18 @@ test("digestReport keeps the counts a history needs, not the report", () => {
   assert.equal(d.graph.first.length, 1, "info findings are not carried"); assert.equal(d.scripts[0].verdict, "native");
   assert.equal(d.fidelity!.importedPct, 80);
 });
+
+test("side-by-side acceptance: who and when, held by the bulk rule, dropped when the question changes", async () => {
+  const { applyReviewAcceptance } = await import("./sessions.ts");
+  const pair = (sourceId: string, level: string, extra: Record<string, unknown> = {}) => ({ sourceId, questionId: sourceId, level, parts: [{ part: "text", level, detail: "" }], unresolved: [], source: {}, result: {}, ...extra }) as never;
+  const pairs = [pair("Q1", "same"), pair("Q2", "converted"), pair("Q3", "lost"), pair("Q4", "check", { unresolved: ["Q9"] })];
+  const who = { by: "u1", at: "2026-11-22T10:00:00Z" };
+  const r = applyReviewAcceptance([], pairs, { accept: ["Q1", "Q2", "Q3", "Q4", "Q99"] }, who);
+  assert.deepEqual(r.accepted.map((a) => [a.sourceId, a.level, a.by]), [["Q1", "same", "u1"], ["Q2", "converted", "u1"]]);
+  assert.deepEqual(r.held.map((h) => h.sourceId).sort(), ["Q3", "Q4", "Q99"]);
+  const again = applyReviewAcceptance(r.accepted, pairs, { accept: ["Q1"], unaccept: ["Q2"] }, { by: "u2", at: "later" });
+  assert.deepEqual(again.accepted.map((a) => [a.sourceId, a.by]), [["Q1", "u1"]], "accepting again keeps the first acceptance; un-accepting removes");
+  const changed = applyReviewAcceptance(r.accepted, [pair("Q1", "lost"), pair("Q2", "converted")], {}, who);
+  assert.deepEqual(changed.dropped, ["Q1"]);
+  assert.deepEqual(changed.accepted.map((a) => a.sourceId), ["Q2"]);
+});
