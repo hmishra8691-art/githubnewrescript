@@ -13,6 +13,7 @@ import { languageName } from "../../../lib/intelligent/voice";
 import type { CopilotEntry, EngineTurn } from "./useCopilot";
 import { DocumentOutput, ThemeTurnCard, type DocumentActions } from "./DocumentCards";
 import { QualTurnCard } from "./QualTurnCard";
+import { OpsTurnCard } from "./OpsTurnCard";
 import { ResearchOutput } from "../ResearchOutput";
 import { validateResearch, PROVENANCE_REASON, type SurveyAction } from "@rescript/engine";
 import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilot/history";
@@ -193,6 +194,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
         )}
         {/* a cleaning request (IM6): the proposal, then Apply / Undo */}
         {entry.cleaning && <CleaningTurnCard card={entry.cleaning} onAction={documents?.cleaning ? (a) => documents.cleaning!(entry.id, a) : undefined} />}
+        {/* a research-operations request (2026-11-22): people, accounts, invitations, portal settings — the preview, then Confirm */}
+        {entry.ops && <OpsTurnCard card={entry.ops} handOver={documents?.opsHandOver?.[entry.id]} onAction={documents?.ops ? (a) => documents.ops!(entry.id, a) : undefined} />}
         {entry.qual && <QualTurnCard card={entry.qual} onRun={documents?.qual ? () => documents.qual!(entry.id) : undefined} />}
         {entry.data && (
           /* a data question's answer (Phase 4): read on the respondent data — the base, the test, the caveats, and the planned finding on the same pair */

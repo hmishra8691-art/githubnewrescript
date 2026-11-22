@@ -1,11 +1,12 @@
 "use client";
+import { ACCEPTED_FILES } from "@/lib/peopleIntakeCore";
 import { describeFailure } from "@/lib/copilot/failure";
 import React from "react";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
 import {
   buildDependencyIndex, objectStatus, applyLogicProposal, proposalTargets, formatCondition, nextQuestionNaming,
-  interpretRequest, interpretQualRequest, DEFER_TO_GRAMMAR, SCRIPT_QUESTION_REASON, explainScripts, diffSurveys,
+  interpretRequest, interpretQualRequest, interpretOpsRequest, PORTAL_TEMPLATES, DEFER_TO_GRAMMAR, SCRIPT_QUESTION_REASON, explainScripts, diffSurveys,
   type ObjectKey,
   type SurveyAction,
 } from "@rescript/engine";
@@ -194,6 +195,8 @@ const WELCOME_TASKS: { label: string; text: string }[] = [
   { label: "Recommend next steps", text: "Recommend next steps from the findings" },
 ];
 
+const OPS_TEMPLATES = PORTAL_TEMPLATES.map((t) => ({ id: t.id, name: t.name }));
+
 export function IntelligentView() {
   const s = useStudio();
   const sel = useSelection();
@@ -294,7 +297,7 @@ export function IntelligentView() {
     patchAll: (fn) => setTurns((ts) => ts.map((x) => { if (!("kind" in x) || x.kind !== "copilot") return x; const p = fn(x); return p ? { ...x, ...p } : x; })),
   });
   /* kept documents and report themes on the copilot's cards (2026-10-18) */
-  const documentActions = React.useMemo(() => ({ download: copilot.downloadOutput, regenerate: copilot.regenerateOutput, theme: copilot.themeCardAction, qual: copilot.qualCardAction, cleaning: copilot.cleaningCardAction }), [copilot.downloadOutput, copilot.regenerateOutput, copilot.themeCardAction, copilot.qualCardAction, copilot.cleaningCardAction]);
+  const documentActions = React.useMemo(() => ({ download: copilot.downloadOutput, regenerate: copilot.regenerateOutput, theme: copilot.themeCardAction, qual: copilot.qualCardAction, cleaning: copilot.cleaningCardAction, ops: copilot.opsCardAction, opsHandOver: copilot.opsHandOver }), [copilot.downloadOutput, copilot.regenerateOutput, copilot.themeCardAction, copilot.qualCardAction, copilot.cleaningCardAction, copilot.opsCardAction, copilot.opsHandOver]);
   const [applyNote, setApplyNote] = React.useState<string | null>(null);
   const applyCopilot = React.useCallback(async () => {
     // what the change is about — the first question it adds, else the first it modifies — becomes the selection once applied, as a grammar Apply always did
@@ -330,7 +333,10 @@ export function IntelligentView() {
   const ask = React.useCallback(async (sentence: string, heard?: HeardTranscript) => {
     const t = sentence.trim();
     if (!t || busy) return;
-    const imp = importRequest(t);
+    /* a sentence about the study's PEOPLE ("upload this file and create their accounts") is not a questionnaire import:
+       it is read first, so "upload this file" does not open the import dialog (the request itself is handled below) */
+    const opsReq = interpretOpsRequest(t, { hasFile: !!copilot.peopleFile, lists: copilot.opsLists, templates: OPS_TEMPLATES });
+    const imp = opsReq ? null : importRequest(t);
     if (imp === "pick") { setText(""); fileRef.current?.click(); return; }
     if (imp === "report") { setText(""); showReview(t); return; }
     setBusy(true);
@@ -361,6 +367,16 @@ export function IntelligentView() {
      * analysis plan, draft the findings report, recommend next steps — start from the same sentence here; the
      * engine picks the planner, the steps run side by side, every check and repair runs as before.
      */
+    /*
+     * RESEARCH OPERATIONS (2026-11-22): the people of the study and their portal — "upload this file and use it for
+     * account creation and invitations", "create accounts for the Wave 1 list", "let respondents see their scores",
+     * "where do I answer a privacy request?". The engine reads the sentence (it leaves anything about the
+     * questionnaire alone); the card previews from the platform's own routes and acts only on Confirm.
+     */
+    if (opsReq) {
+      await copilot.opsRequest(t, opsReq, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     const research = researchRequest(t);
     if (research) {
       await copilot.startResearch(t, research, heard);
@@ -850,6 +866,7 @@ export function IntelligentView() {
    * the sheet could not say matched reported in the Quotas tab.
    */
   const quotaSheetRef = React.useRef<HTMLInputElement>(null);
+  const peopleFileRef = React.useRef<HTMLInputElement>(null);
   const [quotaImport, setQuotaImport] = React.useState<QuotaImportNote | null>(null);
   const importQuotaSheet = React.useCallback(async (file: File) => {
     const form = new FormData();
@@ -1134,6 +1151,16 @@ export function IntelligentView() {
               </>) : <span className="iq-error">{copilot.themeImageError}</span>}
             </span>
           )}
+          <input ref={peopleFileRef} type="file" hidden accept={ACCEPTED_FILES} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void copilot.attachPeopleFile(f).then(() => inputRef.current?.focus()); }} data-testid="cp-people-file" aria-label="Attach a file of people" />
+          {(copilot.peopleFile || copilot.peopleFileError) && (
+            <span className="cp-theme-chip" data-testid="cp-people-chip">
+              {copilot.peopleFile ? (<>
+                <Icon name="paperclip" size={12} />
+                <span><b>{copilot.peopleFile.name}</b> · a list of people · say what to do with it, for example “add these people, create their accounts and send the invitations”</span>
+                <button type="button" onClick={copilot.clearPeopleFile} aria-label="Remove the file of people">×</button>
+              </>) : <span className="iq-error">{copilot.peopleFileError} <button type="button" onClick={copilot.clearPeopleFile} aria-label="Dismiss">×</button></span>}
+            </span>
+          )}
           <input ref={quotaSheetRef} type="file" hidden accept=".xlsx,.csv,.tsv,text/csv" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void importQuotaSheet(f); }} data-testid="cp-quota-sheet-file" />
           <input ref={researchRef} type="file" hidden multiple onChange={(e) => { void copilot.uploadDocs([...(e.target.files ?? [])]); revealInspector(); e.target.value = ""; }} data-testid="cp-research-file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx" />
           <span className="cp-attach-wrap">
@@ -1144,6 +1171,7 @@ export function IntelligentView() {
               <span className="cp-attach-menu" role="menu" data-testid="cp-attach-menu">
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); researchRef.current?.click(); }} data-testid="iq-attach-research"><b>Research documents</b><span className="iqi-dim">papers, reports, briefs — the copilot reads them</span></button>
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); fileRef.current?.click(); }} data-testid="iq-attach-import"><b>Import a questionnaire</b><span className="iqi-dim">QSF, Decipher, Word, Excel, PDF → a Rescript survey</span></button>
+                <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); peopleFileRef.current?.click(); }} data-testid="iq-attach-people"><b>People list</b><span className="iqi-dim">Excel / CSV of respondents → a list, portal accounts, invitations</span></button>
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); quotaSheetRef.current?.click(); }} data-testid="iq-attach-quotas"><b>Quota sheet</b><span className="iqi-dim">Excel / CSV of sample targets → quotas, as a proposal</span></button>
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); themeImageRef.current?.click(); }} data-testid="iq-attach-theme"><b>Theme image</b><span className="iqi-dim">build the survey&apos;s theme from an image, or use it as the background</span></button>
               </span>

@@ -35,6 +35,10 @@ import { fetchArtifactLines, fetchArtifactLink, sandboxFingerprint, saveBytes, s
 import { sandboxFind, sandboxGet, sandboxLines, sandboxPut, sandboxTheme, fromBase64 } from "../../../lib/artifacts/sandboxStore";
 import { themeTurn, themeWithModel, applyThemeTurn, saveThemeTurn, type ThemeCard } from "../../../lib/copilot/reportThemeTurn";
 import { qualTurn, runQualCard, type QualCard } from "./qualTurn";
+import { answerColumn, opsTurn, readPeopleFile, runOps, type HandOver, type OpsCard, type OpsContext, type PeopleFile } from "./opsTurn";
+import type { OpsAction } from "./OpsTurnCard";
+import { PortalSettings } from "@rescript/schema";
+import type { OpsRequest } from "@rescript/engine";
 import type { QualRequest } from "@rescript/engine";
 import type { TaskClientView } from "../../../lib/tasks/service";
 import { PARALLEL_LANES } from "../../../lib/tasks/timing";
@@ -111,6 +115,8 @@ export interface CopilotEntry {
   launchPlan?: string[];
   /** a cleaning request (IM6): the batch proposal, then Apply / Undo */
   cleaning?: CleaningCard;
+  /** a research-operations request (2026-11-22): the preview, then what was done at each step */
+  ops?: OpsCard;
   /** a data question's answer, read on the respondent data (Phase 4): the base, the test behind it, the caveats */
   data?: { n: number; environment: string; dataset: string; source: "data" | "sandbox"; evidence?: { test: string; p: number | null; significant: boolean; effect?: { name: string; value: number } }; caveats: string[]; fromRun?: string };
   error?: string;
@@ -1211,6 +1217,69 @@ export function useCopilot(opts: {
     const next = action === "apply" ? await applyCleaning(s.surveyDbId, e.cleaning) : await undoCleaning(s.surveyDbId, e.cleaning);
     opts.patch(entryId, { cleaning: next });
   }, [copilotTurns, opts, s.surveyDbId]);
+  /* ------------------------------------------------------------ research operations (2026-11-22): people, accounts, invitations, portal settings */
+  /* a file of people, held for the next instruction; the survey's list names, so "the Wave 1 list" is understood */
+  const [peopleFile, setPeopleFile] = React.useState<PeopleFile | null>(null);
+  const [peopleFileError, setPeopleFileError] = React.useState<string | null>(null);
+  const [opsLists, setOpsLists] = React.useState<string[]>([]);
+  const [opsHandOver, setOpsHandOver] = React.useState<Record<string, HandOver[]>>({});
+  const refreshOpsLists = React.useCallback(async (): Promise<void> => {
+    if (!s.surveyDbId) return;
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/portal?limit=1`, { cache: "no-store" });
+      if (!r.ok) return;
+      const j = await r.json().catch(() => null) as { lists?: { name: string | null }[] } | null;
+      setOpsLists((j?.lists ?? []).map((l) => l.name).filter((n): n is string => !!n));
+    } catch { /* the lists are a convenience for reading the sentence; the card reads them again itself */ }
+  }, [s.surveyDbId]);
+  React.useEffect(() => { void refreshOpsLists(); }, [refreshOpsLists]);
+  const attachPeopleFile = React.useCallback(async (file: File): Promise<void> => {
+    setPeopleFileError(null);
+    try { setPeopleFile(await readPeopleFile(file)); } catch (e) { setPeopleFile(null); setPeopleFileError((e as Error).message); }
+  }, []);
+  const opsContext = React.useCallback((file: PeopleFile | null): OpsContext => ({
+    surveyId: s.surveyDbId, def: s.def, file,
+    updatePortal: (f) => { s.labelNextEdit?.("portal settings (Intelligent Mode)"); s.update((d) => { d.portal = d.portal ?? PortalSettings.parse({ enabled: false }); f(d.portal); }); },
+  }), [s]);
+  /** the file each card was built from: needed again when a column question is answered */
+  const opsFiles = React.useRef<Map<string, PeopleFile>>(new Map());
+  const opsReply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
+  const opsRequest = React.useCallback(async (text: string, req: OpsRequest, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    const engine: EngineTurn = { kind: "answer", category: "operations", understood: text, detected: [{ what: "read as", value: `research operations: ${req.op}` }] };
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: opsReply("Reading…"), engine });
+    setBusy(true);
+    const file = req.op === "people" && req.add ? peopleFile : null;
+    if (file) opsFiles.current.set(id, file);
+    try {
+      const t = await opsTurn(req, opsContext(file));
+      opts.patch(id, { status: "ready", ops: t.card, reply: opsReply(t.said), engine, opKey: recordOp({ prompt: text, source: "engine", status: t.card.status === "failed" ? "refused" : "answered", intent: { category: "operations", kind: "ops", engine: "ops", ops: req.op }, detected: engine.detected }) });
+      /* the file belongs to the card now; the chip goes so the next sentence is not read as being about it */
+      if (file && t.card.status !== "failed") setPeopleFile(null);
+    } catch (e) {
+      opts.patch(id, { status: "ready", reply: opsReply(`That could not be read: ${(e as Error).message || "the network request failed"}.`), engine });
+    } finally { setBusy(false); }
+  }, [opts, peopleFile, opsContext, recordOp]);
+  const opsCardAction = React.useCallback(async (entryId: string, action: OpsAction): Promise<void> => {
+    const e = copilotTurns.find((t) => t.id === entryId);
+    if (!e?.ops) return;
+    if (action.kind === "open") { s.goToTab?.("distribution"); return; }
+    if (action.kind === "noted") { setOpsHandOver((m) => { const n = { ...m }; delete n[entryId]; return n; }); return; }
+    const file = opsFiles.current.get(entryId) ?? null;
+    if (action.kind === "answer") {
+      if (!e.ops.intake) return;
+      const t = await opsTurn(e.ops.request, opsContext(file), answerColumn(e.ops.intake.mapping, action.question, action.header));
+      opts.patch(entryId, { ops: t.card, reply: opsReply(t.said) });
+      return;
+    }
+    if (e.ops.status !== "preview") return;
+    opts.patch(entryId, { ops: { ...e.ops, status: "running" } });
+    const r = await runOps(e.ops, opsContext(file));
+    opts.patch(entryId, { ops: r.card, reply: opsReply(r.said) });
+    if (r.handOver.length) setOpsHandOver((m) => ({ ...m, [entryId]: r.handOver }));
+    opsFiles.current.delete(entryId);
+    void refreshOpsLists();
+  }, [copilotTurns, opts, s, opsContext, refreshOpsLists]);
   /*
    * A PRODUCTION-LIKE TEST (IM3, 2026-11-06). The engine read the sentence into a test request; the route walks
    * simulated respondents through the draft against the LIVE quota counts (plus any simulated fullness) and the live
@@ -1738,6 +1807,7 @@ export function useCopilot(opts: {
     taskAction, openTaskResult, startResearch, activeTask, taskDurable,
     executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep, runProductionTest, cleaningRequest, cleaningCardAction,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
+    peopleFile, peopleFileError, attachPeopleFile, clearPeopleFile: () => { setPeopleFile(null); setPeopleFileError(null); }, opsLists, opsRequest, opsCardAction, opsHandOver,
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,
     lastReport, drafting, draftReport,

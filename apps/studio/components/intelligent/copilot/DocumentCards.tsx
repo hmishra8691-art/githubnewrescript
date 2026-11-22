@@ -22,6 +22,10 @@ export interface DocumentActions {
   qual?(entryId: string): Promise<void>;
   /** apply or undo a cleaning batch (IM6) */
   cleaning?(entryId: string, action: "apply" | "undo"): Promise<void>;
+  /** a research-operations card (2026-11-22): confirm, answer a column question, note the hand-over links, open the screen */
+  ops?(entryId: string, action: import("./OpsTurnCard").OpsAction): Promise<void>;
+  /** sign-in links to hand over, by card: shown once, never part of the remembered card */
+  opsHandOver?: Record<string, import("./opsTurn").HandOver[]>;
 }
 
 export function DocumentOutput({ entry, actions }: { entry: CopilotEntry; actions?: DocumentActions }) {
