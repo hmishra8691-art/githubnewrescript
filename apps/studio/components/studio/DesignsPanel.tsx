@@ -1,4 +1,5 @@
 "use client";
+import { UploadHint } from "./UploadHint";
 import React from "react";
 import { designGeneratorRegistry, type DesignReference } from "@rescript/schema";
 import { registerBuiltinDesignGenerators, designToCSV, designFileName, measureMaxDiffDesign, type MaxDiffDiagnostics } from "@rescript/designs";
@@ -495,6 +496,9 @@ function ImportDesign() {
           onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
       </label>
       {error && <span className="chip warn" data-testid="import-design-error">{error}</span>}
+      <UploadHint testid="import-design-hint" formats="CSV or TSV (.csv, .tsv, .txt), with a heading row."
+        needs="a “task” column. Usual columns: version, task, alt, then one column per attribute."
+        template="generate any design here and download its CSV: an imported file has the same layout." />
     </>
   );
 }

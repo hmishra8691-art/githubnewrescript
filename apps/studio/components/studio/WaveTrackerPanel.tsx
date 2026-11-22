@@ -1,4 +1,5 @@
 "use client";
+import { UploadHint } from "./UploadHint";
 import React from "react";
 import { buildVariableDictionary } from "@rescript/engine";
 import { pv, suggestKpis, trackWaves, trackerCsv, waveFromTable, type KpiMeasure, type KpiTrack, type TrackerKpi, type TrackerReport, type WaveData } from "@rescript/analytics";
@@ -223,6 +224,9 @@ export function WaveTrackerPanel() {
           <button className="btn small" type="button" disabled={!!busy || sandbox} title={sandbox ? "Needs a saved project with live data" : "Add this survey’s live completes as a wave"} onClick={() => void addLive()} data-testid="wt-live">Add this survey’s live data</button>
           {busy && <span className="muted">{busy}</span>}
         </div>
+        <UploadHint testid="wt-upload-hint" formats="CSV, TSV or Excel (.csv, .tsv, .txt, .xlsx, .xls), up to 20,000 rows and 400 columns."
+          needs="one row per respondent and one column per variable, with the variable names in the first row. A second row of question wording is recognised and skipped."
+          template="an export of an earlier wave from your survey tool is the right layout; columns are matched to the baseline by name, and you can correct the matches in step 2." />
       </section>
 
       {waves.length >= 2 && mapping && mapWave && (

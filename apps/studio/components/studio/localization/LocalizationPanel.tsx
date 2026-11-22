@@ -1,4 +1,5 @@
 "use client";
+import { UploadHint } from "../UploadHint";
 import React from "react";
 import type { Condition, LanguageConfig } from "@rescript/schema";
 import { LANGUAGE_LIBRARY, LANGUAGE_STATUSES, LANGUAGE_ROUTING_MODES, languageInfo } from "@rescript/schema";
@@ -403,6 +404,8 @@ function ImportExport() {
         <button type="button" className="btn small" data-testid="loc-export-json" disabled={!langs.length} onClick={exportJson}>Export JSON</button>
         <label className="btn small primary" style={{ cursor: "pointer" }}>Import file…<input type="file" accept=".xlsx,.csv,.json" style={{ display: "none" }} data-testid="loc-import-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} /></label>
       </div>
+      <UploadHint testid="loc-upload-hint" formats="Excel, CSV or JSON (.xlsx, .csv, .json)." needs="the columns listed above, unchanged. Element ID and Target Language say where each row goes; Translation, Status and Audio URL are what is read in."
+        template="press Export above: the exported file is the template. Fill in the Translation column and import the same file." />
       {note && <div className="muted" style={{ fontSize: 12.5 }} data-testid="loc-import-note">{note}</div>}
     </div>
   );
