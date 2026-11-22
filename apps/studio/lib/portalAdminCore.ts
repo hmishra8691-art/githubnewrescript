@@ -29,6 +29,23 @@ export interface PortalRequest {
   maxAttempts: number | null;
   setAttempts: boolean;
   setWindow: boolean;
+  /**
+   * "Everyone in this list" instead of ticked rows (2026-11-21): the server finds the people, so a list of thousands
+   * does not have to be loaded into the page to be acted on. `list` undefined = every list; null = people added
+   * without a list name.
+   */
+  everyone: PortalEveryone | null;
+}
+export interface PortalEveryone { list?: string | null; noAccount: boolean }
+
+/** what the request says about "everyone in …", or null when it names people one by one */
+export function readEveryone(v: unknown): PortalEveryone | null {
+  if (!v || typeof v !== "object") return null;
+  const e = v as Record<string, unknown>;
+  const out: PortalEveryone = { noAccount: e.noAccount === true };
+  if (e.list === null) out.list = null;
+  else if (typeof e.list === "string" && e.list.trim()) out.list = e.list.trim().slice(0, 120);
+  return out;
 }
 
 const date = (v: unknown): string | null | undefined => {
@@ -44,11 +61,13 @@ export function readPortalRequest(body: unknown, now: number): PortalRequest | {
   const action = b.action as PortalAction;
   if (!PORTAL_ACTIONS.includes(action)) return { error: "Unknown action." };
   const ids = Array.isArray(b.ids) ? [...new Set(b.ids.filter((x): x is string => typeof x === "string" && UUID.test(x)))] : [];
-  if (!ids.length) return { error: "Choose at least one respondent." };
+  const everyone = ids.length ? null : readEveryone(b.everyone);
+  if (!ids.length && !everyone) return { error: "Choose at least one respondent." };
+  if (everyone && (action === "initial_password" || action === "sign_out" || action === "unlink")) return { error: "Choose the people one by one for this action." };
   if (ids.length > MAX_IDS) return { error: `Choose at most ${MAX_IDS} respondents at a time.` };
   if ((action === "initial_password" || action === "sign_out") && ids.length !== 1) return { error: "Choose one respondent for this action." };
 
-  const out: PortalRequest = { action, ids, identity: b.identity === "assessment" ? "assessment" : "persistent", sendEmail: b.sendEmail !== false, until: null, from: null, maxAttempts: null, setAttempts: false, setWindow: false };
+  const out: PortalRequest = { action, ids, identity: b.identity === "assessment" ? "assessment" : "persistent", sendEmail: b.sendEmail !== false, until: null, from: null, maxAttempts: null, setAttempts: false, setWindow: false, everyone };
   if (action === "reopen") {
     const until = date(b.until);
     if (!until || Date.parse(until) <= now) return { error: "Choose a time in the future until which answers can be changed." };
@@ -70,6 +89,36 @@ export function readPortalRequest(body: unknown, now: number): PortalRequest | {
     if (!out.setWindow && !out.setAttempts) return { error: "Nothing to change." };
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ the lists people were added in */
+
+export interface PortalListSummary { name: string | null; people: number; withAccount: number }
+
+/** one line per list, in the order the lists first appear; people added without a list name are one group (null) */
+export function summariseLists(rows: { list: string | null; hasAccount: boolean }[]): PortalListSummary[] {
+  const by = new Map<string, PortalListSummary>();
+  for (const r of rows) {
+    const key = r.list ?? "\u0000";
+    const at = by.get(key) ?? { name: r.list, people: 0, withAccount: 0 };
+    at.people++; if (r.hasAccount) at.withAccount++;
+    by.set(key, at);
+  }
+  return [...by.values()];
+}
+
+/**
+ * HOW AN INVITATION OR A PASSWORD REACHES A PERSON — the sentences the Studio shows before anything is sent
+ * (the rule itself is `credentialRoute` below; this only says it in words, so the two cannot drift apart silently:
+ * the test checks each sentence against the rule).
+ */
+export function sharingExplained(mailConfigured: boolean): { withEmail: string; withoutEmail: string } {
+  return {
+    withEmail: mailConfigured
+      ? "A person with an email address is emailed a link to set their own password. You never see the link or the password."
+      : "A person with an email address would be emailed a link to set their own password, but email is not set up on this installation, so their account is created and no invitation can be sent yet.",
+    withoutEmail: "A person with no email address cannot be emailed: you are shown their sign-in link (or a first password) once, on this page, to hand over yourself.",
+  };
 }
 
 /* ------------------------------------------------------------------ which rows get which account */

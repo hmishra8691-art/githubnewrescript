@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { actionSummary, credentialRoute, invitationMail, planAccounts, readPortalRequest, resetMail } from "./portalAdminCore.ts";
+import { actionSummary, credentialRoute, invitationMail, planAccounts, readPortalRequest, resetMail, sharingExplained, summariseLists } from "./portalAdminCore.ts";
 
 const NOW = Date.parse("2026-11-20T10:00:00Z");
 const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -69,4 +69,38 @@ test("a credential is never shown to a researcher for an account that has an ema
   assert.deepEqual(credentialRoute(local, "ws-a", false, "password"), { how: "show" });
   assert.equal(credentialRoute(local, "ws-b", true, "link").how, "refuse");
   assert.equal(credentialRoute(local, null, true, "password").how, "refuse");
+});
+
+test("everyone in a list: accepted in place of ticked people, never for a one-person action", () => {
+  const all = readPortalRequest({ action: "create_accounts", everyone: { list: " Wave 1 ", noAccount: true } }, NOW);
+  assert.ok(!("error" in all));
+  assert.deepEqual((all as { everyone: unknown }).everyone, { list: "Wave 1", noAccount: true });
+  assert.deepEqual((all as { ids: string[] }).ids, []);
+  /* no list named = every list; null = the people added without a list name */
+  assert.deepEqual((readPortalRequest({ action: "suspend", everyone: {} }, NOW) as { everyone: unknown }).everyone, { noAccount: false });
+  assert.deepEqual((readPortalRequest({ action: "suspend", everyone: { list: null } }, NOW) as { everyone: unknown }).everyone, { list: null, noAccount: false });
+  /* ticked people win over a list, so one request never means two things */
+  assert.equal((readPortalRequest({ action: "suspend", ids: [ID(1)], everyone: { list: "A" } }, NOW) as { everyone: unknown }).everyone, null);
+  for (const action of ["initial_password", "sign_out", "unlink"]) assert.match((readPortalRequest({ action, everyone: { list: "A" } }, NOW) as { error: string }).error, /one by one/);
+  assert.match((readPortalRequest({ action: "suspend", everyone: "all" }, NOW) as { error: string }).error, /at least one/);
+});
+
+test("lists are summarised in the order they appear, people without a list name as one group", () => {
+  assert.deepEqual(summariseLists([
+    { list: "B", hasAccount: true }, { list: null, hasAccount: false }, { list: "A", hasAccount: false }, { list: "B", hasAccount: false }, { list: null, hasAccount: true },
+  ]), [{ name: "B", people: 2, withAccount: 1 }, { name: null, people: 2, withAccount: 1 }, { name: "A", people: 1, withAccount: 0 }]);
+  assert.deepEqual(summariseLists([]), []);
+});
+
+test("what the Studio says about sharing agrees with the rule that decides it", () => {
+  const person = { email: "a@example.com", createdCustomerId: "w" }, noEmail = { email: null, createdCustomerId: "w" };
+  /* with an address and mail: emailed, never shown */
+  assert.equal(credentialRoute(person, "w", true, "link").how, "email");
+  assert.match(sharingExplained(true).withEmail, /emailed a link/);
+  assert.match(sharingExplained(true).withEmail, /never see/);
+  /* with an address and no mail: refused, and the sentence says no invitation can be sent */
+  assert.equal(credentialRoute(person, "w", false, "link").how, "refuse");
+  assert.match(sharingExplained(false).withEmail, /no invitation can be sent/);
+  /* no address: shown once, either way */
+  for (const mail of [true, false]) { assert.equal(credentialRoute(noEmail, "w", mail, "link").how, "show"); assert.match(sharingExplained(mail).withoutEmail, /shown .* once/); }
 });

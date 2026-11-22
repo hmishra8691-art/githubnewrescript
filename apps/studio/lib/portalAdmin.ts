@@ -4,7 +4,7 @@ import { audit, type ProjectContext } from "./guard";
 import { platformDb } from "./db";
 import { mailConfig, sendMail } from "./mail";
 import { runtimeBaseUrl } from "./runtime-url";
-import { actionSummary, credentialRoute, invitationMail, planAccounts, type PortalRequest } from "./portalAdminCore";
+import { MAX_IDS, actionSummary, credentialRoute, invitationMail, planAccounts, summariseLists, type PortalEveryone, type PortalListSummary, type PortalRequest } from "./portalAdminCore";
 
 /**
  * RESPONDENT PORTAL — THE RESEARCHER'S SIDE (phase 1, 2026-11-20). Reads and writes for /api/surveys/[id]/portal.
@@ -41,20 +41,59 @@ async function accountsById(ids: string[]) {
   return out;
 }
 
-export async function portalList(ctx: ProjectContext, q: { limit: number; offset: number; search: string; showEmail: boolean }): Promise<{ available: boolean; rows: PortalRow[]; total: number; mail: boolean }> {
+/** every list on the survey's LIVE list with its size — read in pages, because one request returns at most 1,000 rows */
+async function listSummaries(ctx: ProjectContext): Promise<PortalListSummary[]> {
+  const all: { list: string | null; hasAccount: boolean }[] = [];
+  for (let from = 0; from < 50_000; from += 1000) {
+    const { data, error } = await ctx.db.from("respondents").select("list_name, account_id").eq("survey_id", ctx.surveyId).eq("is_test", false).order("invited_at", { ascending: true }).order("id", { ascending: true }).range(from, from + 999);
+    if (error) break;
+    const page = (data ?? []) as Row[];
+    for (const r of page) all.push({ list: str(r.list_name), hasAccount: !!r.account_id });
+    if (page.length < 1000) break;
+  }
+  return summariseLists(all);
+}
+
+/**
+ * "Everyone in this list" → the people, found here and not in the page (2026-11-21). At most MAX_IDS at a time;
+ * `more` says how many are left, so the Studio can say "press again" instead of pretending all were done.
+ */
+export async function resolveEveryone(ctx: ProjectContext, e: PortalEveryone): Promise<{ ids: string[]; more: number } | { error: string; status: number }> {
+  /* built afresh for each page: a query builder is used once */
+  const build = () => {
+    let q = ctx.db.from("respondents").select("id", { count: "exact" }).eq("survey_id", ctx.surveyId).eq("is_test", false);
+    if (e.list === null) q = q.is("list_name", null); else if (typeof e.list === "string") q = q.eq("list_name", e.list);
+    if (e.noAccount) q = q.is("account_id", null);
+    return q;
+  };
+  const ids: string[] = []; let total = 0;
+  for (let from = 0; from < MAX_IDS; from += 1000) {
+    const { data, error, count } = await build().order("invited_at", { ascending: true }).order("id", { ascending: true }).range(from, Math.min(from + 999, MAX_IDS - 1));
+    if (error) return missing(error.message) ? { error: "The respondent portal is not set up on this database yet (migration 0103).", status: 409 } : { error: error.message, status: 500 };
+    total = count ?? total;
+    const page = (data ?? []) as Row[];
+    for (const r of page) ids.push(String(r.id));
+    if (page.length < 1000) break;
+  }
+  return { ids, more: Math.max(0, total - ids.length) };
+}
+
+export async function portalList(ctx: ProjectContext, q: { limit: number; offset: number; search: string; showEmail: boolean; list?: string | null; noAccount?: boolean }): Promise<{ available: boolean; rows: PortalRow[]; total: number; mail: boolean; lists: PortalListSummary[] }> {
   let query = ctx.db.from("respondents").select(ENROL, { count: "exact" }).eq("survey_id", ctx.surveyId).eq("is_test", false);
+  if (q.list === null) query = query.is("list_name", null); else if (typeof q.list === "string") query = query.eq("list_name", q.list);
+  if (q.noAccount) query = query.is("account_id", null);
   const s = q.search.replace(/[%,()]/g, " ").trim();
   if (s) query = query.or(`name.ilike.%${s}%,email.ilike.%${s}%,external_id.ilike.%${s}%`);
   const { data, error, count } = await query.order("invited_at", { ascending: true }).range(q.offset, q.offset + q.limit - 1);
   if (error) {
-    if (missing(error.message)) return { available: false, rows: [], total: 0, mail: mailConfig().configured };
+    if (missing(error.message)) return { available: false, rows: [], total: 0, mail: mailConfig().configured, lists: [] };
     throw new Error(error.message);
   }
   const rows = (data ?? []) as Row[];
   const accounts = await accountsById([...new Set(rows.map((r) => str(r.account_id)).filter((x): x is string => !!x))]);
   const now = Date.now();
   return {
-    available: true, total: count ?? rows.length, mail: mailConfig().configured,
+    available: true, total: count ?? rows.length, mail: mailConfig().configured, lists: await listSummaries(ctx),
     rows: rows.map((r) => {
       const a = r.account_id ? accounts.get(String(r.account_id)) : null;
       return {
