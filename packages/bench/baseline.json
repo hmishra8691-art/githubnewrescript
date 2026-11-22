@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "at": "2026-11-22T12:32:41.208Z",
-  "commit": "d2e570b7",
+  "at": "2026-11-22T14:08:32.167Z",
+  "commit": "5179ec1f",
   "suites": [
     {
       "id": "ai_agents.instructions_rules",
@@ -57,7 +57,7 @@
         {
           "id": "median_ms",
           "label": "Median time to a proposal",
-          "value": 22.8,
+          "value": 16.1,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -474,7 +474,7 @@
           "detail": "left alone (refused)"
         }
       ],
-      "ms": 1799
+      "ms": 1345
     },
     {
       "id": "ai_agents.operations_rules",
@@ -772,7 +772,7 @@
           "detail": "not read as a design question"
         }
       ],
-      "ms": 69
+      "ms": 18
     },
     {
       "id": "ai_agents.verifier",
@@ -809,7 +809,7 @@
         {
           "id": "verify_ms",
           "label": "One verification (60 simulated respondents, 14 questions)",
-          "value": 117,
+          "value": 98,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -872,7 +872,7 @@
           "detail": "nothing reported"
         }
       ],
-      "ms": 1110
+      "ms": 936
     },
     {
       "id": "ai_agents.loop_scripted",
@@ -962,7 +962,7 @@
           "detail": "planner_failed after 1 attempt"
         }
       ],
-      "ms": 1634
+      "ms": 1210
     },
     {
       "id": "ai_agents.model",
@@ -984,7 +984,7 @@
         {
           "id": "edit_ms",
           "label": "Apply one edit",
-          "value": 194.7,
+          "value": 157.2,
           "unit": "ms",
           "better": "lower",
           "target": 100,
@@ -993,7 +993,7 @@
         {
           "id": "read_ms",
           "label": "Read one instruction (rule path)",
-          "value": 166.9,
+          "value": 158.5,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -1002,7 +1002,7 @@
         {
           "id": "validate_ms",
           "label": "Parse and validate the whole definition",
-          "value": 112.9,
+          "value": 86.9,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -1011,7 +1011,7 @@
         {
           "id": "review_ms",
           "label": "Review the whole survey for contradictions",
-          "value": 132.4,
+          "value": 104.5,
           "unit": "ms",
           "better": "lower",
           "target": 10000,
@@ -1021,7 +1021,7 @@
         {
           "id": "page_ms",
           "label": "Working out one page for one simulated respondent",
-          "value": 16.4,
+          "value": 15.3,
           "unit": "ms",
           "better": "lower",
           "target": 1000,
@@ -1031,7 +1031,7 @@
         {
           "id": "respondent_ms",
           "label": "One simulated respondent, start to end",
-          "value": 5043,
+          "value": 4699,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -1057,7 +1057,7 @@
           "detail": "4 of 4 simulated respondents produced; 9 issues"
         }
       ],
-      "ms": 36742
+      "ms": 32825
     },
     {
       "id": "analytics.large_data",
@@ -1069,7 +1069,7 @@
         {
           "id": "crosstab_ms",
           "label": "Crosstab with a two-variable banner, 200,000 responses",
-          "value": 138.8,
+          "value": 97.5,
           "unit": "ms",
           "better": "lower",
           "target": 400,
@@ -1079,7 +1079,7 @@
         {
           "id": "crosstab_1m_estimate_ms",
           "label": "The same, scaled linearly to 1,000,000",
-          "value": 694,
+          "value": 488,
           "unit": "ms",
           "better": "lower",
           "target": 2000,
@@ -1089,7 +1089,7 @@
         {
           "id": "dataset_build_ms",
           "label": "Build the dataset from stored responses",
-          "value": 1632,
+          "value": 1507,
           "unit": "ms",
           "better": "lower",
           "target": 5000,
@@ -1104,7 +1104,7 @@
           "detail": "200,000 cases in the dataset"
         }
       ],
-      "ms": 2339
+      "ms": 2017
     },
     {
       "id": "import.fidelity",
@@ -1158,7 +1158,7 @@
         {
           "id": "ms_per_file",
           "label": "Import time per file",
-          "value": 184,
+          "value": 180,
           "unit": "ms",
           "better": "lower",
           "target": 120000,
@@ -1332,7 +1332,7 @@
           "detail": "Block randomizers: 100% of 5"
         }
       ],
-      "ms": 100865
+      "ms": 86708
     },
     {
       "id": "qualitative.speech",
@@ -1397,7 +1397,7 @@
         {
           "id": "per_response_ms",
           "label": "Scoring time per response",
-          "value": 21.5,
+          "value": 19.2,
           "unit": "ms",
           "better": "lower",
           "target": 150,
@@ -1461,19 +1461,19 @@
           "detail": "Classic bot: 30 of 30 detected, 30 excluded"
         }
       ],
-      "ms": 11002
+      "ms": 9802
     },
     {
       "id": "fraud.recorded_automation",
       "area": "fraud",
       "title": "Recorded automated browsers through the quality engine",
       "status": "measured",
-      "caveat": "30 sessions recorded on 2026-11-22 from headless Chromium on one server, scripted by the same author as the benchmark. No person was recorded, no real desktop or phone, and no language model: the agent styles reproduce how an agent drives a browser, with canned text. The typing rules were written in the same sitting as the recordings they catch, from what is known about how people type; they have never been run on a recording of people.",
+      "caveat": "36 sessions recorded on 2026-11-22 from headless Chromium on one server, scripted by the same author as the benchmark. No person was recorded, no real desktop or phone, and no language model: the agent styles reproduce how an agent drives a browser, with canned text. The typing and pointer rules were written by the same author as the recordings, from what is known about how people type and move a mouse; they have never been run on a recording of people.",
       "metrics": [
         {
           "id": "excluded_behaviour",
           "label": "Automated sessions excluded on behaviour alone (own address and device each)",
-          "value": 90,
+          "value": 83.3,
           "unit": "%",
           "better": "higher",
           "target": 95
@@ -1481,7 +1481,7 @@
         {
           "id": "detected_beyond_text",
           "label": "Automated sessions with any evidence other than repeated (canned) text",
-          "value": 90,
+          "value": 83.3,
           "unit": "%",
           "better": "higher",
           "target": 95
@@ -1492,13 +1492,29 @@
           "value": 0,
           "unit": "%",
           "better": "higher",
+          "target": 90
+        },
+        {
+          "id": "patient_beyond_text",
+          "label": "The agent paced like a person: any evidence other than repeated canned text",
+          "value": 0,
+          "unit": "%",
+          "better": "higher",
+          "target": 90
+        },
+        {
+          "id": "careful_beyond_text",
+          "label": "The careful agent (curved pointer, corrected typos): any evidence other than repeated canned text",
+          "value": 0,
+          "unit": "%",
+          "better": "higher",
           "target": 90,
-          "note": "its only flag is repeated canned text, which a real model would not repeat"
+          "note": "written to evade the pointer and typing rules"
         },
         {
           "id": "agents_excluded",
           "label": "Agent-style sessions excluded on behaviour alone",
-          "value": 75,
+          "value": 60,
           "unit": "%",
           "better": "higher",
           "target": 90
@@ -1523,7 +1539,7 @@
         {
           "id": "sessions",
           "label": "Recorded sessions",
-          "value": 30,
+          "value": 36,
           "unit": "count",
           "better": "higher",
           "target": 200,
@@ -1532,34 +1548,34 @@
       ],
       "cases": [
         {
+          "id": "dom_script",
+          "group": "behaviour only",
+          "pass": true,
+          "detail": "Answers set from page script (no real input events): 6 of 6 excluded, 6 with evidence other than repeated text (as recorded: 6 excluded). Fired: bot.machine_timing 6, bot.impossible_sequence 6, openend.duplicate 6, device.webdriver 6, bot.no_interaction 6, matrix.signature_match 3, duplicate.answers 3, duplicate.multi_signal 3"
+        },
+        {
           "id": "playwright_fast",
           "group": "behaviour only",
           "pass": true,
-          "detail": "Scripted browser, as fast as it goes: 6 of 6 excluded, 6 with evidence other than repeated text (as recorded: 6 excluded). Fired: bot.superhuman_typing 12, timing.overall_speeding 6, timing.page_speeding 6, timing.question_speeding 6, timing.matrix_speeding 6, timing.openend_speeding 6"
+          "detail": "Scripted browser, as fast as it goes: 6 of 6 excluded, 6 with evidence other than repeated text (as recorded: 6 excluded). Fired: bot.superhuman_typing 12, bot.impossible_sequence 6, openend.duplicate 6, device.webdriver 6, bot.pointer_jump 6"
         },
         {
           "id": "playwright_stealth",
           "group": "behaviour only",
           "pass": true,
-          "detail": "Scripted browser, automation flag hidden, short waits: 6 of 6 excluded, 6 with evidence other than repeated text (as recorded: 6 excluded). Fired: bot.superhuman_typing 12, timing.overall_speeding 6, timing.page_speeding 6, timing.matrix_speeding 6, timing.openend_speeding 6, timing.reading_time 6"
-        },
-        {
-          "id": "dom_script",
-          "group": "behaviour only",
-          "pass": true,
-          "detail": "Answers set from page script (no real input events): 6 of 6 excluded, 6 with evidence other than repeated text (as recorded: 6 excluded). Fired: timing.overall_speeding 6, timing.page_speeding 6, timing.question_speeding 6, timing.matrix_speeding 6, timing.openend_speeding 6, timing.reading_time 6"
+          "detail": "Scripted browser, automation flag hidden, short waits: 6 of 6 excluded, 6 with evidence other than repeated text (as recorded: 6 excluded). Fired: bot.superhuman_typing 12, bot.impossible_sequence 6, openend.duplicate 6, bot.pointer_jump 6"
         },
         {
           "id": "agent_typed",
           "group": "behaviour only",
           "pass": true,
-          "detail": "Agent mechanics: pointer moved, seconds per page, text typed at an even pace: 3 of 3 excluded, 3 with evidence other than repeated text (as recorded: 3 excluded). Fired: bot.superhuman_typing 6, timing.overall_speeding 3, timing.page_speeding 3, timing.matrix_speeding 3, bot.impossible_sequence 3, openend.duplicate 3"
+          "detail": "Agent mechanics: pointer moved, seconds per page, text typed at an even pace: 3 of 3 excluded, 3 with evidence other than repeated text (as recorded: 3 excluded). Fired: bot.superhuman_typing 6, bot.impossible_sequence 3, openend.duplicate 3"
         },
         {
           "id": "agent_pasted",
           "group": "behaviour only",
           "pass": true,
-          "detail": "Agent mechanics, text pasted: 3 of 3 excluded, 3 with evidence other than repeated text (as recorded: 3 excluded). Fired: timing.overall_speeding 3, timing.page_speeding 3, timing.matrix_speeding 3, openend.duplicate 3, openend.pasted 3, interaction.paste_ratio 3"
+          "detail": "Agent mechanics, text pasted: 3 of 3 excluded, 3 with evidence other than repeated text (as recorded: 3 excluded). Fired: openend.duplicate 3, openend.pasted 3, interaction.paste_ratio 3"
         },
         {
           "id": "agent_patient",
@@ -1572,9 +1588,21 @@
           "group": "behaviour only",
           "pass": true,
           "detail": "Agent that reads at a person's pace and types with a fixed 180 ms delay: 3 of 3 excluded, 3 with evidence other than repeated text (as recorded: 3 excluded). Fired: bot.even_typing 6, openend.duplicate 3"
+        },
+        {
+          "id": "agent_careful",
+          "group": "behaviour only",
+          "pass": false,
+          "detail": "The patient agent, also curving its pointer and correcting typos: 0 of 3 excluded, 0 with evidence other than repeated text (as recorded: 3 excluded). Fired: openend.duplicate 3"
+        },
+        {
+          "id": "scripted_mouse",
+          "group": "behaviour only",
+          "pass": true,
+          "detail": "Mouse moved in 25 equal steps to each target, then pressed: 3 of 3 excluded, 3 with evidence other than repeated text (as recorded: 3 excluded). Fired: bot.superhuman_typing 6, bot.impossible_sequence 3, matrix.signature_match 3, openend.duplicate 3, device.webdriver 3, bot.pointer_ruler 3, duplicate.answers 3, duplicate.multi_signal 3"
         }
       ],
-      "ms": 8004
+      "ms": 7106
     }
   ]
 }

@@ -17,6 +17,12 @@
  *   agent_patient      an agent told to pass for a person: it waits on each page as long as reading it would take
  *                      (about 250 words a minute), moves the pointer, and types at 140 to 340 ms a key with pauses
  *
+ *   agent_careful      the patient agent, also told about the checks: it moves the pointer along a curve with
+ *                      uneven steps, and now and then mistypes a letter and corrects it
+ *
+ *   scripted_mouse     the usual way a script "moves the mouse": mouse.move to the target's centre in 25 equal steps,
+ *                      then press there — what most automation libraries do when asked for mouse movement
+ *
  * WHAT IT IS NOT: a recording of people (there is none here, so no false-positive rate comes from this), of a
  * headed browser on a real desktop or phone, or of a language model — the "agent" text is canned.
  *
@@ -28,7 +34,7 @@ import { validationSurvey } from "../packages/quality/dist/index.js";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
 const OUT = new URL("../packages/quality/fixtures/recorded/automation-2026-11.json", import.meta.url);
-const N = { dom_script: 6, playwright_fast: 6, playwright_stealth: 6, agent_typed: 3, agent_pasted: 3, agent_patient: 0, agent_slow_even: 0, ...JSON.parse(process.env.COUNTS ?? "{}") };
+const N = { dom_script: 6, playwright_fast: 6, playwright_stealth: 6, agent_typed: 3, agent_pasted: 3, agent_patient: 0, agent_slow_even: 0, agent_careful: 0, scripted_mouse: 0, ...JSON.parse(process.env.COUNTS ?? "{}") };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let seed = 20261126;
 const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
@@ -66,16 +72,31 @@ async function session(style, i) {
   await pg.waitForSelector("[data-qid]", { timeout: 120000 });
   const said = texts();
   const human = style.startsWith("agent");
-  const moveTo = async (sel) => { const b = await pg.locator(sel).first().boundingBox(); if (b) await pg.mouse.move(b.x + b.width / 2 + (rnd() - 0.5) * 6, b.y + b.height / 2 + (rnd() - 0.5) * 4, { steps: 12 + Math.floor(rnd() * 10) }); };
+  /* a curved path with uneven steps: a quadratic curve through a random control point, each step jittered and unevenly timed */
+  let at = { x: 640, y: 400 };
+  const curveTo = async (sel) => {
+    /* a target below the fold must be scrolled to first, as a person would; a mouse cannot press what is off screen */
+    await pg.locator(sel).first().scrollIntoViewIfNeeded().catch(() => {});
+    const b = await pg.locator(sel).first().boundingBox(); if (!b) return;
+    const to = { x: b.x + b.width / 2 + (rnd() - 0.5) * b.width * 0.4, y: b.y + b.height / 2 + (rnd() - 0.5) * b.height * 0.4 };
+    const c = { x: (at.x + to.x) / 2 + (rnd() - 0.5) * 160, y: (at.y + to.y) / 2 + (rnd() - 0.5) * 120 };
+    const n = 18 + Math.floor(rnd() * 22);
+    for (let k = 1; k <= n; k++) { const u = Math.pow(k / n, 0.6 + rnd() * 0.8); const x = (1 - u) ** 2 * at.x + 2 * (1 - u) * u * c.x + u * u * to.x + (rnd() - 0.5) * 3, y = (1 - u) ** 2 * at.y + 2 * (1 - u) * u * c.y + u * u * to.y + (rnd() - 0.5) * 3; await pg.mouse.move(x, y); await sleep(6 + rnd() * 22); }
+    await pg.mouse.move(to.x, to.y); at = to;
+  };
+  const moveTo = async (sel) => {
+    if (style === "agent_careful") return curveTo(sel); const b = await pg.locator(sel).first().boundingBox(); if (b) await pg.mouse.move(b.x + b.width / 2 + (rnd() - 0.5) * 6, b.y + b.height / 2 + (rnd() - 0.5) * 4, { steps: 12 + Math.floor(rnd() * 10) }); };
   const click = async (sel) => {
     if (style === "dom_script") { await pg.evaluate((s) => { const parts = s.split(" >> nth="); const el = document.querySelectorAll(parts[0])[Number(parts[1] ?? 0)]; el?.click(); }, sel); return; }
-    if (human) { await moveTo(sel); await sleep(style === "agent_patient" || style === "agent_slow_even" ? 400 + rnd() * 900 : 120 + rnd() * 200); }
+    if (style === "scripted_mouse") { await pg.locator(sel).first().scrollIntoViewIfNeeded().catch(() => {}); const b = await pg.locator(sel).first().boundingBox(); if (!b) return; await pg.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 25 }); await pg.mouse.down(); await pg.mouse.up(); return; }
+    if (style === "agent_careful") { await curveTo(sel); await sleep(300 + rnd() * 700); await pg.mouse.down(); await sleep(40 + rnd() * 80); await pg.mouse.up(); return; }
+    if (human) { await moveTo(sel); await sleep(style === "agent_patient" || style === "agent_slow_even" || style === "agent_careful" ? 400 + rnd() * 900 : 120 + rnd() * 200); }
     await pg.click(sel);
   };
   for (let page = 0; page < 24; page++) {
     const ids = await pg.$$eval("[data-qid]", (els) => els.map((e) => e.getAttribute("data-qid")));
     if (!ids.length) break;
-    if (style === "agent_patient" || style === "agent_slow_even") { const words = (await pg.evaluate(() => document.querySelector("main")?.innerText ?? document.body.innerText)).split(/\s+/).length; await sleep(Math.min(45000, 1500 + (words / 250) * 60000 * (0.8 + rnd() * 0.5))); }
+    if (style === "agent_patient" || style === "agent_slow_even" || style === "agent_careful") { const words = (await pg.evaluate(() => document.querySelector("main")?.innerText ?? document.body.innerText)).split(/\s+/).length; await sleep(Math.min(45000, 1500 + (words / 250) * 60000 * (0.8 + rnd() * 0.5))); }
     else if (human) await sleep(2000 + rnd() * 2000);
     else if (style === "playwright_stealth") await sleep(900);
     for (const id of ids) {
@@ -89,6 +110,7 @@ async function session(style, i) {
         const text = said[id] ?? said.oe;
         if (style === "dom_script") await pg.evaluate(([s, t]) => { const el = document.querySelector(s); const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value").set; set.call(el, t); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); }, [sel, text]);
         else if (style === "agent_pasted") { await click(sel); await pg.evaluate((t) => navigator.clipboard.writeText(t), text); await pg.keyboard.press("Control+V"); }
+        else if (style === "agent_careful") { await click(sel); for (const ch of text) { if (rnd() < 0.05) { await pg.keyboard.type("qwertyuiop"[Math.floor(rnd() * 10)]); await sleep(250 + rnd() * 400); await pg.keyboard.press("Backspace"); await sleep(150 + rnd() * 250); } await pg.keyboard.type(ch); await sleep(110 + rnd() * 260 + (ch === " " && rnd() < 0.15 ? 500 + rnd() * 1500 : 0)); } }
         else if (style === "agent_patient") { await click(sel); for (const ch of text) { await pg.keyboard.type(ch); await sleep(140 + rnd() * 200 + (ch === " " && rnd() < 0.12 ? 600 + rnd() * 1200 : 0)); } }
         else { await click(sel); await pg.keyboard.type(text, style === "agent_slow_even" ? { delay: 180 } : human ? { delay: 40 } : {}); }
       }

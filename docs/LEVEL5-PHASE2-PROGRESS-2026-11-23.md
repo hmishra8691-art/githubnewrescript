@@ -1,4 +1,4 @@
-# Level 5 roadmap, Phase 2 (Essentials) — progress (updated 26 November 2026)
+# Level 5 roadmap, Phase 2 (Essentials) — progress (updated 27 November 2026)
 
 Phase 2 is the essentials for all seven areas, about twelve weeks of work in the roadmap. This document is kept
 as it goes: what is done, what was tested, what is next. AI design agents come first, as asked.
@@ -187,9 +187,58 @@ collector should keep typing statistics for the whole answer and a summary of th
 where a patient agent could still differ from a person; (2) F2, device and network signals, which need a build or
 license decision; (3) recordings of real people, without which no behavioural rule can be trusted to exclude.
 
+### Fraud — the collector sees typing and the pointer path; a careful agent still passes (27 November)
+
+**F4, built.** The runtime collector now keeps, per text answer, how it was typed (keys, mean and spread of the
+gaps between them, pauses, corrections), and for the whole response how the mouse reached what it clicked (how
+many clicks, how many jumped there, how many paths were ruler-straight in equal steps, mean straightness). No key,
+character, text or coordinate is kept. The server's sanitiser keeps only those numbers, drops a summary that cannot
+be true, and keeps nothing when the survey switches interaction telemetry off.
+
+Two pointer rules read it: **mouse clicks without moving the pointer**, and **pointer paths drawn with a ruler**.
+The typing rules now judge the whole answer when the summary exists.
+
+**Re-recorded with the new collector**, 36 sessions, ten styles, each scored with its own address and device:
+
+| Style | Excluded | What caught it, besides timing |
+| --- | --- | --- |
+| Page script | 6 of 6 | No interaction, automation flag |
+| Scripted browser, fast | 6 of 6 | Superhuman typing, **pointer jumps** |
+| Scripted browser, stealth (flag hidden) | 6 of 6 | Superhuman typing, **pointer jumps** |
+| Mouse moved in 25 equal steps, then pressed | 3 of 3 | Superhuman typing, **ruler-straight pointer paths** |
+| Agent, typed at 40 ms a key | 3 of 3 | Superhuman typing |
+| Agent, pasted | 3 of 3 | Pasted answers |
+| Agent, reading pace, fixed 180 ms a key | 3 of 3 | Even typing |
+| Agent paced like a person | **0 of 3** | Nothing |
+| **Careful agent**: paced like a person, curved pointer, typos corrected | **0 of 3** | Nothing |
+
+Both pointer rules fire on real recordings of the patterns they describe. Neither fires on the agents that move
+the pointer with any irregularity.
+
+**What this shows.** Behavioural rules raise the cost of an attack: an automated browser left to its defaults is
+caught on several independent counts. But an agent written to look like a person, as the careful one was in an
+afternoon, passes every behavioural check here. I do not expect more behavioural rules to change that; each one
+tells the attacker what to vary next. The defences that do not depend on how the browser is driven are:
+
+1. **F2, device and network reputation**: data-centre and proxy addresses, emulators, device farms. Needs the build
+   or license decision.
+2. **F3, the same person across surveys and vendors**: hashed identifiers, so one agent cannot complete a hundred
+   times.
+3. **F5, machine-written open ends**: judged by a model on content, and validated against real answers.
+4. **Recordings of real people**, without which none of the behavioural thresholds can be trusted to exclude, and
+   without which "the careful agent passes" cannot be turned into "the careful agent differs from people in X".
+
+One observation to test once human recordings exist: the patient agent typed 140 characters with no correction
+three times out of three. People rarely do. That is a candidate signal, not a rule, because I have no data on how
+often people do.
+
+**Benchmark change.** The recorded set grew from 30 to 36 sessions and gained the careful agent and the scripted
+mouse. The overall exclusion rate fell from 90% to 83.3% because the set got harder; every style excluded before is
+still excluded at the same count. The baseline was re-kept on purpose and the commit says so.
+
 ## The scorecard after this
 
-12 benchmarks, 10 measured. 22 of 41 metrics with a target meet it.
+12 benchmarks, 10 measured. 22 of 43 metrics with a target meet it.
 
 | Benchmark | Measured | Target |
 | --- | --- | --- |
@@ -201,8 +250,8 @@ license decision; (3) recordings of real people, without which no behavioural ru
 | Agent loop scenarios with a scripted planner (12) | 100% | 100% |
 | Loop runs that left the given survey unchanged | 100% | 100% |
 | One edit on a 501-question survey | 185 ms | 100 ms |
-| Recorded automated sessions excluded on behaviour alone (30) | 90% | 95% |
-| The agent paced like a person: excluded (3) | 0% | 90% |
+| Recorded automated sessions excluded on behaviour alone (36) | 83.3% | 95% |
+| The agent paced like a person, and the careful agent: excluded (3 each) | 0% | 90% |
 
 The verifier and loop figures are on cases I wrote and graded. They show the mechanisms work on those cases.
 
@@ -223,7 +272,9 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | The two misreadings, and that cleaning sentences and moves still read correctly | `designIntent.test.ts`, 1 new test | pass |
 | Every suite after the edit speed-up: engine 3,000, analytics 894, Studio 1,331, templates 180, runtime 177, import 150, quality 119 | package tests | pass |
 | The two typing rules: fixed-delay typing, a person's uneven typing, a correction in the window, a fast typist, too few keys, a paste, no history | `typing.test.ts`, 3 tests (quality suite: 122) | pass |
-| 30 real automated sessions recorded through the runtime's collector, all completed | `scripts/redteam-record.mjs` | 30 of 30 |
+| 36 real automated sessions recorded through the runtime's collector, ten styles, all completed | `scripts/redteam-record.mjs` | 36 of 36 |
+| The typing and pointer summaries: kept as numbers only, implausible ones dropped, off with interaction telemetry | `telemetrySanitize.test.ts`, 1 new test (runtime suite: 178) | pass |
+| Whole-answer typing and the two pointer rules on hand-written summaries: fixed delay, fast, a person, corrected, jumps, ruler, a hand, a straight flick, few clicks, none | `typing.test.ts`, 2 new tests (quality suite: 124) | pass |
 | All benchmarks against the previous baseline | `pnpm bench` | no regression |
 
 ## What was NOT tested
@@ -255,13 +306,13 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | Import (6) | | I1 (10 of 300 files), I2 (exists, 58.3%, not examined) | I3, I4, I5, I6 |
 | Reporting (6) | | | R1 to R6 |
 | Qualitative (6) | | | Q2 to Q7 |
-| Fraud (6) | | F4 and F5 (two typing rules from recorded automation; the collector gaps found) | F2, F3, F6, F11 |
+| Fraud (6) | F4 (typing and pointer summaries collected, sanitised and read by four rules) | F5 (typing rules only; open-end content not judged) | F2, F3, F6, F11 |
 
 Some "not started" items have earlier work in the product that I have not assessed against the roadmap's
 definition (libraries, dashboards, the quality review screen, the import review screen). I have not counted them.
 
-**Next:** F4 in the runtime collector (whole-answer typing statistics, pointer path summary), then re-record and
-re-score; then path coverage (P2) and the survey source format (P3).
+**Next:** path coverage (P2) and the survey source format (P3), then "why this number" (M4) and assumption checks
+(M5). Fraud waits on the F2 decision and on recordings of people.
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages
 reviewed by people, P11 real devices, and anything needing the model, speech or vendor keys.

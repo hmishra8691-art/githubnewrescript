@@ -18,7 +18,7 @@ interface Recorded { style: string; sessionId: string; answers: Record<string, u
 const FILE = (root: string) => join(root, "packages/quality/fixtures/recorded/automation-2026-11.json");
 export const RECORDED_STYLES: Record<string, string> = {
   dom_script: "Answers set from page script (no real input events)", playwright_fast: "Scripted browser, as fast as it goes", playwright_stealth: "Scripted browser, automation flag hidden, short waits",
-  agent_typed: "Agent mechanics: pointer moved, seconds per page, text typed at an even pace", agent_pasted: "Agent mechanics, text pasted", agent_slow_even: "Agent that reads at a person's pace and types with a fixed 180 ms delay", agent_patient: "Agent told to pass for a person: reading pace, varied typing, pauses",
+  agent_typed: "Agent mechanics: pointer moved, seconds per page, text typed at an even pace", agent_pasted: "Agent mechanics, text pasted", agent_slow_even: "Agent that reads at a person's pace and types with a fixed 180 ms delay", agent_patient: "Agent told to pass for a person: reading pace, varied typing, pauses", agent_careful: "The patient agent, also curving its pointer and correcting typos", scripted_mouse: "Mouse moved in 25 equal steps to each target, then pressed",
 };
 
 export function recordedAutomation(root: string): Suite {
@@ -54,17 +54,19 @@ export function recordedAutomation(root: string): Suite {
       const n = rec.responses.length;
       const cases: CaseResult[] = Object.entries(behaviour.by).map(([style, b]) => ({
         id: style, group: "behaviour only", pass: b.excluded === b.n,
-        detail: `${RECORDED_STYLES[style] ?? style}: ${b.excluded} of ${b.n} excluded, ${b.beyondText} with evidence other than repeated text (as recorded: ${recorded.by[style]!.excluded} excluded). Fired: ${Object.entries(b.rules).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([r, c]) => `${r} ${c}`).join(", ") || "nothing"}`,
+        detail: `${RECORDED_STYLES[style] ?? style}: ${b.excluded} of ${b.n} excluded, ${b.beyondText} with evidence other than repeated text (as recorded: ${recorded.by[style]!.excluded} excluded). Fired: ${Object.entries(b.rules).filter(([r]) => !r.startsWith("timing.")).sort((x, y) => y[1] - x[1]).slice(0, 8).map(([r, c]) => `${r} ${c}`).join(", ") || "only timing rules"}`,
       }));
       const agents = Object.entries(behaviour.by).filter(([s]) => s.startsWith("agent"));
       const agentN = agents.reduce((s, [, b]) => s + b.n, 0);
       return {
         status: "measured",
-        caveat: `${n} sessions recorded on ${rec.recordedAt.slice(0, 10)} from headless Chromium on one server, scripted by the same author as the benchmark. No person was recorded, no real desktop or phone, and no language model: the agent styles reproduce how an agent drives a browser, with canned text. The typing rules were written in the same sitting as the recordings they catch, from what is known about how people type; they have never been run on a recording of people.`,
+        caveat: `${n} sessions recorded on ${rec.recordedAt.slice(0, 10)} from headless Chromium on one server, scripted by the same author as the benchmark. No person was recorded, no real desktop or phone, and no language model: the agent styles reproduce how an agent drives a browser, with canned text. The typing and pointer rules were written by the same author as the recordings, from what is known about how people type and move a mouse; they have never been run on a recording of people.`,
         metrics: [
           { id: "excluded_behaviour", label: "Automated sessions excluded on behaviour alone (own address and device each)", value: pct(total(behaviour, "excluded"), n), unit: "%", better: "higher", target: 95 },
           { id: "detected_beyond_text", label: "Automated sessions with any evidence other than repeated (canned) text", value: pct(Object.values(behaviour.by).reduce((s, b) => s + b.beyondText, 0), n), unit: "%", better: "higher", target: 95 },
-          { id: "patient_excluded", label: "The agent paced like a person: excluded", value: pct(behaviour.by.agent_patient?.excluded ?? 0, behaviour.by.agent_patient?.n ?? 0), unit: "%", better: "higher", target: 90, note: "its only flag is repeated canned text, which a real model would not repeat" },
+          { id: "patient_excluded", label: "The agent paced like a person: excluded", value: pct(behaviour.by.agent_patient?.excluded ?? 0, behaviour.by.agent_patient?.n ?? 0), unit: "%", better: "higher", target: 90 },
+          { id: "patient_beyond_text", label: "The agent paced like a person: any evidence other than repeated canned text", value: pct(behaviour.by.agent_patient?.beyondText ?? 0, behaviour.by.agent_patient?.n ?? 0), unit: "%", better: "higher", target: 90 },
+          { id: "careful_beyond_text", label: "The careful agent (curved pointer, corrected typos): any evidence other than repeated canned text", value: pct(behaviour.by.agent_careful?.beyondText ?? 0, behaviour.by.agent_careful?.n ?? 0), unit: "%", better: "higher", target: 90, note: "written to evade the pointer and typing rules" },
           { id: "agents_excluded", label: "Agent-style sessions excluded on behaviour alone", value: pct(agents.reduce((s, [, b]) => s + b.excluded, 0), agentN), unit: "%", better: "higher", target: 90 },
           { id: "excluded_recorded", label: "Excluded as recorded (one address, one device)", value: pct(total(recorded, "excluded"), n), unit: "%", better: "higher", target: 95 },
           { id: "genuine_flagged", label: "Synthetic genuine respondents excluded alongside them", value: pct(behaviour.gFlag, genuine.length), unit: "%", better: "lower", target: 1, tolerance: 0.5 },
