@@ -245,6 +245,8 @@ export interface CanonicalQuota {
   when: CExpr;
   onFull: "terminate" | "continue" | "redirect";
   redirectUrl?: string;
+  /** I5: completes the source had already counted in this quota when it was exported (fieldwork moved mid-field) */
+  achieved?: number;
   /**
    * A source-platform quota GROUP this quota belongs to (Qualtrics QG). The
    * mapper turns a group into ONE Rescript quota whose cells are its members

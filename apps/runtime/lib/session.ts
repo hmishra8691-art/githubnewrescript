@@ -1,7 +1,8 @@
 import "server-only";
 import { surveyDb, customerDb } from "./db";
 import type { LoadedDeployment } from "./deployment";
-import type { QuotaCounts } from "@rescript/engine";
+import { withCarriedCounts, type QuotaCounts } from "@rescript/engine";
+import type { SurveyDefinition } from "@rescript/schema";
 import { hashIdentifier } from "@rescript/quality/server";
 
 /** Per-survey salt for pseudonymous identifiers (QUALITY_HASH_SALT env, else the survey id). */
@@ -211,7 +212,7 @@ export async function createSession(
  * work said must never happen. The unfiltered read stays only as the
  * fallback for a database where 0006 has not been applied.
  */
-export async function loadQuotaCounts(surveyId: string, isTest: boolean): Promise<QuotaCounts> {
+export async function loadQuotaCounts(surveyId: string, isTest: boolean, def?: Pick<SurveyDefinition, "quotas"> | null): Promise<QuotaCounts> {
   const db = await surveyDb(surveyId);
   let { data, error } = (await db
     .from("quota_counts")
@@ -229,5 +230,6 @@ export async function loadQuotaCounts(surveyId: string, isTest: boolean): Promis
     counts[row.quota_id] = counts[row.quota_id] ?? {};
     counts[row.quota_id][row.cell_id] = row.count;
   }
-  return counts;
+  /* I5: completes carried over from fieldwork on another platform count toward LIVE fullness only (never a test link's) */
+  return def && !isTest ? withCarriedCounts(def, counts) : counts;
 }

@@ -27,14 +27,15 @@ import { listBlocks } from "./blocks.js";
 
 import type { CondInput } from "./surveyActions.js";
 export interface QuotaOnFull { kind: "terminate" | "redirect" | "flag" | "warn"; url?: string; message?: string }
-export interface QuotaCellSpec { label?: string; when: CondInput; limit?: number; percent?: number; target?: number }
+/** `carried` (I5): completes the cell already has from fieldwork on another platform; `carriedSource` says where from */
+export interface QuotaCellSpec { label?: string; when: CondInput; limit?: number; percent?: number; target?: number; carried?: number; carriedSource?: string }
 /** one band of one dimension: a set of option codes, or a numeric range */
 export interface QuotaBand { label?: string; codes?: (string | number)[]; min?: number; max?: number; share?: number }
 export interface QuotaDimension { question: string; bands?: QuotaBand[] }
 
 export type QuotaAction =
   | { op: "create_quota"; name: string; cells?: QuotaCellSpec[]; dimensions?: QuotaDimension[]; total?: number; mode?: "hard" | "soft"; onFull?: QuotaOnFull; countStatus?: ("complete" | "in_progress")[]; check?: boolean; checkWhen?: CondInput }
-  | { op: "update_quota"; quota: string; name?: string; targetTotal?: number | null; total?: number; mode?: "hard" | "soft"; onFull?: QuotaOnFull; countStatus?: ("complete" | "in_progress")[]; cells?: { cell: string; label?: string; limit?: number; percent?: number; target?: number | null }[] }
+  | { op: "update_quota"; quota: string; name?: string; targetTotal?: number | null; total?: number; mode?: "hard" | "soft"; onFull?: QuotaOnFull; countStatus?: ("complete" | "in_progress")[]; cells?: { cell: string; label?: string; limit?: number; percent?: number; target?: number | null; /** I5: null clears it */ carried?: number | null; carriedSource?: string }[] }
   | { op: "add_quota_cells"; quota: string; cells: QuotaCellSpec[] }
   | { op: "remove_quota_cells"; quota: string; cells: string[] }
   | { op: "delete_quota"; quota: string }
@@ -61,6 +62,14 @@ function onFullOf(v: unknown): QuotaOnFull | string | undefined {
   return { kind: k as QuotaOnFull["kind"], ...(url ? { url } : {}), ...(message ? { message } : {}) };
 }
 
+/** I5: a carried-over count — a whole number of completes, never negative */
+function carriedOf(v: unknown): number | undefined | string {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = num(v);
+  if (n === undefined || !Number.isInteger(n) || n < 0) return "a cell's carried-over completes must be a whole number, 0 or more";
+  return n;
+}
+
 function cellSpec(e: unknown): QuotaCellSpec | string | null {
   const x = (e ?? {}) as Record<string, unknown>;
   const when = cond(x.when ?? x.condition);
@@ -68,7 +77,10 @@ function cellSpec(e: unknown): QuotaCellSpec | string | null {
   const limit = num(x.limit ?? x.max ?? x.count ?? x.n), percent = num(x.percent ?? x.pct ?? x.share), target = num(x.target);
   if (limit !== undefined && limit < 0) return "a cell's limit cannot be negative";
   if (percent !== undefined && (percent <= 0 || percent > 100)) return "a cell's percent must be between 0 and 100";
-  return { ...(str(x.label, 120) ? { label: str(x.label, 120) } : {}), when, ...(limit !== undefined ? { limit } : {}), ...(percent !== undefined ? { percent } : {}), ...(target !== undefined ? { target } : {}) };
+  const carried = carriedOf(x.carried ?? x.achieved);
+  if (typeof carried === "string") return carried;
+  const carriedSource = str(x.carriedSource ?? x.carried_source, 200);
+  return { ...(str(x.label, 120) ? { label: str(x.label, 120) } : {}), when, ...(limit !== undefined ? { limit } : {}), ...(percent !== undefined ? { percent } : {}), ...(target !== undefined ? { target } : {}), ...(carried !== undefined ? { carried } : {}), ...(carried !== undefined && carriedSource ? { carriedSource } : {}) };
 }
 
 function bands(v: unknown): QuotaBand[] | string | undefined {
@@ -135,8 +147,11 @@ export function coerceQuotaAction(op: string, o: Record<string, unknown>): Quota
           const limit = num(x.limit ?? x.max ?? x.count), percent = num(x.percent ?? x.pct), target = x.target === null ? null : num(x.target), label = str(x.newLabel ?? x.rename, 120);
           if (limit !== undefined && limit < 0) return "a cell's limit cannot be negative";
           if (percent !== undefined && (percent <= 0 || percent > 100)) return "a cell's percent must be between 0 and 100";
-          if (limit === undefined && percent === undefined && target === undefined && !label) return `the edit of cell “${cell}” changes nothing`;
-          a.cells.push({ cell, ...(label ? { label } : {}), ...(limit !== undefined ? { limit } : {}), ...(percent !== undefined ? { percent } : {}), ...(target !== undefined ? { target } : {}) });
+          const carried = x.carried === null ? null : carriedOf(x.carried ?? x.achieved);
+          if (typeof carried === "string") return carried;
+          const carriedSource = str(x.carriedSource ?? x.carried_source, 200);
+          if (limit === undefined && percent === undefined && target === undefined && carried === undefined && !label) return `the edit of cell “${cell}” changes nothing`;
+          a.cells.push({ cell, ...(label ? { label } : {}), ...(limit !== undefined ? { limit } : {}), ...(percent !== undefined ? { percent } : {}), ...(target !== undefined ? { target } : {}), ...(carried !== undefined ? { carried } : {}), ...(carried != null && carriedSource ? { carriedSource } : {}) });
         }
       }
       if (Object.keys(a).length <= 2) return "update_quota changes nothing";
@@ -245,7 +260,7 @@ function placeCheck(def: SurveyDefinition, quotas: Quota[], onFull: QuotaOnFull,
   return node.id;
 }
 
-interface BuiltCell { label: string; when: Condition; limit: number; limitType: "count" | "percent"; target?: number }
+interface BuiltCell { label: string; when: Condition; limit: number; limitType: "count" | "percent"; target?: number; carried?: { count: number; source: string } }
 
 /** cells from the crossing of dimensions: every band of every question, shares to the total, largest remainder so the limits add up */
 function cellsFromDimensions(def: SurveyDefinition, dims: QuotaDimension[], total: number, env: QuotaEnv): BuiltCell[] {
@@ -298,9 +313,10 @@ function cellsFromDimensions(def: SurveyDefinition, dims: QuotaDimension[], tota
 function buildCell(def: SurveyDefinition, spec: QuotaCellSpec, total: number | undefined, env: QuotaEnv): BuiltCell {
   const when = env.condition(spec.when);
   const label = spec.label ?? formatCondition(def, when).slice(0, 80);
-  if (spec.percent !== undefined) return { label, when, limit: spec.percent, limitType: "percent", ...(spec.target !== undefined ? { target: spec.target } : {}) };
+  const carried = spec.carried !== undefined ? { carried: { count: spec.carried, source: spec.carriedSource ?? "entered by hand" } } : {};
+  if (spec.percent !== undefined) return { label, when, limit: spec.percent, limitType: "percent", ...(spec.target !== undefined ? { target: spec.target } : {}), ...carried };
   void total;
-  return { label, when, limit: spec.limit ?? 0, limitType: "count", ...(spec.target !== undefined ? { target: spec.target } : {}) };
+  return { label, when, limit: spec.limit ?? 0, limitType: "count", ...(spec.target !== undefined ? { target: spec.target } : {}), ...carried };
 }
 
 export function applyQuotaAction(def: SurveyDefinition, a: QuotaAction, env: QuotaEnv): QuotaApplied {
@@ -313,7 +329,7 @@ export function applyQuotaAction(def: SurveyDefinition, a: QuotaAction, env: Quo
         ...(a.cells ?? []).map((c) => buildCell(def, c, a.total, env)),
       ];
       if (!built.length) fail("the quota has no cells");
-      const cells: QuotaCell[] = built.map((c) => ({ id: env.ids("cell"), label: c.label, when: c.when, limit: c.limit, limitType: c.limitType, ...(c.target !== undefined ? { target: c.target } : {}) }));
+      const cells: QuotaCell[] = built.map((c) => ({ id: env.ids("cell"), label: c.label, when: c.when, limit: c.limit, limitType: c.limitType, ...(c.target !== undefined ? { target: c.target } : {}), ...(c.carried ? { carried: c.carried } : {}) }));
       const onFull: QuotaOnFull = a.onFull ?? { kind: a.mode === "soft" ? "flag" : "terminate" };
       const quota: Quota = { id: env.ids("quota"), name: a.name, mode: a.mode ?? "hard", cells, ...(a.total !== undefined ? { targetTotal: a.total } : {}), onFull: { kind: onFull.kind, ...(onFull.url ? { url: onFull.url } : {}), ...(onFull.message ? { message: onFull.message } : {}) }, countStatus: a.countStatus?.length ? a.countStatus : ["complete"] };
       def.quotas = [...def.quotas, quota];
@@ -321,7 +337,9 @@ export function applyQuotaAction(def: SurveyDefinition, a: QuotaAction, env: Quo
       const sum = cells.filter((c) => c.limitType === "count").reduce((s, c) => s + c.limit, 0);
       if (a.total !== undefined && cells.every((c) => c.limitType === "count") && sum !== a.total) warnings.push(`The cells of “${a.name}” allow ${sum} completes in all, not the ${a.total} asked for.`);
       const shown = cells.slice(0, 12).map((c) => `${c.label} ≤ ${c.limit}${c.limitType === "percent" ? "%" : ""}`).join(", ");
-      return { description: `Quota “${a.name}”${a.mode === "soft" ? " (soft)" : ""}${a.total !== undefined ? ` of ${a.total}` : ""}: ${shown}${cells.length > 12 ? ` … (${cells.length} cells)` : ""}${a.check === false ? " — not checked in the flow" : ""}`, warnings, touched: [] };
+      const carriedTotal = cells.reduce((n, c) => n + (c.carried?.count ?? 0), 0);
+      if (carriedTotal) for (const c of cells) if (c.carried && c.limitType === "count" && c.limit > 0 && c.carried.count >= c.limit) warnings.push(`“${c.label}” is already full from the completes carried over (${c.carried.count} of ${c.limit}).`);
+      return { description: `Quota “${a.name}”${a.mode === "soft" ? " (soft)" : ""}${a.total !== undefined ? ` of ${a.total}` : ""}: ${shown}${cells.length > 12 ? ` … (${cells.length} cells)` : ""}${carriedTotal ? `; ${carriedTotal} completes carried over from earlier fieldwork` : ""}${a.check === false ? " — not checked in the flow" : ""}`, warnings, touched: [] };
     }
     case "update_quota": {
       const q = quotaOrFail(def, a.quota);
@@ -354,6 +372,8 @@ export function applyQuotaAction(def: SurveyDefinition, a: QuotaAction, env: Quo
         if (e.limit !== undefined) { changed.push(`${c.label} ${c.limit}${c.limitType === "percent" ? "%" : ""} → ${e.limit}`); c.limit = e.limit; c.limitType = "count"; }
         if (e.percent !== undefined) { if (q.targetTotal === undefined) fail("a percent limit needs the quota's target total — set total first"); changed.push(`${c.label} → ${e.percent}%`); c.limit = e.percent; c.limitType = "percent"; }
         if (e.target === null) { delete c.target; } else if (e.target !== undefined) { c.target = e.target; changed.push(`${c.label} target ${e.target}`); }
+        if (e.carried === null) { if (c.carried) { delete c.carried; changed.push(`${c.label}: carried-over completes cleared`); } }
+        else if (e.carried !== undefined) { c.carried = { count: e.carried, source: e.carriedSource ?? c.carried?.source ?? "entered by hand" }; changed.push(`${c.label}: ${e.carried} completes carried over (${c.carried.source})`); }
       }
       if (!changed.length) fail("update_quota changes nothing");
       return { description: `Quota “${q.name}”: ${changed.join("; ")}`, warnings, touched: [] };
@@ -363,7 +383,7 @@ export function applyQuotaAction(def: SurveyDefinition, a: QuotaAction, env: Quo
       const built = a.cells.map((c) => buildCell(def, c, q.targetTotal, env));
       if (built.some((c) => c.limitType === "percent") && q.targetTotal === undefined) fail("percent cells need the quota's target total — set total first");
       for (const c of built) if (q.cells.some((x) => x.label.trim().toLowerCase() === c.label.trim().toLowerCase())) fail(`“${q.name}” already has a cell “${c.label}”`);
-      q.cells = [...q.cells, ...built.map((c) => ({ id: env.ids("cell"), label: c.label, when: c.when, limit: c.limit, limitType: c.limitType, ...(c.target !== undefined ? { target: c.target } : {}) }))];
+      q.cells = [...q.cells, ...built.map((c) => ({ id: env.ids("cell"), label: c.label, when: c.when, limit: c.limit, limitType: c.limitType, ...(c.target !== undefined ? { target: c.target } : {}), ...(c.carried ? { carried: c.carried } : {}) }))];
       // the new cells may read a later question than the check sits after: move the check
       const pos = checkPosition(def, [q]);
       const flow = def.flow as FlowNode[];

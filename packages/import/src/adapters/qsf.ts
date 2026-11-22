@@ -248,6 +248,13 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
     const p: Json = el.Payload ?? {};
     const id = str(p.ID ?? el.PrimaryAttribute);
     const limit = Number(p.Occurrences ?? p.Count ?? 0);
+    /*
+     * I5: Qualtrics names the target `Occurrences` and the current count `Count`. An export taken mid-field can carry
+     * the count; most exports leave it null or 0. A count is read only beside a target, so a `Count` that is the
+     * only number (older exports used it as the target) is never mistaken for completes.
+     */
+    const achievedRaw = p.Occurrences !== undefined && p.Occurrences !== null ? Number(p.Count) : NaN;
+    const achieved = Number.isFinite(achievedRaw) && achievedRaw > 0 ? Math.floor(achievedRaw) : undefined;
     const action = str(p.QuotaAction);
     /*
      * A CROSS QUOTA (2026-11-11). `Logic` is a list of dimensions and the export carries the cells already worked
@@ -263,7 +270,7 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
       const before = issues.length;
       for (const [i, c] of cells.entries()) {
         const label = [...str(c.Description).matchAll(/<span class="LeftOpDesc">([\s\S]*?)<\/span>/g)].map((m) => plainText(m[1])).filter(Boolean).join(" × ") || `Cell ${i + 1}`;
-        quotas.push({ sourceId: `${id}_c${i}`, name: label.slice(0, 120), limit: Math.round(Number(c.Occurrences) || 0), when: readLogic(c.Logic, `Quota ${p.Name ?? id} · cell ${label}`, issues), onFull, ...(cellRead.has(id) ? {} : { group: { id, name: str(p.Name) || id, limit: Number.isFinite(limit) ? limit : 0 } }) });
+        quotas.push({ sourceId: `${id}_c${i}`, name: label.slice(0, 120), limit: Math.round(Number(c.Occurrences) || 0), when: readLogic(c.Logic, `Quota ${p.Name ?? id} · cell ${label}`, issues), onFull, ...(Number(c.Count) > 0 ? { achieved: Math.floor(Number(c.Count)) } : {}), ...(cellRead.has(id) ? {} : { group: { id, name: str(p.Name) || id, limit: Number.isFinite(limit) ? limit : 0 } }) });
         if (cellRead.has(id)) quotas[quotas.length - 1].name = `${str(p.Name) || id} · ${label}`.slice(0, 120);
       }
       const fractional = cells.some((c) => !Number.isInteger(Number(c.Occurrences)));
@@ -274,6 +281,7 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
       sourceId: id, name: str(p.Name) || id, limit: Number.isFinite(limit) ? limit : 0,
       when: p.Logic ? readLogic(p.Logic, `Quota ${p.Name ?? id}`, issues) : { t: "const", value: true },
       onFull: /End/i.test(action) ? "terminate" : /Redirect/i.test(action) ? "redirect" : "continue",
+      ...(achieved !== undefined ? { achieved } : {}),
     });
     if (p.LogicType && p.LogicType !== "Simple") issues.push({ location: `Quota ${p.Name ?? id}`, type: "converted", severity: "medium", message: `Quota “${p.Name ?? id}” is a ${p.LogicType} quota; it was imported as one cell with its condition.`, suggestion: "Check its cells in the Quotas tab.", autoAttempted: true });
   }

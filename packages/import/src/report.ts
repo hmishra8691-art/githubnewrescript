@@ -8,6 +8,7 @@ import type { RequiredFile, CanonicalSurvey, CanonicalStats, Issue, InventoryFea
 import { canonicalStats } from "./canonical.js";
 import type { MapResult, ImportScope, UnresolvedReference } from "./map.js";
 import type { Detection } from "./detect.js";
+import { fieldStateOf, type FieldState } from "./fieldState.js";
 
 /* ------------------------------------------------------------ fidelity: measured, per feature */
 
@@ -119,6 +120,8 @@ export interface MigrationReport {
   requiredFiles: RequiredFile[];
   /** 2026-11-02: carried lists, masks, loops and pipes — checked, self-corrected and explained (reconstruct.ts) */
   reconstruction?: Reconstruction;
+  /** I5: the imported quotas' carried-over counts and the language versions, checked (fieldState.ts); null when nothing was created */
+  fieldState: FieldState | null;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -137,6 +140,9 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
   const mapping = { decisions, summary: mappingSummary(decisions) };
   const graph = buildImportGraph(c);
   const asks = clarifications(c);
+  /* I5: only what THIS import brought — on a merge, the survey's own quotas and languages are not re-reported */
+  const importedQuotaIds = m.def ? [...new Set((m.mapping ?? []).filter((x) => x.kind === "quota").map((x) => x.rescript))] : [];
+  const field = m.def ? fieldStateOf(m.def, { ...(m.merge ? { importedQuotaIds } : {}), importedLanguages: fid.languages.map((l) => l.code.toLowerCase()) }) : null;
   const lines = (s: CanonicalStats | null): string[] => !s ? [] : [
     plural(s.questions, "question"), plural(s.blocks, "block"), s.pageBreaks ? plural(s.pageBreaks, "page break") : "",
     s.embeddedFields ? plural(s.embeddedFields, "embedded variable") : "", s.hiddenVariables ? plural(s.hiddenVariables, "hidden variable") : "",
@@ -168,6 +174,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     if (fid.unresolved.length) summary.push(`${plural(fid.unresolved.length, "reference")} point${fid.unresolved.length === 1 ? "s" : ""} at something that is not in the imported survey.`);
     if (fid.assets.some((a) => a.risk !== "ok")) summary.push(`${plural(fid.assets.filter((a) => a.risk !== "ok").length, "image")} ${fid.assets.filter((a) => a.risk !== "ok").length === 1 ? "is" : "are"} still hosted by Qualtrics or named only by a library id — re-upload them here.`);
     if (fid.languages.length) summary.push(`Translations in ${fid.languages.map((l) => l.code).join(", ")} were imported for review.`);
+    if (field) summary.push(...field.summary);
   } else summary.push("The import could not produce a valid survey; nothing was created. The issues below say why.");
   const audit = [
     `Detected ${detection.label} (${detection.reasons.join("; ")})`,
@@ -186,6 +193,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     requiredFiles: c.requiredFiles ?? [],
     outline: outline(c), blocks: blockList(c), ...(m.reconstruction ? { reconstruction: m.reconstruction } : {}),
     sideBySide: sideBySide(c, m, mapping.decisions),
+    fieldState: field,
   } as Omit<MigrationReport, "compatibility">;
   return { ...out, compatibility: compatibility(out as MigrationReport, m.inventory) };
 }

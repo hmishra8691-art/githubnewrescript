@@ -61,7 +61,7 @@ export default async function SurveyPage({
    * the orphan in_progress rows came from. The runner also resumes its own
    * row after a reload, so a refresh keeps the answers instead of restarting.
    */
-  const quotaCounts = await loadQuotaCounts(dep.surveyId, false);
+  const quotaCounts = await loadQuotaCounts(dep.surveyId, false, dep.definition);
 
   return (
     <RunnerLive

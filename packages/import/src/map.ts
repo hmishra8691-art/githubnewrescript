@@ -2,7 +2,7 @@ import { SurveyDefinition, PanelConfig, Localization, LanguageConfig, resolveVar
 import { reconstruct, type Reconstruction } from "./reconstruct.js";
 import { runQualityCheck, listBlocks, constantCondition, recordTranslation, codeGate, gateReason, ensureBranchNames, reviewSurvey } from "@rescript/engine";
 import type {
-  CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField, InventoryItem,
+  CanonicalSurvey, CanonicalQuestion, CanonicalQuota, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField, InventoryItem,
 } from "./canonical.js";
 import { plainText, canonicalStats, exprHasRaw, type CanonicalStats } from "./canonical.js";
 import { analyzeQualtricsJs, type JsMigration } from "./jsMigrate.js";
@@ -695,6 +695,9 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
 
   /* ------------------------------------------------------------ quotas */
   const quotas: Quota[] = [];
+  /* I5: completes the source had already reached in a cell travel with it, said once per quota */
+  const sourceLabel = `${c.source.platform === "qualtrics" ? "Qualtrics" : c.source.platform} export${c.source.fileName ? ` (${c.source.fileName})` : ""}`.slice(0, 200);
+  const carriedOf = (cq: CanonicalQuota) => (cq.achieved && cq.achieved > 0 ? { carried: { count: Math.floor(cq.achieved), source: sourceLabel } } : {});
   if (logic) {
     for (const cq of c.quotas) {
       const when = cond(cq.when, `Quota ${cq.name}`);
@@ -705,14 +708,14 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
         const gq = quotas.find((q) => (q as { __group?: string }).__group === cq.group!.id);
         if (gq) {
           const cid = unique(`${gq.id}_${safeIdent(cq.sourceId)}`, new Set(gq.cells.map((x) => x.id)));
-          gq.cells.push({ id: cid, label: cq.name, when, limit: cq.limit, limitType: "count" } as never);
+          gq.cells.push({ id: cid, label: cq.name, when, limit: cq.limit, limitType: "count", ...carriedOf(cq) } as never);
           mapping.push({ kind: "quota", source: cq.sourceId, rescript: gq.id });
           continue;
         }
       }
       const id = quotaIdOf.get(cq.sourceId) ?? unique(safeIdent(cq.group ? cq.group.id : cq.sourceId), new Set([...(existing?.quotas.map((q) => q.id) ?? []), ...quotas.map((q) => q.id)]));
       mapping.push({ kind: "quota", source: cq.sourceId, rescript: id });
-      quotas.push({ id, name: cq.group ? cq.group.name : cq.name, mode: "hard", cells: [{ id: `${id}_cell`, label: cq.name, when, limit: cq.limit, limitType: "count" }], onFull: { kind: cq.onFull === "continue" ? "flag" : cq.onFull }, countStatus: ["complete"], ...(cq.group ? { __group: cq.group.id } : {}) } as unknown as Quota);
+      quotas.push({ id, name: cq.group ? cq.group.name : cq.name, mode: "hard", cells: [{ id: `${id}_cell`, label: cq.name, when, limit: cq.limit, limitType: "count", ...carriedOf(cq) }], onFull: { kind: cq.onFull === "continue" ? "flag" : cq.onFull }, countStatus: ["complete"], ...(cq.group ? { __group: cq.group.id } : {}) } as unknown as Quota);
     }
     for (const q of quotas) delete (q as { __group?: string }).__group;
     if (quotas.length) {

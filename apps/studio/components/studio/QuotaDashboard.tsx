@@ -4,7 +4,7 @@ import { Loading } from "@/components/ui/Loading";
 import { questionTypeRegistry } from "@rescript/schema";
 import type { Quota } from "@rescript/schema";
 import {
-  QUOTA_STATE_LABEL, filterQuotas, quotaDashboard, quotaEditDiff, sortQuotas, validateQuotaEdit,
+  QUOTA_STATE_LABEL, filterQuotas, quotaDashboard, quotaEditDiff, sortQuotas, validateQuotaEdit, withCarriedCounts,
   type QuotaCellRow, type QuotaEdit, type QuotaEditIssue, type QuotaFilter, type QuotaRow, type QuotaSort, type QuotaState,
   stripHtmlText,
 } from "@rescript/engine";
@@ -33,7 +33,7 @@ type Env = "TEST" | "LIVE";
 type View = "cards" | "table";
 type Mode = { kind: "dashboard" } | { kind: "logic"; focusQuotaId?: string };
 
-interface CellDraft { cellId: string; label: string; limit: string; target: string; limitType: "count" | "percent" }
+interface CellDraft { cellId: string; label: string; limit: string; target: string; limitType: "count" | "percent"; /** I5 */ carried: string }
 interface Draft { quotaId: string; name: string; targetTotal: string; cells: CellDraft[] }
 
 const REFRESH_MS = 30_000;
@@ -125,7 +125,9 @@ export function QuotaDashboard() {
 
   /* ------------------------------------------------------------ model */
 
-  const dash = React.useMemo(() => quotaDashboard(s.def, counts, { updatedAt }), [s.def, counts, updatedAt]);
+  /* I5: completes carried over from another platform count toward LIVE fullness (never the test counters') */
+  const shownCounts = React.useMemo(() => (env === "TEST" ? counts : withCarriedCounts(s.def, counts)), [env, counts, s.def]);
+  const dash = React.useMemo(() => quotaDashboard(s.def, shownCounts, { updatedAt }), [s.def, shownCounts, updatedAt]);
   const rows = React.useMemo(() => sortQuotas(filterQuotas(dash.quotas, search, filter), sort, sortDir), [dash, search, filter, sort, sortDir]);
   const quotaById = (id: string) => s.def.quotas.find((q) => q.id === id);
 
@@ -151,7 +153,7 @@ export function QuotaDashboard() {
     setIssues(null); setOverCapAccepted(false);
     setDraft({
       quotaId: q.id, name: q.name, targetTotal: q.targetTotal == null ? "" : String(q.targetTotal),
-      cells: q.cells.map((c) => ({ cellId: c.id, label: c.label, limit: String(c.limit), target: c.target == null ? "" : String(c.target), limitType: c.limitType })),
+      cells: q.cells.map((c) => ({ cellId: c.id, label: c.label, limit: String(c.limit), target: c.target == null ? "" : String(c.target), limitType: c.limitType, carried: c.carried ? String(c.carried.count) : "" })),
     });
   };
   const cancelEdit = () => { setDraft(null); setIssues(null); setOverCapAccepted(false); };
@@ -174,6 +176,7 @@ export function QuotaDashboard() {
       const lim = num(c.limit); if (lim !== orig.limit) e.limit = lim === null ? Number.NaN : (lim as number);
       const tgt = num(c.target); if (tgt !== (orig.target ?? null)) e.target = tgt === null ? null : (tgt as number);
       if (c.limitType !== orig.limitType) e.limitType = c.limitType;
+      const car = num(c.carried); if ((car ?? 0) !== (orig.carried?.count ?? 0)) e.carried = car === null ? null : (car as number);
       if (Object.keys(e).length > 1) edit.cells!.push(e);
     }
     return edit;
@@ -184,7 +187,7 @@ export function QuotaDashboard() {
     if (s.readOnly) { setNote({ text: s.readOnlyReason ?? "This project is read-only. Your changes have not been applied.", ok: false }); return; }
     const q = quotaById(draft.quotaId); if (!q) { cancelEdit(); return; }
     const edit = draftToEdit(draft, q);
-    const check = validateQuotaEdit(q, edit, counts);
+    const check = validateQuotaEdit(q, edit, shownCounts);
     setIssues({ errors: check.errors, warnings: check.warnings });
     if (check.errors.length) return;
     if (check.warnings.length && !overCapAccepted) return; // needs the explicit "proceed"
@@ -553,10 +556,12 @@ function CellRow({ cell, draft, issues, onChange }: { cell: QuotaCellRow; draft:
       </div>
       <div className="qd-cell-nums">
         <span>Current <strong className="mono">{cell.current}</strong></span>
+        {cell.carried > 0 && !draft && <span data-testid="quota-cell-carried" title={`Completes reached on the platform this survey came from (${cell.carriedSource ?? "source not recorded"}). They count toward the live maximum, never the test counters, and a recount keeps them.`}>Carried over <strong className="mono">{cell.carried}</strong> <span className="muted">({cell.carriedSource ?? "earlier fieldwork"})</span></span>}
         {draft ? (
           <>
             <label>Target <input className="input mono" data-testid="quota-cell-target" style={{ width: 70 }} inputMode="numeric" placeholder="—" value={draft.target} onChange={(e) => onChange({ target: e.target.value })} /></label>
             <label>Maximum <input className="input mono" data-testid="quota-cell-limit" style={{ width: 70 }} inputMode="numeric" value={draft.limit} onChange={(e) => onChange({ limit: e.target.value })} /></label>
+            <label title="Completes this cell already reached on another platform; counted toward the live maximum only">Carried over <input className="input mono" data-testid="quota-cell-carried-input" style={{ width: 70 }} inputMode="numeric" placeholder="0" value={draft.carried} onChange={(e) => onChange({ carried: e.target.value })} /></label>
             <select className="select" data-testid="quota-cell-unit" value={draft.limitType} onChange={(e) => onChange({ limitType: e.target.value as "count" | "percent" })}>
               <option value="count">count</option><option value="percent">% of target total</option>
             </select>

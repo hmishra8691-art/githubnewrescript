@@ -82,6 +82,20 @@ export const QuotaCell = z.object({
    * as every cell always has.
    */
   target: z.number().optional(),
+  /**
+   * I5 (2026-11-22) — COMPLETES THIS CELL ALREADY HAS FROM FIELDWORK ELSEWHERE: a survey moved from another platform
+   * mid-field brings the counts it reached there (from the source file or a quota report), so a cell that was full
+   * there is full here. Added to the LIVE counter wherever fullness is decided (the runtime, List Fill, conditions
+   * that read the quota, the dashboard); never to the test counters. It lives on the definition, not in the
+   * counters, so a recount from responses never wipes it; the dashboard shows it apart from the live count, and the
+   * researcher can change or clear it.
+   */
+  carried: z.object({
+    count: z.number().int().nonnegative(),
+    /** where the number came from: "Qualtrics export", "quota report (quota.xlsx)", "entered by hand" */
+    source: z.string().max(200),
+    at: z.string().optional(),
+  }).optional(),
 });
 export type QuotaCell = z.infer<typeof QuotaCell>;
 

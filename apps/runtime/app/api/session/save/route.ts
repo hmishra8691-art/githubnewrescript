@@ -517,7 +517,7 @@ async function serverCheck(
   const posture = validationPosture();
   if (posture === "off") return null;
   try {
-    const quotaCounts = def.quotas?.length ? await loadQuotaCounts(existing.survey_id, !!existing.is_test) : {};
+    const quotaCounts = def.quotas?.length ? await loadQuotaCounts(existing.survey_id, !!existing.is_test, def) : {};
     const recompute = recomputePosture() !== "off";
     const balanceClaims = recompute ? await storedBalanceClaims(def, existing.survey_id, !!existing.is_test, sessionId) : {};
     const check = checkSubmission({

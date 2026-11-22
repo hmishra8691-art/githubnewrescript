@@ -32,6 +32,26 @@ export function effectiveLimit(q: Quota, cellLimit: number, limitType: "count" |
   return cellLimit;
 }
 
+/** I5: completes a cell already has from fieldwork on another platform (0 when none) */
+export const carriedCount = (cell: { carried?: { count: number } }): number => Math.max(0, Math.floor(cell.carried?.count ?? 0));
+
+/**
+ * I5 — THE LIVE COUNTERS WITH EACH CELL'S CARRIED-OVER COMPLETES ADDED: what the runtime, List Fill, conditions that
+ * read a quota and the dashboard decide fullness on in the LIVE environment. Never applied to the test counters (a
+ * test link must not start with live fieldwork in it). Returns a new object; `counts` is not changed.
+ */
+export function withCarriedCounts(def: Pick<SurveyDefinition, "quotas">, counts: QuotaCounts): QuotaCounts {
+  const out: QuotaCounts = {};
+  for (const [q, cells] of Object.entries(counts ?? {})) out[q] = { ...cells };
+  for (const quota of def.quotas ?? []) for (const cell of quota.cells) {
+    const n = carriedCount(cell);
+    if (!n) continue;
+    const byCell = (out[quota.id] ??= {});
+    byCell[cell.id] = (byCell[cell.id] ?? 0) + n;
+  }
+  return out;
+}
+
 /** Which cells the current respondent falls into. */
 export function matchingCells(
   def: SurveyDefinition,

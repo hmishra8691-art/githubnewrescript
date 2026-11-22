@@ -12,6 +12,7 @@ export * from "./sources.js";
 export * from "./map.js";
 export * from "./report.js";
 export * from "./quotaSheet.js";
+export * from "./fieldState.js";
 export * from "./verify.js";
 export * from "./mappingDecision.js";
 export * from "./graph.js";

@@ -44,11 +44,11 @@ export async function POST(req: NextRequest) {
   const sheet = readQuotaSheet(sheets);
   const mode = form.get("mode") === "soft" ? "soft" as const : undefined;
   const onFull = form.get("onFull") === "flag" ? "flag" as const : undefined;
-  const mapped = quotaSheetActions(def, sheet, { ...(mode ? { mode } : {}), ...(onFull ? { onFull } : {}) });
+  const mapped = quotaSheetActions(def, sheet, { ...(mode ? { mode } : {}), ...(onFull ? { onFull } : {}), sourceName: fileName.slice(0, 120) });
   const gate = coerceSurveyActions(mapped.actions);
   return NextResponse.json({
     ok: true, fileName,
-    sheet: { confidence: sheet.confidence, quotas: sheet.quotas.map((q) => ({ name: q.name, sheet: q.sheet, layout: q.layout, dimensions: q.dimensions, cells: q.cells.length, total: q.total ?? null })) },
+    sheet: { confidence: sheet.confidence, quotas: sheet.quotas.map((q) => ({ name: q.name, sheet: q.sheet, layout: q.layout, dimensions: q.dimensions, cells: q.cells.length, total: q.total ?? null, carried: q.cells.reduce((n, c) => n + (c.achieved ?? 0), 0) })) },
     actions: gate.actions, rejected: gate.rejected, issues: mapped.issues, matched: mapped.matched,
   });
 }

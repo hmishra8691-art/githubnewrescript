@@ -374,7 +374,7 @@ From `packages/engine/src/quotaActions.ts`:
 ```ts
 export type QuotaAction =
   | { op: "create_quota"; name: string; cells?: QuotaCellSpec[]; dimensions?: QuotaDimension[]; total?: number; mode?: "hard" | "soft"; onFull?: QuotaOnFull; countStatus?: ("complete" | "in_progress")[]; check?: boolean; checkWhen?: CondInput }
-  | { op: "update_quota"; quota: string; name?: string; targetTotal?: number | null; total?: number; mode?: "hard" | "soft"; onFull?: QuotaOnFull; countStatus?: ("complete" | "in_progress")[]; cells?: { cell: string; label?: string; limit?: number; percent?: number; target?: number | null }[] }
+  | { op: "update_quota"; quota: string; name?: string; targetTotal?: number | null; total?: number; mode?: "hard" | "soft"; onFull?: QuotaOnFull; countStatus?: ("complete" | "in_progress")[]; cells?: { cell: string; label?: string; limit?: number; percent?: number; target?: number | null; /** I5: null clears it */ carried?: number | null; carriedSource?: string }[] }
   | { op: "add_quota_cells"; quota: string; cells: QuotaCellSpec[] }
   | { op: "remove_quota_cells"; quota: string; cells: string[] }
   | { op: "delete_quota"; quota: string }

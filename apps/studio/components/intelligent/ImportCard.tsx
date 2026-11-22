@@ -76,6 +76,14 @@ export interface ImportReport {
   /** I5: the decisions the source left open */
   clarifications?: ImportClarification[];
   reconstruction?: ImportReconstruction;
+  /** I5: quota counts carried over and each language version checked */
+  fieldState?: ImportFieldState | null;
+}
+export interface ImportFieldState {
+  quotas: { quotaId: string; quota: string; cells: number; maximum: number; carried: number; cellsWithCounts: number; full: { label: string; carried: number; maximum: number }[]; sources: string[] }[];
+  quotaCountsNote: string | null;
+  languages: { code: string; total: number; translated: number; percent: number; missingCount: number; missing: string[]; staleCount: number; invalid: { label: string; kind: string; message: string }[]; complete: boolean }[];
+  languagesNote: string | null;
 }
 export interface ImportDecision { id: string; type: string; [k: string]: unknown }
 export interface ImportClarification {
@@ -221,6 +229,7 @@ export function ImportCard({ job, onPatch, onRun, onCreate, onMerge, onCancel, o
               {(["high", "medium", "low"] as const).map((sv) => <span key={sv} className={`iqi-badge r-${sv}`} data-testid={`iqi-risk-${sv}`}>{sv} risk <b>{r.risks[sv].length}</b></span>)}
             </div>
             {r.fidelity && (r.fidelity.totals.detected > 0 || job.verification) && <FidelityBar f={r.fidelity} verification={job.verification} />}
+            {r.fieldState && (r.fieldState.quotas.length > 0 || r.fieldState.languages.length > 0) && <FieldStatePanel f={r.fieldState} />}
             {job.actual && <p className="iqi-dim" data-testid="iqi-actual">Charged for this import: <b>{formatCharge(job.actual.customerCharge, job.actual.currency)}</b>{job.estimate ? ` (estimated ${formatCharge(job.estimate.import.customerCharge, cur)})` : ""}</p>}
 
             {job.sessionId && <p className="iqi-dim" data-testid="iqi-session">Recorded in the import history{job.sessionExpiresAt ? ` · the file is kept until ${new Date(job.sessionExpiresAt).toLocaleDateString()}` : ""}{job.sessionNote ? ` · ${job.sessionNote}` : ""}</p>}
@@ -552,5 +561,32 @@ function Clarifications({ job, items, onPatch, onDecide, onSuggest }: { job: Imp
         <button type="button" className="iq-btn primary" disabled={!onDecide || job.deciding || !chosen.length || !job.sessionId} onClick={() => onDecide?.(chosen.map(({ c, i }) => opts(c)[i].decision))} data-testid="iqi-clarify-apply" title={job.sessionId ? "Apply these answers and re-analyse the preview" : "This import was not recorded, so its answers cannot be applied — import the file again"}>{job.deciding ? "Re-analysing…" : "Apply answers"}</button>
       </div>
     </div>
+  );
+}
+
+/** I5: what the import brought for fieldwork already under way (quota counts) and for its other languages, checked */
+function FieldStatePanel({ f }: { f: ImportFieldState }) {
+  return (
+    <details className="iqi-history" data-testid="iqi-fieldstate">
+      <summary>Quotas and languages</summary>
+      {f.quotas.length > 0 && (
+        <table className="iqi-table" data-testid="iqi-fieldstate-quotas">
+          <thead><tr><th>Quota</th><th>Cells</th><th>Maximum</th><th>Carried over</th><th>Already full</th></tr></thead>
+          <tbody>{f.quotas.map((q) => (
+            <tr key={q.quotaId}><td>{q.quota}</td><td className="mono">{q.cells}</td><td className="mono">{q.maximum || "—"}</td>
+              <td className="mono" title={q.sources.join("; ")}>{q.carried || "—"}</td><td>{q.full.map((x) => `${x.label} (${x.carried}/${x.maximum})`).join(", ") || "—"}</td></tr>
+          ))}</tbody>
+        </table>
+      )}
+      {f.quotaCountsNote && <p className="iqi-dim">{f.quotaCountsNote}</p>}
+      {f.languages.map((l) => (
+        <div key={l.code} data-testid="iqi-fieldstate-language" data-lang={l.code}>
+          <p className="iqi-line"><b>{l.code}</b>: {l.translated} of {l.total} strings pass the check ({l.percent}%){l.complete ? " — complete" : ""}{l.staleCount ? ` · ${l.staleCount} out of date` : ""}</p>
+          {l.missingCount > 0 && <p className="iqi-dim">Missing ({l.missingCount}): {l.missing.join(", ")}{l.missingCount > l.missing.length ? " …" : ""}</p>}
+          {l.invalid.length > 0 && <ul>{l.invalid.map((i, k) => <li key={k}>{i.label}: {i.message}</li>)}</ul>}
+        </div>
+      ))}
+      {f.languagesNote && <p className="iqi-dim">{f.languagesNote}</p>}
+    </details>
   );
 }

@@ -19,7 +19,8 @@ import { stripHtmlText } from "@rescript/engine";
  * row, and that cell is left out, never approximated.
  */
 
-export interface QuotaSheetCell { label: string; dims: { header: string; value: string }[]; target: number; percent: boolean; row: number }
+/** `achieved` (I5): completes the cell already has, from an Achieved / Current / Completes so far column — a quota REPORT from the platform the survey came from */
+export interface QuotaSheetCell { label: string; dims: { header: string; value: string }[]; target: number; percent: boolean; row: number; achieved?: number }
 export interface QuotaSheetQuota { name: string; sheet: string; layout: "long" | "matrix" | "list"; dimensions: string[]; cells: QuotaSheetCell[]; total?: number }
 export interface QuotaSheet { quotas: QuotaSheetQuota[]; issues: string[]; /** 0–1: how sure the reader is that this is a quota sheet at all */ confidence: number }
 
@@ -27,7 +28,9 @@ const TARGET_RE = /^(?:target|targets|n|quota|quotas|limit|max(?:imum)?|cap|coun
 const PERCENT_RE = /%|percent|share|prop/i;
 const NAME_RE = /^(?:quota|group|quota ?group|quota name|name|segment)$/i;
 const LABEL_RE = /^(?:label|cell|cell label|description|desc)$/i;
-const SKIP_RE = /^(?:notes?|comments?|status|achieved|current|actual|remaining|to go|complete[sd]? so far|id)$/i;
+const SKIP_RE = /^(?:notes?|comments?|status|remaining|to go|id)$/i;
+/** I5: the column that says how many completes a cell ALREADY has — read as carried-over completes, never as a target */
+const ACHIEVED_RE = /^(?:achieved|current(?: count)?|actual|counted|reached|filled|so far|to date|count so far|completes? (?:so far|to date)|completed(?: so far| to date)?|complete[sd]? so far)$/i;
 const TOTAL_RE = /^(?:total|all|overall|sum|grand total|base)$/i;
 
 const clean = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
@@ -62,7 +65,8 @@ function readLong(sheet: { name: string; rows: string[][] }, issues: string[]): 
   const tcol = header.map((c, i) => ({ c, i })).filter(({ c, i }) => c && i !== nameCol && TARGET_RE.test(c)).sort((a, b) => numericUnder(b.i) - numericUnder(a.i) || (TOTAL_RE.test(a.c) ? 1 : 0) - (TOTAL_RE.test(b.c) ? 1 : 0))[0]?.i ?? -1;
   if (tcol < 0) return null;
   const labelCol = header.findIndex((c) => LABEL_RE.test(c));
-  const dimCols = header.map((c, i) => ({ c, i })).filter(({ c, i }) => c && i !== tcol && i !== nameCol && i !== labelCol && !SKIP_RE.test(c) && !TARGET_RE.test(c)).map(({ i }) => i);
+  const achCol = header.findIndex((c, i) => i !== tcol && ACHIEVED_RE.test(c));
+  const dimCols = header.map((c, i) => ({ c, i })).filter(({ c, i }) => c && i !== tcol && i !== nameCol && i !== labelCol && i !== achCol && !SKIP_RE.test(c) && !TARGET_RE.test(c)).map(({ i }) => i);
   if (!dimCols.length && labelCol < 0) return null;
   const percentHeader = PERCENT_RE.test(header[tcol]);
   const byName = new Map<string, QuotaSheetQuota>();
@@ -80,7 +84,13 @@ function readLong(sheet: { name: string; rows: string[][] }, issues: string[]): 
     const name = (nameCol >= 0 && r[nameCol]) || sheet.name;
     const q = byName.get(name) ?? { name, sheet: sheet.name, layout: "long" as const, dimensions: dimCols.map((c) => header[c]), cells: [] };
     byName.set(name, q);
-    q.cells.push({ label, dims, target: t.value, percent: t.percent || percentHeader, row: i + 1 });
+    let achieved: number | undefined;
+    if (achCol >= 0 && clean(r[achCol] ?? "")) {
+      const a = parseTarget(r[achCol] ?? "");
+      if (!a || a.percent || !Number.isInteger(a.value)) issues.push(`${sheet.name} row ${i + 1}: “${r[achCol]}” under “${header[achCol]}” is not a whole number of completes, so no carried-over count was read for this cell.`);
+      else achieved = a.value;
+    }
+    q.cells.push({ label, dims, target: t.value, percent: t.percent || percentHeader, row: i + 1, ...(achieved !== undefined ? { achieved } : {}) });
   }
   const out = [...byName.values()].filter((q) => q.cells.length);
   for (const q of out) { q.dimensions = q.dimensions.filter((d) => q.cells.some((c) => c.dims.some((x) => x.header === d))); if (total !== undefined) q.total = total; }
@@ -93,6 +103,8 @@ function readMatrix(sheet: { name: string; rows: string[][] }, issues: string[])
   const head = rows[0];
   const colLabels = head.slice(1);
   if (colLabels.filter(Boolean).length < 2 || colLabels.some((c) => c && parseTarget(c))) return null;
+  /* a column headed Target / Achieved / Remaining is a long sheet's column, not a value of a crossed dimension */
+  if (colLabels.some((c) => c && !TOTAL_RE.test(c) && (TARGET_RE.test(c) || ACHIEVED_RE.test(c) || SKIP_RE.test(c)))) return null;
   const body = rows.slice(1);
   if (body.some((r) => !r[0] || parseTarget(r[0]))) return null;
   const numericBody = body.every((r) => r.slice(1, colLabels.length + 1).every((c) => !c || parseTarget(c)));
@@ -243,12 +255,31 @@ function ruleFor(def: SurveyDefinition, q: Question, value: string): Condition |
  * question, every value an option or a range, every target a number — the
  * rest reported by row and left out.
  */
-export function quotaSheetActions(def: SurveyDefinition, sheet: QuotaSheet, opts: { onFull?: "terminate" | "flag"; mode?: "hard" | "soft" } = {}): QuotaSheetMapping {
+export function quotaSheetActions(def: SurveyDefinition, sheet: QuotaSheet, opts: { onFull?: "terminate" | "flag"; mode?: "hard" | "soft"; /** I5: the file's name, recorded as where carried-over counts came from */ sourceName?: string } = {}): QuotaSheetMapping {
   const actions: Record<string, unknown>[] = [];
   const issues: string[] = [...sheet.issues];
   const matched: Record<string, string> = {};
   const existing = new Set(def.quotas.map((q) => q.name.trim().toLowerCase()));
+  const carriedSource = `quota report${opts.sourceName ? ` (${opts.sourceName})` : ""}`.slice(0, 200);
   for (const q of sheet.quotas) {
+    /*
+     * I5 — A QUOTA REPORT FOR A QUOTA THAT IS ALREADY HERE (it came across with the questionnaire): the counts go onto
+     * its cells, matched by label; the survey's own targets and conditions are left alone and a different target is
+     * reported, not applied.
+     */
+    const here = def.quotas.find((x) => x.name.trim().toLowerCase() === q.name.trim().toLowerCase());
+    if (here && q.cells.some((c) => c.achieved !== undefined)) {
+      const edits: Record<string, unknown>[] = [];
+      for (const c of q.cells) {
+        if (c.achieved === undefined) continue;
+        const cell = here.cells.find((x) => norm(x.label) === norm(c.label));
+        if (!cell) { issues.push(`${q.sheet} row ${c.row}: “${here.name}” has no cell “${c.label}” — its cells are ${here.cells.map((x) => `“${x.label}”`).join(", ")}; that count was not carried over.`); continue; }
+        edits.push({ cell: cell.id, carried: c.achieved, carriedSource });
+        if (!c.percent && cell.limitType === "count" && cell.limit !== c.target) issues.push(`${q.sheet} row ${c.row}: the report gives “${c.label}” a target of ${c.target}; the survey's maximum is ${cell.limit}. The survey's maximum was kept.`);
+      }
+      if (edits.length) actions.push({ op: "update_quota", quota: here.id, cells: edits });
+      continue;
+    }
     // the headers → questions, helped by the values under each
     const questions = new Map<string, Question | null>();
     for (const h of q.dimensions) {
@@ -263,7 +294,7 @@ export function quotaSheetActions(def: SurveyDefinition, sheet: QuotaSheet, opts
         // a list: the label itself must name an option of some question, or a range of a numeric one
         const candidates = def.questions.map((cand) => ({ cand, r: ruleFor(def, cand, c.label) })).filter((x) => typeof x.r !== "string" && (x.cand.options?.some((o) => norm(o.label) === norm(c.label)) || parseRange(c.label)));
         if (candidates.length !== 1) { issues.push(`${q.sheet} row ${c.row}: “${c.label}” ${candidates.length ? "matches more than one question" : "names no option of any question"} — add a column with the question.`); continue; }
-        cells.push({ label: c.label, when: candidates[0].r, ...(c.percent ? { percent: c.target } : { limit: c.target }) });
+        cells.push({ label: c.label, when: candidates[0].r, ...(c.percent ? { percent: c.target } : { limit: c.target }), ...(c.achieved !== undefined ? { carried: c.achieved, carriedSource } : {}) });
         continue;
       }
       const rules: Condition[] = []; let bad = false;
@@ -275,7 +306,7 @@ export function quotaSheetActions(def: SurveyDefinition, sheet: QuotaSheet, opts
         rules.push(r);
       }
       if (bad) continue;
-      cells.push({ label: c.label, when: rules.length === 1 ? rules[0] : { type: "group", op: "and", children: rules }, ...(c.percent ? { percent: c.target } : { limit: c.target }) });
+      cells.push({ label: c.label, when: rules.length === 1 ? rules[0] : { type: "group", op: "and", children: rules }, ...(c.percent ? { percent: c.target } : { limit: c.target }), ...(c.achieved !== undefined ? { carried: c.achieved, carriedSource } : {}) });
     }
     if (!cells.length) { issues.push(`${q.sheet}: none of the ${q.cells.length} cells of “${q.name}” could be matched to the survey, so no quota was made from it.`); continue; }
     const percent = cells.some((c) => c.percent !== undefined);

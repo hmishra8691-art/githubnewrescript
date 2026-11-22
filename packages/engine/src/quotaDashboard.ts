@@ -14,7 +14,7 @@
  *                              →  applyQuotaEdit()    → the new Quota, unchanged otherwise
  */
 import type { Condition, ConditionRule, Quota, QuotaCell, SurveyDefinition } from "@rescript/schema";
-import { effectiveLimit, type QuotaCounts } from "./quotas.js";
+import { carriedCount, effectiveLimit, type QuotaCounts } from "./quotas.js";
 import { conditionSummary } from "./logicSummary.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 
@@ -66,6 +66,9 @@ export interface QuotaCellRow {
   /** resolved target in completes, when a target is configured */
   targetCount: number | null;
   current: number;
+  /** I5: completes carried over from fieldwork on another platform (on the definition); part of `current` when the caller passed live counts through `withCarriedCounts` */
+  carried: number;
+  carriedSource?: string;
   remainingToMaximum: number | null;
   remainingToTarget: number | null;
   /** 0–100+ against the maximum; null when unlimited */
@@ -216,6 +219,7 @@ export function quotaCellRow(def: SurveyDefinition, quota: Quota, cell: QuotaCel
     condition: conditionSummary(def, cell.when) || "every respondent",
     limit: cell.limit, limitType: cell.limitType, target: cell.target,
     maximum, targetCount, current,
+    carried: carriedCount(cell), ...(cell.carried?.source ? { carriedSource: cell.carried.source } : {}),
     remainingToMaximum: maximum > 0 ? Math.max(0, maximum - current) : null,
     remainingToTarget: targetCount != null && targetCount > 0 ? Math.max(0, targetCount - current) : null,
     pct: maximum > 0 ? Math.round((current / maximum) * 1000) / 10 : null,
@@ -334,12 +338,12 @@ export function sortQuotas(rows: QuotaRow[], sort: QuotaSort, direction: "asc" |
 export interface QuotaEdit {
   name?: string;
   targetTotal?: number | null;
-  cells?: { cellId: string; label?: string; limit?: number; target?: number | null; limitType?: "count" | "percent" }[];
+  cells?: { cellId: string; label?: string; limit?: number; target?: number | null; limitType?: "count" | "percent"; /** I5: completes carried over from another platform; null clears */ carried?: number | null }[];
 }
 
 export interface QuotaEditIssue {
   cellId?: string;
-  field: "name" | "targetTotal" | "limit" | "target" | "limitType";
+  field: "name" | "targetTotal" | "limit" | "target" | "limitType" | "carried";
   message: string;
 }
 
@@ -368,6 +372,10 @@ export function applyQuotaEdit(quota: Quota, edit: QuotaEdit): Quota {
     if (e.limit !== undefined) cell.limit = e.limit;
     if (e.limitType !== undefined) cell.limitType = e.limitType;
     if (e.target !== undefined) { if (e.target === null) delete cell.target; else cell.target = e.target; }
+    if (e.carried !== undefined) {
+      if (e.carried === null || e.carried === 0) delete cell.carried;
+      else cell.carried = { count: e.carried, source: cell.carried?.source && cell.carried.count === e.carried ? cell.carried.source : "entered by hand" };
+    }
   }
   return next;
 }
@@ -398,6 +406,8 @@ export function validateQuotaEdit(quota: Quota, edit: QuotaEdit, counts: QuotaCo
       errors.push({ cellId: cell.id, field: "limit", message: `${cell.label}: maximum must be a whole number of 0 or more.` });
     if (cell.limitType === "percent" && cell.limit > 100)
       errors.push({ cellId: cell.id, field: "limit", message: `${cell.label}: a percent maximum cannot exceed 100%.` });
+    if (cell.carried && (!isInt(cell.carried.count) || cell.carried.count < 0))
+      errors.push({ cellId: cell.id, field: "carried", message: `${cell.label}: carried-over completes must be a whole number of 0 or more.` });
     if (cell.target != null) {
       if (!isInt(cell.target) || cell.target < 0)
         errors.push({ cellId: cell.id, field: "target", message: `${cell.label}: target must be a whole number of 0 or more.` });
@@ -430,6 +440,7 @@ export function quotaEditDiff(before: Quota, after: Quota): Record<string, { bef
     if ((b.target ?? null) !== (a.target ?? null)) diff[`cell.${b.id}.target`] = { before: b.target ?? null, after: a.target ?? null };
     if (b.limitType !== a.limitType) diff[`cell.${b.id}.limitType`] = { before: b.limitType, after: a.limitType };
     if (b.label !== a.label) diff[`cell.${b.id}.label`] = { before: b.label, after: a.label };
+    if ((b.carried?.count ?? 0) !== (a.carried?.count ?? 0)) diff[`cell.${b.id}.carried`] = { before: b.carried?.count ?? 0, after: a.carried?.count ?? 0 };
   }
   for (const a of after.cells) if (!before.cells.some((b) => b.id === a.id)) diff[`cell.${a.id}`] = { before: null, after: { label: a.label, limit: a.limit } };
   return diff;

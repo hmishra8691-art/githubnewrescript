@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { reviewQuotas, quotaAdvice, quotaDashboard, formatCondition, type SurveyAction } from "@rescript/engine";
+import { reviewQuotas, quotaAdvice, quotaDashboard, withCarriedCounts, formatCondition, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
 import { Linked } from "./CopilotCard";
 import type { Copilot } from "./useCopilot";
@@ -26,7 +26,8 @@ export interface QuotaImportNote { fileName: string; issues: string[]; matched: 
 export function QuotasTab({ copilot, def, onSelect, onImportSheet, lastImport, readOnly }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void; onImportSheet(): void; lastImport: QuotaImportNote | null; readOnly: boolean }) {
   const findings = React.useMemo(() => reviewQuotas(def), [def]);
   const counts = copilot.quotaCounts ?? {};
-  const dash = React.useMemo(() => quotaDashboard(def, counts), [def, counts]);
+  /* the copilot's counts are LIVE: completes carried over from another platform are part of them (I5) */
+  const dash = React.useMemo(() => quotaDashboard(def, withCarriedCounts(def, counts)), [def, counts]);
   const advice = React.useMemo(() => (copilot.quotaCounts ? quotaAdvice(def, copilot.quotaCounts) : []), [def, copilot.quotaCounts]);
   const sev = (s: string) => (s === "info" ? "suggestion" : s);
   const propose = (a: SurveyAction, label: string) => copilot.previewFix([a], label);

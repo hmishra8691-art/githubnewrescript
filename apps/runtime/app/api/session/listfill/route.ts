@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
     : ready;
   if (!requested.length) return NextResponse.json({ ok: true, allocations: [] });
 
-  const quotaCounts = await loadQuotaCounts(existing.survey_id, isTest);
+  const quotaCounts = await loadQuotaCounts(existing.survey_id, isTest, def);
 
   const rpc = async (fn: string, args: Record<string, unknown>) => {
     const { data, error } = await db.rpc(fn, {

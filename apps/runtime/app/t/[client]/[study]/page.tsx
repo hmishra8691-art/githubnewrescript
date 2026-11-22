@@ -68,7 +68,7 @@ export default async function TestSurveyPage({
    * Reading only: this session's own complete still increments the TEST counters, never the live ones.
    */
   const liveCounts = searchParams.counts === "live";
-  const quotaCounts = simulatedQuotaCounts(dep.definition, await loadQuotaCounts(dep.surveyId, !liveCounts), (searchParams.full ?? "").split(",").slice(0, 50));
+  const quotaCounts = simulatedQuotaCounts(dep.definition, await loadQuotaCounts(dep.surveyId, !liveCounts, dep.definition), (searchParams.full ?? "").split(",").slice(0, 50));
   return (
     <Runner
       /* ASSESSMENTS (step 4A): a test link is a respondent payload too — the key is scored on the server after submit */
