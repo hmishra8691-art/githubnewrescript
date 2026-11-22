@@ -1,3 +1,4 @@
+import { answerDesignRequest } from "./designIntent.js";
 import { sampleAvailability } from "./sampleAvailability.js";
 import { interpretVendorRequest } from "./vendorIntent.js";
 import { fieldworkPlan } from "./fieldworkPlan.js";
@@ -3864,6 +3865,17 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
   /* …and an ANALYSIS of the exercise ("run HB on the conjoint", 2026-10-22) is the analysis plan's, read by the grammar below */
   if (!scope.longBrief && DESIGN_METHOD.test(clean) && DESIGN_CONFIG.test(clean) && !/^(?:why|what|which|how|explain|tell me|describe|is|are|does|do|should)\b/i.test(clean) && !ADVANCED_ANALYSIS.test(clean)) {
     return { kind: "model", category: null, reason: "a MaxDiff / conjoint design is configured by the design actions and the methods guide — the language model takes it, and the engine generates and checks the design", detected: [] };
+  }
+  /*
+   * A DESIGN QUESTION WITH A FORMULA BEHIND IT (Level 5 roadmap A7, 2026-11-23): sample for a margin or a
+   * difference, what a sample can show, the interview length, starts and invitations. Worked out by the design
+   * calculators, with the working and the assumptions — before the grammar, which read "how many completes for
+   * ±3%?" as a question about the analysis plan and answered with the plan's minimum.
+   */
+  const design = scope.longBrief ? null : answerDesignRequest(def, clean);
+  if (design) {
+    if (!design.ok) return { kind: "refused", category: "research_design", understood: design.understood, reason: design.answer, detected: [{ what: "Calculation", value: design.tool }] };
+    return { kind: "answer", category: "research_design", understood: design.understood, answer: design.answer, sections: [{ title: "Working", items: design.working.map((label) => ({ label })) }, ...(design.assumptions.length ? [{ title: "Assumptions", items: design.assumptions.map((label) => ({ label })) }] : [])], detected: [{ what: "Calculation", value: design.tool }] };
   }
   try {
     const parts = splitCommands(clean);

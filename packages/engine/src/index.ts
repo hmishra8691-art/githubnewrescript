@@ -303,6 +303,7 @@ export * from "./missingAsset.js";
 export * from "./conjointFixed.js";
 export * from "./designBrief.js";
 export * from "./toolRegistry.js";
+export { answerDesignRequest, interpretDesignRequest } from "./designIntent.js";
 export { fieldEstimate, interviewLength, precisionOf, quotaCells, sampleForDifference, sampleForMargin } from "./designCalc.js";
 export * from "./portalPolicy.js";
 export * from "./scorecard.js";
