@@ -502,6 +502,18 @@ export const RULES: RuleDef[] = [
     params: [p("maxPageMs", "Median page time below this", lvl(600, 1000, 1500, 2000), "ms")],
   },
   {
+    id: "bot.even_typing", category: "bot", title: "Typing too even to be a person",
+    description: "A text answer was typed one key at a time at almost exactly the same interval, with no correction. People speed up, slow down and fix mistakes; a script typing with a fixed delay does not. Needs the answer-history telemetry; skipped without it.",
+    defaultSeverity: "high", riskPoints: 30, qualityPenalty: 0, enabledIn: ALL, needs: ["timing"],
+    params: [p("minKeys", "Judge from this many consecutive keystrokes (the collector keeps the last 20 changes of an answer)", lvl(19, 15, 12, 10)), p("maxVariation", "Flag when the variation of the gaps between keys is below this (coefficient of variation)", lvl(0.08, 0.12, 0.15, 0.2))],
+  },
+  {
+    id: "bot.superhuman_typing", category: "bot", title: "Typed faster than a person can",
+    description: "A text answer was typed, key by key, faster than a person can sustain. Needs the answer-history telemetry; skipped without it.",
+    defaultSeverity: "high", riskPoints: 30, qualityPenalty: 0, enabledIn: ALL, needs: ["timing"],
+    params: [p("minKeys", "Judge from this many consecutive keystrokes (the collector keeps the last 20 changes of an answer)", lvl(19, 15, 12, 10)), p("maxCharsPerSecond", "Flag above this many characters a second across those keys", lvl(20, 16, 14, 12))],
+  },
+  {
     id: "bot.no_interaction", category: "bot", title: "No human interaction recorded",
     description: "Pages answered without pointer, key or scroll events.",
     defaultSeverity: "high", riskPoints: 30, qualityPenalty: 0, enabledIn: ALL, needs: ["interaction"],

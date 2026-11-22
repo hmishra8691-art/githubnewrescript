@@ -350,6 +350,41 @@ export function timingRules(ctx: RuleContext): FlagDraft[] {
     }
   }
 
+  /*
+   * HOW A TEXT ANSWER WAS TYPED (Level 5 roadmap F4/F5, 2026-11-26) — from the answer history, which keeps the
+   * time and the length after every change (never the text). Two things a person cannot do and a script does by
+   * default: sustain a rate no typist reaches, and hit every key at the same interval with no correction. Found on
+   * RECORDED automation (packages/quality/fixtures/recorded); there is no recording of people here, so the
+   * thresholds are set from what is known about typing (sustained rates above 12 to 16 characters a second are
+   * beyond professional typists; people's gaps between keys vary by 40% of their mean or more), not fitted.
+   */
+  if (ctx.enabled("bot.even_typing") || ctx.enabled("bot.superhuman_typing")) {
+    for (const [qid, qt] of Object.entries(t.questions)) {
+      const h = qt.history;
+      if (!h || h.length < 10) continue;
+      /* the longest run of single keystrokes: each change adds exactly one character */
+      let best: number[] = [], run: number[] = [], corrections = 0;
+      for (let i = 1; i < h.length; i++) {
+        const a = (h[i - 1]![1] as { len?: unknown } | null)?.len, b = (h[i]![1] as { len?: unknown } | null)?.len;
+        if (typeof a !== "number" || typeof b !== "number") { run = []; continue; }
+        if (b < a) corrections++;
+        if (b === a + 1) { run.push(h[i]![0] - h[i - 1]![0]); if (run.length > best.length) best = run; } else run = [];
+      }
+      const even = ctx.enabled("bot.even_typing") && best.length >= ctx.param<number>("bot.even_typing", "minKeys");
+      const fast = ctx.enabled("bot.superhuman_typing") && best.length >= ctx.param<number>("bot.superhuman_typing", "minKeys");
+      if (!even && !fast) continue;
+      const mean = best.reduce((s, x) => s + x, 0) / best.length;
+      const sd = Math.sqrt(best.reduce((s, x) => s + (x - mean) ** 2, 0) / best.length);
+      const variation = mean > 0 ? sd / mean : 0;
+      const cps = mean > 0 ? 1000 / mean : Infinity;
+      if (fast && cps > ctx.param<number>("bot.superhuman_typing", "maxCharsPerSecond")) {
+        out.push({ ruleId: "bot.superhuman_typing", questionIds: [qid], observed: `${best.length} keys in a row at ${cps.toFixed(1)} characters a second`, expected: `at most ${ctx.param<number>("bot.superhuman_typing", "maxCharsPerSecond")} a second`, explanation: "The answer was typed key by key faster than a person can sustain — consistent with a script typing it." });
+      } else if (even && corrections === 0 && variation < ctx.param<number>("bot.even_typing", "maxVariation")) {
+        out.push({ ruleId: "bot.even_typing", questionIds: [qid], observed: `${best.length} keys in a row, ${Math.round(mean)} ms apart, varying by ${Math.round(variation * 100)}% and never corrected`, expected: `gaps that vary by ${Math.round(ctx.param<number>("bot.even_typing", "maxVariation") * 100)}% or more, or a correction`, explanation: "Every key came at almost the same interval and nothing was corrected. People's typing speeds up, slows down and is fixed along the way; a script typing with a fixed delay looks like this." });
+      }
+    }
+  }
+
   /* impossible sequences */
   if (ctx.enabled("bot.impossible_sequence")) {
     const problems: string[] = [];
