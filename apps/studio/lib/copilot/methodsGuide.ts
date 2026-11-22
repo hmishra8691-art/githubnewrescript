@@ -15,7 +15,7 @@ IDENTIFY: most/least important of a list, best–worst → create_maxdiff. Produ
 CBC OPTIONS: "dualResponse":true = dual-response None (forced choice, then "would you buy it?"; replaces none:true); "labelled":true = each brand once per task; "alternativeSpecific":[{"attribute":"5G","appliesTo":["Alpha","Beta"]}] = brand-specific attributes ("brandAttribute" when it is not Brand). ACBC: summed price = "priceBase" + "priceIncrements":{"Brand":[0,50,120]} (one per level). Menu: "exclusiveGroups":[{"name":"Plan","items":["Basic","Plus"]}] = pick at most one.
 SIMULATOR: "run the simulator / what share at ₹X / the bundle at ₹499" → simulate_conjoint on the question (target): a CBC/ACBC/CVA scenario is "products" [{name, levels, price?, cost?}], "rule" logit|first_choice|rfc|btl; a menu scenario is "prices" {item: price} and "bundles" [{name, items, price}]. The engine checks and saves it; Data Analytics → Conjoint simulates it once data is in. Never invent shares.
 NEVER SUBSTITUTE a simpler method (a matrix or ranking for a MaxDiff, plain questions for a conjoint, cbc when acbc or cva was asked). NOT AVAILABLE — say so, offer the supported alternative (propose it only if the researcher agrees): ranking-based conjoint, ACA / self-explicated, numeric/linear attributes (except ACBC summed price), level images, latent-class choice models, worst-only MaxDiff, balanced (least-filled) version assignment. HB / individual utilities are not a design setting: they run after fielding in Data Analytics (CBC, ACBC, menu, MaxDiff) — asked for now, plan it as an analysis-plan item ({"op":"add_analysis_test","method":"hb","variables":["<exercise code>"]}); it runs as a background job when the plan is applied.
-ASK, don't invent: reply "kind":"clarify" with "questions" and NO actions when an essential is missing — the MaxDiff ITEMS (unless named, or a survey question lists them → "itemsFrom"), the conjoint ATTRIBUTES AND THEIR LEVELS ("four attributes with three levels" is a size, not the attributes), the menu items and prices. Essentials given → BUILD now; never ask first about sizes, placement or gating (note concerns in "reply"). INFER the sizes: leave perTask, tasks, versions, alternatives, profiles out unless given — the engine picks them (MaxDiff 3–5 per task, ~3 shows per item, 10 versions; CBC 3 alternatives, 12+ tasks, 10 versions, efficient; CVA 1.5 × parameters profiles, 4 versions) and reports them as assumptions with the measured balance or D-efficiency. Never write diagnostics yourself.
+ASK, don't invent: reply "kind":"clarify" with "questions" and NO actions when an essential is missing — the MaxDiff ITEMS (unless named, or a survey question lists them → "itemsFrom"), the conjoint ATTRIBUTES AND THEIR LEVELS ("four attributes with three levels" is a size, not the attributes), the menu items and prices. Essentials given → BUILD now; never ask first about category, wording, sizes, placement or gating (decide; list in "assumptions"). INFER the sizes: leave perTask, tasks, versions, alternatives, profiles out unless given — the engine picks them (MaxDiff 3–5 per task, ~3 shows per item, 10 versions; CBC 3 alternatives, 12+ tasks, 10 versions, efficient; CVA 1.5 × parameters profiles, 4 versions) and reports them as assumptions with the measured balance or D-efficiency. Never write diagnostics yourself.
 THE ENGINE generates the design once (seeded), refuses an infeasible one with the reason and the fix (pass it on), attaches it, puts the question on its own page (required, order randomized per respondent) and describes it. Display logic: set_display_logic on the ref. create_question with a MaxDiff/conjoint type is refused. The outline's "Designs:" line shows each design's settings — CHANGE one with update_*, a patch of the named fields only (text, logic, the rest stay); never recreate it.
 {"op":"create_maxdiff","ref":"FEAT_MD","text":"Which of these is the MOST important to you, and which the LEAST?","items":["Battery life","Camera","Price","Screen size","Storage","Durability","Weight","Warranty"]}   // or "itemsFrom":"Q5"; perTask, tasks, appearances, versions, responseMode best_worst|best_only, anchored, prohibitedPairs [["A","B"]], bestLabel, worstLabel, instructions, practice, optOuts ["none","no_preference","cannot_choose"] (per-set opt-outs, never items), block, after
 {"op":"update_maxdiff","target":"FEAT_MD","perTask":5}   // or addItems, removeItems, addProhibitedPairs [["Camera","Price"]], removeProhibitedPairs, tasks, versions, labels, text, required
@@ -56,3 +56,27 @@ export function methodsIntent(text: string): boolean {
   if (/\bvan[\s-]?westendorp\b|\bprice sensitivity (?:meter|study|test)\b|\bpsm\b|\bnewton[\s–-]+miller|\bnms\b|\bgabor[\s–-]+granger\b|\bprice ladder\b|\bsequential[\s-]+monadic\b|\biat\b|\bimplicit association\b|\bshelf (?:test|simulation)\b|\bvirtual shelf\b|\bbrand funnel\b|\bad (?:test|testing|pre-?test)\b|\bcopy test\w*\b|\bcommercial test\b/i.test(t)) return true;
   return false;
 }
+
+/**
+ * THE ESSENTIALS ARE IN THE MESSAGE (live eval 2026-11-22). Told "essentials given → build now", the model still asked
+ * for the product category and the placement of a conjoint whose three attributes and their levels were named. This
+ * reads the researcher's words for the essentials the guide names, so the turn can ask the model once more to build:
+ *   conjoint  two or more attributes written with their levels — "brand (Alpha, Beta, Gamma)"
+ *   maxdiff   a MaxDiff with four or more items listed
+ * Returns what was found in words, or null.
+ */
+export function methodEssentialsGiven(message: string): string | null {
+  const m = String(message ?? "");
+  const groups = [...m.matchAll(/([\p{L}][\p{L}\p{N} &/-]{1,40}?)\s*\(([^()]{1,200})\)/gu)].filter((g) => g[2].split(/\s*(?:,|\/|;|\bor\b)\s*/).filter((x) => x.trim()).length >= 2);
+  if (/conjoint|\bcbc\b|\bcva\b|trade-?off|choice[- ]based|dual[- ]response/i.test(m) && groups.length >= 2) return `${groups.length} attributes with their levels (${groups.map((g) => g[1].trim().split(/\s+/).slice(-2).join(" ")).join(", ")})`;
+  if (/max-?diff|best[- ]worst/i.test(m)) {
+    const list = /(?:items?|of|:)\s*([^.\n]+)/i.exec(m)?.[1] ?? "";
+    const items = list.split(/\s*,\s*|\s+and\s+/).filter((x) => x.trim().length > 1);
+    if (items.length >= 4) return `${items.length} items`;
+  }
+  return null;
+}
+
+/** the one extra instruction when the model asked although the essentials were given */
+export const BUILD_NOW_INSTRUCTION = (found: string) =>
+  `The researcher's message already gives the essentials (${found}). Do not ask: BUILD the exercise now with "kind":"proposal". Anything else (the product category, wording, placement, sizes, gating) you decide sensibly and list in "assumptions".`;

@@ -50,7 +50,7 @@ import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
 import { copilotOutline } from "@/lib/copilot/outline";
 import { listFillIntent } from "@/lib/copilot/listFillGuide";
-import { methodsIntent } from "@/lib/copilot/methodsGuide";
+import { BUILD_NOW_INSTRUCTION, methodEssentialsGiven, methodsIntent } from "@/lib/copilot/methodsGuide";
 /* create_maxdiff / create_conjoint generate their designs through the schema's registry: the real generators, here as in the Studio's panel and the browser's replay */
 import { registerBuiltinDesignGenerators } from "@rescript/designs";
 
@@ -872,6 +872,26 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       ? describeFailure("unusable", "The FAKE provider cannot reason about surveys; configure a real model to use the copilot.")
       : describeFailure("unusable");
     return NextResponse.json({ ok: true, reply: null, message: failure.message, failure, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
+  }
+  /*
+   * A QUESTION BACK WHEN NOTHING WAS MISSING (live eval 2026-11-22): a conjoint whose attributes and levels were all in
+   * the message came back as "what product category is this for?". When the researcher's words carry the method's
+   * essentials, the model is asked once more to build, with its non-essential questions turned into assumptions.
+   */
+  const essentials = methodsTurn && reply.kind === "clarify" && !reply.actions.length && !cached && !fake ? methodEssentialsGiven(message) : null;
+  if (essentials && deadline - Date.now() > MIN_ITEM_MS) {
+    const again = `${prompt}\n\n${BUILD_NOW_INSTRUCTION(essentials)}`;
+    console.warn("[rescript:copilot]", JSON.stringify({ event: "asked although the essentials were given; asking once more to build", surveyId, essentials }));
+    try {
+      const m2 = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + again, maxTokens: budget.expectedTokens, operation: `copilot_${mode}_build_now` }, again,
+        () => model(() => completeJson(...copilotCall(again, stableExtra), maxTokens, { timeoutMs: budget.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations, operation: `copilot_${mode}_build_now`, onEvent })));
+      if (m2.ok) {
+        charge += m2.event?.customerCharge ?? 0;
+        const c2 = coerceCopilotReply(m2.value);
+        const r2 = guard(c2 && themeImageUrl ? { ...c2, actions: withThemeImage(c2.actions, themeImageUrl) } : c2);
+        if (r2 && r2.actions.length) { reply = r2; raw = m2.value; CACHE.set(key, { at: Date.now(), value: m2.value }); }
+      }
+    } catch (e) { console.warn("[rescript:copilot] build-now ask failed", JSON.stringify({ error: (e as Error).message })); }
   }
   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
   let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly, uxOnlyInferred, uxBehaviour }) : null;

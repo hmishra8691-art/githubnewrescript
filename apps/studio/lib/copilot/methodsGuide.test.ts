@@ -201,3 +201,13 @@ test("phase 2: partial-profile CBC and create_experiment are taught, applied wit
   const acbc = applySurveyActions(empty(), coerceSurveyActions([{ op: "create_conjoint", method: "acbc", attributesPerTask: 3, attributes: [{ name: "A", levels: ["1", "2"] }, { name: "B", levels: ["1", "2"] }] }]).actions);
   assert.match(acbc.errors.join(" "), /does not apply to ACBC/);
 });
+
+test("the essentials in the researcher's words: conjoint attributes with levels, MaxDiff items; sizes alone are not", async () => {
+  const { methodEssentialsGiven } = await import("./methodsGuide.ts");
+  assert.match(methodEssentialsGiven("Add a choice-based conjoint with brand (Alpha, Beta, Gamma), storage (64 GB, 128 GB, 256 GB) and price (₹14,999, ₹19,999, ₹24,999)")!, /^3 attributes with their levels/);
+  assert.equal(methodEssentialsGiven("make a rating-based conjoint with 4 attributes"), null);
+  assert.equal(methodEssentialsGiven("make a conjoint with brand (Alpha, Beta)"), null, "one attribute is not a design");
+  assert.match(methodEssentialsGiven("Add a MaxDiff of price, speed, coverage, support and contract length")!, /^5 items/);
+  assert.equal(methodEssentialsGiven("Add a MaxDiff about features"), null);
+  assert.equal(methodEssentialsGiven("Add a question about brand (Alpha, Beta) and price (low, high)"), null, "not a method request");
+});

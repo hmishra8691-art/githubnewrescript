@@ -235,7 +235,14 @@ function findQuestion(sec: QualGuideSection, ref: string): QualGuideQuestion | u
 }
 const allQuestionIds = (study: QualStudy) => study.sections.flatMap((s) => s.questions.map((q) => q.id));
 function newQuestion(study: QualStudy, sec: QualGuideSection, q: QualQuestionInput): QualGuideQuestion {
-  const id = nextId(allQuestionIds(study), `${sec.id}q`);
+  /*
+   * A NEW question keeps the id the model gave it ("TRIGGER_INCIDENT") when it is a plain identifier not already used:
+   * the same reply then names it in configure_ai_interviews' probing (live eval 2026-11-22 — the AI-interview set-up was
+   * refused because the guide had renamed its questions s2q1…). Otherwise the next free s<n>q<m>.
+   */
+  const ids = allQuestionIds(study);
+  const given = q.target && /^[A-Za-z][A-Za-z0-9_]{1,39}$/.test(q.target) && !ids.includes(q.target) ? q.target : null;
+  const id = given ?? nextId(ids, `${sec.id}q`);
   return { id, text: q.text!, probes: [...(q.probes ?? []), ...(q.addProbes ?? [])], conditionalProbes: [...(q.conditionalProbes ?? []), ...(q.addConditionalProbes ?? [])], ...(q.moderatorNote ? { moderatorNote: q.moderatorNote } : {}), ...(typeof q.minutes === "number" ? { minutes: q.minutes } : {}) };
 }
 function newSection(study: QualStudy, s: QualSectionInput): QualGuideSection {

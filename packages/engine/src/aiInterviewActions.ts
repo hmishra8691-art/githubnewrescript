@@ -170,7 +170,19 @@ export function coerceAiInterviewAction(op: string, o: Record<string, unknown>):
   for (const k of ["incentive", "thankYouMessage"] as const) { if (o[k] === null) a[k] = null; else { const v = str(o[k], 600); if (v) a[k] = v; } }
   if (o.redirectUrl === null) a.redirectUrl = null; else if (o.redirectUrl !== undefined) { const u = str(o.redirectUrl, 2000); if (!u || !safeHttpsUrl(u)) return `${op}: redirectUrl must be an https address (only {{pid}} may be piped)`; if (/\{\{(?!\s*pid\s*\}\})|\$\{|\[\[/.test(u)) return `${op}: redirectUrl may pipe only {{pid}}`; a.redirectUrl = u; }
   const p = obj(o.persona);
-  if (p) { const tone = str(p.tone, 20)?.toLowerCase(); if (tone && !["warm", "neutral", "professional", "casual"].includes(tone)) return `${op}: persona.tone is warm, neutral, professional or casual`; a.persona = { ...(str(p.name, 40) ? { name: str(p.name, 40) } : {}), ...(tone ? { tone: tone as AiModeration["persona"]["tone"] } : {}), ...(p.style === null ? { style: null } : str(p.style, 200) ? { style: str(p.style, 200) } : {}) }; }
+  if (p) {
+    /*
+     * A tone written as a description ("warm, curious, unhurried, non-judgmental" — live eval 2026-11-22) takes the
+     * first of the four tones it names; the full description becomes the style when none was given. A tone naming none
+     * of them is still refused.
+     */
+    const TONES = ["warm", "neutral", "professional", "casual"] as const;
+    const rawTone = typeof p.tone === "string" ? p.tone.trim().toLowerCase() : "";
+    const named = rawTone ? TONES.map((t) => ({ t, at: rawTone.search(new RegExp(`\\b${t}\\b`)) })).filter((x) => x.at >= 0).sort((x, y) => x.at - y.at)[0]?.t : undefined;
+    if (rawTone && !named) return `${op}: persona.tone is warm, neutral, professional or casual`;
+    const described = rawTone && rawTone !== named ? str(p.tone, 200) : undefined;
+    a.persona = { ...(str(p.name, 40) ? { name: str(p.name, 40) } : {}), ...(named ? { tone: named as AiModeration["persona"]["tone"] } : {}), ...(p.style === null ? { style: null } : str(p.style, 200) ? { style: str(p.style, 200) } : described ? { style: described } : {}) };
+  }
   for (const k of ["stimuli", "addStimuli"] as const) { const s = stimuliIn(o[k]); if (s && "error" in s) return `${op}: ${s.error}`; if (s) a[k] = s; }
   if (o.costCapUsd !== undefined) { const n = num(o.costCapUsd); if (n === undefined || n <= 0 || n > 50) return `${op}: costCapUsd is a dollar amount above 0 and at most 50 per interview`; a.costCapUsd = n; }
   if (o.studyBudgetUsd === null) a.studyBudgetUsd = null; else if (o.studyBudgetUsd !== undefined) { const n = num(o.studyBudgetUsd); if (n === undefined || n <= 0) return `${op}: studyBudgetUsd is a dollar amount`; a.studyBudgetUsd = n; }

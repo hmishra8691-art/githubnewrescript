@@ -1093,15 +1093,62 @@ export function parseJsonReply(content: string): { label?: unknown; question?: u
   if (fenced) { try { return JSON.parse(fenced[1].trim()); } catch { /* fall through */ } }
   const start = text.indexOf("{");
   if (start < 0) return null;
+  const scanned = scanObject(text, start);
+  if (scanned !== undefined) return scanned;
+  /*
+   * STRAY QUOTES (live eval 2026-11-22): a model quoting the survey inside its own sentence writes
+   * `"reply": "I'll add **CITY** ("Which city do you live in?") after Q6"` — the inner quotes unescaped, so the
+   * object is not JSON. Five of 54 live cases failed on exactly that, twice each (the second ask repeats it). The
+   * object between the first "{" and the last "}" is read once more with those quotes escaped (`repairStrayQuotes`).
+   * Nothing is guessed: the repair only escapes a quote that cannot be the end of a string, and the result must still
+   * parse as JSON.
+   */
+  const end = text.lastIndexOf("}");
+  if (end > start) { try { return JSON.parse(repairStrayQuotes((fenced ? fenced[1].trim() : text.slice(start, end + 1)))); } catch { /* not repairable */ } }
+  if (fenced) { try { return JSON.parse(repairStrayQuotes(text.slice(start, end + 1))); } catch { /* not repairable */ } }
+  return null;
+}
+
+/** the first balanced object from `start`: its value, null when it is balanced but not JSON, undefined when unbalanced */
+function scanObject(text: string, start: number): unknown | null | undefined {
   let depth = 0, inStr = false, esc = false;
   for (let i = start; i < text.length; i++) {
     const ch = text[i];
     if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
     if (ch === '"') inStr = true;
     else if (ch === "{") depth++;
-    else if (ch === "}") { depth--; if (depth === 0) { try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; } } }
+    else if (ch === "}") { depth--; if (depth === 0) { try { return JSON.parse(text.slice(start, i + 1)); } catch { return undefined; } } }
   }
-  return null;
+  return undefined;
+}
+
+/**
+ * JSON with unescaped double quotes inside its strings, made parseable: inside a string, a `"` ends the string only
+ * when what follows can follow a string in JSON — `:` `}` `]` the end of the text, or a `,` followed by a value or a
+ * key (`"` `{` `[` a number, true/false/null) or by `}` `]`. Any other `"` is escaped. Raw line breaks and tabs inside
+ * strings are escaped too. Text that was valid JSON comes back unchanged.
+ */
+export function repairStrayQuotes(src: string): string {
+  let out = "", inStr = false;
+  const nextNonSpace = (i: number) => { let j = i; while (j < src.length && /\s/.test(src[j])) j++; return j; };
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (!inStr) { out += ch; if (ch === '"') inStr = true; continue; }
+    if (ch === "\\") { out += ch + (src[i + 1] ?? ""); i++; continue; }
+    if (ch === "\n") { out += "\\n"; continue; }
+    if (ch === "\r") { out += "\\r"; continue; }
+    if (ch === "\t") { out += "\\t"; continue; }
+    if (ch !== '"') { out += ch; continue; }
+    const j = nextNonSpace(i + 1);
+    const c = src[j];
+    let closes = j >= src.length || c === ":" || c === "}" || c === "]";
+    if (c === ",") {
+      const k = nextNonSpace(j + 1), d = src[k];
+      closes = k >= src.length || d === '"' || d === "{" || d === "[" || d === "}" || d === "]" || /[-\d]/.test(d ?? "") || /^(true|false|null)\b/.test(src.slice(k, k + 6));
+    }
+    if (closes) { out += ch; inStr = false; } else out += '\\"';
+  }
+  return out;
 }
 
 /* ------------------------------------------------------- the http client */

@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { INJECTION_NOTICE, INJECTION_WARNING, PROVENANCE_REASON, UNTRUSTED_DATA_RULE, fenceUntrusted, provenanceGate, scanUntrusted, withoutInstructionLines, type InjectionSignal, type ProvenanceExclusion, type SurveyAction } from "@rescript/engine";
+import { INJECTION_NOTICE, INJECTION_WARNING, PROVENANCE_REASON, UNTRUSTED_DATA_RULE, fenceUntrusted, provenanceGate, scanUntrusted, scrubEchoedInstructions, withoutInstructionLines, type InjectionSignal, type ProvenanceExclusion, type SurveyAction } from "@rescript/engine";
 
 /**
  * PROMPT INJECTION IN A COPILOT TURN (audit 2026-10-18) — what the turn route asks, in one place:
@@ -105,8 +105,22 @@ export function gateReply<R extends GateableReply>(reply: R, def: SurveyDefiniti
       ? { ...reply, actions: g.kept, rejected, reply: `${reply.reply} ${said}`.slice(0, 4000) }
       : { ...reply, actions: [], rejected, kind: reply.findings.length ? "review" : "answer", reply: said };
   }
+  /* instructions the model quoted back are taken out of everything the researcher reads (the rule asks it not to; it still does) */
   if (prov.flagged && out.memory && scanUntrusted(out.memory).flagged) { const { memory: _drop, ...rest } = out; out = rest as R; }
+  if (prov.flagged) out = scrubReply(out);
   return { reply: out, excluded: g.excluded };
+}
+
+function scrubReply<R extends GateableReply>(r: R): R {
+  const x = r as R & { assumptions?: unknown; findings: unknown[] };
+  const str = (v: unknown) => (typeof v === "string" ? scrubEchoedInstructions(v) : v);
+  return {
+    ...x,
+    reply: scrubEchoedInstructions(x.reply),
+    findings: x.findings.map((f) => (f && typeof f === "object" ? { ...(f as Record<string, unknown>), message: str((f as Record<string, unknown>).message), suggestion: str((f as Record<string, unknown>).suggestion) } : f)),
+    ...(Array.isArray(x.assumptions) ? { assumptions: (x.assumptions as unknown[]).map(str) } : {}),
+    ...(typeof x.memory === "string" ? { memory: scrubEchoedInstructions(x.memory) } : {}),
+  };
 }
 
 /** the sentence the turn shows: the scan's notice, or what the gate left out when the scan saw nothing */

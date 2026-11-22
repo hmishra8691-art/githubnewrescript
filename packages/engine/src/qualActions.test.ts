@@ -157,3 +157,15 @@ test("the review lists a guide change item by item (Qualitative guide), and the 
   assert.deepEqual(diffSurveys(before, after.def).qualGuide, { added: [], removed: ["s4"], changed: ["s3"] });
   assert.equal(changeItems(before, before).items.length, 0, "no change, no item");
 });
+
+test("a new guide question keeps the id the model gave it, so the same reply can name it in the AI-interview probing", () => {
+  const guide = { op: "create_qual_guide", kind: "interview", title: "Broadband switching", sections: [
+    { title: "Opening", kind: "opening", questions: [{ text: "Tell me about your provider." }] },
+    { title: "Triggers", questions: [{ id: "TRIGGER_INCIDENT", text: "Think about a time you thought of switching." }, { id: "TRIGGER_INCIDENT", text: "A duplicate id falls back." }, { id: "bad id!", text: "Not an identifier." }] },
+  ] };
+  const ai = { op: "configure_ai_interviews", targetCompletes: 50, probing: [{ question: "TRIGGER_INCIDENT", depth: "deep", maxFollowUps: 4 }] };
+  const r = run(empty(), [guide, ai] as never);
+  assert.deepEqual(r.errors, []);
+  const ids = r.def.qualStudy!.sections.flatMap((s) => s.questions.map((q) => q.id));
+  assert.deepEqual(ids, ["s1q1", "TRIGGER_INCIDENT", "s2q1", "s2q2"]);
+});

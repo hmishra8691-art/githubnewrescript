@@ -132,3 +132,12 @@ test("2026-11-08: the interview format, follow-up cap, exploring and turn-taking
   assert.deepEqual(chat.def.qualStudy!.aiModeration!.modes, ["text"]);
   assert.match(coerceAiInterviewAction("configure_ai_interviews", { format: "carrier pigeon" }) as string, /format is voice, chat or hybrid/);
 });
+
+test("a persona tone written as a description takes the tone it names and keeps the description as the style", async () => {
+  const r = coerceSurveyActions([{ op: "configure_ai_interviews", persona: { name: "Riya", tone: "warm, curious, unhurried, non-judgmental" }, targetCompletes: 50 }]);
+  assert.equal(r.rejected.length, 0, JSON.stringify(r.rejected));
+  const p = (r.actions[0] as unknown as { persona: { tone: string; style: string } }).persona;
+  assert.equal(p.tone, "warm");
+  assert.equal(p.style, "warm, curious, unhurried, non-judgmental");
+  assert.match(coerceSurveyActions([{ op: "configure_ai_interviews", persona: { tone: "sarcastic" } }]).rejected[0].reason, /persona\.tone is warm, neutral, professional or casual/);
+});
