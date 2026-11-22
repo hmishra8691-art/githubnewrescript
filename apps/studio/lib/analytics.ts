@@ -5,7 +5,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
-  buildDataset, runAnalysis, variableMetadata, recommendCharts, adviseChart, DEFAULT_THEME,
+  buildDataset, runAnalysis, variableMetadata, recommendCharts, adviseChart, DEFAULT_THEME, ANALYTICS_MAX_ROWS,
   unionVariableMetadata, definitionResolver, reviewAgainstSaved, surveyKnownNames, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf, inputHashOf, runScopeOf,
   type ChartAdvice, type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
@@ -42,7 +42,7 @@ import { insertRun, pickPrevious, runFromRow, type RunInsertDb, type StoredRun a
  */
 const COLUMNS = "id, version_id, session_id, respondent_code, respondent_id, status, is_test, answers, calculated, embedded, flags, seed, started_at, completed_at, quality, review_status, sample_source";
 const CHUNK = 1000;
-const MAX_ROWS = 250_000;
+const MAX_ROWS = ANALYTICS_MAX_ROWS;
 
 interface CacheEntry { at: number; stamp: string; rows: AnalyticsRow[]; bytes: number }
 const rowCache = new Map<string, CacheEntry>();

@@ -297,6 +297,9 @@ function metricLabel(m: string, target: string): string { return m === "nps" ? "
 
 /* ============================================================ TURF */
 
+/** TURF searches every combination up to this many items; above it, greedy forward selection — published in limits.ts */
+export const TURF_EXHAUSTIVE_ITEMS = 12;
+
 export function turf(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
   const items = expandBattery(ds, def.variables);
   const maxSize = Math.min(opt(def, "maxSize", 5) as number, items.length);
@@ -333,7 +336,7 @@ export function turf(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
   let prev = 0;
   for (let k = 1; k <= maxSize; k++) {
     let cand: number[] | null = null, candReach = -1, candFreq = 0;
-    if (items.length <= 12) {
+    if (items.length <= TURF_EXHAUSTIVE_ITEMS) {
       for (const combo of combinations(items.length, k)) { const r = reachOf(combo); if (r.reach > candReach) { candReach = r.reach; cand = combo; candFreq = r.frequency; } }
     } else {
       for (let j = 0; j < items.length; j++) { if (chosen.includes(j)) continue; const r = reachOf([...chosen, j]); if (r.reach > candReach) { candReach = r.reach; cand = [...chosen, j]; candFreq = r.frequency; } }

@@ -16,6 +16,9 @@ import { bootstrapIndirect } from "../stats/bootstrap.js";
 import { mcdonaldOmega } from "../models/omega.js";
 import { REPORT_LOCALE } from "../format.js";
 
+/** hierarchical clustering refuses above this many complete cases (it is O(n²) memory and time) — published in limits.ts */
+export const HIERARCHICAL_MAX_ROWS = 1_500;
+
 const sigWord = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested" : p < alpha ? "is statistically significant" : "is not statistically significant");
 /** "…differs significantly from X" / "…does not differ significantly from X" / "…could not be tested against X" — a sentence, not a suffix. */
 const differsFrom = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested against" : p < alpha ? "differs significantly from" : "does not differ significantly from");
@@ -489,7 +492,7 @@ export function cluster(def: AnalysisDefinition, ds: Dataset, totalCases: number
    * explanation. Saying so, and naming the method that does scale, is a better
    * answer than a timeout.
    */
-  const HIERARCHICAL_MAX_ROWS = 1_500;
+
   if (method === "hierarchical" && rows.length > HIERARCHICAL_MAX_ROWS) {
     return makeResult(def, ds, { tables: [], chart: {},
       warnings: [`Hierarchical clustering is limited to ${HIERARCHICAL_MAX_ROWS.toLocaleString(REPORT_LOCALE)} complete cases and this analysis has ${rows.length.toLocaleString(REPORT_LOCALE)}. Use k-means, which handles this size, or filter to a smaller base.`],
