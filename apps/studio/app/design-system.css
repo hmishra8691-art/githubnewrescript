@@ -2823,3 +2823,10 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
    in the narrow properties panel "Spoken instruction" shrank to 1 px beside a 260 px field instead of wrapping */
 .row > label.f.grow { flex: 1 1 180px; min-width: 0; }
 .row > label.f[style*="width"] { max-width: 100%; }
+
+/* I6 — side-by-side import review: the part badges by level */
+.iqr-side td { vertical-align: top; padding: 6px 8px; border-top: 1px solid var(--c-border); }
+.iqi-badge.lv-same { border-color: #2f9e44; color: #2f9e44; }
+.iqi-badge.lv-converted { border-color: #1971c2; color: #1971c2; }
+.iqi-badge.lv-check { border-color: #e8590c; color: #e8590c; }
+.iqi-badge.lv-lost { border-color: #c92a2a; color: #c92a2a; }

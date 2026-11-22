@@ -33,6 +33,47 @@ export interface ReviewExtras {
   blocks?: { id: string; title: string; questions: number }[];
   graph?: { edges: Edge[]; findings: { kind: string; severity: string; location: string; message: string }[] };
   mapping?: { summary: Record<string, number> };
+  /** I6: each source question beside what it became, a confidence per part (packages/import sideBySide.ts) */
+  sideBySide?: SidePair[];
+}
+type Level = "same" | "converted" | "check" | "lost";
+interface SidePair { sourceId: string; questionId: string | null; source: { variable: string; type: string; text: string; options: string[]; rows: string[]; logic: string | null }; result: { code: string; type: string; text: string; options: string[]; rows: string[]; logic: boolean } | null; parts: { part: string; level: Level; detail: string }[]; level: Level; unresolved: string[] }
+const LEVEL_WORDS: Record<Level, string> = { same: "as written", converted: "converted", check: "check", lost: "lost" };
+const RANK: Record<Level, number> = { same: 3, converted: 2, check: 1, lost: 0 };
+/** the same rule as bulkAccept in packages/import: never a lost part or an unresolved reference */
+const acceptable = (p: SidePair) => !p.unresolved.length && !p.parts.some((x) => x.level === "lost");
+
+function SideBySide({ pairs, onOpen }: { pairs: SidePair[]; onOpen(source: string): void }) {
+  const [accepted, setAccepted] = React.useState<Set<string>>(new Set());
+  const [show, setShow] = React.useState<Level | "all">("all");
+  const acceptWhere = (min: Level) => setAccepted((a) => new Set([...a, ...pairs.filter((p) => RANK[p.level] >= RANK[min] && acceptable(p)).map((p) => p.sourceId)]));
+  const counts = (["same", "converted", "check", "lost"] as Level[]).map((l) => [l, pairs.filter((p) => p.level === l).length] as const);
+  const left = pairs.filter((p) => !accepted.has(p.sourceId)).length;
+  const shown = pairs.filter((p) => show === "all" || p.level === show);
+  return (
+    <div data-testid="iqr-side">
+      <p className="iqr-cats">
+        {counts.map(([l, n]) => <button key={l} type="button" className={`iq-btn${show === l ? " on" : ""}`} onClick={() => setShow(show === l ? "all" : l)} data-testid={`iqr-side-filter-${l}`}>{LEVEL_WORDS[l]} <b>{n}</b></button>)}
+        <span className="iq-spacer" />
+        <button type="button" className="iq-btn" onClick={() => acceptWhere("same")} data-testid="iqr-side-accept-same">Accept all as written</button>
+        <button type="button" className="iq-btn" onClick={() => acceptWhere("converted")} data-testid="iqr-side-accept-converted">Accept converted too</button>
+      </p>
+      <p className="iqi-dim" data-testid="iqr-side-left">{accepted.size} accepted · {left} still to review. A question with a lost part or an unresolved reference cannot be accepted in bulk; open it and fix it. (Acceptance is for this review; it is not stored with the import yet.)</p>
+      <table className="iqr-table iqr-side">
+        <thead><tr><th scope="col">Source</th><th scope="col">Rescript</th><th scope="col">Parts</th><th scope="col">Accept</th></tr></thead>
+        <tbody>
+          {shown.slice(0, 400).map((p) => (
+            <tr key={p.sourceId} data-testid="iqr-side-row">
+              <td><button type="button" className="iqr-link" onClick={() => onOpen(p.sourceId)}><b>{p.source.variable}</b></button> <span className="iqi-dim">{p.source.type}</span><div>{p.source.text}</div>{p.source.options.length ? <div className="iqi-dim">{p.source.options.join(" · ")}</div> : null}{p.source.logic ? <div className="iqi-dim">shown when {p.source.logic}</div> : null}</td>
+              <td>{p.result ? <><b>{p.result.code}</b> <span className="iqi-dim">{p.result.type}</span><div>{p.result.text}</div>{p.result.options.length ? <div className="iqi-dim">{p.result.options.join(" · ")}</div> : null}</> : <span className="iqi-dim">not created</span>}</td>
+              <td>{p.parts.map((x) => <div key={x.part}><span className={`iqi-badge lv-${x.level}`}>{x.part} · {LEVEL_WORDS[x.level]}</span> <span className="iqi-dim">{x.detail}</span></div>)}{p.unresolved.map((u, i) => <div key={i} className="iqi-dim">unresolved: {u}</div>)}</td>
+              <td><input type="checkbox" aria-label={`Accept ${p.source.variable}`} disabled={!acceptable(p)} checked={accepted.has(p.sourceId)} onChange={(e) => setAccepted((a) => { const n = new Set(a); if (e.target.checked) n.add(p.sourceId); else n.delete(p.sourceId); return n; })} data-testid="iqr-side-accept" /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export function ImportReview({ job, onClose, onRerun, renderQuestions }: {
@@ -42,7 +83,7 @@ export function ImportReview({ job, onClose, onRerun, renderQuestions }: {
   renderQuestions(): React.ReactNode;
 }) {
   const r = job.report as (NonNullable<ImportJob["report"]> & ReviewExtras) | undefined;
-  const [tab, setTab] = React.useState<"summary" | "compat" | "recon" | "flow" | "questions" | "blocks">("summary");
+  const [tab, setTab] = React.useState<"summary" | "compat" | "side" | "recon" | "flow" | "questions" | "blocks">("summary");
   const [inspect, setInspect] = React.useState<{ source: string; data?: { kind: string; source: unknown; issues: { message: string }[] } | { error: string } } | null>(null);
   const [chosen, setChosen] = React.useState<Set<string> | null>(job.blocks ? new Set(job.blocks) : null);
   const dialog = React.useRef<HTMLDivElement>(null);
@@ -84,7 +125,7 @@ export function ImportReview({ job, onClose, onRerun, renderQuestions }: {
           <button type="button" className="iq-btn" onClick={onClose} data-testid="iqr-close">Close</button>
         </header>
         <nav className="iqr-tabs" role="tablist">
-          {([["summary", "Summary"], ["compat", "Compatibility"], ["recon", `Reconstruction${recon ? ` (${recon.items.length})` : ""}`], ["flow", "Flow & logic"], ["questions", `Questions (${clar.length})`], ["blocks", `Blocks (${blocks.length})`]] as const).map(([k, l]) => (
+          {([["summary", "Summary"], ["compat", "Compatibility"], ["side", `Side by side${r.sideBySide ? ` (${r.sideBySide.length})` : ""}`], ["recon", `Reconstruction${recon ? ` (${recon.items.length})` : ""}`], ["flow", "Flow & logic"], ["questions", `Questions (${clar.length})`], ["blocks", `Blocks (${blocks.length})`]] as const).map(([k, l]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} className={`iq-btn${tab === k ? " on" : ""}`} onClick={() => setTab(k)} data-testid={`iqr-tab-${k}`}>{l}</button>
           ))}
         </nav>
@@ -178,6 +219,7 @@ export function ImportReview({ job, onClose, onRerun, renderQuestions }: {
               </ol>
             )}
             {tab === "questions" && <div data-testid="iqr-questions">{clar.length ? renderQuestions() : <p className="iqi-dim">No open questions — the source decided everything it could be read for.</p>}</div>}
+            {tab === "side" && (r.sideBySide?.length ? <SideBySide pairs={r.sideBySide} onOpen={(src) => void open(src)} /> : <p className="iqi-dim" data-testid="iqr-side">No questions to compare.</p>)}
             {tab === "blocks" && (
               <div data-testid="iqr-blocks">
                 <p className="iqi-dim">Import only some blocks. What the chosen blocks refer to outside the selection is reported after the re-run, never rewritten.</p>

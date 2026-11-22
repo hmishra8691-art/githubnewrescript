@@ -51,6 +51,7 @@ export async function analyzeImport(bytes: Uint8Array, fileName: string, opts: M
 }
 export * from "./research.js";
 export * from "./dataMigration.js";
+export * from "./sideBySide.js";
 /* Intelligent Mode upgrade (2026-11-13): the orchestrated import and its engines */
 export * from "./intelligence/methodology.js";
 export * from "./intelligence/understand.js";

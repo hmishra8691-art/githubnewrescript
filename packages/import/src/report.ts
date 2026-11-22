@@ -2,6 +2,7 @@ import { buildImportGraph, type ImportGraph } from "./graph.js";
 import type { Reconstruction } from "./reconstruct.js";
 import { clarifications, type Clarification } from "./clarify.js";
 import { compatibility, outline, blockList, type Compatibility, type OutlineNode } from "./review.js";
+import { sideBySide, type SidePair } from "./sideBySide.js";
 import { classifyMapping, mappingSummary, type MappingDecision, type MappingClass } from "./mappingDecision.js";
 import type { RequiredFile, CanonicalSurvey, CanonicalStats, Issue, InventoryFeature, InventoryItem, CanonicalAsset } from "./canonical.js";
 import { canonicalStats } from "./canonical.js";
@@ -108,6 +109,8 @@ export interface MigrationReport {
   clarifications: Clarification[];
   /** I7: every element in one of six categories (review.ts) */
   compatibility: Compatibility;
+  /** I6: each source question beside the question it became, with a confidence per part */
+  sideBySide: SidePair[];
   /** I7: the source flow in order, conditions in words */
   outline: OutlineNode[];
   /** I7: the blocks a person can choose to import */
@@ -182,6 +185,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid, mapping, graph, scripts: m.jsMigrations ?? [], clarifications: asks,
     requiredFiles: c.requiredFiles ?? [],
     outline: outline(c), blocks: blockList(c), ...(m.reconstruction ? { reconstruction: m.reconstruction } : {}),
+    sideBySide: sideBySide(c, m, mapping.decisions),
   } as Omit<MigrationReport, "compatibility">;
   return { ...out, compatibility: compatibility(out as MigrationReport, m.inventory) };
 }
