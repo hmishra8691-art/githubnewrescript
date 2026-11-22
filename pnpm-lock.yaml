@@ -359,6 +359,34 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
 
+  packages/bench:
+    dependencies:
+      '@rescript/analytics':
+        specifier: workspace:*
+        version: link:../analytics
+      '@rescript/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@rescript/import':
+        specifier: workspace:*
+        version: link:../import
+      '@rescript/quality':
+        specifier: workspace:*
+        version: link:../quality
+      '@rescript/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@rescript/templates':
+        specifier: workspace:*
+        version: link:../templates
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
   packages/billing:
     dependencies:
       zod:
