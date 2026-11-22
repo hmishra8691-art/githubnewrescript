@@ -1,4 +1,4 @@
-import { infographicDashboard, isReportFormat, drillPlan, drillCondition, minBasesFor, protectSnapshot, type DrillVariants } from "@rescript/analytics";
+import { infographicDashboard, isReportFormat, drillPlan, drillCondition, minBasesFor, protectSnapshot, checkViewerRules, type DrillVariants, type ViewerRule } from "@rescript/analytics";
 import { shareView } from "@/lib/shareView";
 import { NextRequest, NextResponse } from "next/server";
 import { clientDb, platformDb, surveyDb, type Db } from "@/lib/db";
@@ -662,6 +662,34 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       console.error("[rescript:analytics] export failed", JSON.stringify({ ref, surveyId, reportId: body.reportId ?? null, analysisId: body.analysisId ?? null, format: body.format ?? "pptx", error: (e as Error)?.message ?? String(e), stack: (e as Error)?.stack?.split("\n").slice(0, 6).join(" | ") }));
       return bad(`The export could not be built. Nothing was downloaded. Try again, or export a single analysis; if it keeps failing quote reference ${ref} to support.`, 500);
     }
+  }
+
+  /*
+   * R3 — VIEWER RULES ON A SHARE LINK (migration 0109): which part of the data each signed-in viewer may see.
+   *   POST shares/<id>/viewer-rules { rules: ViewerRule[] | null }   null removes them (everyone sees everything frozen)
+   * Checked against the version the link shows, so a rule can only open an answer that was frozen.
+   */
+  if (head === "shares" && itemId && action === "viewer-rules") {
+    const ctx = await gate(req, surveyId, "analytics.publish"); if (isFailure(ctx)) return ctx.response;
+    if (!isUuid(itemId)) return bad("Unknown share.", 404);
+    const { data: sh } = await db.from("analytics_shares").select("id, report_id, report_version, revoked_at").eq("id", itemId).eq("survey_id", surveyId).maybeSingle();
+    if (!sh) return bad("Unknown share.", 404);
+    if (sh.revoked_at) return bad("This link has been revoked.", 409);
+    let rules: ViewerRule[] | null = null;
+    if (body.rules !== null) {
+      const { data: rep } = await db.from("analytics_reports").select("published_version").eq("id", sh.report_id).maybeSingle();
+      const version = sh.report_version ?? rep?.published_version;
+      const { data: v } = version ? await db.from("analytics_report_versions").select("definition").eq("report_id", sh.report_id).eq("version", version).maybeSingle() : { data: null };
+      if (!v) return bad("The report this link shows has no published version.", 409);
+      const checked = checkViewerRules(body.rules, v.definition as ReportDefinition);
+      if (checked.problems.length) return NextResponse.json({ error: `Not saved. ${checked.problems.join(" ")}`, problems: checked.problems }, { status: 400 });
+      if (!checked.rules.length) return bad("Give at least one rule, or send rules: null to remove them.");
+      rules = checked.rules;
+    }
+    const { error } = await db.from("analytics_shares").update({ viewer_rules: rules }).eq("id", itemId).eq("survey_id", surveyId);
+    if (error) return bad(/viewer_rules/.test(error.message) ? "Viewer rules need migration 0109, which has not been applied to this database." : error.message, /viewer_rules/.test(error.message) ? 503 : 500);
+    log(ctx, "analytics.share_viewer_rules", itemId, { rules: rules?.length ?? 0 });
+    return json({ ok: true, rules });
   }
 
   if (head === "reports" && itemId && action === "publish") {

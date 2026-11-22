@@ -19,6 +19,8 @@ interface Payload {
   /** §36 — allowed viewer filters and their frozen results (absent on versions published before 0014) */
   viewerFilters?: { id: string; name: string }[];
   filterResults?: Record<string, Record<string, AnalysisResult>> | null;
+  /** R3 — the segment this viewer is restricted to by the link's viewer rules */
+  scope?: string | null;
   /** R2 — the frozen drill-down, when the report has one */
   drill?: { label: string; values: { value: string | number; label: string }[]; results: Record<string, Record<string, AnalysisResult>> } | null;
 }
@@ -104,6 +106,7 @@ export default function SharePage({ params }: { params: { token: string } }) {
          */
         viewerFilters={data.viewerFilters ?? []} filterResults={data.filterResults ?? null} drill={data.drill ?? null} showPages
         toolbar={<>
+          {data.scope && <span className="chip" data-testid="ax-share-scope" title="This link shows you only this part of the data">Showing: {data.scope}</span>}
           {data.dataset?.responses != null && <span className="muted" style={{ fontSize: 13 }}>{data.dataset.responses} responses</span>}
           {data.permission === "download" && <><button className="btn small" disabled={busy} onClick={() => download("pptx")} data-testid="ax-share-ppt">Download PPT</button><button className="btn small" disabled={busy} onClick={() => download("xlsx")} data-testid="ax-share-xlsx">Download Excel</button></>}
           {/*

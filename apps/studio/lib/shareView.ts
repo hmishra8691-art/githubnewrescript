@@ -9,5 +9,6 @@ export function shareView(row: Record<string, unknown>, canManage: boolean): Rec
   const emails = Array.isArray(row.allowed_emails) ? (row.allowed_emails as unknown[]) : [];
   const ids = Array.isArray(row.allowed_user_ids) ? (row.allowed_user_ids as unknown[]) : [];
   const base = { ...row, password_hash: undefined, has_password: !!row.password_hash, can_manage: canManage, allowed_count: Math.max(emails.length, ids.length) };
-  return canManage ? base : { ...base, token: undefined, allowed_emails: undefined, allowed_user_ids: undefined };
+  /* R3: viewer rules name people, so only link managers see them */
+  return canManage ? base : { ...base, token: undefined, allowed_emails: undefined, allowed_user_ids: undefined, viewer_rules: undefined };
 }

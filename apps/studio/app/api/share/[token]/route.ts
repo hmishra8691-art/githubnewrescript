@@ -5,7 +5,7 @@ import { buildPptx, buildXlsx, buildStoryPptx, ExportUnsupportedError } from "@r
 import { composeReport, type StoryReport } from "@rescript/analytics/story";
 import { loadReportFonts } from "@rescript/reportvideo";
 import { join } from "node:path";
-import { DEFAULT_THEME, minBasesFor, protectSnapshot, type AnalysisResult, type DrillVariants, type ReportDefinition, type ReportTheme } from "@rescript/analytics";
+import { DEFAULT_THEME, minBasesFor, protectSnapshot, restrictToRule, ruleForViewer, type AnalysisResult, type DrillVariants, type ReportDefinition, type ReportTheme, type ViewerRule } from "@rescript/analytics";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 import { verifyPassword, hashPassword } from "@/lib/analytics";
 import { assertNotReadOnly, getMeter } from "@/lib/metering";
@@ -40,6 +40,19 @@ type Resolved = {
 
 const noStore = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" };
 const deny = (message: string, status: number, extra: Record<string, unknown> = {}) => NextResponse.json({ error: message, ...extra }, { status, headers: noStore });
+
+/*
+ * R3 — the share's viewer rules (migration 0109), or null when it has none or the column does not exist yet. A
+ * malformed list is treated as "no one is opened anything" rather than as no rules: failing open would show every
+ * segment to everyone.
+ */
+async function viewerRulesOf(db: Db, shareId: string): Promise<ViewerRule[] | null> {
+  const { data, error } = await db.from("analytics_shares").select("viewer_rules").eq("id", shareId).maybeSingle();
+  if (error) return null;
+  const raw = (data as { viewer_rules?: unknown } | null)?.viewer_rules;
+  if (raw == null) return null;
+  return Array.isArray(raw) ? (raw as ViewerRule[]) : [];
+}
 
 async function resolve(req: NextRequest, token: string, password: string | null) {
   if (!token || token.length < 16 || token.length > 128) return { denied: deny("This link is not valid.", 404) };
@@ -127,19 +140,33 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     if (v?.results && v.filters?.length) variants = { filters: v.filters, results: Object.fromEntries(Object.entries(v.results).map(([k, rs]) => [k, protectSnapshot(rs, bases.variants).results])) };
     if (v?.drill?.results) drill = { ...v.drill, results: Object.fromEntries(Object.entries(v.drill.results).map(([k, rs]) => [k, protectSnapshot(rs, bases.variants).results])) };
   }
+  /* R3 — a share with viewer rules sends each signed-in viewer only the part a rule opens to them */
+  let mainResults = bases.main && r.snapshot ? protectSnapshot(r.snapshot, bases.main).results : r.snapshot;
+  let scopeLabel: string | null = null;
+  const rules = await viewerRulesOf(db, r.share_id);
+  if (rules) {
+    const pick = ruleForViewer(rules, user?.email);
+    if ("denied" in pick) { if (user) await record("denied", user); return deny(pick.denied, user ? 403 : 401, { status: user ? "no_segment" : "sign_in", reportName: r.report_name }); }
+    const got = restrictToRule({ results: mainResults ?? {}, filters: variants?.filters ?? [], filterResults: variants?.results ?? null, drill }, pick.rule);
+    if ("missing" in got) return deny(got.missing, 409, { status: "segment_missing", reportName: r.report_name });
+    mainResults = got.view.results; variants = got.view.filterResults ? { filters: got.view.filters, results: got.view.filterResults } : null; drill = got.view.drill ? { ...drill!, ...got.view.drill } : null; scopeLabel = got.view.scopeLabel;
+  }
   // ONLY the snapshot leaves: no analysis ids that could be used elsewhere, no dataset spec beyond its summary
   const definition = r.definition!;
   return NextResponse.json({
     report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, story: (definition as { story?: unknown }).story ?? null, storyDoc: (definition as { storyDoc?: unknown }).storyDoc ?? null, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false, /* §41 — the scenery travels with the dashboard, or a shared one loses its banner */ hero: (definition as unknown as { hero?: unknown }).hero ?? null, bands: (definition as unknown as { bands?: unknown[] }).bands ?? null },
     theme: r.theme ?? DEFAULT_THEME,
-    results: bases.main && r.snapshot ? protectSnapshot(r.snapshot, bases.main).results : r.snapshot,
+    results: mainResults,
+    /* R3 — the segment this viewer is restricted to, when the link has viewer rules */
+    scope: scopeLabel,
     /* the filters this viewer may switch to, and the answer for each — no ids they could use elsewhere */
     viewerFilters: variants?.filters ?? [],
     filterResults: variants?.results ?? null,
     /* the drill-down: its label, the values and the answer for each — never the variable's other values */
     drill: drill ? { label: drill.label, values: drill.values, results: drill.results } : null,
     version: r.version, publishedAt: r.published_at, mode: "snapshot",
-    dataset: r.dataset ? { responses: (r.dataset as { responses?: number }).responses, surveyVersion: (r.dataset as { surveyVersion?: string }).surveyVersion, computedAt: (r.dataset as { computedAt?: string }).computedAt } : null,
+    /* a restricted viewer is not told the whole sample size */
+    dataset: r.dataset ? { responses: scopeLabel ? undefined : (r.dataset as { responses?: number }).responses, surveyVersion: (r.dataset as { surveyVersion?: string }).surveyVersion, computedAt: (r.dataset as { computedAt?: string }).computedAt } : null,
     permission: r.permission,
   }, { headers: noStore });
 }
@@ -160,7 +187,22 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   const format = body.format === "xlsx" ? "xlsx" : "pptx";
   /* R2 — the download carries the same protection as the page */
   const mainBase = minBasesFor(r.definition ?? {}).main;
-  const report = r.definition!, results = mainBase ? protectSnapshot(r.snapshot ?? {}, mainBase).results : r.snapshot ?? {}, theme = r.theme ?? DEFAULT_THEME;
+  let results = mainBase ? protectSnapshot(r.snapshot ?? {}, mainBase).results : r.snapshot ?? {};
+  /* R3 — a restricted viewer downloads only their own segment */
+  const rules = await viewerRulesOf(db, r.share_id);
+  if (rules) {
+    const pick = ruleForViewer(rules, user?.email);
+    if ("denied" in pick) return deny(pick.denied, user ? 403 : 401, { status: user ? "no_segment" : "sign_in" });
+    if (pick.rule.sees.kind !== "all") {
+      const vBase = minBasesFor(r.definition ?? {}).variants;
+      const got = await db.rpc("rescript_resolve_share_variants", { p_token: params.token });
+      const v = got.data as { results?: Record<string, Record<string, AnalysisResult>>; drill?: DrillVariants } | null;
+      const seg = pick.rule.sees.kind === "filter" ? v?.results?.[pick.rule.sees.filterId] : v?.drill?.results?.[String(pick.rule.sees.value)];
+      if (!seg) return deny("The part of this report opened to you was not in the published version. Ask the person who shared it to publish again.", 409, { status: "segment_missing" });
+      results = protectSnapshot(seg, vBase).results;
+    }
+  }
+  const report = r.definition!, theme = r.theme ?? DEFAULT_THEME;
   const storyDoc = (report as { storyDoc?: StoryReport }).storyDoc ?? null;
   if (storyDoc && format === "xlsx") return NextResponse.json({ error: "A story has no workbook. Download the PowerPoint or the page instead.", status: "nothing_to_export" }, { status: 422, headers: noStore });
   // a viewer may pick what to include, never restyle or recompute

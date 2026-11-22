@@ -32,6 +32,8 @@ export class AxApi {
   create(coll: string, body: unknown) { return this.req<{ item: Row }>(coll, { method: "POST", body: JSON.stringify(body) }); }
   update(coll: string, id: string, body: unknown) { return this.req<{ item: Row }>(`${coll}/${id}`, { method: "PUT", body: JSON.stringify(body) }); }
   patch(coll: string, id: string, body: unknown) { return this.req<{ item: Row }>(`${coll}/${id}`, { method: "PATCH", body: JSON.stringify(body) }); }
+  /** R3 — who sees which part of a share link; null removes the rules */
+  viewerRules(shareId: string, rules: unknown[] | null) { return this.req<{ ok: true; rules: unknown[] | null }>(`shares/${shareId}/viewer-rules`, { method: "POST", body: JSON.stringify({ rules }) }); }
   remove(coll: string, id: string) { return this.req<{ ok: true }>(`${coll}/${id}`, { method: "DELETE" }); }
   versions(coll: "analyses" | "reports", id: string) { return this.req<{ versions: Row[] }>(`${coll}/${id}/versions`); }
   results(reportId: string, version?: number) { return this.req<{ mode: "live" | "snapshot"; version?: number; definition: unknown; theme: unknown; results: Record<string, AnalysisResult>; computedAt?: string; publishedAt?: string }>(`reports/${reportId}/results${version ? `?version=${version}` : ""}`); }
