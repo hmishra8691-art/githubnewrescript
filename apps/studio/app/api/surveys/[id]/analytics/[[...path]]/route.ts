@@ -1,4 +1,4 @@
-import { infographicDashboard, isReportFormat } from "@rescript/analytics";
+import { infographicDashboard, isReportFormat, drillPlan, drillCondition, minBasesFor, protectSnapshot, type DrillVariants } from "@rescript/analytics";
 import { shareView } from "@/lib/shareView";
 import { NextRequest, NextResponse } from "next/server";
 import { clientDb, platformDb, surveyDb, type Db } from "@/lib/db";
@@ -292,6 +292,8 @@ async function computeReport(
   loaded: Awaited<ReturnType<typeof loadDefinition>> & { def: unknown },
   report: ReportDefinition | { widgets?: { analysisId?: string }[]; blocks?: unknown[] },
   extraFilterIds: string[] = [],
+  /** R2 — an inline condition ANDed onto every analysis (a drill-down value), never from a viewer: from the report definition */
+  extraCondition: Record<string, unknown> | null = null,
 ) {
   const ids = new Set<string>(reportAnalysisIds(report as ReportDefinition));
   if (!ids.size) return {};
@@ -306,6 +308,7 @@ async function computeReport(
       id: a.id,
       name: a.name as string,
       ...(applied.length ? { filterIds: [...new Set([...(own.filterIds ?? []), ...applied])] } : {}),
+      ...(extraCondition ? { filter: (own.filter ? { type: "group", op: "and", children: [own.filter, extraCondition] } : extraCondition) as AnalysisDefinition["filter"] } : {}),
     };
     /*
      * One analysis that cannot be computed must not take the whole report with
@@ -704,16 +707,36 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const { data: filterRows } = viewerFilters.length
       ? await db.from("analytics_segments").select("id, name").in("id", viewerFilters).eq("survey_id", surveyId)
       : { data: [] as { id: string; name: string }[] };
+    /*
+     * R2 — THE DRILL-DOWN AND THE MINIMUM BASE. Each drill value the report lists is computed now and frozen, like a
+     * filter; then every frozen answer is protected: no number from fewer than the minimum base is written into the
+     * version (filters and drill values at 30 unless the report sets `minBase`; the main results only when it does).
+     */
+    const drill = drillPlan(definition);
+    if (drill.problems.length && body.force !== true) return NextResponse.json({ error: `Not published. ${drill.problems.join(" ")}`, problems: drill.problems, canForce: true }, { status: 409 });
+    const bases = minBasesFor(definition);
+    const withheld: string[] = [];
+    const guard = (rs: Record<string, AnalysisResult>, min: number, where: string) => { const p = protectSnapshot(rs, min); withheld.push(...p.withheld.map((w) => `${where}: ${w}`)); return p.results; };
+    for (const id of Object.keys(filterResults)) filterResults[id] = guard(filterResults[id], bases.variants, (filterRows ?? []).find((f) => f.id === id)?.name ?? "filter");
+    let drillVariants: DrillVariants | null = null;
+    if (drill.plan) {
+      const dr: DrillVariants["results"] = {};
+      for (const v of drill.plan.values) dr[String(v.value)] = guard(await computeReport(db, surveyId, loaded, definition, [], drillCondition(drill.plan.variable, v.value)), bases.variants, v.label);
+      drillVariants = { variable: drill.plan.variable, label: drill.plan.label ?? drill.plan.variable, values: drill.plan.values, results: dr };
+    }
+    const protectedSnapshot = bases.main ? guard(snapshot, bases.main, "main") : snapshot;
     const variants = {
       filters: viewerFilters.map((id) => ({ id, name: (filterRows ?? []).find((f) => f.id === id)?.name ?? "Filter" })),
       results: filterResults,
+      ...(drillVariants ? { drill: drillVariants } : {}),
+      minBase: bases,
     };
-    const { error } = await db.from("analytics_report_versions").insert({ report_id: itemId, survey_id: surveyId, version, definition, theme, snapshot, dataset, ...(viewerFilters.length ? { variants } : {}), note: typeof body.note === "string" ? body.note : null, published_by: ctx.user.userId });
+    const { error } = await db.from("analytics_report_versions").insert({ report_id: itemId, survey_id: surveyId, version, definition, theme, snapshot: protectedSnapshot, dataset, ...(viewerFilters.length || drillVariants ? { variants } : {}), note: typeof body.note === "string" ? body.note : null, published_by: ctx.user.userId });
     if (error) return bad(error.message, 500);
     const { error: pointerError } = await db.from("analytics_reports").update({ published_version: version, updated_by: ctx.user.userId }).eq("id", itemId);
     if (pointerError) return bad(`Version ${version} was written but the report could not be pointed at it (${pointerError.message}). Publish again.`, 500);
-    log(ctx, "analytics.report_published", itemId, { name: r.name, version, mode: r.mode, viewerFilters: viewerFilters.length });
-    return json({ version, publishedAt: new Date().toISOString(), viewerFilters: viewerFilters.length });
+    log(ctx, "analytics.report_published", itemId, { name: r.name, version, mode: r.mode, viewerFilters: viewerFilters.length, drillValues: drillVariants?.values.length ?? 0, withheld: withheld.length });
+    return json({ version, publishedAt: new Date().toISOString(), viewerFilters: viewerFilters.length, drillValues: drillVariants?.values.length ?? 0, minBase: bases, withheld: withheld.slice(0, 50) });
   }
 
   /*

@@ -495,6 +495,16 @@ export interface ReportDefinition {
    * being duplicated.
    */
   filterId?: string | null;
+  /**
+   * R2 — the ONE variable a shared viewer may drill into: each listed value is computed at publish time and frozen
+   * (dashboardData.ts `drillPlan`), at most 12. A viewer never composes a condition of their own.
+   */
+  drillDown?: { variable: string; label?: string; values: { value: string | number; label: string }[] };
+  /**
+   * R2 — no number from fewer than this many respondents leaves a shared report. Applied to the main results when set,
+   * and to filter and drill variants always (30 when not set). dashboardData.ts `protectResult`.
+   */
+  minBase?: number;
   branding?: { showLogo?: boolean; footer?: string; header?: string };
   exportDefaults?: ExportSettings;
   origin?: OutputOrigin;

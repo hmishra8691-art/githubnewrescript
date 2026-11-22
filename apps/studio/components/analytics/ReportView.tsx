@@ -46,6 +46,8 @@ export interface ReportViewProps {
    */
   viewerFilters?: { id: string; name: string }[];
   filterResults?: Record<string, Record<string, AnalysisResult>> | null;
+  /** R2 — the frozen drill-down: one variable's values, each with its own result set (minimum-base protected on the server) */
+  drill?: { label: string; values: { value: string | number; label: string }[]; results: Record<string, Record<string, AnalysisResult>> } | null;
   toolbar?: React.ReactNode;
   onBlockAction?: (blockId: string, action: "up" | "down" | "remove" | "edit") => void;
   /**
@@ -94,7 +96,10 @@ export function ReportView(p: ReportViewProps) {
    * author published, not on whichever filter happens to be first.
    */
   const [viewerFilter, setViewerFilter] = React.useState<string>("");
-  const filtered = viewerFilter ? p.filterResults?.[viewerFilter] : undefined;
+  /* R2 — a drill value replaces the viewer filter (each is one frozen answer; they are not combined) */
+  const [drillValue, setDrillValue] = React.useState<string>("");
+  const drilled = drillValue ? p.drill?.results?.[drillValue] : undefined;
+  const filtered = drilled ?? (viewerFilter ? p.filterResults?.[viewerFilter] : undefined);
   const results = filtered ?? p.results;
   const usedIds = new Set<string>();
   for (const id of reportAnalysisIds({ blocks: p.blocks, widgets: p.widgets })) usedIds.add(id);
@@ -295,12 +300,21 @@ export function ReportView(p: ReportViewProps) {
         {(p.viewerSegments?.length || segmentsAvailable.length) ? <select className="select small" value={globalSeg} onChange={(e) => { setGlobalSeg(e.target.value); setSegIdx({}); }} data-testid="ax-viewer-segment"><option value="">All respondents</option>{[...new Set(segmentsAvailable)].filter((s) => !p.viewerSegments?.length || p.viewerSegments.includes(s)).map((s) => <option key={s} value={s}>{s}</option>)}</select> : null}
         {p.viewerFilters?.length && p.filterResults ? (
           <select className="select small" value={viewerFilter} data-testid="ax-viewer-filter"
-            onChange={(e) => { setViewerFilter(e.target.value); setSegIdx({}); }}
+            onChange={(e) => { setViewerFilter(e.target.value); setDrillValue(""); setSegIdx({}); }}
             title="Each of these was computed when the report was published">
             <option value="">Whole sample</option>
             {p.viewerFilters.filter((f) => p.filterResults?.[f.id]).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
           </select>
         ) : null}
+        {p.drill?.values.length ? (
+          <select className="select small" value={drillValue} data-testid="ax-viewer-drill"
+            onChange={(e) => { setDrillValue(e.target.value); setViewerFilter(""); setSegIdx({}); }}
+            title="Each value was computed when the report was published; figures from too few respondents are not shown">
+            <option value="">{`All · ${p.drill.label}`}</option>
+            {p.drill.values.filter((v) => p.drill?.results?.[String(v.value)]).map((v) => <option key={String(v.value)} value={String(v.value)}>{v.label}</option>)}
+          </select>
+        ) : null}
+        {drillValue && <span className="chip" data-testid="ax-viewer-drill-on">{p.drill?.label}: {p.drill?.values.find((v) => String(v.value) === drillValue)?.label}</span>}
         {viewerFilter && (
           <span className="chip" data-testid="ax-viewer-filter-on">
             Filtered: {p.viewerFilters?.find((f) => f.id === viewerFilter)?.name}

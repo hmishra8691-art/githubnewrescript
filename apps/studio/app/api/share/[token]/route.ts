@@ -5,7 +5,7 @@ import { buildPptx, buildXlsx, buildStoryPptx, ExportUnsupportedError } from "@r
 import { composeReport, type StoryReport } from "@rescript/analytics/story";
 import { loadReportFonts } from "@rescript/reportvideo";
 import { join } from "node:path";
-import { DEFAULT_THEME, type AnalysisResult, type ReportDefinition, type ReportTheme } from "@rescript/analytics";
+import { DEFAULT_THEME, minBasesFor, protectSnapshot, type AnalysisResult, type DrillVariants, type ReportDefinition, type ReportTheme } from "@rescript/analytics";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 import { verifyPassword, hashPassword } from "@/lib/analytics";
 import { assertNotReadOnly, getMeter } from "@/lib/metering";
@@ -118,20 +118,26 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
    * "no variants" — a shared report without filter buttons, not a broken one.
    */
   let variants: { filters: { id: string; name: string }[]; results: Record<string, Record<string, AnalysisResult>> } | null = null;
-  if ((r.definition?.viewerFilters ?? []).length) {
+  let drill: DrillVariants | null = null;
+  /* R2 — every frozen answer is protected again on the way out, so a version published before the minimum base existed is covered too */
+  const bases = minBasesFor(r.definition ?? {});
+  if ((r.definition?.viewerFilters ?? []).length || r.definition?.drillDown) {
     const got = await db.rpc("rescript_resolve_share_variants", { p_token: params.token });
-    const v = got.data as { filters?: { id: string; name: string }[]; results?: Record<string, Record<string, AnalysisResult>> } | null;
-    if (v?.results && v.filters?.length) variants = { filters: v.filters, results: v.results };
+    const v = got.data as { filters?: { id: string; name: string }[]; results?: Record<string, Record<string, AnalysisResult>>; drill?: DrillVariants } | null;
+    if (v?.results && v.filters?.length) variants = { filters: v.filters, results: Object.fromEntries(Object.entries(v.results).map(([k, rs]) => [k, protectSnapshot(rs, bases.variants).results])) };
+    if (v?.drill?.results) drill = { ...v.drill, results: Object.fromEntries(Object.entries(v.drill.results).map(([k, rs]) => [k, protectSnapshot(rs, bases.variants).results])) };
   }
   // ONLY the snapshot leaves: no analysis ids that could be used elsewhere, no dataset spec beyond its summary
   const definition = r.definition!;
   return NextResponse.json({
     report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, story: (definition as { story?: unknown }).story ?? null, storyDoc: (definition as { storyDoc?: unknown }).storyDoc ?? null, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false, /* §41 — the scenery travels with the dashboard, or a shared one loses its banner */ hero: (definition as unknown as { hero?: unknown }).hero ?? null, bands: (definition as unknown as { bands?: unknown[] }).bands ?? null },
     theme: r.theme ?? DEFAULT_THEME,
-    results: r.snapshot,
+    results: bases.main && r.snapshot ? protectSnapshot(r.snapshot, bases.main).results : r.snapshot,
     /* the filters this viewer may switch to, and the answer for each — no ids they could use elsewhere */
     viewerFilters: variants?.filters ?? [],
     filterResults: variants?.results ?? null,
+    /* the drill-down: its label, the values and the answer for each — never the variable's other values */
+    drill: drill ? { label: drill.label, values: drill.values, results: drill.results } : null,
     version: r.version, publishedAt: r.published_at, mode: "snapshot",
     dataset: r.dataset ? { responses: (r.dataset as { responses?: number }).responses, surveyVersion: (r.dataset as { surveyVersion?: string }).surveyVersion, computedAt: (r.dataset as { computedAt?: string }).computedAt } : null,
     permission: r.permission,
@@ -152,7 +158,9 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   const blocked = await assertNotReadOnly(getMeter(), { customerId: (owner?.customer_id as string | null) ?? "sandbox", surveyId: r.survey_id }, "export");
   if (blocked) return deny("Downloads are paused for this report. Ask its owner.", 423, { status: "read_only" });
   const format = body.format === "xlsx" ? "xlsx" : "pptx";
-  const report = r.definition!, results = r.snapshot ?? {}, theme = r.theme ?? DEFAULT_THEME;
+  /* R2 — the download carries the same protection as the page */
+  const mainBase = minBasesFor(r.definition ?? {}).main;
+  const report = r.definition!, results = mainBase ? protectSnapshot(r.snapshot ?? {}, mainBase).results : r.snapshot ?? {}, theme = r.theme ?? DEFAULT_THEME;
   const storyDoc = (report as { storyDoc?: StoryReport }).storyDoc ?? null;
   if (storyDoc && format === "xlsx") return NextResponse.json({ error: "A story has no workbook. Download the PowerPoint or the page instead.", status: "nothing_to_export" }, { status: 422, headers: noStore });
   // a viewer may pick what to include, never restyle or recompute

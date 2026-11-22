@@ -600,6 +600,22 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
               </div>
             )}
 
+            {/* R2 — minimum base and drill-down for shared viewers (dashboardData.ts); both frozen at publish */}
+            <div className="flabel" style={{ marginTop: 12 }}>Minimum base for shared viewers</div>
+            <div className="muted" style={{ fontSize: 12.5 }}>No figure from fewer people than this is shown on the shared page or in its downloads. Filters and drill-downs use 30 when this is empty.</div>
+            <input className="input small" type="number" min={0} max={1000} style={{ width: 110 }} data-testid="ax-min-base"
+              value={rd.minBase ?? ""} placeholder="not set"
+              onChange={(e) => { const v = e.target.value.trim(); setDef({ ...rd, minBase: v === "" ? undefined : Math.max(0, Math.min(1000, Math.round(Number(v) || 0))) }); setDirty(true); }} />
+            <div className="flabel" style={{ marginTop: 12 }}>Drill-down</div>
+            <div className="muted" style={{ fontSize: 12.5 }}>One variable a shared viewer may open by value (at most 12 values, one per line as <code>code = label</code>). Each value is computed at publish time.</div>
+            <input className="input small" placeholder="Variable, e.g. REGION" data-testid="ax-drill-var" value={rd.drillDown?.variable ?? ""}
+              onChange={(e) => { const variable = e.target.value.trim(); setDef({ ...rd, drillDown: variable ? { variable, label: rd.drillDown?.label, values: rd.drillDown?.values ?? [] } : undefined }); setDirty(true); }} />
+            {rd.drillDown && (
+              <textarea className="input small" rows={4} data-testid="ax-drill-values" style={{ marginTop: 6 }}
+                defaultValue={(rd.drillDown.values ?? []).map((v) => `${v.value} = ${v.label}`).join("\n")}
+                onBlur={(e) => { const values = e.target.value.split(/\n/).map((l) => l.trim()).filter(Boolean).map((l) => { const [code, ...rest] = l.split("="); const c = code.trim(); return { value: /^-?\d+(\.\d+)?$/.test(c) ? Number(c) : c, label: (rest.join("=").trim() || c) }; }); setDef({ ...rd, drillDown: { ...rd.drillDown!, values } }); setDirty(true); }} />
+            )}
+
             {/*
               * §36 — one filter applied to EVERY analysis in this report:
               * "the North region report". Merged in at compute time, so the

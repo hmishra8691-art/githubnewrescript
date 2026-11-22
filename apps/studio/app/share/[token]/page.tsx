@@ -19,6 +19,8 @@ interface Payload {
   /** §36 — allowed viewer filters and their frozen results (absent on versions published before 0014) */
   viewerFilters?: { id: string; name: string }[];
   filterResults?: Record<string, Record<string, AnalysisResult>> | null;
+  /** R2 — the frozen drill-down, when the report has one */
+  drill?: { label: string; values: { value: string | number; label: string }[]; results: Record<string, Record<string, AnalysisResult>> } | null;
 }
 
 export default function SharePage({ params }: { params: { token: string } }) {
@@ -100,7 +102,7 @@ export default function SharePage({ params }: { params: { token: string } }) {
          * prints, and a client pressing Cmd-P is the most common way a
          * report becomes a PDF.
          */
-        viewerFilters={data.viewerFilters ?? []} filterResults={data.filterResults ?? null} showPages
+        viewerFilters={data.viewerFilters ?? []} filterResults={data.filterResults ?? null} drill={data.drill ?? null} showPages
         toolbar={<>
           {data.dataset?.responses != null && <span className="muted" style={{ fontSize: 13 }}>{data.dataset.responses} responses</span>}
           {data.permission === "download" && <><button className="btn small" disabled={busy} onClick={() => download("pptx")} data-testid="ax-share-ppt">Download PPT</button><button className="btn small" disabled={busy} onClick={() => download("xlsx")} data-testid="ax-share-xlsx">Download Excel</button></>}

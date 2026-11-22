@@ -10,6 +10,7 @@ export * from "./summary.js";
 export * from "./export/shared.js";
 export * from "./reportPages.js";
 export * from "./reportModel.js";
+export * from "./dashboardData.js";
 export * from "./geo/index.js";
 export * from "./dashboardLayout.js";
 export * from "./dashboardTemplates.js";
