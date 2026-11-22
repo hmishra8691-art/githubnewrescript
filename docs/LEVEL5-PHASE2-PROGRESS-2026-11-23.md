@@ -298,6 +298,29 @@ the price's place on the Van Westendorp curves). Functions only; no screen yet.
 constant, with what happens when it is exceeded, and 9 checks against outside references with the tolerance each
 test uses, plus what has no outside reference. A test fails if the page and the code disagree.
 
+### Fraud batch: cross-survey duplicates, trust score, review console (29 November)
+
+**F3, cross-survey duplicates.** Identity resolution already merges the same e-mail, phone or panel ID, and the
+fraud graph finds rings sharing devices and networks. Added, for one organisation at a time: the same open-ended
+answer (identical, or 85% character-shingle overlap, the in-survey rule's standard setting) from different
+respondents in different surveys; one person reusing their own paragraph (informational only); and one identity
+behind several participant IDs of one vendor. Short and generic answers are never evidence; a text shared by more
+than 50 sessions across five or more surveys is treated as boilerplate and noted. The hourly fraud job runs it over
+the organisation's last 30 days of real completes (at most 4,000) and opens one "duplicate" case per new finding,
+without holding payment.
+
+**F6, trust score with actions.** A second number beside the identity's standing risk: a Beta-style average with a
+prior worth ten observations at 70, clean completes and cleared cases for, rejections, duplicates, upheld cases,
+suspicious completes and open strong cross-survey findings against, capped by the standing risk. Confidence is kept
+apart so a newcomer is not read as bad. It recommends allow, watch, verify, review before payment or quarantine,
+each with its reason; quarantine needs enough evidence. A route reads it for one respondent and can open a manual
+case with a typed reason; nothing quarantines or blocks directly.
+
+**F11, review console.** The per-survey quality panel already recorded decisions with reasons, in bulk, with a
+history, and the fraud centre already handled cases and rings. Added: a review queue (flagged first, riskier first,
+one response per cluster ahead of its siblings), per-rule verdicts (how often reviewers removed what a rule flagged,
+with a Wilson interval), and Cohen's κ between two reviewers. A "Review console" card in Data → Quality shows them.
+
 ## The scorecard after this
 
 14 benchmarks, 12 measured. 24 of 47 metrics with a target meet it.
@@ -347,6 +370,9 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | Tab plan: cells identical to a direct crosstab, summary rows equal each question's own, ranking, refusals reported, draft plan, workbook sheets, links and formats | `tabPlan.test.ts`, 5 tests | pass |
 | Simulators: MaxDiff shares reproduce the engine's within 0.1 point, logit formula, TURF reach equals TURF's own, price interpolation and refusal, Van Westendorp range | `simulators.test.ts`, 4 tests | pass |
 | Published limits: sources and reference tests exist, the page matches the generator, a truncated dataset warns | `limits.test.ts`, 4 tests (analytics suite: 916) | pass |
+| Cross-survey duplicates: reuse across surveys found, own answers and same-survey repeats not, near-duplicates, boilerplate, vendor ID switching, two organisations refused, text read from answers | `crossSurvey.test.ts`, 7 tests | pass |
+| Trust score: stranger at 70, clean history, newcomer verified not quarantined, quarantine with evidence, risk cap, open case, cleared case | `trustScore.test.ts`, 6 tests | pass |
+| Review console: queue order, rule verdicts with interval, κ on a hand-worked case | `reviewConsole.test.ts`, 3 tests (quality suite: 140) | pass |
 | All benchmarks against the previous baseline | `pnpm bench` | no regression |
 
 ## What was NOT tested
@@ -365,6 +391,9 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 - **Quota cells are not yet written into the survey from a sentence.**
 - **The analytics batch has no screens.** "Why this number", the tab plan, the simulators and the assumption checks
   are engine functions with tests; no Studio screen or route shows them yet, and none was opened in a browser.
+- **The fraud batch was not run against a database.** The hourly cross-survey pass, the trust route and the console
+  route were type-checked and audited (Studio suite 1,332 passes), not called; the review console card was not opened in a browser. No
+  reviewer has made decisions, so the rule verdicts and κ have no real figures yet.
 - **English only.**
 
 ## Phase 2 item by item
@@ -380,13 +409,13 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | Import (6) | | I1 (10 of 300 files), I2 (exists, 58.3%, not examined) | I3, I4, I5, I6 |
 | Reporting (6) | | | R1 to R6 |
 | Qualitative (6) | | | Q2 to Q7 |
-| Fraud (6) | F4 (typing and pointer summaries collected, sanitised and read by four rules) | F5 (typing rules only; open-end content not judged) | F2, F3, F6, F11 |
+| Fraud (6) | F3, F4 (typing and pointer summaries collected, sanitised and read by four rules), F6, F11 | F5 (typing rules only; open-end content not judged) | F2 |
 
 Some "not started" items have earlier work in the product that I have not assessed against the roadmap's
 definition (libraries, dashboards, the quality review screen, the import review screen). I have not counted them.
 
-**Next:** fraud (F3 cross-survey duplicates, F6 trust score with actions, F11 review console), then import (I3, I4,
-I6), qualitative (Q4, Q6) and reporting (R1 to R6). F2 still waits on the build-or-license decision.
+**Next:** import (I3, I4, I6), then qualitative (Q4, Q6) and reporting (R1 to R6). F2 still waits on the
+build-or-license decision.
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages
 reviewed by people, P11 real devices, and anything needing the model, speech or vendor keys.
