@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseEnvironment } from "@/lib/responseData";
 import { audit, isFailure, requireProject } from "@/lib/guard";
-import {
-  parseSpreadsheet, parseDelimitedList, guessRespondentMapping,
-  prepareRespondentList, summariseRespondentList,
-  type ColumnTarget,
-} from "@rescript/exporters";
+import { peopleSandboxAllowed, runIntake, sandboxPeople, sandboxStore, type IntakeStore, type SandboxPerson } from "@/lib/respondentIntake";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -23,6 +19,7 @@ export const maxDuration = 60;
  *   POST   { environment, stage: "preview" | "commit", listName,
  *            text | xlsxBase64 | rows, format?, sheet?, mapping? }
  *   PATCH  { environment, action: "mark_sent" | "mark_unsent", ids? | list? }
+ *          { environment, action: "rename_list", list, to }
  *   DELETE ?ids=a,b   or   ?list=wave%201&environment=TEST
  *
  * THE UPLOAD IS TWO-STAGE, exactly like the response importer: `preview`
@@ -50,7 +47,6 @@ export const maxDuration = 60;
  * in. What is left here is what cannot be pure: permissions, the two-stage
  * preview, and the insert that lets the database mint each token.
  */
-const MAX_ROWS = 20_000;
 
 /* ------------------------------------------------------------------ read */
 
@@ -60,6 +56,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * (`responses.read_pii`, 0062). Every role that held `responses.read` holds
    * it, so nobody loses the list; a custom member can be given data without it.
    */
+  if (peopleSandboxAllowed(params.id)) return sandboxList(req);
   const gate = await requireProject(req, params.id, "responses.read_pii");
   if (isFailure(gate)) return gate.response;
 
@@ -139,6 +136,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 /* ---------------------------------------------------------------- upload */
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  /* the database-less /sandbox fixture: the same two stages, kept in memory (never in production) */
+  if (peopleSandboxAllowed(params.id)) {
+    let sb: any;
+    try { sb = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
+    const env = parseEnvironment(sb?.environment);
+    if (!env || env === "ALL") return NextResponse.json({ error: "environment must be TEST or LIVE" }, { status: 400 });
+    const o = await runIntake(sandboxStore(env === "TEST"), sb, env);
+    return NextResponse.json(o.body, { status: o.status });
+  }
   /*
    * `deploy.manage`, not `survey.edit`. Minting invitation links is shipping
    * the study, and the platform's roles separate the two on purpose — a
@@ -156,137 +162,79 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "environment must be TEST or LIVE" }, { status: 400 });
   }
   const isTest = environment === "TEST";
-  const stage = body?.stage === "commit" ? "commit" : "preview";
-  const listName = String(body?.listName ?? "").trim().slice(0, 120) || null;
+  const db = gate.db;
 
-  let headers: string[] = [];
-  let rows: Record<string, unknown>[] = [];
-  let sheetInfo: { sheetName?: string; sheetNames?: string[] } = {};
-
-  if (Array.isArray(body?.rows)) {
-    rows = body.rows as Record<string, unknown>[];
-    headers = Array.isArray(body?.headers) && body.headers.length
-      ? body.headers.map(String)
-      : Object.keys(rows[0] ?? {});
-  } else if (typeof body?.xlsxBase64 === "string" && body.xlsxBase64) {
+  const store: IntakeStore = {
+    async existing(emails, externalIds) {
+      const out = { emails: new Set<string>(), externalIds: new Set<string>() };
+      const base = () => db.from("respondents").select("email, external_id").eq("survey_id", params.id).eq("is_test", isTest);
+      for (let i = 0; i < externalIds.length; i += 200) {
+        const { data } = await base().in("external_id", externalIds.slice(i, i + 200));
+        for (const r of data ?? []) if (r.external_id) out.externalIds.add(String(r.external_id).toLowerCase());
+      }
+      /* ids are matched as written first; a file that writes them in another case is caught by the index on commit */
+      for (let i = 0; i < emails.length; i += 200) {
+        const { data } = await base().in("email", emails.slice(i, i + 200)).is("external_id", null);
+        for (const r of data ?? []) if (r.email) out.emails.add(String(r.email).toLowerCase());
+      }
+      return out;
+    },
     /*
-     * A workbook is parsed HERE, as in the response importer: exceljs is
-     * already a server dependency because every export writes with it, and
-     * shipping a spreadsheet parser into the Studio bundle to read a file
-     * that is about to be posted anyway would be paying twice.
+     * Inserted in chunks, and `token` is left out of every row so the database
+     * generates it. A partial failure leaves the rows that landed — which is
+     * the right outcome for a list: the alternative is one bad address
+     * discarding an upload of 4 000 people.
      */
-    try {
-      const parsed = await parseSpreadsheet(Buffer.from(body.xlsxBase64, "base64"), { sheet: body?.sheet });
-      headers = parsed.headers;
-      rows = parsed.rows;
-      sheetInfo = { sheetName: parsed.sheetName, sheetNames: parsed.sheetNames };
-    } catch (e) {
-      return NextResponse.json({ error: `that workbook could not be read: ${(e as Error).message}` }, { status: 422 });
-    }
-  } else if (typeof body?.text === "string" && body.text.trim()) {
-    const parsed = parseDelimitedList(body.text);
-    headers = parsed.headers;
-    rows = parsed.rows;
-  } else {
-    return NextResponse.json({ error: "nothing to import — paste a list, or choose a file" }, { status: 422 });
-  }
+    async insert(prepared, listName) {
+      const CHUNK = 500;
+      let inserted = 0;
+      const rejected: string[] = [];
+      for (let i = 0; i < prepared.length; i += CHUNK) {
+        const slice = prepared.slice(i, i + CHUNK).map((p) => ({
+          survey_id: params.id, is_test: isTest, list_name: listName,
+          name: p.name, email: p.email, external_id: p.external_id, embedded: p.embedded, status: "invited",
+        }));
+        const { data, error } = await db.from("respondents").insert(slice).select("id");
+        if (error) {
+          if (/is_test|list_name|does not exist|schema cache/i.test(error.message)) return { error: "Respondent lists need migration 0013.", status: 503, migration: "0013" };
+          /*
+           * Almost always the external-id unique index: somebody in this file is
+           * already on the list. Retried one at a time so the clash names the
+           * person instead of losing the chunk.
+           */
+          for (const one of slice) {
+            const single = await db.from("respondents").insert(one).select("id");
+            if (single.error) rejected.push(one.external_id ?? one.email ?? one.name ?? "(unnamed)");
+            else inserted++;
+          }
+          continue;
+        }
+        inserted += data?.length ?? 0;
+      }
+      return { inserted, rejected };
+    },
+  };
 
-  if (!rows.length) return NextResponse.json({ error: "that file has a header row and no people in it" }, { status: 422 });
-  if (rows.length > MAX_ROWS) {
-    return NextResponse.json({ error: `${rows.length} rows is more than this can take at once (${MAX_ROWS}). Split the file.` }, { status: 413 });
-  }
-
-  const mapping: Record<string, ColumnTarget> =
-    body?.mapping && typeof body.mapping === "object" ? body.mapping : guessRespondentMapping(headers);
-
-  const parsed = prepareRespondentList(rows, mapping);
-  const { people: prepared, issues, duplicates } = parsed;
-  const summary = summariseRespondentList(rows.length, parsed, mapping);
-
-  if (stage === "preview") {
-    return NextResponse.json({
-      stage: "preview",
-      environment,
-      listName,
-      headers,
-      mapping,
-      ...sheetInfo,
-      summary,
-      issues: issues.slice(0, 20),
-      duplicates: duplicates.slice(0, 20),
-      sample: prepared.slice(0, 10),
-      rows,
-      /* nothing blocks an upload except having no people in it */
-      blocking: prepared.length === 0 ? "none of those rows has an email, an id or a name, so there is nobody to invite" : null,
+  const outcome = await runIntake(store, body, environment);
+  if (outcome.committed) {
+    const { inserted, rejected, listName } = outcome.committed;
+    await audit({
+      action: "deployment.started", userId: gate.user.userId, sessionId: gate.user.sessionId,
+      surveyId: params.id, customerId: gate.user.customerId,
+      entity: "respondent_list", entityId: listName,
+      detail: {
+        summary: `added ${inserted} ${environment} invitation${inserted === 1 ? "" : "s"}${listName ? ` to “${listName}”` : ""}`,
+        environment, listName, inserted, rejected,
+      },
     });
   }
-
-  if (!prepared.length) {
-    return NextResponse.json({ error: "there is nobody to invite in that file" }, { status: 422 });
-  }
-
-  const db = gate.db;
-  /*
-   * Inserted in chunks, and `token` is left out of every row so the database
-   * generates it. A partial failure leaves the rows that landed — which is
-   * the right outcome for a list: the alternative is one bad address
-   * discarding an upload of 4 000 people.
-   */
-  const CHUNK = 500;
-  let inserted = 0;
-  const rejected: string[] = [];
-  for (let i = 0; i < prepared.length; i += CHUNK) {
-    const slice = prepared.slice(i, i + CHUNK).map((p) => ({
-      survey_id: params.id,
-      is_test: isTest,
-      list_name: listName,
-      name: p.name,
-      email: p.email,
-      external_id: p.external_id,
-      embedded: p.embedded,
-      status: "invited",
-    }));
-    const { data, error } = await db.from("respondents").insert(slice).select("id");
-    if (error) {
-      if (/is_test|list_name|does not exist|schema cache/i.test(error.message)) {
-        return NextResponse.json({ error: "Respondent lists need migration 0013.", migration: "0013" }, { status: 503 });
-      }
-      /*
-       * Almost always the external-id unique index: somebody in this file is
-       * already on the list. Retried one at a time so the clash names the
-       * person instead of losing the chunk.
-       */
-      for (const one of slice) {
-        const single = await db.from("respondents").insert(one).select("id");
-        if (single.error) rejected.push(one.external_id ?? one.email ?? one.name ?? "(unnamed)");
-        else inserted++;
-      }
-      continue;
-    }
-    inserted += data?.length ?? 0;
-  }
-
-  await audit({
-    action: "deployment.started", userId: gate.user.userId, sessionId: gate.user.sessionId,
-    surveyId: params.id, customerId: gate.user.customerId,
-    entity: "respondent_list", entityId: listName,
-    detail: {
-      summary: `added ${inserted} ${environment} invitation${inserted === 1 ? "" : "s"}${listName ? ` to “${listName}”` : ""}`,
-      environment, listName, inserted, rejected: rejected.length,
-    },
-  });
-
-  return NextResponse.json({
-    ok: true, stage: "commit", environment, listName, inserted,
-    alreadyOnTheList: rejected.slice(0, 20),
-    alreadyOnTheListCount: rejected.length,
-    summary,
-  });
+  return NextResponse.json(outcome.body, { status: outcome.status });
 }
 
 /* ------------------------------------------------------------ mark sent */
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  if (peopleSandboxAllowed(params.id)) return sandboxPatch(req);
   const gate = await requireProject(req, params.id, "deploy.manage");
   if (isFailure(gate)) return gate.response;
 
@@ -296,6 +244,23 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const environment = parseEnvironment(body?.environment);
   if (!environment || environment === "ALL") {
     return NextResponse.json({ error: "environment must be TEST or LIVE" }, { status: 400 });
+  }
+  /*
+   * RENAME A LIST (2026-11-21): a list is a label on its people, so renaming is relabelling them. Refused when the
+   * new name is already another list's — merging two lists is not something a rename should do by accident.
+   */
+  if (body?.action === "rename_list") {
+    const from = typeof body?.list === "string" ? body.list : "";
+    const to = String(body?.to ?? "").trim().slice(0, 120);
+    if (!from || !to) return NextResponse.json({ error: "Give the list a name." }, { status: 400 });
+    if (from === to) return NextResponse.json({ ok: true, affected: 0 });
+    const isTest = environment === "TEST";
+    const clash = await gate.db.from("respondents").select("id", { count: "exact", head: true }).eq("survey_id", params.id).eq("is_test", isTest).eq("list_name", to);
+    if ((clash.count ?? 0) > 0) return NextResponse.json({ error: `There is already a list called “${to}”. Choose another name.` }, { status: 409 });
+    const { data: moved, error: rErr } = await gate.db.from("respondents").update({ list_name: to }).eq("survey_id", params.id).eq("is_test", isTest).eq("list_name", from).select("id");
+    if (rErr) return NextResponse.json({ error: rErr.message }, { status: 500 });
+    await audit({ action: "deployment.started", userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId: params.id, customerId: gate.user.customerId, entity: "respondent_list", entityId: to, detail: { summary: `renamed the ${environment} list “${from}” to “${to}” (${moved?.length ?? 0} people)`, environment } });
+    return NextResponse.json({ ok: true, affected: moved?.length ?? 0 });
   }
   const action = body?.action === "mark_unsent" ? "mark_unsent" : "mark_sent";
 
@@ -376,4 +341,38 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     removed: data?.length ?? 0,
     note: "Only invitations nobody has opened are removed — a respondent who has started keeps their row, because their answers point at it.",
   });
+}
+
+
+/* ------------------------------------------------------------------ the /sandbox fixture's list, from memory */
+
+function sandboxList(req: NextRequest) {
+  const sp = req.nextUrl.searchParams;
+  const isTest = (parseEnvironment(sp.get("environment") ?? "LIVE") ?? "LIVE") === "TEST";
+  const all = sandboxPeople().filter((p) => p.is_test === isTest);
+  const list = sp.get("list"), search = sp.get("search")?.trim().toLowerCase();
+  const rows = all.filter((p) => (!list || p.list_name === list) && (!search || `${p.email ?? ""} ${p.external_id ?? ""} ${p.name ?? ""}`.toLowerCase().includes(search))).sort((a, b) => b.invited_at.localeCompare(a.invited_at));
+  const by = new Map<string, SandboxPerson[]>();
+  for (const p of all) (by.get(p.list_name ?? "") ?? by.set(p.list_name ?? "", []).get(p.list_name ?? "")!).push(p);
+  return NextResponse.json({
+    available: true, environment: isTest ? "TEST" : "LIVE", total: rows.length, offset: 0, limit: 100,
+    rows: rows.slice(0, 100).map((r) => ({ id: r.id, token: r.token, name: r.name, email: r.email, externalId: r.external_id, status: r.status, listName: r.list_name, sentAt: r.sent_at, invitedAt: r.invited_at, embeddedCount: Object.keys(r.embedded).length })),
+    stats: [...by.entries()].map(([name, ps]) => ({ listName: name || null, total: ps.length, sent: ps.filter((p) => p.sent_at).length, notSent: ps.filter((p) => !p.sent_at).length, waiting: ps.filter((p) => p.sent_at && p.status === "invited").length, started: 0, completed: 0, screened: 0, quotaFull: 0, terminated: 0, firstInvited: ps[0]?.invited_at ?? null, lastInvited: ps.at(-1)?.invited_at ?? null })),
+  }, { headers: { "cache-control": "no-store" } });
+}
+
+async function sandboxPatch(req: NextRequest) {
+  const body = await req.json().catch(() => ({}));
+  const isTest = parseEnvironment(body?.environment) === "TEST";
+  if (body?.action === "rename_list") {
+    const to = String(body?.to ?? "").trim();
+    if (!to) return NextResponse.json({ error: "Give the list a name." }, { status: 400 });
+    if (sandboxPeople().some((p) => p.is_test === isTest && p.list_name === to)) return NextResponse.json({ error: `There is already a list called “${to}”. Choose another name.` }, { status: 409 });
+    let n = 0;
+    for (const p of sandboxPeople()) if (p.is_test === isTest && p.list_name === body.list) { p.list_name = to; n++; }
+    return NextResponse.json({ ok: true, affected: n });
+  }
+  let n = 0;
+  for (const p of sandboxPeople()) if (p.is_test === isTest && (Array.isArray(body?.ids) ? body.ids.includes(p.id) : p.list_name === body?.list)) { p.sent_at = body?.action === "mark_unsent" ? null : new Date().toISOString(); n++; }
+  return NextResponse.json({ ok: true, affected: n });
 }

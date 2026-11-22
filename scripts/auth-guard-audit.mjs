@@ -181,6 +181,18 @@ const BODY_FIRST = {
     "the /sandbox fixture (id \"sandbox\") has no database row and is served from the in-memory meter without a session; every real id goes through requireProject(billing.read)",
   "surveys/[id]/billing/route.ts POST":
     "the body is validated first (action, amount, reason) and the sandbox id answered from memory; every real id goes through requireProject(billing.request_credits)",
+  "surveys/[id]/respondents/route.ts GET":
+    "the id \"sandbox\" is answered from an in-memory list ONLY where peopleSandboxAllowed says so — no database configured and not production (lib/respondentIntake.ts) — so the add-people walk can be driven in a browser (scripts/people-intake-test.mjs); every real id goes through requireProject before anything is read",
+  "surveys/[id]/respondents/route.ts POST":
+    "the id \"sandbox\" is answered from an in-memory list ONLY where peopleSandboxAllowed says so — no database configured and not production (lib/respondentIntake.ts) — so the add-people walk can be driven in a browser (scripts/people-intake-test.mjs); every real id goes through requireProject(deploy.manage) before the body is parsed",
+  "surveys/[id]/respondents/route.ts PATCH":
+    "the id \"sandbox\" is answered from an in-memory list ONLY where peopleSandboxAllowed says so — no database configured and not production (lib/respondentIntake.ts) — so the add-people walk can be driven in a browser (scripts/people-intake-test.mjs); every real id goes through requireProject(deploy.manage)",
+  "surveys/[id]/respondents/template/route.ts GET":
+    "the template is a fixed file with no project data in it; the id \"sandbox\" is answered from an in-memory list ONLY where peopleSandboxAllowed says so — no database configured and not production (lib/respondentIntake.ts) — so the add-people walk can be driven in a browser (scripts/people-intake-test.mjs); every real id goes through requireProject(project.read)",
+  "surveys/[id]/portal/route.ts GET":
+    "only the query string (limit, offset, list) is read before the guard; the id \"sandbox\" is answered from an in-memory list ONLY where peopleSandboxAllowed says so — no database configured and not production (lib/respondentIntake.ts) — so the add-people walk can be driven in a browser (scripts/people-intake-test.mjs); every real id goes through requireProject(responses.read)",
+  "surveys/[id]/portal/route.ts POST":
+    "the id \"sandbox\" is answered from an in-memory list ONLY where peopleSandboxAllowed says so — no database configured and not production (lib/respondentIntake.ts) — so the add-people walk can be driven in a browser (scripts/people-intake-test.mjs); every real id goes through requireProject(deploy.manage) before the body is parsed",
   "translation/status/route.ts GET":
     "reports only whether a provider is configured — never a key; the FAKE provider answers without a session so the sandbox tab can render",
   "auth/handoff/route.ts GET":

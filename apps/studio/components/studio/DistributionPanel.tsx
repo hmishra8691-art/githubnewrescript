@@ -2,6 +2,7 @@
 import React from "react";
 import { useStudio } from "./store";
 import { PortalAccessPanel } from "./PortalAccessPanel";
+import { AddPeople } from "./people/AddPeople";
 
 type Env = "TEST" | "LIVE";
 type Field = "email" | "external_id" | "name" | "embedded";
@@ -99,12 +100,6 @@ export function DistributionPanel() {
   const [mail, setMail] = React.useState<{ configured: boolean; canReachRealRecipients: boolean; redirectTo: string | null } | null>(null);
 
   // the upload draft
-  const [listName, setListName] = React.useState("");
-  const [text, setText] = React.useState("");
-  const [xlsxBase64, setXlsxBase64] = React.useState<string | null>(null);
-  const [sheet, setSheet] = React.useState<string | null>(null);
-  const [fileName, setFileName] = React.useState<string | null>(null);
-  const [preview, setPreview] = React.useState<Preview | null>(null);
 
   const say = (text: string, ok = true) => { setNote({ text, ok }); setTimeout(() => setNote(null), 8000); };
 
@@ -133,78 +128,7 @@ export function DistributionPanel() {
   }, []);
 
   /* the environment is a different list entirely: nothing carries over */
-  React.useEffect(() => { setListFilter(""); setPreview(null); setQr(null); }, [env]);
-
-  const onFile = async (f: File) => {
-    setFileName(f.name);
-    setPreview(null);
-    setSheet(null);
-    if (!listName.trim()) setListName(f.name.replace(/\.[^.]+$/, "").slice(0, 120));
-    /*
-     * A workbook is bytes, not text: reading one with `f.text()` yields the
-     * zip container as mojibake and a parse error that blames the file. It is
-     * base64'd and parsed on the server, where the spreadsheet library
-     * already lives. The 0x8000 chunking is what keeps
-     * `String.fromCharCode(...)` from overflowing the stack on a large file.
-     */
-    if (/\.xlsx?$|\.xlsm$/i.test(f.name)) {
-      const buf = new Uint8Array(await f.arrayBuffer());
-      let bin = "";
-      for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-      setXlsxBase64(btoa(bin));
-      setText("");
-      return;
-    }
-    setXlsxBase64(null);
-    setText(await f.text());
-  };
-
-  const post = async (stage: "preview" | "commit", extra: Record<string, unknown> = {}) => {
-    setBusy(true);
-    try {
-      const r = await fetch(`/api/surveys/${s.surveyDbId}/respondents`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          environment: env, stage, listName: listName.trim() || null,
-          ...(xlsxBase64 ? { xlsxBase64, sheet: sheet ?? undefined } : { text }),
-          ...extra,
-        }),
-      });
-      const j = await r.json();
-      if (!r.ok) { say(j.error ?? `That failed (${r.status})`, false); return null; }
-      return j;
-    } catch (e) { say((e as Error).message, false); return null; }
-    finally { setBusy(false); }
-  };
-
-  const doPreview = async () => {
-    const j = await post("preview");
-    if (j) {
-      setPreview(j as Preview);
-      if ((j as Preview).sheetNames?.length && !sheet) setSheet((j as Preview).sheetName ?? null);
-    }
-  };
-
-  const doCommit = async () => {
-    if (!preview) return;
-    /*
-     * The rows the researcher just looked at are posted back unchanged, along
-     * with the mapping as it stands on screen. Re-parsing on commit would
-     * mean committing something subtly different from what was previewed —
-     * which for a list of 4 000 people is exactly the difference nobody would
-     * notice.
-     */
-    const j = await post("commit", { rows: preview.rows, headers: preview.headers, mapping: preview.mapping });
-    if (j) {
-      const dup = j.alreadyOnTheListCount ?? 0;
-      say(
-        `Added ${j.inserted} invitation${j.inserted === 1 ? "" : "s"}${j.listName ? ` to “${j.listName}”` : ""}.` +
-        (dup ? ` ${dup} ${dup === 1 ? "person was" : "people were"} already on the list and were left alone.` : ""),
-      );
-      setPreview(null); setText(""); setXlsxBase64(null); setFileName(null); setUploadOpen(false);
-      refresh();
-    }
-  };
+  React.useEffect(() => { setListFilter(""); setQr(null); }, [env]);
 
   /*
    * §24 — email the links.
@@ -262,6 +186,20 @@ Send anyway?`)) return;
       const j = await r.json();
       if (!r.ok) say(j.error ?? "That failed", false);
       else { say(`Marked ${j.affected} invitation${j.affected === 1 ? "" : "s"} as sent.`); refresh(); }
+    } finally { setBusy(false); }
+  };
+
+  const renameList = async (list: string) => {
+    const to = window.prompt(`A new name for “${list}”`, list)?.trim();
+    if (!to || to === list) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/respondents`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ environment: env, action: "rename_list", list, to }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { say(j.error ?? `That failed (${r.status})`, false); return; }
+      say(`“${list}” is now “${to}”.`);
+      if (listFilter === list) setListFilter(to);
+      refresh();
     } finally { setBusy(false); }
   };
 
@@ -334,135 +272,30 @@ Send anyway?`)) return;
       )}
       {note && <div className={`chip ${note.ok ? "on" : "warn"} qd-note`} data-testid="ds-note">{note.text}</div>}
 
-      {/* ---------------------------------------------------------- upload */}
-      {uploadOpen && (
-        <div className="card" data-testid="ds-upload">
-          <h3 className="sec" style={{ marginTop: 0 }}>Add people to the {env === "TEST" ? "test" : "live"} list</h3>
-          <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
-            <label className="f" style={{ width: 220 }}>
-              <span>Name this upload</span>
-              <input className="input" placeholder="wave 1" value={listName} data-testid="ds-list-name"
-                onChange={(e) => setListName(e.target.value)} />
-            </label>
-            <label className="btn small">
-              Choose a file…
-              <input type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" style={{ display: "none" }}
-                data-testid="ds-file"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); }} />
-            </label>
-            {fileName && <span className="chip">{fileName}</span>}
-            {preview?.sheetNames && preview.sheetNames.length > 1 && (
-              <label className="f" style={{ width: 180 }}>
-                <span>Sheet</span>
-                <select className="select" value={sheet ?? ""} onChange={(e) => { setSheet(e.target.value); setPreview(null); }}>
-                  {preview.sheetNames.map((n) => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </label>
-            )}
-            <span className="grow" />
-            <button className="btn small primary" disabled={busy} data-testid="ds-preview" onClick={() => void doPreview()}>
-              {busy ? "Reading…" : "Check the list"}
-            </button>
-          </div>
-
-          <label className="f" style={{ marginTop: 10 }}>
-            <span>…or paste it (a header row, then one person per line)</span>
-            <textarea className="input mono" rows={5} value={text} data-testid="ds-paste"
-              placeholder={"name,email,employee_id,region\nAda Lovelace,ada@example.com,EMP-001,North"}
-              onChange={(e) => { setText(e.target.value); setXlsxBase64(null); setFileName(null); setPreview(null); }} />
-          </label>
-
-          {preview && (
-            <div style={{ marginTop: 12 }} data-testid="ds-preview-result">
-              <div className="row" style={{ flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                <span className="chip on">{preview.summary.people} to invite</span>
-                <span className="chip">{preview.summary.withEmail} with an email</span>
-                <span className="chip">{preview.summary.withExternalId} with an id</span>
-                {preview.summary.dropped > 0 && (
-                  <span className="chip warn" title="No email, no id and no name — there is nobody to invite">
-                    {preview.summary.dropped} row{preview.summary.dropped === 1 ? "" : "s"} with nobody in
-                  </span>
-                )}
-                {preview.summary.duplicatesInFile > 0 && (
-                  <span className="chip warn" data-testid="ds-dupes">
-                    {preview.summary.duplicatesInFile} duplicate{preview.summary.duplicatesInFile === 1 ? "" : "s"} in the file
-                  </span>
-                )}
-              </div>
-
-              {/* the mapping is editable: a guess from a column heading is a guess */}
-              <div className="card" style={{ padding: 10, marginBottom: 8 }}>
-                <div className="flabel">What each column is</div>
-                <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-                  {preview.headers.filter(Boolean).map((h) => (
-                    <label className="f" key={h} style={{ width: 190 }}>
-                      <span className="mono" title={h}>{h.length > 22 ? `${h.slice(0, 21)}…` : h}</span>
-                      <select className="select" value={preview.mapping[h] ?? "embedded"}
-                        data-testid={`ds-map-${h}`}
-                        onChange={(e) => setPreview({ ...preview, mapping: { ...preview.mapping, [h]: e.target.value as Field } })}>
-                        <option value="email">email address</option>
-                        <option value="external_id">their id (client&apos;s own key)</option>
-                        <option value="name">name</option>
-                        <option value="embedded">embedded data</option>
-                      </select>
-                    </label>
-                  ))}
-                </div>
-                {preview.summary.embeddedFields.length > 0 && (
-                  <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-                    Columns kept as embedded data reach the survey only if a field of the same name is declared in Survey
-                    Flow — an undeclared column is stored with the respondent and not piped, so a typo in the client&apos;s
-                    file cannot invent a variable.
-                  </p>
-                )}
-              </div>
-
-              {preview.issues.length > 0 && (
-                <div className="card" style={{ padding: 10, marginBottom: 8 }} data-testid="ds-issues">
-                  <div className="flabel">Worth a look — none of these stops the upload</div>
-                  <ul className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 18 }}>
-                    {preview.issues.map((t, i) => <li key={i}>{t}</li>)}
-                  </ul>
-                </div>
-              )}
-
-              <div className="card" style={{ padding: 0, overflowX: "auto", marginBottom: 8 }}>
-                <table className="grid" style={{ minWidth: 520 }}>
-                  <thead><tr><th>Name</th><th>Email</th><th>Their id</th><th>Embedded</th></tr></thead>
-                  <tbody>
-                    {preview.sample.map((p, i) => (
-                      <tr key={i}>
-                        <td>{p.name ?? "—"}</td>
-                        <td className="mono">{p.email ?? "—"}</td>
-                        <td className="mono">{p.external_id ?? "—"}</td>
-                        <td className="muted" style={{ fontSize: 12 }}>
-                          {Object.entries(p.embedded).slice(0, 3).map(([k, v]) => `${k}=${String(v)}`).join(", ") || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {preview.blocking ? (
-                <div className="chip warn" data-testid="ds-blocking">{preview.blocking}</div>
-              ) : (
-                <button className="btn primary" disabled={busy} data-testid="ds-commit" onClick={() => void doCommit()}>
-                  {busy ? "Adding…" : `Add ${preview.summary.people} ${env === "TEST" ? "test" : "live"} invitation${preview.summary.people === 1 ? "" : "s"}`}
-                </button>
-              )}
-            </div>
-          )}
+      <ol className="muted" style={{ display: "flex", gap: 18, flexWrap: "wrap", listStyle: "none", padding: 0, margin: "0 0 12px", fontSize: 12.5 }} data-testid="ds-guide">
+        <li><strong>1. Add people</strong>: type them in or upload a file.</li>
+        <li><strong>2. Check your lists</strong>: who is on each, and how far they have got.</li>
+        <li><strong>3. Send invitations</strong>: {mail?.configured ? "by email from here, or download the links." : "download each person's link and send it yourself."}</li>
+      </ol>
+      {available && stats.length === 0 && !uploadOpen && (
+        <div className="card" style={{ textAlign: "center", padding: 22 }} data-testid="ds-empty">
+          <p style={{ margin: "0 0 10px" }}>Nobody is on the {env === "TEST" ? "test" : "live"} list yet.</p>
+          <button className="btn primary" onClick={() => setUploadOpen(true)} data-testid="ds-empty-add">Add people</button>
         </div>
       )}
 
-      {/* --------------------------------------------------------- by wave */}
-      <h3 className="sec">Progress</h3>
+      {/* ---------------------------------------------------------- add people */}
+      {uploadOpen && (
+        <AddPeople surveyId={s.surveyDbId!} env={env} lists={lists.filter((x): x is string => !!x)} defaultList={listFilter || undefined} onClose={() => setUploadOpen(false)}
+          onAdded={(r) => { say(`Added ${r.inserted} ${r.inserted === 1 ? "person" : "people"}${r.listName ? ` to “${r.listName}”` : ""}.${r.leftOut ? ` ${r.leftOut} already on the list ${r.leftOut === 1 ? "was" : "were"} left as ${r.leftOut === 1 ? "it was" : "they were"}.` : ""} Next: send their invitations from “Your lists” below.`); refresh(); }} />
+      )}
+
+      <h3 className="sec">Your lists</h3>
       <div className="card" style={{ padding: 0, overflowX: "auto" }} data-testid="ds-stats">
         <table className="grid" style={{ minWidth: 860 }}>
           <thead>
             <tr>
-              <th>Upload</th>
+              <th>List</th>
               <th style={{ textAlign: "right" }}>People</th>
               <th style={{ textAlign: "right" }}>Links sent</th>
               <th style={{ textAlign: "right" }}>Not sent</th>
@@ -497,16 +330,16 @@ Send anyway?`)) return;
                   <div className="row" style={{ gap: 4, flexWrap: "wrap" }}>
                     <button className="btn small" data-testid={`ds-xlsx-${x.listName}`}
                       onClick={() => download("xlsx", { list: x.listName === "(no list)" ? undefined : x.listName })}>
-                      xlsx
+                      Download links (Excel)
                     </button>
                     <button className="btn small"
                       onClick={() => download("csv", { list: x.listName === "(no list)" ? undefined : x.listName })}>
-                      csv
+                      CSV
                     </button>
                     {x.notSent > 0 && (
                       <button className="btn small" title="Only the links that have not gone out yet"
                         onClick={() => download("xlsx", { list: x.listName === "(no list)" ? undefined : x.listName, onlyUnsent: true })}>
-                        unsent only
+                        Unsent only
                       </button>
                     )}
                     {x.notSent > 0 && mail?.configured && (
@@ -515,28 +348,34 @@ Send anyway?`)) return;
                           ? `Email their link to the ${x.notSent} who have not had one`
                           : "This is not the production platform — see what happens before you send"}
                         onClick={() => void sendInvitations(x.listName === "(no list)" ? null : x.listName)}>
-                        email {x.notSent}
+                        Email {x.notSent} invitation{x.notSent === 1 ? "" : "s"}
                       </button>
                     )}
                     {x.notSent === 0 && x.total > 0 && mail?.configured && (
                       <button className="btn small ghost" disabled={busy} data-testid={`ds-again-${x.listName}`}
                         title="Everybody here has had a link. Sending again gives them a second one."
                         onClick={() => void sendInvitations(x.listName === "(no list)" ? null : x.listName, { again: true })}>
-                        re-send
+                        Send again
                       </button>
                     )}
                     {x.notSent > 0 && (
                       <button className="btn small ghost" disabled={busy} data-testid={`ds-sent-${x.listName}`}
                         title="Record that you sent these yourself, without emailing anything"
                         onClick={() => void markSent(x.listName === "(no list)" ? null : x.listName)}>
-                        mark sent
+                        I sent these myself
                       </button>
                     )}
                     {x.waiting > 0 && x.listName !== "(no list)" && (
                       <button className="btn small ghost danger" disabled={busy}
                         title="Removes only the invitations nobody has opened"
                         onClick={() => void removeUnused(x.listName)}>
-                        remove unopened
+                        Remove unopened
+                      </button>
+                    )}
+                    {x.listName !== "(no list)" && (
+                      <button className="btn small ghost" disabled={busy} data-testid={`ds-rename-${x.listName}`} title="Give this list another name"
+                        onClick={() => void renameList(x.listName)}>
+                        Rename
                       </button>
                     )}
                   </div>
@@ -594,7 +433,7 @@ Send anyway?`)) return;
         {lists.length > 1 && (
           <select className="select" style={{ width: 190 }} value={listFilter} data-testid="ds-list-filter"
             onChange={(e) => setListFilter(e.target.value)}>
-            <option value="">Every upload</option>
+            <option value="">Every list</option>
             {lists.filter((l) => l !== "(no list)").map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
         )}
@@ -607,7 +446,7 @@ Send anyway?`)) return;
         <table className="grid" style={{ minWidth: 760 }}>
           <thead>
             <tr>
-              <th>Name</th><th>Email</th><th>Their id</th><th>Upload</th>
+              <th>Name</th><th>Email</th><th>Their id</th><th>List</th>
               <th>Status</th><th>Link sent</th><th>Added</th>
             </tr>
           </thead>

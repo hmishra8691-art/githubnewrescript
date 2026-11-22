@@ -59,23 +59,27 @@ ok("an empty list explains itself instead of failing");
 
 /* ---------------------------------------------------- the upload preview */
 await page.click('[data-testid="ds-upload-open"]');
+/* 2026-11-21: adding people opens on typing them in; pasting is the third way (scripts/people-intake-test.mjs walks all three) */
+await page.click('[data-testid="ds-mode-paste"]');
 await page.waitForSelector('[data-testid="ds-paste"]');
 await page.fill('[data-testid="ds-list-name"]', "wave 1");
 await page.fill('[data-testid="ds-paste"]',
   "name,email,employee_id,region\nAda Lovelace,ada@example.com,EMP-001,North\nAlan Turing,alan@example.com,EMP-002,South\nGrace Hopper,not-an-email,EMP-003,North\nAda Again,other@example.com,emp-001,North\n,,,\n");
 await page.click('[data-testid="ds-preview"]');
 // the sandbox has no project row, so the API refuses — the panel must SAY so
-await page.waitForSelector('[data-testid="ds-preview-result"], [data-testid="ds-note"]', { timeout: 10000 });
+/* the first call compiles the route on a development server, which can take longer than the check itself */
+await page.waitForSelector('[data-testid="ds-preview-result"], [data-testid="ds-error"]', { timeout: 90000 });
 const previewed = await page.$('[data-testid="ds-preview-result"]');
 if (previewed) {
   const body = await page.textContent('[data-testid="ds-preview-result"]');
-  assert.match(body, /2 to invite|3 to invite/, `unexpected preview summary: ${body.slice(0, 200)}`);
-  assert.match(body, /duplicate/i, "the in-file duplicate was not reported");
+  assert.match(body, /\d people will be added to the test list/, `unexpected preview summary: ${body.slice(0, 200)}`);
+  assert.match(body, /repeated/i, "the in-file duplicate was not reported");
+  assert.match(body, /look wrong/i, "the bad address was not reported");
   ok("the preview counts the people, and reports the duplicate and the bad address");
   assert.ok(await page.$('[data-testid="ds-map-email"]'), "the column mapping is not editable");
   ok("the guessed column mapping can be corrected before committing");
 } else {
-  const msg = await page.textContent('[data-testid="ds-note"]');
+  const msg = await page.textContent('[data-testid="ds-error"]');
   assert.match(msg, /\S/);
   ok(`the upload reports why it could not run here rather than throwing (“${msg.trim().slice(0, 60)}…”)`);
 }
