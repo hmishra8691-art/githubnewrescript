@@ -38,7 +38,8 @@ import { NextResponse, type NextRequest } from "next/server";
  * after 48 hours) and refuses everything else with a 410.
  */
 /* `/docs` (and its screenshots under `/docs-media`), `/robots.txt` and `/sitemap.xml` are the public developer documentation (Phase 7; Developer Docs 2026-11-09): read by people who are not users yet and by search engines; they read no data. */
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/d", "/docs", "/docs-media", "/robots.txt", "/sitemap.xml"];
+/* `/book` is an interview invitee's booking page (Q6, 0107): the token in its address is the credential, checked by /api/book/[token]. */
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/book", "/d", "/docs", "/docs-media", "/robots.txt", "/sitemap.xml"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

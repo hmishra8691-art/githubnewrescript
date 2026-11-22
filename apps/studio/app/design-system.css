@@ -2826,7 +2826,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 
 /* I6 — side-by-side import review: the part badges by level */
 .iqr-side td { vertical-align: top; padding: 6px 8px; border-top: 1px solid var(--c-border); }
-.iqi-badge.lv-same { border-color: #2f9e44; color: #2f9e44; }
-.iqi-badge.lv-converted { border-color: #1971c2; color: #1971c2; }
-.iqi-badge.lv-check { border-color: #e8590c; color: #e8590c; }
-.iqi-badge.lv-lost { border-color: #c92a2a; color: #c92a2a; }
+.iqi-badge.lv-same { border-color: var(--success, var(--c-success)); color: var(--success, var(--c-success)); }
+.iqi-badge.lv-converted { border-color: var(--accent); color: var(--accent); }
+.iqi-badge.lv-check { border-color: var(--warning, var(--c-warning-fg)); color: var(--warning, var(--c-warning-fg)); }
+.iqi-badge.lv-lost { border-color: var(--danger); color: var(--danger); }

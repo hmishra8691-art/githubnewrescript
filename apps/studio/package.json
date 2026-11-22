@@ -29,6 +29,7 @@
     "@rescript/exporters": "workspace:*",
     "@rescript/identity": "workspace:*",
     "@rescript/import": "workspace:*",
+    "@rescript/interviews": "workspace:*",
     "@rescript/mail": "workspace:*",
     "@rescript/media": "workspace:*",
     "@rescript/quality": "workspace:*",

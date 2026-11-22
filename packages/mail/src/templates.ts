@@ -336,3 +336,38 @@ function when(iso: string): string {
     hour: "2-digit", minute: "2-digit", timeZone: "UTC",
   }) + " UTC";
 }
+
+/**
+ * INTERVIEW SCHEDULING (Q6, 2026-11-29): the invitation to pick a time, and the reminder before it. Plain text first,
+ * like every template here; the booking link is personal and says so.
+ */
+export function interviewInvitationEmail(args: { name?: string | null; senderName: string; studyTitle: string; url: string; minutes: number; incentive?: string | null; replyTo?: string | null }): Rendered {
+  const who = args.name?.trim() ? `Hello ${args.name.trim().split(/\s+/)[0]},` : "Hello,";
+  const text = [
+    who, "",
+    `${args.senderName} would like to talk with you about ${args.studyTitle}. The conversation takes about ${args.minutes} minutes.`, "",
+    ...(args.incentive ? [`As a thank-you for taking part: ${args.incentive}.`, ""] : []),
+    "Pick a time that suits you:", "", args.url, "",
+    "This link is just for you. You can change or cancel your time from the same link.", "",
+    args.replyTo ? `If you have a question, reply to this email and it will reach ${args.senderName}.` : "",
+  ].filter((l) => l !== "").join("\n").replace(/\n(?=\S)/g, "\n\n");
+  const html = shell(
+    `<p style="margin:0 0 12px">${escapeHtml(who)}</p>` +
+      `<p style="margin:0"><strong>${escapeHtml(args.senderName)}</strong> would like to talk with you about ${escapeHtml(args.studyTitle)}. The conversation takes about ${args.minutes} minutes.</p>` +
+      (args.incentive ? `<p style="margin:12px 0 0">As a thank-you for taking part: ${escapeHtml(args.incentive)}.</p>` : "") +
+      linkBlock(args.url, "Pick a time") +
+      `<p style="margin:16px 0 0">This link is just for you. You can change or cancel your time from the same link.</p>`,
+    args.replyTo ? `Questions? Reply to this email and it reaches ${escapeHtml(args.senderName)}.` : undefined,
+  );
+  return { subject: `Would you talk with ${args.senderName} about ${args.studyTitle}?`, text, html };
+}
+
+export function interviewReminderEmail(args: { name?: string | null; senderName: string; studyTitle: string; when: string; url?: string | null; hoursBefore: number }): Rendered {
+  const who = args.name?.trim() ? `Hello ${args.name.trim().split(/\s+/)[0]},` : "Hello,";
+  const soon = args.hoursBefore <= 1 ? "in about an hour" : args.hoursBefore <= 24 ? "in about a day" : `in ${Math.round(args.hoursBefore / 24)} days`;
+  /* the booking link is personal and only its hash is stored, so a reminder sent by the job points back to the invitation */
+  const change = args.url ? ["To change or cancel your time:", "", args.url] : ["To change or cancel your time, use the link in your invitation email."];
+  const text = [who, "", `A reminder: your conversation with ${args.senderName} about ${args.studyTitle} is ${soon}, at ${args.when}.`, "", ...change].join("\n").replace(/\n(?=\S)/g, "\n\n");
+  const html = shell(`<p style="margin:0 0 12px">${escapeHtml(who)}</p><p style="margin:0">A reminder: your conversation with <strong>${escapeHtml(args.senderName)}</strong> about ${escapeHtml(args.studyTitle)} is ${soon}, at ${escapeHtml(args.when)}.</p>` + (args.url ? linkBlock(args.url, "Change or cancel") : `<p style="margin:16px 0 0">To change or cancel your time, use the link in your invitation email.</p>`));
+  return { subject: `Reminder: ${args.studyTitle}, ${args.when}`, text, html };
+}

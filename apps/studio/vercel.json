@@ -52,6 +52,10 @@
     {
       "path": "/api/cron/portal-reminders",
       "schedule": "23 * * * *"
+    },
+    {
+      "path": "/api/cron/qual-scheduling",
+      "schedule": "41 * * * *"
     }
   ]
 }

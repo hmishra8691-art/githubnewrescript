@@ -14,3 +14,4 @@ export * from "./scoring.js";
 export * from "./feedback.js";
 export * from "./mockLibrary.js";
 export * from "./code.js";
+export * from "./scheduling.js";

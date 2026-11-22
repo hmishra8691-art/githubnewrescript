@@ -112,6 +112,14 @@ const PUBLIC = {
     "marks in_progress responses idle past their survey's window as abandoned (RUNTIME-07): the same bearer-token "
     + "credential as the media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's first statement, "
     + "refusing everything when it is unset. It sweeps every survey, so there is no project to gate on — and no session",
+  "book/[token]/route.ts":
+    "an interview invitee's booking link (Q6, migration 0107): the invitee has no account and never will. The TOKEN in the "
+    + "invitation email is the credential — 32 random bytes, only its SHA-256 stored — looked up before anything else; an "
+    + "unknown token gets one fixed 404 sentence. It returns only the study title, open times and the holder's own booking",
+  "cron/qual-scheduling/route.ts":
+    "interview reminders (Q6, migration 0107): the same bearer-token credential as the other jobs, checked against CRON_SECRET by "
+    + "`timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It reminds booked invitees "
+    + "across every organisation, so there is no project to gate on — and no session",
   "webhooks/vendors/[vendor]/route.ts":
     "vendor event deliveries (0086): not a person and no session, and the sender is the public internet. "
     + "Authenticated by the vendor's own HMAC signature over the RAW body plus its signed timestamp, checked "

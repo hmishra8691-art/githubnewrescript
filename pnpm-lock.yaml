@@ -229,6 +229,9 @@ importers:
       '@rescript/import':
         specifier: workspace:*
         version: link:../../packages/import
+      '@rescript/interviews':
+        specifier: workspace:*
+        version: link:../../packages/interviews
       '@rescript/mail':
         specifier: workspace:*
         version: link:../../packages/mail
