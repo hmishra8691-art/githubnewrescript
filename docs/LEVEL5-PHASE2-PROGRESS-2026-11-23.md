@@ -1,4 +1,4 @@
-# Level 5 roadmap, Phase 2 (Essentials) — progress (updated 25 November 2026)
+# Level 5 roadmap, Phase 2 (Essentials) — progress (updated 26 November 2026)
 
 Phase 2 is the essentials for all seven areas, about twelve weeks of work in the roadmap. This document is kept
 as it goes: what is done, what was tested, what is next. AI design agents come first, as asked.
@@ -130,9 +130,66 @@ baseline exists.
 | One edit on the 501-question survey at about 440 ms | About 150 to 190 ms. Each edit no longer re-judges the survey it was given. **The 100 ms target is not met**; getting there needs incremental validation |
 | How many of the 131 failing import scenarios are the scenario builder's fault | Not looked at |
 
+### Fraud — recorded automation, and what it showed (26 November)
+
+The red-team corpus simulates attacks: it writes the telemetry I believed an attacker would leave. Building
+detectors against my own simulation would prove little, so I recorded the real thing instead.
+
+**What was recorded.** 30 sessions of a real Chromium completing the benchmark survey through the runtime's own
+collector, driven seven ways (`scripts/redteam-record.mjs`, kept in `packages/quality/fixtures/recorded`):
+
+| Style | What it is | Excluded |
+| --- | --- | --- |
+| Page script | Answers set from script, no real input events | 6 of 6 |
+| Scripted browser, fast | Clicks and types as fast as it goes | 6 of 6 |
+| Scripted browser, stealth | Automation flag hidden, short waits | 6 of 6 |
+| Agent, typed | Pointer moved, a few seconds a page, text at 40 ms a key | 3 of 3 |
+| Agent, pasted | The same, text pasted | 3 of 3 |
+| Agent, slow and even | Reads at a person's pace, types at a fixed 180 ms a key | 3 of 3 |
+| **Agent, patient** | **Reads at a person's pace, types at 140 to 340 ms a key with pauses** | **0 of 3** |
+
+Each was scored as if it came from its own address and device, so only behaviour counts.
+
+**What it showed.**
+
+1. Before any change, the engine excluded every fast style, and all of them by speed alone. Speed is the easiest
+   thing for an attacker to fix.
+2. **A patient agent passes.** Its only flag was repeated text, and that is an artefact: my recordings use canned
+   sentences, which a real model would not repeat. Counted properly, nothing catches it.
+3. Two things the collector does not see, found by looking at real telemetry:
+   - It counts clicks, not pointer movement. Moving the pointer to each target left exactly 31 pointer events,
+     the same as not moving it. So a pointer path cannot be judged at all.
+   - It keeps only the last 20 changes of a typed answer, so typing can be judged on 19 keystrokes, not 150.
+
+**What was added.** Two rules that read how keys arrived, from the answer history (times and lengths; never the
+text):
+
+| Rule | Fires when | On the recordings |
+| --- | --- | --- |
+| Typed faster than a person can | 15 or more keys in a row above 16 characters a second | The fast scripted styles and the 40 ms agent |
+| Typing too even to be a person | 15 or more keys in a row, gaps varying under 12%, nothing corrected | The slow, even agent — the one that speed does not catch |
+
+The slow, even agent is excluded because of the second rule. Its only other flag is the repeated canned text,
+the same as the patient agent, which is not excluded.
+
+**What this does not establish.**
+
+- **No person was recorded.** The rules' thresholds come from what is known about typing, not from data, and they
+  have never met a recording of people. The synthetic genuine respondents have no keystroke history, so the rules
+  cannot fire on them: the 0% false-positive figure says nothing about these two rules.
+- I wrote the recordings and the rules in the same sitting. The patient style is my guess at an evasive agent,
+  not a real one.
+- Headless Chromium on one server. No real desktop, no phone, no language model.
+- The simulated red-team numbers are unchanged (63.3% detected), as they should be: nothing was tuned to them.
+
+**What it means for the roadmap.** The fraud items that matter most are now clearer, in this order: (1) F4, the
+collector should keep typing statistics for the whole answer and a summary of the pointer path, because that is
+where a patient agent could still differ from a person; (2) F2, device and network signals, which need a build or
+license decision; (3) recordings of real people, without which no behavioural rule can be trusted to exclude.
+
 ## The scorecard after this
 
-11 benchmarks, 9 measured. 20 of 35 metrics with a target meet it.
+12 benchmarks, 10 measured. 22 of 41 metrics with a target meet it.
 
 | Benchmark | Measured | Target |
 | --- | --- | --- |
@@ -144,6 +201,8 @@ baseline exists.
 | Agent loop scenarios with a scripted planner (12) | 100% | 100% |
 | Loop runs that left the given survey unchanged | 100% | 100% |
 | One edit on a 501-question survey | 185 ms | 100 ms |
+| Recorded automated sessions excluded on behaviour alone (30) | 90% | 95% |
+| The agent paced like a person: excluded (3) | 0% | 90% |
 
 The verifier and loop figures are on cases I wrote and graded. They show the mechanisms work on those cases.
 
@@ -163,7 +222,9 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | Plan reading, plan check, clarification policy, routing, and the loop with scripted planners (verifies, repairs, stops on no progress, cost, refusals, unreadable plans, asks first) | `agentLoop.test.ts`, 10 tests | pass |
 | The two misreadings, and that cleaning sentences and moves still read correctly | `designIntent.test.ts`, 1 new test | pass |
 | Every suite after the edit speed-up: engine 3,000, analytics 894, Studio 1,331, templates 180, runtime 177, import 150, quality 119 | package tests | pass |
-| All benchmarks against the previous baseline | `pnpm bench` | no regression; five improvements |
+| The two typing rules: fixed-delay typing, a person's uneven typing, a correction in the window, a fast typist, too few keys, a paste, no history | `typing.test.ts`, 3 tests (quality suite: 122) | pass |
+| 30 real automated sessions recorded through the runtime's collector, all completed | `scripts/redteam-record.mjs` | 30 of 30 |
+| All benchmarks against the previous baseline | `pnpm bench` | no regression |
 
 ## What was NOT tested
 
@@ -194,14 +255,13 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | Import (6) | | I1 (10 of 300 files), I2 (exists, 58.3%, not examined) | I3, I4, I5, I6 |
 | Reporting (6) | | | R1 to R6 |
 | Qualitative (6) | | | Q2 to Q7 |
-| Fraud (6) | | | F2 to F6, F11 |
+| Fraud (6) | | F4 and F5 (two typing rules from recorded automation; the collector gaps found) | F2, F3, F6, F11 |
 
 Some "not started" items have earlier work in the product that I have not assessed against the roadmap's
 definition (libraries, dashboards, the quality review screen, the import review screen). I have not counted them.
 
-**Next:** fraud items the red-team benchmark can score (machine-answer detection, duplicates, one trust score).
-I am doing that one carefully: I wrote the simulated attacks, so tuning a detector to them would raise the number
-without meaning anything. It needs attack variants held back from development.
+**Next:** F4 in the runtime collector (whole-answer typing statistics, pointer path summary), then re-record and
+re-score; then path coverage (P2) and the survey source format (P3).
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages
 reviewed by people, P11 real devices, and anything needing the model, speech or vendor keys.

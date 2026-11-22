@@ -1,8 +1,8 @@
 # Level 5 scorecard
 
-Run at 2026-11-22T10:45:49.617Z, commit f8b3be40.
+Run at 2026-11-22T12:32:41.208Z, commit d2e570b7.
 
-9 of 11 benchmarks measured. 20 of 35 metrics meet their Level 5 target.
+10 of 12 benchmarks measured. 22 of 41 metrics meet their Level 5 target.
 
 ## AI design agents
 
@@ -15,7 +15,7 @@ Run at 2026-11-22T10:45:49.617Z, commit f8b3be40.
 | Proposals that were not what was asked | 0% | at most 1% | yes |
 | Instructions the rules hand to the model (the model's share of the work) | 48.3% | none set | – |
 | Out-of-scope or unanswerable requests that changed the survey | 0 | at most 0 | yes |
-| Median time to a proposal | 23.1 ms | at most 2000 ms | yes |
+| Median time to a proposal | 22.8 ms | at most 2000 ms | yes |
 
 68 cases, 29 not passing. First: add_text.plain (handed to the model: model); add_text.free (handed to the model: model); reword.free (handed to the model: model); type.free (handed to the model: model); add_option.free (handed to the model: model).
 
@@ -77,12 +77,12 @@ What this does not show: the planner is a script. This shows the loop's control 
 
 | Metric | Measured | Level 5 target | Meets it |
 | --- | --- | --- | --- |
-| Apply one edit | 185.4 ms | at most 100 ms | no |
-| Read one instruction (rule path) | 195.6 ms | at most 2000 ms | yes |
-| Parse and validate the whole definition | 111 ms | at most 1000 ms | yes |
-| Review the whole survey for contradictions (the roadmap's 10 seconds is for publish) | 128.4 ms | at most 10000 ms | yes |
-| Working out one page for one simulated respondent (about 308 pages each; the roadmap's 1 second is a page on a phone, which this is not) | 17.2 ms | at most 1000 ms | yes |
-| One simulated respondent, start to end (at this rate 1,000 simulated respondents take over an hour) | 5306 ms | none set | – |
+| Apply one edit | 194.7 ms | at most 100 ms | no |
+| Read one instruction (rule path) | 166.9 ms | at most 2000 ms | yes |
+| Parse and validate the whole definition | 112.9 ms | at most 1000 ms | yes |
+| Review the whole survey for contradictions (the roadmap's 10 seconds is for publish) | 132.4 ms | at most 10000 ms | yes |
+| Working out one page for one simulated respondent (about 308 pages each; the roadmap's 1 second is a page on a phone, which this is not) | 16.4 ms | at most 1000 ms | yes |
+| One simulated respondent, start to end (at this rate 1,000 simulated respondents take over an hour) | 5043 ms | none set | – |
 
 3 cases, 0 not passing.
 
@@ -94,9 +94,9 @@ What this does not show: this is the engine in Node, not the editor in a browser
 
 | Metric | Measured | Level 5 target | Meets it |
 | --- | --- | --- | --- |
-| Crosstab with a two-variable banner, 200,000 responses (400 ms here is the 2-second target scaled to a fifth of the rows) | 160.8 ms | at most 400 ms | yes |
-| The same, scaled linearly to 1,000,000 (estimate) | 804 ms | at most 2000 ms | yes |
-| Build the dataset from stored responses | 1755 ms | none set | – |
+| Crosstab with a two-variable banner, 200,000 responses (400 ms here is the 2-second target scaled to a fifth of the rows) | 138.8 ms | at most 400 ms | yes |
+| The same, scaled linearly to 1,000,000 (estimate) | 694 ms | at most 2000 ms | yes |
+| Build the dataset from stored responses | 1632 ms | none set | – |
 
 1 cases, 0 not passing.
 
@@ -113,7 +113,7 @@ What this does not show: measured at 200,000 responses by 4 variables, not the r
 | Behaviour scenarios identical to the source (419 built, 0 not run) | 58.3% | at least 99% | no |
 | Files importing to a survey that passes the publish check | 90% | at least 100% | no |
 | References the importer could not resolve | 4 | at most 0 | no |
-| Import time per file | 201 ms | at most 120000 ms | yes |
+| Import time per file | 184 ms | at most 120000 ms | yes |
 | Files in the corpus | 10 | at least 300 | no |
 
 26 cases, 16 not passing. First: decipher/decipher_1.xml (98.1% of 52 items; 32/61 behaviours); decipher/decipher_2.xml (100% of 32 items; 12/25 behaviours); decipher/decipher_3.xml (100% of 20 items; 9/19 behaviours); decipher/decipher_4.xml (97.6% of 82 items; 39/61 behaviours); decipher/decipher_5.xml (100% of 33 items; 23/47 behaviours).
@@ -141,9 +141,25 @@ No benchmark yet.
 | Language-model agents detected | 75% | at least 90% | no |
 | Real people wrongly excluded | 0% | at most 1% | yes |
 | Real people sent to review | 8.8% | at most 5% | no |
-| Scoring time per response (after the fact; the roadmap's 150 ms is for the entry decision) | 21.1 ms | at most 150 ms | yes |
+| Scoring time per response (after the fact; the roadmap's 150 ms is for the entry decision) | 21.5 ms | at most 150 ms | yes |
 
 9 cases, 6 not passing. First: llm_agent_typed (Language-model agent, typing: 16 of 30 detected, 0 excluded); llm_agent_pasted (Language-model agent, pasting: 29 of 30 detected, 0 excluded); device_farm (Device farm: 3 of 30 detected, 0 excluded); click_farm_humans (Click-farm workers: 0 of 30 detected, 0 excluded); translated_paste (Copied open ends: 29 of 30 detected, 1 excluded).
 
 What this does not show: the attacks are simulated from a description of how each behaves, not recorded from real attackers, and the people are synthetic. No device or network signal exists yet, so nothing here tests one.
+
+### Recorded automated browsers through the quality engine
+
+| Metric | Measured | Level 5 target | Meets it |
+| --- | --- | --- | --- |
+| Automated sessions excluded on behaviour alone (own address and device each) | 90% | at least 95% | no |
+| Automated sessions with any evidence other than repeated (canned) text | 90% | at least 95% | no |
+| The agent paced like a person: excluded (its only flag is repeated canned text, which a real model would not repeat) | 0% | at least 90% | no |
+| Agent-style sessions excluded on behaviour alone | 75% | at least 90% | no |
+| Excluded as recorded (one address, one device) | 100% | at least 95% | yes |
+| Synthetic genuine respondents excluded alongside them | 0% | at most 1% | yes |
+| Recorded sessions | 30 | none set | – |
+
+7 cases, 1 not passing. First: agent_patient (Agent told to pass for a person: reading pace, varied typing, pauses: 0 of 3 excluded, 0 with evidence other than repeated text (as recorded: 3 excluded). Fired: openend.duplicate 3).
+
+What this does not show: 30 sessions recorded on 2026-11-22 from headless Chromium on one server, scripted by the same author as the benchmark. No person was recorded, no real desktop or phone, and no language model: the agent styles reproduce how an agent drives a browser, with canned text. The typing rules were written in the same sitting as the recordings they catch, from what is known about how people type; they have never been run on a recording of people.
 
