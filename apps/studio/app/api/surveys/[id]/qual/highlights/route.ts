@@ -26,7 +26,7 @@ export const runtime = "nodejs";
  *   POST { action: "delete", reelId }
  *   exports: POST qual/export { type: "highlights", reelId, format: "docx" | "pptx" } — Data view + report downloads
  *
- * Clips play the turn a quote is in (no word timings); they are not stitched into one video. The sandbox (fake
+ * Clips play the turn a quote is in (no word timings); …/highlights/render joins them into one MP4 (Q4). The sandbox (fake
  * provider) exports the reel it sends; it has no recordings.
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {

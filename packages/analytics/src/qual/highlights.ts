@@ -18,7 +18,8 @@ import { excerptClip } from "./wordTimings.js";
  * says so ("the excerpt was changed / removed since"). Timing is the SEGMENT's:
  * transcripts carry turn timings, not word timings, so a clip plays the whole
  * turn the quote is in (stated on the reel). Stitching the clips into one video
- * is not done (no media processing in the Studio). Pure.
+ * is done on the server by @rescript/reportvideo's renderReel (Q4, 2026-11-29): clips with recording consent, text
+ * cards for the rest. Pure.
  */
 
 export interface HighlightSnapshot { quote: string; sourceId: string; segmentId: string; speaker?: string; group?: string; start?: number; end?: number; charStart: number; charEnd: number; codeId: string }
@@ -115,4 +116,4 @@ export function selectForReel(state: QualState, segments: readonly QualSegment[]
   return { excerpts: out, codes: [...codeHit], note };
 }
 
-export const CLIP_NOTE = "Clips play exactly the quote's words when the transcript has word timings (speech-to-text since 2026-10-22; timings re-aligned after a correction are approximate), otherwise the whole turn the quote is in. Clips are played one by one from the recording; joining them into one video is not done.";
+export const CLIP_NOTE = "Clips play exactly the quote's words when the transcript has word timings (speech-to-text since 2026-10-22; timings re-aligned after a correction are approximate), otherwise the whole turn the quote is in. Clips play one by one from the recording, or render as one video: footage only where the participant consented to recording, a text card otherwise.";

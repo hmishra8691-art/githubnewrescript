@@ -5,3 +5,4 @@ export * from "./verify.js";
 export * from "./pptxQa.js";
 export * from "./brand.js";
 export * from "./providers.js";
+export * from "./reel.js";

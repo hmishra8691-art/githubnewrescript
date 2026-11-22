@@ -35,7 +35,7 @@ test("highlight reels: a Word list with clip ranges and changed items, and a Pow
   const sources = { src1: { title: "IDI 1" }, src2: { title: "IDI 2" } };
   const d = checkDocx(await buildHighlightsDocx(def, { reel, states, sources, date: "2026-10-22" }));
   assert.ok(d.ok, d.problems.join("; "));
-  for (const w of ["HIGHLIGHT REEL", "Pricing complaints", "The price went up twice last year", "clip 00:12–00:40", "removed or rejected since", "Clip list", "joining them into one video is not done"]) assert.ok(d.text.toUpperCase().includes(w.toUpperCase()), w);
+  for (const w of ["HIGHLIGHT REEL", "Pricing complaints", "The price went up twice last year", "clip 00:12–00:40", "removed or rejected since", "Clip list", "render as one video"]) assert.ok(d.text.toUpperCase().includes(w.toUpperCase()), w);
   const p = await buildHighlightsPptx(def, { reel, states, sources });
   assert.ok(checkPptx(p).ok);
   const deck = await buildQualDeckPptx(def, { state: st, segments: segs, sources, comparison: compareGroups(st, segs, "Mumbai", "Delhi") });
