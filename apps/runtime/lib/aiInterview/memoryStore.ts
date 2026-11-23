@@ -1,6 +1,6 @@
 import type { QualStudy } from "@rescript/schema";
 import { moderationOf, quotaVerdict, type InterviewTurnRecord, type ModeratorState, type QualTranscriptShape } from "@rescript/engine";
-import type { AiInterviewStore, BeginArgs, BeginResult, RecordArgs, SessionRec, StudyRec } from "./types.ts";
+import type { AiInterviewStore, BeginArgs, BeginResult, ObserverNote, RecordArgs, SessionRec, StudyRec } from "./types.ts";
 
 /**
  * THE SANDBOX STORE — the same contract as the database (`rescript_ai_interview_begin` /
@@ -17,6 +17,8 @@ interface Mem {
   sessions: Map<string, SessionRec & { tokenHash: string; lastActivity: number; completedAt: number | null; qual?: { title: string; transcript: QualTranscriptShape } }>;
   turns: Map<string, InterviewTurnRecord[]>;
   observers: Map<string, string>;
+  /** Q5: the observer room's notes, by interview */
+  notes?: Map<string, ObserverNote[]>;
   seq: number;
 }
 declare global {
@@ -89,6 +91,15 @@ export function memoryStore(now: () => number = Date.now): AiInterviewStore & Sa
       return { qualSessionId: `mem-qs-${s.id}`, qualTranscriptId: `mem-qt-${s.id}` };
     },
     async mediaOwned() { return false; },
+    async nextObserverQuestion(sessionId) {
+      const q = (m.notes?.get(sessionId) ?? []).filter((n) => n.kind === "question" && n.status === "queued").sort((a, b) => a.createdAt - b.createdAt)[0];
+      return q ? { id: q.id, text: q.body } : null;
+    },
+    async settleObserverQuestion(noteId, outcome) {
+      for (const list of m.notes?.values() ?? []) for (const n of list) if (n.id === noteId && n.status === "queued") {
+        if ("askedSeq" in outcome) { n.status = "asked"; n.askedSeq = outcome.askedSeq; } else { n.status = "refused"; n.refusedReason = outcome.refused.slice(0, 300); }
+      }
+    },
 
     /* ---------------------------------------------------------------- the Studio sandbox's view */
     launch(guide: QualStudy, o: { title: string; guideLanguage?: string }) {
@@ -108,6 +119,14 @@ export function memoryStore(now: () => number = Date.now): AiInterviewStore & Sa
     endSession(sessionId: string) { const s = m.sessions.get(sessionId); if (!s || s.status !== "in_progress") return false; s.status = "ended"; s.version++; s.completedAt = now(); return true; },
     excludeSession(sessionId: string, excluded: boolean, reason?: string) { const s = m.sessions.get(sessionId); if (!s) return false; s.excluded = excluded; (s as { exclusionReason?: string }).exclusionReason = reason; return true; },
     touch(sessionId: string, at: number) { const s = m.sessions.get(sessionId); if (s) s.lastActivity = at; },
+    notesOf(sessionId: string) { return [...(m.notes?.get(sessionId) ?? [])].sort((a, b) => a.createdAt - b.createdAt); },
+    addNote(sessionId: string, n: { kind: ObserverNote["kind"]; body: string; turnSeq?: number; authorLabel?: string }) {
+      const s = m.sessions.get(sessionId); if (!s) return null;
+      const note: ObserverNote = { id: id(), kind: n.kind, body: n.body, turnSeq: n.turnSeq ?? s.state.seq, offsetMs: Math.max(0, now() - s.startedAt), status: n.kind === "question" ? (s.status === "in_progress" ? "queued" : "refused") : null, askedSeq: null, refusedReason: n.kind === "question" && s.status !== "in_progress" ? "the interview has finished" : null, authorLabel: n.authorLabel ?? "Observer", createdAt: now() };
+      (m.notes ??= new Map()).set(sessionId, [...(m.notes.get(sessionId) ?? []), note]);
+      return note;
+    },
+    withdrawNote(sessionId: string, noteId: string) { const n = (m.notes?.get(sessionId) ?? []).find((x) => x.id === noteId && x.status === "queued"); if (n) n.status = "withdrawn"; return !!n; },
   };
 }
 
@@ -119,6 +138,9 @@ export interface SandboxOps {
   endSession(sessionId: string): boolean;
   excludeSession(sessionId: string, excluded: boolean, reason?: string): boolean;
   touch(sessionId: string, at: number): void;
+  notesOf(sessionId: string): ObserverNote[];
+  addNote(sessionId: string, n: { kind: ObserverNote["kind"]; body: string; turnSeq?: number; authorLabel?: string }): ObserverNote | null;
+  withdrawNote(sessionId: string, noteId: string): boolean;
 }
 
 /** forget everything (tests) */

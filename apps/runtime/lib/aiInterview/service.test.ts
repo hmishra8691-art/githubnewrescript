@@ -155,3 +155,31 @@ test("stop, distress and manipulation take the rules' path; test interviews are 
   assert.equal(test.status, "flagged");
   assert.equal(test.qual, undefined, "a test interview never reaches the coding workspace");
 });
+
+test("Q5 the observer room: a queued question is asked after the next answer, as the moderator's own; withdrawn and late questions are not", async () => {
+  const d = deps(null); // the rules path: deterministic
+  const st = launch(d);
+  const b = await begin(d, { token: st.linkToken, ...ok });
+  assert.equal(b.kind, "started");
+  if (b.kind !== "started") return;
+  const sid = d.store.sessionsOf(st.id)[0].id;
+  const kept = d.store.addNote(sid, { kind: "question", body: "What would make you stay with your current provider?", authorLabel: "Priya" })!;
+  const gone = d.store.addNote(sid, { kind: "question", body: "Which comparison sites do you use?" })!;
+  d.store.withdrawNote(sid, gone.id);
+  d.store.addNote(sid, { kind: "chat", body: "Strong price sensitivity here", authorLabel: "Sam" });
+  const r1 = await turn(d, { sessionToken: b.sessionToken, afterSeq: 1, input: { kind: "answer", text: "We looked around when the contract ended last spring." } });
+  const asked = r1.added.find((t) => t.speaker === "moderator")!;
+  assert.equal(asked.text, "What would make you stay with your current provider?");
+  const notes = d.store.notesOf(sid);
+  assert.equal(notes.find((n) => n.id === kept.id)!.status, "asked");
+  assert.equal(notes.find((n) => n.id === kept.id)!.askedSeq, asked.seq);
+  assert.equal(notes.find((n) => n.id === gone.id)!.status, "withdrawn", "a withdrawn question is never asked");
+  assert.equal(notes.filter((n) => n.kind === "chat").length, 1);
+  /* the next answer goes on with the guide; nothing else is queued */
+  const r2 = await turn(d, { sessionToken: b.sessionToken, afterSeq: r1.interview.lastSeq, input: { kind: "answer", text: "A lower price and a faster connection in the evenings, mostly." } });
+  assert.notEqual(r2.added.find((t) => t.speaker === "moderator")!.text, asked.text);
+  /* after the interview, a question is recorded as not asked */
+  d.store.endSession(sid);
+  const late = d.store.addNote(sid, { kind: "question", body: "Anything else?" })!;
+  assert.equal(late.status, "refused"); assert.equal(late.refusedReason, "the interview has finished");
+});

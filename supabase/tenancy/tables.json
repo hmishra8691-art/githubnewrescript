@@ -13,6 +13,10 @@
       "class": "platform",
       "why": "platform AI evaluation"
     },
+    "ai_interview_observer_notes": {
+      "class": "customer",
+      "why": "the observer room of an AI interview (0115): holds an interview project's data"
+    },
     "ai_interview_participants": {
       "class": "customer",
       "why": "holds a survey's, session's or interview project's data"

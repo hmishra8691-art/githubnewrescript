@@ -7,7 +7,7 @@ import {
 import { AI_PROBING_DEPTHS, interviewFormatOf, modesForFormat, type AiModeration } from "@rescript/schema";
 import { useStudio } from "../store";
 import { transcriptText } from "@/lib/aiInterviews/view";
-import { AiApiError, httpAiInterviewApi, sandboxAiInterviewApi, type AiInterviewApi, type AiView, type InterviewDetail } from "./aiInterviewApi";
+import { AiApiError, httpAiInterviewApi, sandboxAiInterviewApi, type AiInterviewApi, type AiView, type InterviewDetail, type ObserverNote } from "./aiInterviewApi";
 import type { QualApi, WorkspaceView } from "./qualApi";
 import { AiInterviewLanguages, VoiceStats } from "./AiInterviewLanguages";
 import { translatePacks } from "@/lib/aiInterviews/translatePacks";
@@ -394,6 +394,63 @@ function Transcript({ id, row, api, busy, refresh, canManage }: { id: string; ro
           })}
         </tbody></table></div>
       )}
+      <ObserverRoom id={id} api={api} live={live} latestSeq={d?.turns.length ? d.turns[d.turns.length - 1].seq : undefined} canAsk={canManage} />
+    </div>
+  );
+}
+
+/**
+ * Q5 — THE OBSERVER ROOM: beside the live transcript, the team's private chat, markers on moments of the interview,
+ * and questions for the AI moderator (asked after the participant's next answer, or refused with the reason). The
+ * participant never sees any of it.
+ */
+function ObserverRoom({ id, api, live, latestSeq, canAsk }: { id: string; api: AiInterviewApi; live: boolean; latestSeq?: number; canAsk: boolean }) {
+  const [notes, setNotes] = React.useState<ObserverNote[] | null>(null);
+  const [text, setText] = React.useState("");
+  const [kind, setKind] = React.useState<"chat" | "marker" | "question">("chat");
+  const [error, setError] = React.useState<string | null>(null);
+  const [sending, setSending] = React.useState(false);
+  React.useEffect(() => {
+    let gone = false;
+    const load = () => api.observer(id).then((n) => { if (!gone) { setNotes(n); setError(null); } }).catch((e) => { if (!gone) setError((e as Error).message); });
+    void load();
+    if (!live) return () => { gone = true; };
+    const t = setInterval(load, 3000);
+    return () => { gone = true; clearInterval(t); };
+  }, [api, id, live]);
+  const send = async () => {
+    if (!text.trim()) return;
+    setSending(true); setError(null);
+    try { setNotes(await api.observer(id, { note: { kind, text: text.trim(), ...(kind === "marker" && latestSeq !== undefined ? { turnSeq: latestSeq } : {}) } })); setText(""); }
+    catch (e) { setError((e as Error).message); }
+    finally { setSending(false); }
+  };
+  const withdraw = async (noteId: string) => { try { setNotes(await api.observer(id, { withdraw: noteId })); } catch (e) { setError((e as Error).message); } };
+  const status = (n: ObserverNote) => n.status === "queued" ? "waiting for the participant's next answer" : n.status === "asked" ? `asked at moderator turn ${n.askedSeq}` : n.status === "refused" ? `not asked: ${n.refusedReason ?? ""}` : n.status === "withdrawn" ? "withdrawn" : "";
+  return (
+    <div className="ql-section" data-testid="ai-observer-room">
+      <div className="ql-row"><b>Observer room</b><span className="ql-muted">private to the research team — the participant never sees it</span></div>
+      {error && <div className="alert warning" data-testid="ai-observer-error">{error}</div>}
+      <div className="ql-observer-notes" data-testid="ai-observer-notes">
+        {(notes ?? []).length === 0 && <div className="ql-muted">No notes yet.</div>}
+        {(notes ?? []).map((n) => (
+          <div key={n.id} className="ql-row" data-testid="ai-observer-note" data-kind={n.kind} data-status={n.status ?? ""}>
+            <span className={`badge ${n.kind === "question" ? "info" : n.kind === "marker" ? "warning" : "neutral"}`}>{n.kind === "question" ? "Question" : n.kind === "marker" ? "Marker" : "Chat"}</span>
+            {n.offsetMs != null && <span className="ql-muted">{fmt(n.offsetMs)}{n.turnSeq != null ? ` · turn ${n.turnSeq}` : ""}</span>}
+            <span style={{ flex: 1 }}><b>{n.authorLabel ?? "Observer"}:</b> {n.body}{n.kind === "question" && <span className="ql-muted" data-testid="ai-observer-question-status"> — {status(n)}</span>}</span>
+            {n.kind === "question" && n.status === "queued" && canAsk && <button type="button" className="btn small" data-testid="ai-observer-withdraw" onClick={() => void withdraw(n.id)}>Withdraw</button>}
+          </div>
+        ))}
+      </div>
+      <div className="ql-row">
+        <select className="select small" data-testid="ai-observer-kind" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+          <option value="chat">Message the team</option>
+          <option value="marker">Mark this moment</option>
+          {canAsk && live && <option value="question">Ask the moderator</option>}
+        </select>
+        <input className="input" style={{ flex: 1 }} data-testid="ai-observer-text" value={text} maxLength={kind === "question" ? 300 : kind === "marker" ? 200 : 1000} placeholder={kind === "question" ? "A question the moderator asks after the next answer" : kind === "marker" ? "What happened here (e.g. pricing objection)" : "A private message to the other observers"} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void send(); }} />
+        <button type="button" className="btn small primary" data-testid="ai-observer-send" disabled={sending || !text.trim()} onClick={() => void send()}>{kind === "question" ? "Send to moderator" : kind === "marker" ? "Mark" : "Send"}</button>
+      </div>
     </div>
   );
 }

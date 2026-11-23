@@ -26,7 +26,10 @@ export interface AiInterviewApi {
   status(action: "pause" | "resume" | "close"): Promise<AiView>;
   interview(id: string): Promise<InterviewDetail>;
   act(id: string, action: "end" | "exclude" | "include", reason?: string): Promise<{ transcriptKept?: boolean; citations?: number }>;
+  /** Q5: the observer room of one interview — its notes; send a chat message, a marker or a question; withdraw a question */
+  observer(id: string, send?: { note?: { kind: "chat" | "marker" | "question"; text: string; turnSeq?: number }; withdraw?: string }): Promise<ObserverNote[]>;
 }
+export interface ObserverNote { id: string; kind: "chat" | "marker" | "question"; body: string; turnSeq: number | null; offsetMs: number | null; status: "queued" | "asked" | "refused" | "withdrawn" | null; askedSeq: number | null; refusedReason: string | null; authorLabel: string | null; createdAt: string | number }
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { cache: "no-store", ...init });
@@ -46,6 +49,7 @@ export function httpAiInterviewApi(surveyId: string): AiInterviewApi {
     status: (action) => call<AiView>(base, post({ action })),
     interview: (id) => call<InterviewDetail>(`${base}/${id}`),
     act: (id, action, reason) => call(`${base}/${id}`, post({ action, ...(reason ? { reason } : {}) })),
+    observer: async (id, send) => (await call<{ notes: ObserverNote[] }>(`${base}/${id}/observer`, send ? post(send) : undefined)).notes,
   };
 }
 
@@ -83,5 +87,6 @@ export function sandboxAiInterviewApi(getDef: () => SurveyDefinition): AiIntervi
     async status(action) { normalise(await call<Record<string, unknown>>(base, post({ action, observerKey: key() }))); return this.load(); },
     async interview(id) { const r = await call<{ id: string; turns: (TurnView & { decision: Record<string, unknown> | null })[] }>(`${base}/${id}?key=${encodeURIComponent(key())}`); return { id: r.id, turns: r.turns.map((t) => ({ ...t, hasAudio: false, hasVideo: false })), pii: true }; },
     async act(id, action, reason) { await call(`${base}/${id}`, post({ action, observerKey: key(), ...(reason ? { reason } : {}) })); return {}; },
+    async observer(id, send) { return (await call<{ notes: ObserverNote[] }>(`${base}/${id}/observer${send ? "" : `?key=${encodeURIComponent(key())}`}`, send ? post({ ...send, observerKey: key() }) : undefined)).notes; },
   };
 }

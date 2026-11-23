@@ -86,4 +86,14 @@ export interface AiInterviewStore {
   saveQual(a: { study: StudyRec; session: SessionRec; transcript: QualTranscriptShape }): Promise<{ qualSessionId: string; qualTranscriptId: string } | null>;
   /** does this media row belong to this interview? */
   mediaOwned(mediaId: string, sessionId: string): Promise<boolean>;
+  /** Q5: the oldest question the observer room queued for this interview (null when none, or before migration 0115) */
+  nextObserverQuestion(sessionId: string): Promise<{ id: string; text: string } | null>;
+  /** Q5: the question was asked at this moderator turn, or refused (why) */
+  settleObserverQuestion(id: string, outcome: { askedSeq: number } | { refused: string }): Promise<void>;
+}
+
+/** Q5: one note of the observer room (chat, marker, or a question for the moderator) */
+export interface ObserverNote {
+  id: string; kind: "chat" | "marker" | "question"; body: string; turnSeq: number | null; offsetMs: number | null;
+  status: "queued" | "asked" | "refused" | "withdrawn" | null; askedSeq: number | null; refusedReason: string | null; authorLabel: string | null; createdAt: number;
 }

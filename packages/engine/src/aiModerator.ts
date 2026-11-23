@@ -8,6 +8,7 @@ import {
   shortLanguage, wantsContinue, wantsStop, type EntryMeta,
 } from "./aiInterviewSafety.js";
 import { signalsDone } from "./aiInterviewTurnTaking.js";
+import { observerQuestionProblems, observerQuestionText } from "./aiInterviewObserver.js";
 
 /**
  * THE AI MODERATOR (2026-10-22) — the engine that runs ONE 1:1 interview from
@@ -273,9 +274,11 @@ export interface ModeratorState {
   exhausted?: string[];
   /** sections that ran over their minutes (and what was skipped for it) */
   sectionsOver?: { sectionId: string; minutes: number; budget: number; skipped: string[] }[];
+  /** Q5: questions from the observer room the moderator asked, and at which of its turns */
+  observerAsked?: { id: string; seq: number }[];
 }
 
-export type ReplyIntent = "open" | "probe" | "clarify" | "conditional_probe" | "next" | "cover" | "check_in" | "resume" | "boundary" | "nudge" | "close" | "repeat";
+export type ReplyIntent = "open" | "probe" | "clarify" | "conditional_probe" | "next" | "cover" | "check_in" | "resume" | "boundary" | "nudge" | "close" | "repeat" | "observer_question";
 /** G1 2026-10-22: the voice style a session runs in and what it measured */
 export interface VoiceStats { style?: "turn_based" | "conversation" | "realtime"; interruptions: number; latenciesMs: number[]; fallback?: string }
 /**
@@ -714,7 +717,7 @@ export function startInterview(plan: ModeratorPlan, opts: { now: number; languag
 
 /* ------------------------------------------------------------ a participant's turn */
 
-export function prepareTurn(plan: ModeratorPlan, prior: ModeratorState, input: ParticipantInput, opts: { now: number; modelAvailable?: boolean }): PreparedTurn {
+export function prepareTurn(plan: ModeratorPlan, prior: ModeratorState, input: ParticipantInput, opts: { now: number; modelAvailable?: boolean; /** Q5: the next queued question from the observer room */ observerQuestion?: { id: string; text: string } | null }): PreparedTurn {
   const out = prepareTurnInner(plan, prior, input, opts);
   const cut = input.kind === "answer" ? input.interrupted : undefined;
   if (!cut || !cut.said) return out;
@@ -727,7 +730,7 @@ export function prepareTurn(plan: ModeratorPlan, prior: ModeratorState, input: P
   return { ...out, fallback: { ...out.fallback, decision: { ...out.fallback.decision, interrupted: mark } }, ctx: { ...out.ctx, interrupted: cut } };
 }
 
-function prepareTurnInner(plan: ModeratorPlan, prior: ModeratorState, input: ParticipantInput, opts: { now: number; modelAvailable?: boolean }): PreparedTurn {
+function prepareTurnInner(plan: ModeratorPlan, prior: ModeratorState, input: ParticipantInput, opts: { now: number; modelAvailable?: boolean; observerQuestion?: { id: string; text: string } | null }): PreparedTurn {
   const now = opts.now;
   const state = clone(prior);
   const w = moderatorWords(state.language, plan);
@@ -799,6 +802,20 @@ function prepareTurnInner(plan: ModeratorPlan, prior: ModeratorState, input: Par
   if (state.coverage && raw.trim()) { if (!state.covered.includes(state.coverage.objectiveId)) state.covered.push(state.coverage.objectiveId); }
   const step = currentStep(plan, state);
   for (const o of plan.objectives) if (!state.covered.includes(o.id) && step && keywordCover(raw, o.text)) state.covered.push(o.id);
+
+  /*
+   * Q5 — A QUESTION FROM THE OBSERVER ROOM: asked now, after this answer, as the moderator's own follow-up (it does
+   * not use one of the question's follow-ups); not on the closing question, not after text that read like
+   * instructions, not in a check-in. The participant's next answer goes on with the guide as usual.
+   */
+  const oq = opts.observerQuestion;
+  if (oq && !injected && !state.coverage && step && !step.closing && state.phase === "active" && !(state.observerAsked ?? []).some((x) => x.id === oq.id) && observerQuestionProblems(oq.text).length === 0) {
+    const ask = observerQuestionText(oq.text);
+    state.asked.push(ask); state.stepAnswers.push(raw); state.lastQuestion = ask; state.lastAnswer = masked.text.slice(0, 600);
+    moderatorTurn(state);
+    state.observerAsked = [...(state.observerAsked ?? []), { id: oq.id, seq: state.seq }].slice(-50);
+    return { kind: "final", state, reply: reply(plan, state, now, { say: ask, intent: "observer_question", source: "rules", reason: "a question from the observer room", flags: flagsNow }) };
+  }
 
   /* 3 — conditional probes (the guide's own) */
   if (step && !injected) {

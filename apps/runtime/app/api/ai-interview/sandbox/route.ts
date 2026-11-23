@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { QualStudy } from "@rescript/schema";
-import { interviewCounts, launchProblems, moderationOf, voiceSummaryOf, type InterviewSummary } from "@rescript/engine";
+import { parseObserverNote, interviewCounts, launchProblems, moderationOf, voiceSummaryOf, type InterviewSummary } from "@rescript/engine";
 import { sandboxStore } from "@/lib/aiInterview/runtimeDeps";
 import { planFor } from "@/lib/aiInterview/service";
 
@@ -50,6 +50,16 @@ export async function POST(req: NextRequest) {
     const g = QualStudy.safeParse({ ...study.guide, aiModeration: { ...(study.guide.aiModeration ?? {}), translations: { ...(study.guide.aiModeration?.translations ?? {}), ...packs } } });
     if (!g.success) return NextResponse.json({ error: "the wording could not be read" }, { status: 400 });
     study.guide = g.data;
+  } else if (action === "observer") {
+    /* Q5: the observer room of one sandbox interview — its notes; with `note`, add one; with `withdraw`, take a queued question back */
+    if (!store.sessionsOf(study.id).some((x) => x.id === id)) return NextResponse.json({ error: "no such interview" }, { status: 404 });
+    if (body.note) {
+      const n = parseObserverNote(body.note);
+      if ("error" in n) return NextResponse.json({ error: n.error }, { status: 400 });
+      store.addNote(id, { kind: n.kind, body: n.text, ...(n.turnSeq !== undefined ? { turnSeq: n.turnSeq } : {}), authorLabel: typeof body.author === "string" ? body.author.slice(0, 200) : "Observer" });
+    }
+    if (typeof body.withdraw === "string") store.withdrawNote(id, body.withdraw);
+    return NextResponse.json({ ok: true, notes: store.notesOf(id) }, { headers: { "cache-control": "no-store" } });
   } else if (action !== "list" && action !== "interview") return NextResponse.json({ error: "unknown action" }, { status: 400 });
 
   const sessions = store.sessionsOf(study.id);

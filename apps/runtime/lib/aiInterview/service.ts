@@ -6,6 +6,7 @@ import type { AiStimulus, PanelOutcome } from "@rescript/schema";
 import { interviewFormatOf } from "@rescript/schema";
 import { outcomeForInterview, type FlagKind, type NotifyEmitInput } from "@rescript/engine";
 import type { AiInterviewStore, SessionRec, StudyRec } from "./types.ts";
+import { observerQuestionProblems } from "@rescript/engine";
 import { realtimeReplyFrom, realtimeTurnInstructions, realtimeVerbatimInstructions, spokeVerbatim } from "@rescript/engine";
 import { lastModeratorTurn, localizedPlan, modeAndStyle, offeredStyles, replySpeaker, setVoice, studyI18n, type SpeakSink, type StudyI18n, type VoiceStyle } from "./voice.ts";
 
@@ -283,7 +284,9 @@ export async function turn(deps: Deps, body: TurnBody, opts: { onSay?: SayStream
   const interrupted = cutTurn && cutHeard !== null && cutHeard < cutTurn.text.length ? { said: cutTurn.text, heardChars: Math.min(cutHeard, cutTurn.text.length) } : undefined;
   const input: ParticipantInput = kind === "answer" ? { kind, text, meta: { ...(body.input?.meta ?? {}), ...(session.mode !== "text" && body.original != null ? { spoken: true } : {}) }, ...(interrupted ? { interrupted } : {}) } : { kind };
   const now = deps.now();
-  const prepared = prepareTurn(plan, session.state, input, { now, modelAvailable: !!deps.model });
+  /* Q5: a question the observer room queued is asked after this answer (never on a realtime provider's own turn) */
+  const observerQuestion = kind === "answer" && !(session.mode === "voice" && session.state.voice?.style === "realtime") ? await deps.store.nextObserverQuestion(session.id).catch(() => null) : null;
+  const prepared = prepareTurn(plan, session.state, input, { now, modelAvailable: !!deps.model, observerQuestion });
   /* 2026-11-08: a typed session speaks its replies only in a hybrid study (the participant switched to talking) — never a free voice for a chat study */
   if (session.mode === "text" && interviewFormatOf(moderationOf(study.guide)) !== "hybrid") opts = { ...opts, onSpeak: undefined };
   /* G1 realtime: a model turn is spoken by the provider — hand it the turn's instructions, record nothing yet */
@@ -337,6 +340,13 @@ export async function turn(deps: Deps, body: TurnBody, opts: { onSay?: SayStream
     return { interview: view(plan, study, fresh ?? session, turns, silence), added: turns.filter((t) => t.seq > after).map((t) => turnView(plan, t)), replayed: true };
   }
   const after2: SessionRec = { ...session, state, status, version: v, flags: state.flags };
+  if (observerQuestion) {
+    const asked = (state.observerAsked ?? []).find((x) => x.id === observerQuestion.id);
+    const problems = observerQuestionProblems(observerQuestion.text);
+    if (asked) await deps.store.settleObserverQuestion(observerQuestion.id, { askedSeq: asked.seq }).catch(() => undefined);
+    else if (problems.length) await deps.store.settleObserverQuestion(observerQuestion.id, { refused: problems.join("; ") }).catch(() => undefined);
+    else if (state.phase === "done") await deps.store.settleObserverQuestion(observerQuestion.id, { refused: "the interview ended before it could be asked" }).catch(() => undefined);
+  }
   if (state.phase === "done" && !session.isTest && state.answers > 0) await toQual(deps, plan, study, after2, all).catch((e) => console.warn("[rescript:ai-interview] transcript not written to the qualitative tables", JSON.stringify({ session: session.id.slice(0, 8), error: (e as Error).message })));
   /* G3: the moderator's NEW alert flags (and a completion) become events — the participant's words of this turn as the excerpt (redacted before anything stores or sends it) */
   const seen = new Set(session.flags.map((f) => f.kind));

@@ -226,6 +226,7 @@ export * from "./liveSchedule.js";
 export * from "./aiInterviewSafety.js";
 export * from "./aiModerator.js";
 export * from "./aiInterviewStudy.js";
+export * from "./aiInterviewObserver.js";
 export * from "./aiInterviewActions.js";
 export * from "./aiModeratorEval.js";
 /* G1 2026-10-22: AI interviews in every language, voice conversation with barge-in, realtime */

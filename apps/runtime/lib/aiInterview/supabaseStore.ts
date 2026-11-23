@@ -96,6 +96,16 @@ export function supabaseStore(db: SupabaseClient): AiInterviewStore {
       if (ev.error) console.warn("[rescript:ai-interview] history not recorded", JSON.stringify({ error: ev.error.message }));
       return { qualSessionId: String(qs.data!.id), qualTranscriptId: String(qt.data!.id) };
     },
+    /* Q5: the observer room (0115); before it, there are no queued questions */
+    async nextObserverQuestion(sessionId) {
+      const { data, error } = await db.from("ai_interview_observer_notes").select("id, body").eq("session_id", sessionId).eq("kind", "question").eq("status", "queued").order("created_at", { ascending: true }).limit(1);
+      if (error || !data?.length) return null;
+      return { id: String(data[0].id), text: String(data[0].body) };
+    },
+    async settleObserverQuestion(noteId, outcome) {
+      const patch = "askedSeq" in outcome ? { status: "asked", asked_seq: outcome.askedSeq } : { status: "refused", refused_reason: outcome.refused.slice(0, 300) };
+      await db.from("ai_interview_observer_notes").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", noteId).eq("status", "queued");
+    },
     async mediaOwned(mediaId, sessionId) {
       if (!/^[0-9a-f-]{36}$/i.test(mediaId)) return false;
       const r = await db.from("media_objects").select("id").eq("id", mediaId).eq("session_id", sessionId).maybeSingle();
