@@ -36,7 +36,8 @@ export function liveApi(surveyId: string) {
   const base = `/api/surveys/${surveyId}/qual/live`;
   return {
     list: () => call<LiveList>(base),
-    detail: (id: string) => call<LiveDetail>(`${base}?id=${encodeURIComponent(id)}`),
+    /* a reply without the room (an older server, or the list instead of the detail) is an error, never a half-drawn console */
+    detail: async (id: string) => { const d = await call<LiveDetail>(`${base}?room=${encodeURIComponent(id)}`); if (!d?.room) throw new QualApiError("The session could not be loaded — reload the page and try again.", 502); return d; },
     schedule: (sessions: Record<string, unknown>[], guide?: unknown) => call<{ rooms: (LiveRoomSummary & { invites: LiveInviteView[] })[] }>(base, post({ action: "schedule", sessions, ...(guide !== undefined ? { guide } : {}) })),
     update: (id: string, patch: Record<string, unknown>) => call(base, post({ action: "update", id, ...patch })),
     cancel: (id: string) => call(base, post({ action: "cancel", id })),

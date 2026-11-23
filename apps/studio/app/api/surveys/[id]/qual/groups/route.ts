@@ -28,7 +28,7 @@ export const maxDuration = 120;
  * others' answers; here the moderator runs it.
  *
  *   GET                       the project's group sessions                                  Data view
- *   GET ?id=…                 one session live: the state, participants (handles and groups), the current
+ *   GET ?group=…              one session live: the state, participants (handles and groups), the current
  *                             answers (redacted without contact details), clusters, votes by code    Data view
  *   POST { action: "create", title, mode?, prompts?: string[], settings? }   prompts from the guide by default
  *   POST { action: "op", id, version, op }      start / voting / next / ask / approve or reject a follow-up / mode / end
@@ -144,7 +144,8 @@ async function moderate(store: GroupStore, row: GroupRow, body: Record<string, u
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const authed = await requireUser(req);
-  const id = req.nextUrl.searchParams.get("id") ?? "";
+  /* not ?id=: on a route under [id] the platform fills `id` from the path, so a query parameter of that name never arrives (2026-11-23) */
+  const id = req.nextUrl.searchParams.get("group") ?? "";
   if (params.id === "sandbox") {
     if (aiProviderName() !== "fake") return isFailure(authed) ? authed.response : json({ error: "the sandbox runs group sessions only against the fake provider" }, 403);
     const store = sandboxStore();

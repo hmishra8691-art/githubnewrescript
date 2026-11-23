@@ -19,7 +19,7 @@ export const runtime = "nodejs";
  *   POST json       { text, title?, fileName?, format?, sessionId? }        a pasted transcript
  *   POST json       { source: "open_ends", questionIds, title?, environment? }  open-ended answers, snapshotted
  *   PATCH json      { id, title?, sessionId?, speakers? }                    the speaker map: role, group
- *   DELETE ?id=…    the source, and every excerpt coded from it
+ *   DELETE ?transcript=…    the source, and every excerpt coded from it
  *
  * Speaker ids and timestamps are kept exactly as the file has them; the
  * moderator is suggested from the label and the group from the session's
@@ -117,7 +117,8 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (isFailure(gate)) return gate.response;
   const refused = refuse(gate, "manage");
   if (refused) return refused;
-  const id = req.nextUrl.searchParams.get("id") ?? "";
+  /* not ?id=: on a route under [id] the platform fills `id` from the path, so a query parameter of that name never arrives (2026-11-23) */
+  const id = req.nextUrl.searchParams.get("transcript") ?? "";
   if (!UUID.test(id)) return json({ error: "which transcript (id)" }, 400);
   try {
     const db = gate.db;

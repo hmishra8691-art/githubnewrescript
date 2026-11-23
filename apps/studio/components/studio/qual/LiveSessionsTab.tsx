@@ -65,7 +65,7 @@ export function LiveSessionsTab({ ws, api, run, setWs, setNote }: { ws: Workspac
     void lapi.list().then(setList).catch(() => null);
   };
 
-  if (consoleRole && detail) return <LiveConsole api={lapi} detail={detail} role={consoleRole} onLeave={() => { setConsoleRole(null); void reload(); }} onFinalized={finalized} />;
+  if (consoleRole && detail?.room) return <LiveConsole api={lapi} detail={detail} role={consoleRole} onLeave={() => { setConsoleRole(null); void reload(); }} onFinalized={finalized} />;
 
   const t = list?.transport;
   const can = list?.can;
@@ -119,8 +119,8 @@ export function LiveSessionsTab({ ws, api, run, setWs, setNote }: { ws: Workspac
               {r.transcriptId && <span className="chip on" data-testid="live-has-transcript">transcript ready</span>}
               <span className="grow" />
               <button type="button" className="btn sm" data-testid="live-details" onClick={() => setOpen(open === r.id ? null : r.id)}>{open === r.id ? "Close" : "Details"}</button>
-              {can?.manage && r.status !== "cancelled" && r.status !== "ended" && <button type="button" className="btn sm primary" data-testid="live-moderate" onClick={async () => { await loadDetail(r.id); setOpen(r.id); setConsoleRole("moderator"); }}>Moderate</button>}
-              {(r.status === "open" || r.status === "live") && <button type="button" className="btn sm" data-testid="live-observe" onClick={async () => { await loadDetail(r.id); setOpen(r.id); setConsoleRole("observer"); }}>Observe</button>}
+              {can?.manage && r.status !== "cancelled" && r.status !== "ended" && <button type="button" className="btn sm primary" data-testid="live-moderate" onClick={() => run("Opening the session", async () => { await loadDetail(r.id); setOpen(r.id); setConsoleRole("moderator"); return null; }, () => {})}>Moderate</button>}
+              {(r.status === "open" || r.status === "live") && <button type="button" className="btn sm" data-testid="live-observe" onClick={() => run("Opening the session", async () => { await loadDetail(r.id); setOpen(r.id); setConsoleRole("observer"); return null; }, () => {})}>Observe</button>}
               {can?.manage && r.status === "ended" && !r.transcriptId && <button type="button" className="btn sm primary" data-testid="live-finalize-row" onClick={() => run("Finalizing", () => lapi.finalize(r.id), finalized)}>Finalize → transcript</button>}
             </div>
             {r.problems.length > 0 && <div className="alert warning" data-testid="live-problems">{r.problems.join(" ")}</div>}

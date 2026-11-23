@@ -33,7 +33,7 @@ export const maxDuration = 120;
  *
  *   GET                         the project's sessions (status, time, invitations / joined / no-shows), the transport
  *                               (built-in mesh, TURN or not — with the warning — LiveKit or not), whether e-mail is on   Data view
- *   GET ?id=…                   one session: invitations (links for Data edit; names and e-mails only with contact
+ *   GET ?room=…                 one session: invitations (links for Data edit; names and e-mails only with contact
  *                               details), people, recording chunks, back-room chat and notes                         Data view
  *   POST { action: "schedule", sessions: [{ title, kind, scheduledAt, timeZone, segment, settings, slots?, people? }] }
  *                               rooms snapshotted from the guide (consent, stimuli, timed sections), each with a
@@ -111,7 +111,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const store = await storeFor(params.id);
     const mail = mailConfig();
     const base = { ok: true, transport: transportInfo(), mail: { configured: !w.sandbox && mail.configured }, can: { manage: w.manage, pii: w.pii }, sandbox: w.sandbox };
-    const id = req.nextUrl.searchParams.get("id");
+    /* not ?id=: on a route under [id] the platform fills `id` from the path, so a query parameter of that name never arrives (2026-11-23) */
+  const id = req.nextUrl.searchParams.get("room");
     if (!id) {
       const rows = await store.rooms(params.id);
       const out = [];

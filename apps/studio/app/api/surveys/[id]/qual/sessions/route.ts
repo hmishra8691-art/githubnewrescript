@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
  *
  *   POST   { title, kind, scheduledAt, moderator, participants, consent, notes, observations, status }
  *   PATCH  { id, …any of the above }
- *   DELETE ?id=…   (its transcripts stay, unlinked; its recording row goes with the media sweep)
+ *   DELETE ?session=…   (its transcripts stay, unlinked; its recording row goes with the media sweep)
  *
  * Every answer is the refreshed workspace.
  */
@@ -58,7 +58,8 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (isFailure(gate)) return gate.response;
   const refused = refuse(gate, "manage");
   if (refused) return refused;
-  const id = req.nextUrl.searchParams.get("id") ?? "";
+  /* not ?id=: on a route under [id] the platform fills `id` from the path, so a query parameter of that name never arrives (2026-11-23) */
+  const id = req.nextUrl.searchParams.get("session") ?? "";
   if (!UUID.test(id)) return json({ error: "which session (id)" }, 400);
   try {
     const db = gate.db;

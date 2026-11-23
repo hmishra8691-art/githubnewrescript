@@ -107,7 +107,7 @@ export function httpSynthesisApi(surveyId: string, onWorkspace: (ws: WorkspaceVi
     async setAutoCode(s) { return (await call<{ settings: AutoCodeSettings }>(`${base}/jobs`, post({ action: "settings", autoCode: s }))).settings; },
     async continueJobs() { const r = await call<{ jobs: QualJob[]; idle?: boolean }>(`${base}/jobs`, post({ action: "continue" })); return { ...r, ...(r.idle ? {} : { ws: await ws() }) }; },
     async groups() { return (await call<{ sessions: GroupListItem[] }>(`${base}/groups`)).sessions; },
-    async group(id) { return (await call<{ session: GroupLive }>(`${base}/groups?id=${encodeURIComponent(id)}`)).session; },
+    async group(id) { return (await call<{ session: GroupLive }>(`${base}/groups?group=${encodeURIComponent(id)}`)).session; },
     async createGroup(input) { return (await call<{ id: string }>(`${base}/groups`, post({ action: "create", ...input }))).id; },
     async groupOp(g, op) { await call(`${base}/groups`, post({ action: "op", id: g.id, version: g.version, op })); },
     async groupAi(id, step) { return call(`${base}/groups`, post({ action: "ai", id, step })); },
@@ -286,7 +286,7 @@ export function sandboxSynthesisApi(api: QualApi, getDef: () => SurveyDefinition
       return { jobs, ws: w };
     },
     async groups() { return (await call<{ sessions: GroupListItem[] }>(groupsUrl)).sessions; },
-    async group(id) { return (await call<{ session: GroupLive }>(`${groupsUrl}?id=${encodeURIComponent(id)}`)).session; },
+    async group(id) { return (await call<{ session: GroupLive }>(`${groupsUrl}?group=${encodeURIComponent(id)}`)).session; },
     async createGroup(input) { return (await call<{ id: string }>(groupsUrl, post({ action: "create", ...input, guide: getDef().qualStudy ?? null }))).id; },
     async groupOp(g, op) { await call(groupsUrl, post({ action: "op", id: g.id, version: g.version, op })); },
     async groupAi(id, step) { return call(groupsUrl, post({ action: "ai", id, step, objectives: studyOfDef(getDef()).objectives, fake: fake("__rescriptGroupFake") })); },

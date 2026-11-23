@@ -106,7 +106,7 @@ export function httpQualApi(surveyId: string): QualApi {
     sandbox: false,
     async load() { last = await call<WorkspaceView>(base); return last; },
     async saveSession(input, id) { const r = await call<{ workspace: QualWorkspace }>(`${base}/sessions`, jsonInit(id ? "PATCH" : "POST", id ? { ...input, id } : input)); return merge(r.workspace); },
-    async deleteSession(id) { const r = await call<{ workspace: QualWorkspace }>(`${base}/sessions?id=${encodeURIComponent(id)}`, { method: "DELETE" }); return merge(r.workspace); },
+    async deleteSession(id) { const r = await call<{ workspace: QualWorkspace }>(`${base}/sessions?session=${encodeURIComponent(id)}`, { method: "DELETE" }); return merge(r.workspace); },
     async importText(input) { const r = await call<{ workspace: QualWorkspace; warnings: string[] }>(`${base}/transcripts`, jsonInit("POST", input)); return { ws: merge(r.workspace), warnings: r.warnings ?? [] }; },
     async importFile(file, input) {
       const f = new FormData(); f.set("file", file); if (input.title) f.set("title", input.title); if (input.sessionId) f.set("sessionId", input.sessionId);
@@ -114,7 +114,7 @@ export function httpQualApi(surveyId: string): QualApi {
       return { ws: merge(r.workspace), warnings: r.warnings ?? [] };
     },
     async updateTranscript(id, patch) { const r = await call<{ workspace: QualWorkspace }>(`${base}/transcripts`, jsonInit("PATCH", { id, ...patch })); return merge(r.workspace); },
-    async deleteTranscript(id) { const r = await call<{ workspace: QualWorkspace }>(`${base}/transcripts?id=${encodeURIComponent(id)}`, { method: "DELETE" }); return merge(r.workspace); },
+    async deleteTranscript(id) { const r = await call<{ workspace: QualWorkspace }>(`${base}/transcripts?transcript=${encodeURIComponent(id)}`, { method: "DELETE" }); return merge(r.workspace); },
     async openEnds(questionIds, title) { const r = await call<{ workspace: QualWorkspace; warnings: string[] }>(`${base}/transcripts`, jsonInit("POST", { source: "open_ends", questionIds, title })); return { ws: merge(r.workspace), warnings: r.warnings ?? [] }; },
     async aiCode(req) { const r = await call<CodingReport & { workspace: QualWorkspace }>(`${base}/coding`, jsonInit("POST", { action: "ai", ...req, version: last?.version ?? 0 })); return { ws: merge(r.workspace), report: r }; },
     async op(op) { const r = await call<{ workspace: QualWorkspace }>(`${base}/coding`, jsonInit("POST", { action: "op", op, version: last?.version ?? 0 })); return merge(r.workspace); },
