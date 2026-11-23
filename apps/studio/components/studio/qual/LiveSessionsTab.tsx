@@ -25,7 +25,7 @@ export function LiveSessionsTab({ ws, api, run, setWs, setNote }: { ws: Workspac
   const [detail, setDetail] = React.useState<LiveDetail | null>(null);
   const [consoleRole, setConsoleRole] = React.useState<"moderator" | "observer" | null>(null);
   const tomorrow = React.useMemo(() => { const d = new Date(Date.now() + 86_400_000); d.setMinutes(0, 0, 0); const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T18:00`; }, []);
-  const [form, setForm] = React.useState({ title: "", kind: (s.def.qualStudy?.kind === "interview" ? "interview" : "focus_group") as "focus_group" | "interview", when: tomorrow, tz: TZ, duration: 90, max: 6, slots: 6, segment: "", record: true, video: false, assist: true, waiting: true });
+  const [form, setForm] = React.useState({ title: "", kind: (s.def.qualStudy?.kind === "interview" ? "interview" : "focus_group") as "focus_group" | "interview", when: tomorrow, tz: TZ, duration: 90, max: 6, slots: 6, segment: "", record: true, video: false, assist: true, waiting: true, connection: "default" as "default" | "sfu" | "mesh" });
   const [newLinks, setNewLinks] = React.useState<LiveInviteView[]>([]);
 
   const reload = React.useCallback(() => run("Loading live sessions", () => lapi.list(), setList), [lapi, run]);
@@ -36,9 +36,11 @@ export function LiveSessionsTab({ ws, api, run, setWs, setNote }: { ws: Workspac
   React.useEffect(() => { if (consoleRole) return; const t = setInterval(() => { void lapi.list().then(setList).catch(() => null); if (open) void loadDetail(open).catch(() => null); }, 5000); return () => clearInterval(t); }, [consoleRole, open, lapi, loadDetail]);
 
   const guide = s.def.qualStudy ?? null;
+  /* LiveKit by default when this installation has it; the built-in connection on request */
+  const sfuChosen = !!list?.transport.sfu && form.connection !== "mesh";
   const schedule = () => run("Scheduling", async () => {
     const at = zonedInputToIso(form.when, form.tz);
-    const r = await lapi.schedule([{ title: form.title || `${guide?.title ?? s.def.meta.title} — ${form.kind === "focus_group" ? "focus group" : "interview"}`, kind: form.kind, scheduledAt: at, timeZone: form.tz, segment: form.segment || null, slots: form.slots, settings: { maxParticipants: form.max, durationMinutes: form.duration, record: form.record, recordVideo: form.video, assist: form.assist, waitingRoom: form.waiting } }], api.sandbox ? guide : undefined);
+    const r = await lapi.schedule([{ title: form.title || `${guide?.title ?? s.def.meta.title} — ${form.kind === "focus_group" ? "focus group" : "interview"}`, kind: form.kind, scheduledAt: at, timeZone: form.tz, segment: form.segment || null, slots: form.slots, settings: { maxParticipants: form.max, durationMinutes: form.duration, record: form.record, recordVideo: form.video, assist: form.assist, waitingRoom: form.waiting, ...(sfuChosen ? { transport: "sfu" } : { transport: "mesh" }) } }], api.sandbox ? guide : undefined);
     setNewLinks(r.rooms[0]?.invites ?? []);
     setOpen(r.rooms[0]?.id ?? null);
     return lapi.list();
@@ -74,7 +76,7 @@ export function LiveSessionsTab({ ws, api, run, setWs, setNote }: { ws: Workspac
         <div className="ql-row" data-testid="live-transport" data-turn={t.turn} data-sfu={t.sfu ? "1" : "0"}>
           <span className="chip">Built-in browser connection: up to {t.mesh.maxParticipants} participants + 3 observers</span>
           <span className={`chip${t.turn === "none" ? "" : " on"}`}>{t.turn === "none" ? "No TURN relay" : `TURN relay (${t.turn === "rest" ? "time-limited credentials" : "static credentials"})`}</span>
-          <span className="chip">{t.sfu ? `LiveKit configured${t.sfuClient ? "" : " (browser client not set: LIVEKIT_CLIENT_URL)"}` : "LiveKit not configured"}</span>
+          <span className={`chip${t.sfu ? " on" : ""}`} data-testid="live-sfu">{t.sfu ? `LiveKit configured (up to 30 participants)${t.sfuClient ? " · browser client from LIVEKIT_CLIENT_URL" : ""}` : "LiveKit not configured"}</span>
           {!list?.mail.configured && <span className="chip">{list?.sandbox ? "Sandbox: no e-mail" : "E-mail not configured: copy the links"}</span>}
         </div>
       )}
@@ -89,7 +91,8 @@ export function LiveSessionsTab({ ws, api, run, setWs, setNote }: { ws: Workspac
             <label>When<input className="input" type="datetime-local" value={form.when} onChange={(e) => setForm({ ...form, when: e.target.value })} data-testid="live-when" /></label>
             <label>Time zone<select className="input" value={form.tz} onChange={(e) => setForm({ ...form, tz: e.target.value })} data-testid="live-tz">{ZONES.map((z) => <option key={z}>{z}</option>)}</select></label>
             <label>Minutes<input className="input" type="number" min={15} max={240} value={form.duration} onChange={(e) => setForm({ ...form, duration: Number(e.target.value) })} data-testid="live-duration" /></label>
-            <label>Participants (at most)<input className="input" type="number" min={1} max={t?.sfu ? 30 : 6} value={form.max} onChange={(e) => setForm({ ...form, max: Number(e.target.value) })} data-testid="live-max" /></label>
+            {t?.sfu && <label>Connection<select className="input" value={sfuChosen ? "sfu" : "mesh"} onChange={(e) => setForm({ ...form, connection: e.target.value as "sfu" | "mesh", max: e.target.value === "mesh" ? Math.min(form.max, t.mesh.maxParticipants) : form.max })} data-testid="live-connection"><option value="sfu">LiveKit (up to 30)</option><option value="mesh">Built-in (up to {t.mesh.maxParticipants})</option></select></label>}
+            <label>Participants (at most)<input className="input" type="number" min={1} max={sfuChosen ? 30 : (t?.mesh.maxParticipants ?? 6)} value={form.max} onChange={(e) => setForm({ ...form, max: Number(e.target.value) })} data-testid="live-max" /></label>
             <label>Links to create<input className="input" type="number" min={0} max={20} value={form.slots} onChange={(e) => setForm({ ...form, slots: Number(e.target.value) })} data-testid="live-slots" /></label>
             <label>Segment<input className="input" value={form.segment} onChange={(e) => setForm({ ...form, segment: e.target.value })} placeholder="e.g. Mumbai" data-testid="live-segment" /></label>
           </div>

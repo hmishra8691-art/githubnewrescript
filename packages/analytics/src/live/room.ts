@@ -97,7 +97,8 @@ const safeUrl = (u: unknown): string | undefined => { const s = str(u, 2000); re
 
 export function readSettings(v: unknown, opts: { sfuAvailable?: boolean } = {}): LiveSettings {
   const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
-  const transport: LiveTransport = o.transport === "sfu" && opts.sfuAvailable ? "sfu" : "mesh";
+  /* LiveKit when this installation has it, unless the session asks for the built-in connection (2026-11-23) */
+  const transport: LiveTransport = opts.sfuAvailable && o.transport !== "mesh" ? "sfu" : "mesh";
   const maxP = transport === "sfu" ? SFU_MAX_PARTICIPANTS : MESH_MAX_PARTICIPANTS;
   const maxO = transport === "sfu" ? SFU_MAX_OBSERVERS : MESH_MAX_OBSERVERS;
   return {

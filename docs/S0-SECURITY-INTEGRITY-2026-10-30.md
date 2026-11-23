@@ -286,7 +286,7 @@ Scripts-panel code into the sandboxed frame; nothing here builds that.
 - What the runtime client connects to was enumerated by grep (`fetch(`, `new WebSocket`, `EventSource`,
   `sendBeacon`, `RTCPeerConnection` in `apps/runtime` and `packages/renderer`): own-origin `/api/*`; signed storage
   PUTs; the realtime SDP post; the LiveKit signalling socket. `GEOCODE_API_URL` is called by the server only. The
-  `livekit-client` module (from `LIVEKIT_CLIENT_URL`) is a script import, not restricted. WebRTC media/TURN is not
+  `livekit-client` module is bundled (same-origin chunk, 2026-11-23; or a script import from `LIVEKIT_CLIENT_URL`). WebRTC media/TURN is not
   governed by `connect-src`.
 - `RUNTIME_CSP=enforce` (default) | `report` (the enforce policy as Report-Only) | `off`. Documented in
   `.env.example`. There is no runtime readiness list on `/platform` (it reads the Studio's environment), so it is

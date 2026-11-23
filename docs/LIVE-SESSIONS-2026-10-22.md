@@ -51,11 +51,17 @@ off and retries; a peer that comes back with a new browser session gets a fresh 
 - **LiveKit (SFU) option** for larger groups (up to 30 participants, 20 observers) when `LIVEKIT_URL`,
   `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are set: **access tokens are minted server-side** as HS256 JWTs with
   `node:crypto` (`iss` = API key, `sub` = member, a `video` grant with the room; observers `canPublish: false,
-  hidden: true`), handed to each member once admitted. **Honest limit:** LiveKit's client protocol (protobuf over
-  its own websocket signalling) cannot reasonably be spoken without its SDK, so **the browser side is not bundled**:
-  an operator who wants it sets `LIVEKIT_CLIENT_URL` to an ESM build of `livekit-client` they host. The token
-  minting is tested; the browser adapter and a real LiveKit server were **not exercised here**. Without the client
-  module an SFU room cannot carry media. The room logic (waiting room, admit, stimuli, chat, notes, recording) is
+  hidden: true`), handed to each member once admitted. **Browser side (updated 2026-11-23):** `livekit-client` v2
+  is now a dependency of `@rescript/analytics` and is **bundled**: a separate chunk (≈ 600 KB, ≈ 155 KB gzipped)
+  fetched from the app's own origin only when an admitted member enters a LiveKit room; nobody else downloads it.
+  `LIVEKIT_CLIENT_URL` remains an optional override (an operator-hosted ESM build). New sessions are scheduled on
+  LiveKit by default once it is configured; the scheduling form has a **Connection** choice (LiveKit / built-in).
+  If LiveKit cannot be reached, the room falls back to the built-in mesh: the moderator's console says so (with the
+  reason), participants are not shown a warning. Tested: the adapter against a stand-in module
+  (`livekitAdapter.test.ts`) and, in Chromium, the bundled chunk opening `LIVEKIT_URL/rtc` with a valid minted token
+  against a stand-in signalling server, then falling back (`scripts/livekit-bundled-browser.mjs`). **Not tested:**
+  a real LiveKit server (the protobuf join and WebRTC to the SFU) — none can be run in this environment. The room
+  logic (waiting room, admit, stimuli, chat, notes, recording) is
   Rescript's either way. The mesh needs no provider at all.
 
 ### Recording and transcription
@@ -188,8 +194,8 @@ check (Data view + contact details).
 | `WEBRTC_TURN_USERNAME`, `WEBRTC_TURN_CREDENTIAL` | Studio, runtime | static TURN credentials (instead of the secret) |
 | `WEBRTC_TURN_TTL_SECONDS` | Studio, runtime | credential lifetime, 600–86400 (default 21600) |
 | `WEBRTC_STUN_URLS` | Studio, runtime | STUN servers (default `stun:stun.l.google.com:19302`; `none` disables) |
-| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Studio, runtime | the SFU option (token minting) |
-| `LIVEKIT_CLIENT_URL` | Studio, runtime | an https URL of an ESM build of `livekit-client` (the browser side; not bundled) |
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Studio, runtime | the SFU option (token minting; the browser client is bundled) |
+| `LIVEKIT_CLIENT_URL` | Studio, runtime | optional: an https URL of an ESM build of `livekit-client` to use instead of the bundled one |
 | `LIVE_LINK_SECRET` | Studio | ≥ 16 characters; the secret invitation links are derived from (default: derived from `SUPABASE_SERVICE_ROLE_KEY`) |
 | `RESEND_API_KEY`, `MAIL_FROM` | Studio | invitation / reminder e-mails (existing) |
 | `AI_STT_API_URL` / `AI_STT_API_KEY` / `AI_STT_MODEL` | Studio | per-speaker transcription (existing) |
@@ -218,8 +224,8 @@ analytics `package.json` (exports, test glob); Studio `QualPanel.tsx` (tab), `li
 
 ## 8. Not done, and why
 
-- **LiveKit browser client** — not bundled (no SDK dependency; its protocol is not reasonably spoken without it).
-  Tokens are minted and tested; set `LIVEKIT_CLIENT_URL` to use it — the adapter and a real server are untested here.
+- **LiveKit against a real server** — the browser client is bundled (2026-11-23) and checked against a stand-in
+  signalling server; the join and media through a real LiveKit server have not been exercised here.
 - **Server-side recording / composite recording** — none (no media server): each person records themselves. A tab
   closed mid-chunk loses at most that chunk (≤ 30 s); someone without `MediaRecorder` support or a microphone is
   not recorded (said on the transcript).

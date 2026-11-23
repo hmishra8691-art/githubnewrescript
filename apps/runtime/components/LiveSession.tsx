@@ -222,7 +222,7 @@ function Room({ session, joined }: { session: LiveSession; joined: Joined }) {
   const waiting = v?.me.state === "waiting";
   return (
     <main className="lv-shell" data-testid="live-page" data-step="room">
-      <div className="lv-card lv-wide" data-testid="live-room" data-state={v?.me.state ?? ""} data-status={v?.room.status ?? ""} data-handle={joined.handle} data-role={joined.role} data-member={joined.memberId}>
+      <div className="lv-card lv-wide" data-testid="live-room" data-sfu={snap.sfu?.state ?? ""} data-state={v?.me.state ?? ""} data-status={v?.room.status ?? ""} data-handle={joined.handle} data-role={joined.role} data-member={joined.memberId}>
         <div className="lv-row">
           <h1 style={{ margin: 0 }}>{v?.room.title ?? "…"}</h1>
           <span className="lv-grow" />

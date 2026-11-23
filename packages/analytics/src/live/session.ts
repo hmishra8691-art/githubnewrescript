@@ -17,6 +17,8 @@ export interface SessionSnapshot {
   tiles: RemoteTile[];
   gone: string | null;
   error: string | null;
+  /** the media path of a room scheduled on LiveKit: connecting, connected, or back on the built-in mesh (with why) */
+  sfu: { state: "connecting" | "connected" | "fallback"; note?: string } | null;
   audio: boolean;
   video: boolean;
   screen: boolean;
@@ -61,10 +63,10 @@ export class LiveSession {
 
   constructor(private readonly o: LiveSessionOptions) {
     const hasAudio = !!o.local?.getAudioTracks().length, hasVideo = !!o.local?.getVideoTracks().length;
-    this.snap = { view: null, extra: {}, tiles: [], gone: null, error: null, audio: hasAudio, video: hasVideo, screen: false, recording: { supported: recordingSupported(), active: false, uploaded: 0, pending: 0, failed: 0, lastError: null } };
+    this.snap = { view: null, extra: {}, tiles: [], gone: null, error: null, sfu: null, audio: hasAudio, video: hasVideo, screen: false, recording: { supported: recordingSupported(), active: false, uploaded: 0, pending: 0, failed: 0, lastError: null } };
     this.client = new LiveClient({
       call: o.call, memberId: o.memberId, role: o.role, iceServers: o.iceServers, local: o.role === "observer" ? null : o.local,
-      onView: (view, extra) => { this.set({ view, extra, ...(this.sfuNote ? {} : { error: null }) }); this.syncRecording(view); this.syncSfu(view, extra); if (view.me.mutedByModerator && this.snap.audio) this.set({ audio: false }); },
+      onView: (view, extra) => { this.set({ view, extra, error: null }); this.syncRecording(view); this.syncSfu(view, extra); if (view.me.mutedByModerator && this.snap.audio) this.set({ audio: false }); },
       onTiles: (tiles) => { if (!this.sfu) this.set({ tiles }); },
       onGone: (reason) => { this.set({ gone: reason }); this.stopRecording(); },
       onError: (message) => this.set({ error: message }),
@@ -104,10 +106,10 @@ export class LiveSession {
     const lk = (extra.connection as { livekit?: { url: string; token: string; clientUrl: string | null } } | undefined)?.livekit;
     if (!lk) return;
     this.sfuTried = true;
-    if (!lk.clientUrl) { this.sfuNote = "This session is set up for LiveKit, but its browser client is not configured (LIVEKIT_CLIENT_URL): using the built-in connection instead."; this.set({ error: this.sfuNote }); return; }
+    this.set({ sfu: { state: "connecting" } });
     connectLiveKit({ clientUrl: lk.clientUrl, url: lk.url, token: lk.token, local: this.o.role === "observer" ? null : this.o.local, onTiles: (tiles) => this.set({ tiles }) })
-      .then((m) => { this.sfu = m; this.client.useSfu(true); this.set({ tiles: m.tiles() }); })
-      .catch((e) => { this.sfuNote = `LiveKit could not be reached (${(e as Error).message}): using the built-in connection instead.`; this.set({ error: this.sfuNote }); });
+      .then((m) => { this.sfu = m; this.client.useSfu(true); this.set({ tiles: m.tiles(), sfu: { state: "connected" } }); })
+      .catch((e) => { this.sfuNote = `LiveKit could not be reached (${(e as Error).message}): using the built-in connection instead.`; this.set({ sfu: { state: "fallback", note: this.sfuNote } }); });
   }
 
   /* -------------------------------------------- controls */

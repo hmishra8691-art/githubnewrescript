@@ -14,7 +14,7 @@ export interface LiveRoomSummary {
   counts: { invited: number; joined: number; inRoom: number; waiting: number; noShow: number; observers: number };
 }
 export interface LiveInviteView { id: string; role: "participant" | "observer"; status: string; segment: string | null; label: string | null; email: string | null; remindedAt: string | null; invitedAt: string | null; memberId: string | null; link?: string }
-export interface LiveTransport { mesh: { maxParticipants: number }; turn: "rest" | "static" | "none"; turnWarning?: string; sfu: boolean; sfuClient: boolean }
+export interface LiveTransport { mesh: { maxParticipants: number }; turn: "rest" | "static" | "none"; turnWarning?: string; sfu: boolean; /** the browser client comes from LIVEKIT_CLIENT_URL (the operator's copy) rather than the bundled one */ sfuClient: boolean }
 export interface LiveList { rooms: LiveRoomSummary[]; transport: LiveTransport; mail: { configured: boolean }; can: { manage: boolean; pii: boolean }; sandbox: boolean }
 export interface LiveDetail extends Omit<LiveList, "rooms"> {
   room: LiveRoomSummary; stimuli: LiveStimulus[]; sections: LiveSectionPlan[]; consent: { statement: string; recordingDisclosure: string; dataUse: string };

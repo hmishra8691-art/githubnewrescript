@@ -1,18 +1,17 @@
 import type { RemoteTile } from "./client.js";
 
 /**
- * THE LIVEKIT (SFU) ADAPTER — ISOLATED, AND HONEST ABOUT ITS DEPENDENCY (2026-10-22, G2).
+ * THE LIVEKIT (SFU) ADAPTER (2026-10-22, G2; the browser client bundled 2026-11-23).
  *
- * LiveKit's client protocol (protobuf messages over its own websocket signalling, then WebRTC to the SFU) cannot
- * reasonably be spoken without its SDK, and this repository adds no vendor SDK. So the browser side LOADS the
- * operator's own copy of `livekit-client` at run time, from LIVEKIT_CLIENT_URL (an https URL of an ESM build they
- * host and trust), only for a room scheduled on the SFU. Without it the room falls back to the built-in mesh (which
- * carries at most 6 participants) and says so.
+ * LiveKit's client protocol (protobuf messages over its own websocket signalling, then WebRTC to the SFU) is spoken
+ * through its own browser SDK, `livekit-client` (v2, a dependency of this package). It is loaded lazily — a
+ * separate chunk fetched from the app's own origin — and only for a room scheduled on the SFU, so nobody else
+ * downloads it. LIVEKIT_CLIENT_URL remains an optional override: an https URL of an ESM build the operator hosts
+ * (a pinned or patched copy); when it is set that copy is imported instead of the bundled one.
  *
- * Written against livekit-client v2's documented API (Room, RoomEvent, Track.Source, publishTrack). It was NOT
- * exercised here: there is no LiveKit server and no client build in this environment. Token minting (the server
- * half) is tested in liveCredentials.test.ts. The room logic — waiting room, admit, stimuli, chat, notes, recording
- * — stays Rescript's; only the media goes through the SFU.
+ * If LiveKit cannot be reached the session says so and falls back to the built-in mesh (at most 6 participants).
+ * The room logic — waiting room, admit, stimuli, chat, notes, recording — stays Rescript's; only the media goes
+ * through the SFU. Token minting (the server half) is tested in liveCredentials.test.ts.
  */
 
 export interface SfuMedia {
@@ -27,9 +26,17 @@ export interface SfuMedia {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
-export async function connectLiveKit(o: { clientUrl: string; url: string; token: string; local: MediaStream | null; onTiles: (t: RemoteTile[]) => void }): Promise<SfuMedia> {
-  if (!/^https:\/\//i.test(o.clientUrl)) throw new Error("LIVEKIT_CLIENT_URL must be an https URL of an ESM build of livekit-client");
-  const lk: Any = await import(/* webpackIgnore: true */ o.clientUrl);
+/** the livekit-client module: the operator's copy when LIVEKIT_CLIENT_URL names one, else the bundled chunk */
+export async function loadLiveKitClient(clientUrl: string | null | undefined): Promise<Any> {
+  if (clientUrl) {
+    if (!/^https:\/\//i.test(clientUrl)) throw new Error("LIVEKIT_CLIENT_URL must be an https URL of an ESM build of livekit-client");
+    return import(/* webpackIgnore: true */ clientUrl);
+  }
+  return import("livekit-client");
+}
+
+export async function connectLiveKit(o: { clientUrl?: string | null; url: string; token: string; local: MediaStream | null; onTiles: (t: RemoteTile[]) => void; load?: (clientUrl: string | null) => Promise<Any> }): Promise<SfuMedia> {
+  const lk: Any = await (o.load ?? loadLiveKitClient)(o.clientUrl ?? null);
   const room: Any = new lk.Room({ adaptiveStream: true, dynacast: true });
   /* member id (the token's identity) → its camera and screen streams */
   const streams = new Map<string, { camera: MediaStream; screen: MediaStream }>();
