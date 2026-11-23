@@ -158,6 +158,16 @@ export function migrateResponses(def: SurveyDefinition, table: LegacyTable, plan
   return { rows, reconciliation: recon, summary: { rows: rows.length, mappedColumns: plan.columns.length, variablesMatching: recon.filter((x) => x.matches).length, variablesDiffering: recon.filter((x) => !x.matches).length, valuesLost: lostN, weighted: !!plan.weight } };
 }
 
+/**
+ * The rows to store (rescript_migrate_responses, migration 0116): answers and embedded data as mapped, and the
+ * source's own respondent id as LEGACY_ID. A row the file left wholly empty is not a response and is dropped.
+ */
+export function migrationRows(result: MigrationResult): { legacy_id: string | null; answers: Record<string, unknown>; embedded: Record<string, unknown> }[] {
+  return result.rows
+    .filter((r) => Object.keys(r.answers).length > 0 || Object.keys(r.embedded).length > 0)
+    .map((r) => ({ legacy_id: r.externalId && r.externalId.trim() ? r.externalId.trim().slice(0, 200) : null, answers: r.answers, embedded: r.embedded }));
+}
+
 /** the reconciliation alone, re-runnable on rows that were edited or stored: legacy (recoded) beside the engine's reading of the answers */
 export function reconcile(def: SurveyDefinition, table: LegacyTable, plan: MigrationPlan, rows: MigratedRow[]): Reconciliation[] {
   const ci = new Map(table.header.map((h, i) => [h, i]));

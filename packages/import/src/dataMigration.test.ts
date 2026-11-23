@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
-import { planDataMigration, migrateResponses, type LegacyTable } from "./dataMigration.js";
+import { planDataMigration, migrateResponses, migrationRows, type LegacyTable } from "./dataMigration.js";
 
 const def = SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "S", version: "1.0" }, questions: [
   { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "Brand used", options: [{ code: 1, label: "Alpha" }, { code: 2, label: "Beta" }, { code: 3, label: "Gamma" }] },
@@ -80,4 +80,13 @@ test("a CSV with a codebook-free header reads as a legacy table; a .sav is refus
   const sav = new Uint8Array([0x24, 0x46, 0x4c, 0x32, 0, 0, 0, 0]);
   const s = await legacyTableFrom(sav, "x.sav");
   assert.ok("error" in s && /export the data as CSV or Excel/.test(s.error));
+});
+
+test("the rows to store: answers and embedded as mapped, the source id as legacy_id, a wholly empty row dropped", () => {
+  const t: LegacyTable = { ...table, rows: [...table.rows, ["A5", "", "", "", "", "", "", "", "", "", "z"], ["  ", "2", "", "", "", "", "", "", "", "", ""]] };
+  const rows = migrationRows(migrateResponses(def, t, planDataMigration(def, t)));
+  assert.equal(rows.length, 5, "A5 answered nothing the survey has and carries no weight: not a response");
+  assert.deepEqual(rows[0], { legacy_id: "A1", answers: { q1: 1, q2: [1, 3], q3: 34, q4: { r1: 5, r2: 4 }, q5: "Good coffee" }, embedded: { WEIGHT: 1.2 } });
+  assert.equal(rows[4]!.legacy_id, null, "a blank source id is no id");
+  assert.deepEqual(rows[4]!.answers, { q1: 2 });
 });

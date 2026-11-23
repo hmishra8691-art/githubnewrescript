@@ -720,3 +720,21 @@ test("own-provider usage is recorded even when the wallet is suspended or read-o
   const refused = await meter.reserve(ctx, { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: "gpt-4o-mini", inputUnits: 1000, outputUnits: 1000 });
   assert.equal(refused.ok, false, "while the platform's own AI stays refused");
 });
+
+test("I4: a migrated legacy response is billed at its own rate ($0.002 by default), a tenth of a complete; TEST is free", async () => {
+  const { meter, ctx, store, walletId } = await fixture(100);
+  const est = await meter.estimate(ctx, { eventType: "SURVEY_RESPONSE_IMPORTED", quantity: 10_000 });
+  assert.equal(est.customerCharge, 20);
+  assert.equal(est.fixedRate, true);
+  const complete = await meter.estimate(ctx, { eventType: "SURVEY_RESPONSE", quantity: 10_000 });
+  assert.equal(complete.customerCharge, 200, "a complete stays at $0.02");
+  /* reserve → settle: the wallet is charged exactly the quoted amount */
+  const hold = await meter.reserve(ctx, { eventType: "SURVEY_RESPONSE_IMPORTED", quantity: 2500, metadata: { operation: "data_migration" } });
+  assert.ok(hold.ok);
+  const ev = await meter.settle(hold as Extract<typeof hold, { ok: true }>, { quantity: 2500 });
+  assert.equal(ev.customerCharge, 5);
+  assert.equal(ev.eventType, "SURVEY_RESPONSE_IMPORTED");
+  assert.equal((await store.getWallet(walletId))!.balance, 95);
+  const t = await meter.estimate({ ...ctx, environment: "TEST" }, { eventType: "SURVEY_RESPONSE_IMPORTED", quantity: 1000 });
+  assert.equal(t.customerCharge, 0);
+});

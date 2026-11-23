@@ -61,6 +61,8 @@ export async function recountQuotas(
         .eq("survey_id", surveyId)
         .eq("is_test", isTest)
         .in("status", COUNTED_STATUSES)
+        /* I4: responses migrated from another platform are data, not interviews of this one — never in a quota count */
+        .neq("source", "migration")
         .is("deleted_at", null)
         .order("started_at", { ascending: true })
         .order("id", { ascending: true })

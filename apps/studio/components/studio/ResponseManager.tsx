@@ -1,4 +1,5 @@
 "use client";
+import { MigrateLegacyDialog } from "./MigrateLegacyDialog";
 import React from "react";
 import { Loading } from "@/components/ui/Loading";
 import type { Condition, Question, SurveyDefinition } from "@rescript/schema";
@@ -85,6 +86,8 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [openId, setOpenId] = React.useState<string | null>(null);
   const [importOpen, setImportOpen] = React.useState(false);
+  /* I4: legacy responses from another platform */
+  const [migrateOpen, setMigrateOpen] = React.useState(false);
   const [eraseOpen, setEraseOpen] = React.useState(false);
   const [filterOpen, setFilterOpen] = React.useState(false);
   const [filter, setFilter] = React.useState<Condition | null>(null);
@@ -227,6 +230,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
         </div>
         <div className="qd-config-actions">
           <button className="btn small" data-testid="rm-import-open" onClick={() => setImportOpen(true)}>⬆ Import responses</button>
+          <button className="btn small" data-testid="rm-migrate-open" onClick={() => setMigrateOpen(true)} title="Responses from another platform or a past wave: mapped onto this survey, billed per migrated response, not counted in quotas">⇪ Migrate legacy data</button>
           <button className="btn small" data-testid="rm-erase-open" onClick={() => setEraseOpen(true)} title="A request to erase someone's data: find them by email, respondent code, panel id or session, and erase everything of theirs in this project">Erase a person…</button>
           <button className={`btn small ${bin ? "primary" : ""}`} data-testid="rm-bin" onClick={() => setBin((b) => !b)}>
             🗑 {bin ? "Back to responses" : `Recycle bin${counts?.[environment]?.deleted ? ` (${counts[environment].deleted})` : ""}`}
@@ -366,7 +370,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
                   <button className="rm-code" data-testid="rm-open" onClick={() => setOpenId(r.id)} title="Open the full response editor">
                     {r.respondentCode ?? r.sessionId.slice(0, 10)}
                   </button>
-                  {r.source !== "runtime" && <span className="chip" title={`This response was ${r.source === "import" ? "imported" : "edited by hand"}`}>{r.source}</span>}
+                  {r.source !== "runtime" && <span className="chip" title={`This response was ${r.source === "import" ? "imported" : r.source === "migration" ? "migrated from another platform (not counted in quotas)" : "edited by hand"}`}>{r.source}</span>}
                   {r.sampleSource && (
                     <span className="chip" data-testid="rm-row-source"
                       title={`Sample source: ${r.sampleSource}${r.sampleSourceRespondent ? ` — their respondent id ${r.sampleSourceRespondent}` : ""}`}>
@@ -427,6 +431,11 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
         <ResponseEditor surveyDbId={s.surveyDbId} def={s.def} responseId={openId}
           onClose={() => setOpenId(null)}
           onSaved={(msg) => { say(msg); void load(); }} />
+      )}
+      {migrateOpen && s.surveyDbId && (
+        <MigrateLegacyDialog surveyDbId={s.surveyDbId} environment={environment === "ALL" ? "LIVE" : environment}
+          onClose={() => setMigrateOpen(false)}
+          onDone={(msg) => { setMigrateOpen(false); say(msg); void load(); }} />
       )}
       {importOpen && (
         <ImportDialog surveyDbId={s.surveyDbId} environment={environment === "ALL" ? "TEST" : environment}
