@@ -6,6 +6,7 @@ import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./va
 import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 import { definitionHash } from "./stamp.js";
 import { timingCells, timingColumns, type TimingTelemetry } from "./paradataExport.js";
+import type { DerivedColumns } from "./statisticalExport.js";
 
 /**
  * Response data with the quality assessment — two sheets, as the researcher
@@ -127,6 +128,8 @@ export interface ResponseXlsxOptions {
    * is the same as no warning.
    */
   versionNote?: { versions: string[]; warnings: string[] };
+  /** derived variables (e.g. coded open-ends), appended after every other column of Main Data; `value` is indexed like `rows` */
+  derived?: DerivedColumns;
   /** S5b (TE-10): append PAGE_<id>_SEC / Q_<VAR>_SEC (from each row's telemetry) to Main Data, last */
   timingColumns?: boolean;
 }
@@ -157,7 +160,8 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
   const mixed = rows.some((r) => r.state.isTest) && rows.some((r) => !r.state.isTest);
   const envCols = (opts.environmentColumn ?? mixed) ? [...ENVIRONMENT_COLUMNS] : [];
   const timingCols = opts.timingColumns ? timingColumns(def) : [];
-  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames.map((n) => renderHeader(defs.get(n), n, headerMode)), ...qualityCols, ...sampleCols, ...envCols, ...timingCols.map((c) => (headerMode === "name" ? c.name : c.label))];
+  const derivedDefs = (opts.derived?.defs ?? []).filter((v) => !defs.has(v.name));
+  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames.map((n) => renderHeader(defs.get(n), n, headerMode)), ...qualityCols, ...sampleCols, ...envCols, ...timingCols.map((c) => (headerMode === "name" ? c.name : c.label)), ...derivedDefs.map((v) => renderHeader(v, v.name, headerMode))];
   main.columns = header.map((h) => ({ header: h, key: h, width: Math.min(40, Math.max(12, h.length + 2)) }));
   /*
    * The dataset filter removes rows, so the position in `included` is NOT
@@ -181,6 +185,7 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     if (sampleCols.length) line.push(...sampleCells(r));
     if (envCols.length) line.push(...environmentCells(r));
     if (timingCols.length) line.push(...timingCells(timingCols, r.telemetry));
+    if (derivedDefs.length) { const d = opts.derived!.value(index) ?? {}; for (const v of derivedDefs) line.push(d[v.name] == null ? "" : cell(renderValue(d[v.name], v, valueMode))); }
     main.addRow(line);
   }
   styleHeader(main);

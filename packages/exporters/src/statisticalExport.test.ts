@@ -23,6 +23,9 @@ import {
   variableDictionaryToCSV,
   BUILT_IN_EXPORT_PRESETS,
   buildExportExtra,
+  concatExtra,
+  derivedAsExtra,
+  type DerivedColumns,
   CSV_BOM,
   type QualityExportRow,
   type ResponseStateLike,
@@ -1244,4 +1247,106 @@ test("export values: an option's export value replaces its code only in “Expor
   assert.match(values, /,42,/, "a number with no option is untouched");
   // a survey with no export values writes the codes in value mode
   assert.equal(responsesToCSV(makeSurvey(), states, undefined, { valueMode: "value" }), responsesToCSV(makeSurvey(), states));
+});
+
+/* ------------------------------------------------------------ derived variables (Q7: coded open-ends) */
+
+/** COMMENT coded: r1 mentioned "Price"; r2 is outside the coded base (its open end was blank) → missing, not 0 */
+const coded: DerivedColumns = {
+  defs: [
+    { name: "COMMENT_CODED", label: "Q4 — coded at all", questionId: "q_open", questionCode: "Q4", dataType: "numeric", responseType: "coded", valueCodes: [0, 1], valueLabels: { "0": "No code", "1": "At least one code" }, derived: true, hidden: false },
+    { name: "COMMENT_PRICE", label: "Q4 — coded: Price", questionId: "q_open", questionCode: "Q4", dataType: "numeric", responseType: "coded", valueCodes: [0, 1], valueLabels: { "0": "Not mentioned", "1": "Mentioned" }, derived: true, hidden: false, notes: "1 of 1 excerpts reviewed by a person" },
+  ],
+  value: (i) => (i === 0 ? { COMMENT_CODED: 1, COMMENT_PRICE: 1 } : undefined),
+};
+
+test("derived variables: SPSS carries them last, numeric, with labels and value labels; outside the base is system-missing", () => {
+  const def = makeSurvey();
+  const extra = buildExportExtra([{ state: { ...states[0], isTest: false } as never, quality: null, review: { status: null, reason: null, by: null, at: null } }, { state: { ...states[1], isTest: true } as never, quality: null, review: { status: null, reason: null, by: null, at: null } }], { environment: true });
+  const sav = readSav(responsesToSav(def, states, { extra, derived: coded }));
+  assert.deepEqual(sav.names.slice(-3), ["ENVIRONMENT", "COMMENT_CODED", "COMMENT_PRICE"], "after every other column, the extra block included");
+  assert.equal(sav.labels.COMMENT_PRICE, "Q4 — coded: Price");
+  assert.deepEqual(sav.valueLabels.COMMENT_PRICE, { "0": "Not mentioned", "1": "Mentioned" });
+  assert.equal(sav.widths.COMMENT_PRICE, undefined, "numeric, not a string");
+  assert.equal(sav.cases[0].COMMENT_PRICE, 1);
+  assert.equal(sav.cases[1].COMMENT_PRICE, null, "outside the coded base: missing, never 0");
+  /* nothing asked for → the file is what it was */
+  assert.deepEqual(readSav(responsesToSav(def, states)).names, readSav(responsesToSav(def, states, { derived: undefined })).names);
+});
+
+test("derived variables: SAS transport and syntax, the CSV beside them, and the bundle dictionary agree", () => {
+  const def = makeSurvey();
+  const xpt = readXpt(responsesToXpt(def, states, { derived: coded }));
+  assert.equal(xpt.names.length, readXpt(responsesToXpt(def, states)).names.length + 2, "two columns appended");
+  assert.equal(xpt.rows[0][xpt.names.at(-1)!], 1);
+  assert.ok(Number.isNaN(xpt.rows[1][xpt.names.at(-1)!] as number) || xpt.rows[1][xpt.names.at(-1)!] == null, "missing in the transport file");
+  const sas = responsesToSasSyntax(def, states, { derived: coded });
+  assert.match(sas, /COMMENT_PRICE/);
+  assert.match(sas, /Not mentioned/);
+  /* the CSV of the SAS bundle carries the same columns, last, blank where missing */
+  const csv = responsesToCSV(def, states, concatExtra(undefined, derivedAsExtra(coded)));
+  const [head, r1, r2] = csv.trim().split("\n");
+  assert.deepEqual(head.split(",").slice(-2), ["COMMENT_CODED", "COMMENT_PRICE"]);
+  assert.deepEqual(r1.split(",").slice(-2), ["1", "1"]);
+  assert.deepEqual(r2.split(",").slice(-2), ["", ""]);
+  const dict = variableDictionaryToCSV(def, coded.defs);
+  assert.match(dict, /COMMENT_PRICE,Q4 — coded: Price,Q4,,numeric,coded,"?0,1"?,0=Not mentioned; 1=Mentioned/);
+  assert.equal(variableDictionaryToCSV(def).includes("COMMENT_PRICE"), false);
+  assert.ok(zipEntryNames(responsesToSavBundle(def, states, { derived: coded })).includes("STAT01_dictionary.csv"));
+});
+
+test("derived variables: extra blocks compose in order", () => {
+  const a = { columns: ["A"], cells: () => ["a"] };
+  const b = derivedAsExtra(coded)!;
+  const ab = concatExtra(a, b)!;
+  assert.deepEqual(ab.columns, ["A", "COMMENT_CODED", "COMMENT_PRICE"]);
+  assert.deepEqual(ab.cells(0), ["a", 1, 1]);
+  assert.deepEqual(ab.cells(1), ["a", "", ""]);
+  assert.deepEqual(derivedAsExtra(coded, "label")!.cells(0), ["At least one code", "Mentioned"], "label mode, like the CSV's own cells");
+  assert.deepEqual(derivedAsExtra(coded, "label")!.cells(1), ["", ""]);
+  assert.equal(concatExtra(undefined, undefined), undefined);
+  assert.equal(derivedAsExtra({ defs: [], value: () => undefined }), undefined);
+});
+
+test("derived variables: Excel Main Data appends them last; label mode writes the value label", async () => {
+  const ExcelJS = (await import("exceljs")).default;
+  const def = makeSurvey();
+  const rows: QualityExportRow[] = states.map((st) => ({ state: { ...st, isTest: false } as never, quality: null, review: { status: null, reason: null, by: null, at: null } }));
+  for (const [mode, want] of [["code", [1, ""]], ["label", ["Mentioned", ""]]] as const) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load((await exportResponsesXlsx(def, rows, { derived: coded, valueMode: mode })) as any);
+    const ws = wb.getWorksheet("Main Data")!;
+    const header = (ws.getRow(1).values as unknown[]).slice(1);
+    assert.deepEqual(header.slice(-2), ["COMMENT_CODED", "COMMENT_PRICE"]);
+    const n = header.length;
+    assert.deepEqual([ws.getRow(2).getCell(n).value, ws.getRow(3).getCell(n).value ?? ""], want);
+  }
+});
+
+test("derived variables: pyreadstat reads the .sav and the .dta back — numeric, labelled, missing outside the base", { skip: !pyreadstat && "python3 with pyreadstat is not installed" }, () => {
+  const def = makeSurvey();
+  const dir = mkdtempSync(join(tmpdir(), "rescript-derived-"));
+  writeFileSync(join(dir, "d.sav"), responsesToSav(def, states, { derived: coded }));
+  writeFileSync(join(dir, "d.dta"), responsesToDta(def, states, { derived: coded }));
+  writeFileSync(join(dir, "read.py"), `
+import json, math, pyreadstat
+out = {}
+for f, reader in (("d.sav", pyreadstat.read_sav), ("d.dta", pyreadstat.read_dta)):
+    df, meta = reader(${JSON.stringify(dir)} + "/" + f)
+    col = "COMMENT_PRICE"
+    vals = [None if (v is None or (isinstance(v, float) and math.isnan(v))) else float(v) for v in df[col]]
+    vl = meta.variable_value_labels.get(col, {})
+    out[f] = {"last": list(df.columns[-2:]), "vals": vals, "label": dict(zip(meta.column_names, meta.column_labels))[col], "valueLabels": {str(int(k)): v for k, v in vl.items()}, "numeric": meta.readstat_variable_types[col] != "string"}
+print(json.dumps(out, ensure_ascii=False))
+`);
+  const run = spawnSync("python3", ["-I", join(dir, "read.py")], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  const out = JSON.parse(run.stdout);
+  for (const f of ["d.sav", "d.dta"]) {
+    assert.deepEqual(out[f].last, ["COMMENT_CODED", "COMMENT_PRICE"], f);
+    assert.deepEqual(out[f].vals, [1, null], f);
+    assert.equal(out[f].numeric, true, f);
+    assert.deepEqual(out[f].valueLabels, { "0": "Not mentioned", "1": "Mentioned" }, f);
+    assert.match(out[f].label, /coded: Price/, f);
+  }
 });

@@ -33,6 +33,35 @@ export interface MatrixOptions {
   extra?: { columns: readonly string[]; cells: (index: number) => unknown[] };
   /** R7: the union dictionary and each row's own definition. Absent = today's behaviour. */
   versioned?: VersionedSource;
+  /** derived variables with their own dictionary entries (e.g. coded open-ends), appended after every other column */
+  derived?: DerivedColumns;
+}
+
+/**
+ * DERIVED VARIABLES — columns the questionnaire does not define but the platform computes per response, delivered
+ * as real variables: a dictionary entry (label, numeric codes, value labels) and one value per row, null where
+ * the row is outside the variable's base. Placed LAST so no column a client script already reads moves.
+ * `value(index)` is indexed like `states` / `rows` (the delivered order).
+ */
+export interface DerivedColumns {
+  defs: VariableDef[];
+  value: (index: number) => Record<string, number | string | null | undefined> | undefined;
+}
+
+/** the derived columns as plain extra cells (for the text formats), in the same order; `valueMode` as the CSV's own cells */
+export function derivedAsExtra(d: DerivedColumns | undefined, valueMode: ValueMode = "code"): { columns: string[]; cells: (index: number) => unknown[] } | undefined {
+  if (!d || !d.defs.length) return undefined;
+  return { columns: d.defs.map((v) => v.name), cells: (i) => { const row = d.value(i) ?? {}; return d.defs.map((v) => (row[v.name] == null ? "" : valueMode === "code" ? row[v.name] : renderValue(row[v.name], v, valueMode))); } };
+}
+
+/** two sets of extra columns as one (the first set's columns first) */
+export function concatExtra(
+  a: { columns: readonly string[]; cells: (index: number) => unknown[] } | undefined,
+  b: { columns: readonly string[]; cells: (index: number) => unknown[] } | undefined,
+): { columns: string[]; cells: (index: number) => unknown[] } | undefined {
+  if (!a) return b ? { columns: [...b.columns], cells: b.cells } : undefined;
+  if (!b) return { columns: [...a.columns], cells: a.cells };
+  return { columns: [...a.columns, ...b.columns], cells: (i) => [...a.cells(i), ...b.cells(i)] };
 }
 
 export interface ResponseMatrix {
@@ -68,7 +97,9 @@ export function buildResponseMatrix(
   }
 
   const extraColumns = [...(opts.extra?.columns ?? [])];
-  const names = [...SYSTEM.map((s) => s.name), ...varNames, ...extraColumns];
+  const derivedNames: string[] = [];
+  for (const v of opts.derived?.defs ?? []) { if (defs.has(v.name) || extraColumns.includes(v.name)) continue; defs.set(v.name, v); derivedNames.push(v.name); }
+  const names = [...SYSTEM.map((s) => s.name), ...varNames, ...extraColumns, ...derivedNames];
 
   const rows = states.map((state, i) => {
     const flat = flattenVariables(defForRow(def, i, opts.versioned), state as any, { mediaBaseUrl: opts.mediaBaseUrl ?? null });
@@ -85,6 +116,7 @@ export function buildResponseMatrix(
       /* a blank in a numeric extra (an unscored response) is a missing value, never an empty string */
       extraColumns.forEach((c, j) => { row[c] = (NUMERIC_EXTRA.has(c) || TIMING_COLUMN.test(c)) && cells[j] === "" ? null : cells[j]; });
     }
+    if (derivedNames.length) { const d = opts.derived!.value(i) ?? {}; for (const n of derivedNames) row[n] = d[n] ?? null; }
     return row;
   });
 
@@ -343,7 +375,7 @@ export function responsesToDtaBundle(
   const code = def.meta.code ?? "SURVEY";
   return buildZip([
     { name: `${code}.dta`, data: responsesToDta(def, states, opts) },
-    { name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def) },
+    { name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def, opts.derived?.defs) },
   ]);
 }
 
@@ -388,7 +420,7 @@ export function responsesToSasBundle(
      * is a dictionary for a different version of the study.
      */
     ...(opts.includeDictionary
-      ? [{ name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def) }]
+      ? [{ name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def, opts.derived?.defs) }]
       : []),
     {
       name: "README.txt",
@@ -426,7 +458,7 @@ export function responsesToSavBundle(
   const code = def.meta.code ?? "SURVEY";
   return buildZip([
     { name: `${code}.sav`, data: responsesToSav(def, states, opts) },
-    { name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def) },
+    { name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def, opts.derived?.defs) },
     { name: `${code}_bases.sps`, data: spssBasesSyntax(def) },
     {
       name: "README.txt",

@@ -515,6 +515,25 @@ refused when sent, and one still queued when the interview ends is recorded as n
 any of it. Live groups (many participants and observers on video) still wait on the media server (Q2). Needs
 migration 0115.
 
+### Live groups on LiveKit, migration guards, coded columns in exports (23 November, 0298 to 0300)
+
+**LiveKit (0298).** LiveKit's browser library is now part of the Studio and the runtime, loaded only when an admitted
+person enters a LiveKit room. New live sessions go on LiveKit once it is configured, with a Connection choice when
+scheduling (LiveKit up to 30, built-in up to 6). Two faults found on the way: nothing ever scheduled a session on
+LiveKit, so a group over 6 could not be booked; and when LiveKit was unreachable participants saw "Reconnecting…"
+for the whole session. The console now shows LiveKit, connecting, or "built-in connection (LiveKit unreachable)"
+with the reason; participants see nothing. LiveKit Cloud is configured on the live runtime (its health check says so).
+
+**Guards (0299).** `scripts/migration-audit.mjs` (first in `audit:code`): migration file names, numbers unique and
+without gaps, each file's schema mark carrying its own number, and code that names "migration NNNN (table)" pointing
+at a file that has that table. `scripts/patch-base.mjs` stamps the tree a patch was made on and, in the copy that
+receives it, refuses when that copy has moved on or a patch reuses a migration number.
+
+**Coded columns in exports (0300).** "Coded open-end columns" on the Data export: `<VAR>_CODED` and `<VAR>_<CODE>`
+appended after every other column in CSV, Excel, SPSS, SAS and Stata, as numeric 0/1 variables with value labels
+(and in the dictionary file of the bundles). A response outside the coded sources is missing, never 0. Off unless
+ticked, so existing deliveries do not change.
+
 ## The scorecard after this
 
 14 benchmarks, 12 measured. 24 of 47 metrics with a target meet it.
@@ -594,6 +613,10 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | On the participant page: the ladder asks why, a value moves on and the concept card shows, a screen share starts and stops | `scripts/q3-moderator-v2-browser.mjs` (runtime sandbox, fake screen) | 4 of 4 |
 | Observer room: notes checked, a question asked once after the next answer, not after injected text or on the closing question; queued → asked, withdrawn never asked, a late question refused | `aiInterviewObserver.test.ts` 3, runtime `service.test.ts` 1 (runtime suite: 179) | pass |
 | Observer room end to end: the moderator asks the observer's question on the participant's page, the room shows it asked, the participant never sees the room | `scripts/q5-observer-room-browser.mjs` (runtime sandbox) | 5 of 5 |
+| LiveKit adapter: which library is loaded, the URL and token, what is published, remote tracks as tiles, observers publish nothing; LiveKit by default once configured | `livekitAdapter.test.ts`, 4 tests | pass |
+| LiveKit in the browser: LiveKit offered by default; both apps serve the library themselves and open `LIVEKIT_URL/rtc` with a valid token; nothing loaded from the waiting room; the fall back said in the console, not to participants | `scripts/livekit-bundled-browser.mjs` against a stand-in signalling server, in two parts (sandbox memory) | 4 of 4 and 3 of 3 |
+| Migration guard: six planted faults reported and nothing else; the repository's 115 migrations clean | `migration-audit.mjs --self-test` | pass |
+| Coded columns in exports: SPSS, SAS (transport, syntax, CSV), Stata, Excel and the dictionary carry them last, numeric, labelled, missing outside the base; read back by pyreadstat | `statisticalExport.test.ts` 5, `codedVariables.test.ts` 1 (exporters suite: 169) | pass |
 
 ## What was NOT tested
 
@@ -624,8 +647,11 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 - **The 0293 to 0296 batch ran against no database.** Migration 0115 is not applied. The upload of a video's audio
   track, a real transcript (no speech-to-text provider here), a real screen recording upload, the moderator v2 with a
   real model, and the Studio's observer-room panel and quota "Carried over" field in a browser were not exercised;
-  the routes and panels were type-checked and audited. Coded columns are in the Studio's tables, not yet in the
-  exported data files.
+  the routes and panels were type-checked and audited.
+- **LiveKit was not tested against a real LiveKit server.** The browser library, the token and the fall back were
+  checked against a stand-in server; the join and video through LiveKit itself were not. The live runtime has the keys.
+- **The coded-columns export was not run against a database.** The exporters were tested on fixtures (read back by
+  this repository's decoders and by pyreadstat); the export route was type-checked only.
 - **English only.**
 
 ## Phase 2 item by item

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
-import { buildDataset, codedVariables, withCodedVariables, openEndSegments, answerText, runAnalysis, type AnalyticsRow, type QualCodebook, type QualExcerpt } from "./index.js";
+import { buildDataset, codedVariables, codedExportColumns, withCodedVariables, openEndSegments, answerText, runAnalysis, type AnalyticsRow, type QualCodebook, type QualExcerpt } from "./index.js";
 
 /*
  * Q7 — VIDEO ANSWERS, TRANSCRIBED AND CODED, AS VARIABLES IN TABLES: the transcript on a video answer is read as an
@@ -69,4 +69,25 @@ test("no coding or no coded source: nothing added", () => {
   const ds = buildDataset(def, rows, { spec: { environment: "ALL" } as never });
   assert.equal(withCodedVariables(ds, codedVariables(def, null, [])), ds);
   assert.equal(codedVariables(def, { codebook, excerpts: [] }, []).variables.length, 0);
+});
+
+test("the coded columns for a data export: numeric 0/1 dictionary entries with value labels, values by response id, missing outside the base", () => {
+  const segs = openEndSegments("src", rows.slice(0, 4).map((r) => ({ responseId: r.id!, answers: r.answers as Record<string, unknown> })), [{ id: "v1", code: "V1" }])
+    .map((s) => ({ segmentId: s.id, responseId: s.responseId!, questionId: s.questionId! }));
+  const coded = codedVariables(def, { codebook, excerpts: [ex("e1", "c1", "r1"), ex("e3", "c1", "r3")] }, segs);
+  const delivered = ["r3", "r4", "r1", undefined];
+  const cols = codedExportColumns(coded, (i) => delivered[i])!;
+  assert.deepEqual(cols.defs.map((d) => [d.name, d.dataType, d.responseType, d.valueCodes, d.valueLabels, d.derived, d.measure]), [
+    ["V1_CODED", "numeric", "coded", [0, 1], { "0": "No code", "1": "At least one code" }, true, "nominal"],
+    ["V1_PRICE", "numeric", "coded", [0, 1], { "0": "Not mentioned", "1": "Mentioned" }, true, "nominal"],
+  ]);
+  assert.equal(cols.defs[1].label, "V1 — coded: Price (theme: Value)");
+  assert.equal(cols.defs[1].questionId, "v1");
+  assert.match(cols.defs[1].notes!, /1 of 1 excerpts reviewed by a person|2 of 2 excerpts reviewed by a person/);
+  assert.deepEqual(cols.value(0), { V1_CODED: 1, V1_PRICE: 1 });
+  assert.equal(cols.value(1), undefined, "r4 is not in a coded source: missing");
+  assert.deepEqual(cols.value(2), { V1_CODED: 1, V1_PRICE: 1 });
+  assert.equal(cols.value(3), undefined);
+  assert.equal(codedExportColumns(null, () => "r1"), undefined);
+  assert.equal(codedExportColumns(codedVariables(def, null, []), () => "r1"), undefined);
 });

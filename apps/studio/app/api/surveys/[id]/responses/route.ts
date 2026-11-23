@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { observed } from "@rescript/storage/observe";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
-import { choiceDataToCSV, maxdiffChoiceCSV, timingLongCSV, responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, buildExportExtra, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
+import { choiceDataToCSV, maxdiffChoiceCSV, timingLongCSV, responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, buildExportExtra, concatExtra, derivedAsExtra, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { resolveExportVersions } from "@/lib/exportVersions";
 import { exportEnvironmentOf } from "@/lib/exportEnvironment";
+import { codingStamp, loadCodedVariables } from "@/lib/codedAnswers";
+import { codedExportColumns } from "@rescript/analytics";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +46,8 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
    * page and × question). Only then is `responses.telemetry` read at all.
    */
   const withTiming = req.nextUrl.searchParams.get("timing") === "1";
+  /* Q7: the qualitative coding of open-ended answers as <VAR>_CODED / <VAR>_<CODE> columns, last (CSV / Excel / SPSS / SAS / Stata) */
+  const withCoded = req.nextUrl.searchParams.get("coded") === "1";
   const needTelemetry = withTiming || format === "timing";
 
   const db = gate.db;
@@ -192,8 +196,8 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
    * configuration, and crossing it is REPORTED (see below) instead of quietly
    * shortening the file.
    */
-  const COLUMNS = "session_id, version_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent";
-  const FALLBACK_COLUMNS = "session_id, version_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test";
+  const COLUMNS = "id, session_id, version_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent";
+  const FALLBACK_COLUMNS = "id, session_id, version_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test";
 
   const page = (columns: string, softDelete: boolean, start: number) => {
     let q = db.from("responses").select(columns).eq("survey_id", params.id);
@@ -340,8 +344,11 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
    * client's script does not gain one halfway through fieldwork.
    */
   const withEnvironment = include === "all";
+  /* the coded columns, when asked for and the study has coded open-ended answers (none → the file is unchanged) */
+  const coded = withCoded && (await codingStamp(db, params.id)) ? await loadCodedVariables(db, params.id, parsed.data) : null;
+  const rowIds: (string | undefined)[] = (resp ?? []).map((r: any) => (r.id == null ? undefined : String(r.id)));
   if (format === "xlsx") {
-    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, timingColumns: withTiming, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality), valueMode, versioned: versioned.sourceFor(resp ?? []), versionNote: { versions: versioned.union.versions, warnings: versioned.warnings } });
+    const buf = await exportResponsesXlsx(parsed.data, exportRows, { derived: codedExportColumns(coded, (i) => rowIds[i]), dataset, timingColumns: withTiming, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality), valueMode, versioned: versioned.sourceFor(resp ?? []), versionNote: { versions: versioned.union.versions, warnings: versioned.warnings } });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -359,6 +366,9 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
    * neighbour's questionnaire.
    */
   const versionedSource = versioned.sourceFor(resp ?? []);
+  /* the delivered rows' ids, after the filter — the statistical and text formats index the coded values by them */
+  const keptIds: (string | undefined)[] = (resp ?? []).map((r: any) => (r.id == null ? undefined : String(r.id)));
+  const derived = codedExportColumns(coded, (i) => keptIds[i]);
 
   /*
    * A CSV or a .sav cannot carry a note inside it without corrupting the
@@ -466,7 +476,7 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
     const mediaBaseUrl = process.env.STUDIO_PUBLIC_URL ?? null;
     if (format === "sav") {
       if (withDictionary) {
-        const buf = responsesToSavBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra });
+        const buf = responsesToSavBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra, derived });
         return new NextResponse(new Uint8Array(buf), {
           headers: {
             ...versionHeaders,
@@ -475,7 +485,7 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
           },
         });
       }
-      const buf = responsesToSav(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra });
+      const buf = responsesToSav(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra, derived });
       return new NextResponse(new Uint8Array(buf), {
         headers: {
           ...versionHeaders,
@@ -486,7 +496,7 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
     }
     if (format === "dta") {
       if (withDictionary) {
-        const buf = responsesToDtaBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra });
+        const buf = responsesToDtaBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra, derived });
         return new NextResponse(new Uint8Array(buf), {
           headers: {
             ...versionHeaders,
@@ -495,7 +505,7 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
           },
         });
       }
-      const buf = responsesToDta(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra });
+      const buf = responsesToDta(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra, derived });
       return new NextResponse(new Uint8Array(buf), {
         headers: {
           ...versionHeaders,
@@ -510,8 +520,8 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
      * the dictionary. The zip carries the CSV and the generated syntax with
      * the full names, labels and PROC FORMAT value labels beside it.
      */
-    const csvForSas = responsesToCSV(parsed.data, states as any, statExtra, { mediaBaseUrl, versioned: versionedSource });
-    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas, includeDictionary: withDictionary, versioned: versionedSource, extra: statExtra });
+    const csvForSas = responsesToCSV(parsed.data, states as any, concatExtra(statExtra, derivedAsExtra(derived)), { mediaBaseUrl, versioned: versionedSource });
+    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas, includeDictionary: withDictionary, versioned: versionedSource, extra: statExtra, derived });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         ...versionHeaders,
@@ -599,7 +609,7 @@ export const GET = observed(async function GET(req: NextRequest, { params }: { p
   const csv = responsesToCSV(
     parsed.data,
     states as any,
-    csvExtra,
+    concatExtra(csvExtra, derivedAsExtra(derived, valueMode)),
     { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null, valueMode, versioned: versionedSource, bom: withBom },
   );
   return new NextResponse(csv, {

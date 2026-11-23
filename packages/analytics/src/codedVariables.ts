@@ -1,4 +1,4 @@
-import type { SurveyDefinition } from "@rescript/schema";
+import type { SurveyDefinition, VariableDef } from "@rescript/schema";
 import type { Case, Dataset, VariableMeta } from "./dataset.js";
 import type { QualCodebook, QualExcerpt } from "./qual/types.js";
 
@@ -109,4 +109,22 @@ export function withCodedVariables(ds: Dataset, coded: CodedVariables): Dataset 
   const byName = new Map(ds.byName);
   for (const v of fresh) byName.set(v.name, v);
   return { ...ds, cases, variables: [...ds.variables, ...fresh], byName };
+}
+
+/**
+ * The coded columns for a DATA EXPORT (CSV, Excel, SPSS, SAS, Stata — @rescript/exporters' DerivedColumns): the same
+ * variables as numeric 0 / 1 dictionary entries with value labels. A response outside the coded base gets no
+ * value (missing), never 0. `idAt(i)` is the response id of the i-th delivered row.
+ */
+export function codedExportColumns(coded: CodedVariables | null, idAt: (index: number) => string | undefined): { defs: VariableDef[]; value: (index: number) => Record<string, number> | undefined } | undefined {
+  if (!coded || !coded.variables.length) return undefined;
+  const defs = coded.variables.map((v): VariableDef => ({
+    name: v.name, label: v.label, ...(v.questionId ? { questionId: v.questionId } : {}), ...(v.questionCode ? { questionCode: v.questionCode } : {}),
+    dataType: "numeric", responseType: "coded",
+    valueCodes: (v.categories ?? []).map((c) => Number(c.code)),
+    valueLabels: Object.fromEntries((v.categories ?? []).map((c) => [String(c.code), c.label])),
+    derived: true, hidden: false, measure: "nominal",
+    ...(v.note ? { notes: v.note } : {}),
+  }) as VariableDef);
+  return { defs, value: (i) => { const id = idAt(i); return id ? coded.values.get(id) : undefined; } };
 }

@@ -81,6 +81,8 @@ export function DataPanel() {
   const [withDictionary, setWithDictionary] = React.useState(false);
   /* S5b (TE-10): PAGE_<ID>_SEC / Q_<VAR>_SEC timing columns, last, in CSV / Excel / SPSS / SAS / Stata */
   const [withTiming, setWithTiming] = React.useState(false);
+  /* Q7: <VAR>_CODED / <VAR>_<CODE> from the qualitative coding of open-ended answers, last */
+  const [withCoded, setWithCoded] = React.useState(false);
   const [format, setFormat] = React.useState<"csv" | "xlsx" | "json" | "sav" | "sas" | "dta">("csv");
   const [meta, setMeta] = React.useState<{ total: number; included: number } | null>(null);
   const datasetParam = dataset === "custom" ? `custom:${exclude.join(",")}` : dataset;
@@ -179,7 +181,7 @@ export function DataPanel() {
    * ask for those formats at all; passing the parameter to them would imply
    * a choice that does not exist there.
    */
-  const timingParam = withTiming ? "&timing=1" : "";
+  const timingParam = (withTiming ? "&timing=1" : "") + (withCoded ? "&coded=1" : "");
   const valuesParam = (values === "code" ? "" : `&values=${values}`) + timingParam;
   const csvHref = exportUrl("csv", `${hasQuality || dataset !== "all" ? "&quality=1" : ""}${valuesParam}`);
   const xlsxHref = exportUrl("xlsx", `&quality=1${valuesParam}`);
@@ -274,6 +276,11 @@ export function DataPanel() {
               <input type="checkbox" data-testid="export-with-timing"
                 checked={withTiming} onChange={(e) => setWithTiming(e.target.checked)} />
               Per-page / per-question timing columns
+            </label>
+            <label className="row" style={{ gap: 6, fontSize: 12.5 }} title="<VAR>_CODED and <VAR>_<CODE> — 0/1 per code from Research Tools → Qualitative coding of open-ended answers, appended last; blank (missing) for responses outside the coded sources. Nothing is added when no open-ended answers have been coded.">
+              <input type="checkbox" data-testid="export-with-coded"
+                checked={withCoded} onChange={(e) => setWithCoded(e.target.checked)} />
+              Coded open-end columns
             </label>
           </div>
           {presetNote && (

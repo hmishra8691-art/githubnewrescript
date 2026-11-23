@@ -1,4 +1,4 @@
-import type { SurveyDefinition } from "@rescript/schema";
+import type { SurveyDefinition, VariableDef } from "@rescript/schema";
 import type { ResponseState } from "@rescript/engine";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
@@ -93,8 +93,11 @@ export function responsesToCSV(
 export const CSV_BOM = "﻿";
 
 /** Export the variable dictionary itself as CSV. */
-export function variableDictionaryToCSV(def: SurveyDefinition): string {
-  const dict = buildVariableDictionary(def);
+/** `derived`: computed variables delivered beside the questionnaire's (e.g. coded open-ends), listed after them */
+export function variableDictionaryToCSV(def: SurveyDefinition, derived: VariableDef[] = []): string {
+  const base = buildVariableDictionary(def);
+  const seen = new Set(base.map((v) => v.name));
+  const dict = [...base, ...derived.filter((v) => !seen.has(v.name))];
   const header = [
     "Variable",
     "Label",
