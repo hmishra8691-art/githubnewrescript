@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { platformDb } from "./db";
-import { admissionRisk, type AdmissionSignals } from "@rescript/quality";
+import { admissionRisk, isIp, type AdmissionSignals } from "@rescript/quality";
 import type { QualityConfig } from "@rescript/schema";
 
 /**
@@ -64,6 +64,7 @@ async function signalsFor(
   networkToken: string | null,
   trustUuid: string | null,
   deviceToken: string | null,
+  ip: string | null = null,
 ): Promise<AdmissionSignals> {
   /* shared fraud intelligence stays central (supabase/tenancy/tables.json: shared) */
   const db = platformDb();
@@ -81,6 +82,27 @@ async function signalsFor(
         vpn: n.vpn === true,
         identities: Number(n.identities ?? 0),
         providerRisk: n.provider_risk === null || n.provider_risk === undefined ? null : Number(n.provider_risk),
+      };
+    }
+  }
+
+  /*
+   * F2 (migration 0117): what the published ranges say about the arriving address — datacenter and Tor from the free
+   * lists, VPN / proxy when a licensed feed is loaded. The address is looked up and dropped; only its hash is kept.
+   * A database without 0117, or any failure, adds nothing: a respondent is never refused because a lookup failed.
+   */
+  if (ip && isIp(ip)) {
+    const { data, error } = await db.rpc("rescript_ip_signals", { p_ip: ip });
+    const s = Array.isArray(data) ? data[0] : data;
+    if (!error && s) {
+      const n = out.network ?? {};
+      out.network = {
+        ...n,
+        datacenter: n.datacenter === true || s.datacenter === true,
+        tor: n.tor === true || s.tor === true,
+        vpn: n.vpn === true || s.vpn === true,
+        proxy: s.proxy === true,
+        ...(Array.isArray(s.providers) && s.providers.length ? { providers: s.providers.map(String).slice(0, 3) } : {}),
       };
     }
   }
@@ -120,6 +142,8 @@ export interface GatewayInput {
   integrationId?: string | null;
   networkToken?: string | null;
   deviceToken?: string | null;
+  /** the arriving address, for the published-range lookup (F2); never stored */
+  ip?: string | null;
   /** how the arrival was matched to its identity (0083), carried through for the reviewer */
   resolution?: string | null;
   /** the identity decision already made upstream: a confirmed duplicate under enforcement */
@@ -157,7 +181,7 @@ export async function runGateway(input: GatewayInput): Promise<GatewayOutcome> {
     };
   }
 
-  const signals = await signalsFor(input.customerId, input.networkToken ?? null, input.trustUuid, input.deviceToken ?? null);
+  const signals = await signalsFor(input.customerId, input.networkToken ?? null, input.trustUuid, input.deviceToken ?? null, input.ip ?? null);
   const risk = admissionRisk(signals, input.qualityConfig ?? DEFAULT_CONFIG);
 
   // a case is opened only in `review` mode; `observe` scores and records and leaves the queue alone

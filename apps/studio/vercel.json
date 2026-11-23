@@ -64,6 +64,10 @@
     {
       "path": "/api/cron/report-schedules",
       "schedule": "7 * * * *"
+    },
+    {
+      "path": "/api/cron/ip-ranges",
+      "schedule": "37 4 * * *"
     }
   ]
 }

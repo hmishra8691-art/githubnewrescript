@@ -139,6 +139,7 @@ export async function GET(req: NextRequest, { params }: { params: { client: stri
     ledgerId: admission.ledgerId,
     networkToken: admission.networkToken,
     deviceToken: admission.deviceToken,
+    ip: clientIp(req.headers),
     resolution: admission.resolution,
     identityRefused: !admission.admit,
     identityReason: admission.decision?.reason ?? null,

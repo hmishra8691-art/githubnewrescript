@@ -48,6 +48,10 @@ export interface AdmissionSignals {
     tor?: boolean;
     /** a commercial VPN. Counted only at strict settings: plenty of ordinary people use one. */
     vpn?: boolean;
+    /** a public or residential proxy (F2: only from a licensed feed — no free list has them) */
+    proxy?: boolean;
+    /** who publishes the range the address is in (F2: "Amazon Web Services", "Tor Project (exit relays)" …) */
+    providers?: string[];
     /** distinct respondent identities seen on this network, across this organisation's projects */
     identities?: number;
     /** 0–100 from a configured network-intelligence provider, when one exists */
@@ -119,14 +123,15 @@ export function admissionFlags(signals: AdmissionSignals, config: QualityConfig)
 
   if (enabled(config, "network.datacenter")) {
     const includeVpn = param(config, "network.datacenter", "includeVpn", 0) >= 1;
-    const hit = net.tor ? "a Tor exit node" : net.datacenter ? "a datacenter or hosting provider" : (includeVpn && net.vpn) ? "a commercial VPN" : null;
+    const named = net.providers?.length ? ` (${net.providers.slice(0, 2).join(", ")})` : "";
+    const hit = net.tor ? "a Tor exit node" : net.datacenter ? `a datacenter or hosting provider${named}` : net.proxy ? `a public or residential proxy${named}` : (includeVpn && net.vpn) ? "a commercial VPN" : null;
     if (hit) {
       out.push({
         ruleId: "network.datacenter",
         explanation: `The respondent arrived over ${hit} rather than a consumer connection.`,
         observed: hit,
         // Tor is a far stronger signal than a VPN somebody uses for everything
-        intensity: net.tor ? 1 : net.datacenter ? 0.8 : 0.4,
+        intensity: net.tor ? 1 : net.datacenter || net.proxy ? 0.8 : 0.4,
         ...(net.tor ? {} : { caveat: "Ordinary respondents do use VPNs; this is evidence, not a verdict." }),
       });
     }

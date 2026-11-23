@@ -121,6 +121,10 @@ const PUBLIC = {
     "an interview invitee's booking link (Q6, migration 0107): the invitee has no account and never will. The TOKEN in the "
     + "invitation email is the credential — 32 random bytes, only its SHA-256 stored — looked up before anything else; an "
     + "unknown token gets one fixed 404 sentence. It returns only the study title, open times and the holder's own booking",
+  "cron/ip-ranges/route.ts":
+    "F2 (0117): the daily refresh of the published datacenter and Tor address lists: the same bearer-token credential as the "
+    + "media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's first statement, refusing everything when it "
+    + "is unset. It reads public lists and writes platform-wide ranges; nothing about a person or a project.",
   "cron/qual-scheduling/route.ts":
     "interview reminders (Q6, migration 0107): the same bearer-token credential as the other jobs, checked against CRON_SECRET by "
     + "`timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It reminds booked invitees "

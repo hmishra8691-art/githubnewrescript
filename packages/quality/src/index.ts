@@ -24,3 +24,4 @@ export * from "./redTeam.js";
 export * from "./crossSurvey.js";
 export * from "./trustScore.js";
 export * from "./reviewConsole.js";
+export * from "./ipRanges.js";
