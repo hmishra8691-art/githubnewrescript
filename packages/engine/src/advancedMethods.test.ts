@@ -110,6 +110,10 @@ test("method suitability: sample minimums, indicators, identification and tasks 
   /* covariates / distal outcomes (2026-11-23, three-step): planned when they are questions of the survey */
   assert.equal(block(T({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["AGE"], distal: ["CH"] } })), "");
   assert.match(block(T({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["INCOME"] } })), /INCOME is not a question in this survey \(latent class covariates\)/);
+  /* one CBC or MaxDiff question: the latent-class choice model */
+  assert.equal(block(T({ method: "latent_class", variables: ["CBC"] })), "");
+  assert.equal(block(T({ method: "latent_class", variables: ["MD"], options: { maxClasses: 3 } })), "");
+  assert.match(block(T({ method: "latent_class", variables: ["CBC"], options: { covariates: ["AGE"] } })), /profile the choice segments afterwards/);
   assert.match(warn(T({ method: "latent_class", variables: ["CH", "U1"], options: { maxClasses: 4 } })), /At most \d classes are identified/);
   assert.match(block(T({ method: "latent_class", variables: ["U1", "U2", "U3"] }), study({ research: { sampleSize: 80 } })), /at least 100 completes/);
   /* SEM */
@@ -229,6 +233,10 @@ test("sentences → actions through the gate (deterministic): HB, latent class, 
   const cov = read("segment respondents with latent class using U1 to U4 and compare the classes on CH, with AGE as covariates");
   assert.equal(cov.kind, "actions", cov.kind === "refused" ? cov.reason : "");
   if (cov.kind === "actions") { const o = (cov.actions[0] as { options?: Record<string, unknown> }).options ?? {}; assert.deepEqual(o.covariates, ["AGE"]); assert.deepEqual(o.distal, ["CH"]); assert.match(cov.understood, /ML three-step.*BCH three-step/); }
+  /* a single CBC or MaxDiff question: the latent-class choice model */
+  const lcc = read("segment respondents with latent class using CBC");
+  assert.equal(lcc.kind, "actions", lcc.kind === "refused" ? lcc.reason : "");
+  if (lcc.kind === "actions") assert.match(lcc.understood, /latent-class choice model of CBC.*part-worths/);
   const no = read("segment respondents with latent class using U1 to U4 with INCOME as covariates");
   assert.equal(no.kind, "refused"); assert.match(no.kind === "refused" ? no.reason : "", /INCOME is not a question of this survey/);
   const hbAge = read("run HB on AGE");

@@ -18,12 +18,13 @@
 import type { AnalysisDefinition, AnalysisResult, ResultTable, ChartData } from "../types.js";
 import { categoricalColumn, categoriesOf, labelOf, numericColumn, type Dataset } from "../dataset.js";
 import { conditionalLogit, logitShares, type ChoiceSet } from "../stats/choice.js";
-import { cbcRespondentSets, choiceQuestionFor, maxdiffRespondentSets } from "./choice.js";
+import { cbcCoding, cbcRespondentSets, choiceQuestionFor, maxdiffRespondentSets } from "./choice.js";
 import { expandBattery } from "./basics.js";
 import { fmtNum, fmtP, fmtPct, makeResult, opt, pct, refused, round } from "./common.js";
 import { effectsPriorShape, hbAdvance, hbDone, hbInit, hbSummarise, resolveHbOptions, type HbData, type HbOptions, type HbOutput, type HbState } from "../models/hb.js";
 import { latentClass, type LcaFit } from "../models/lca.js";
 import { bchDistal, mlThreeStep, modalCrosstab, oddsRatio, type DistalCategorical, type DistalNumeric } from "../models/lcaThreeStep.js";
+import { latentClassChoice } from "../models/lcMnl.js";
 import { fitSem, type SemEstimate } from "../models/sem.js";
 import { MODELS_VERSION, intOpt, nowMs } from "../models/spec.js";
 import { dualCodingOf } from "./choice.js";
@@ -265,6 +266,12 @@ export function hb(def: AnalysisDefinition, ds: Dataset, totalCases: number): An
 /* ================================================================== LCA */
 
 export function lca(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
+  /* a single conjoint (CBC) or MaxDiff question: segments by how people CHOOSE — the latent-class choice model */
+  if (def.variables.length === 1) {
+    const name = def.variables[0]!, meta = ds.byName.get(name) ?? ds.byName.get(`${name}_TASKS`);
+    const q = ds.def.questions.find((x) => x.id === meta?.questionId || x.id === name || x.code === name || x.variableName === name);
+    if (q && (q.type === "conjoint_task" || q.type === "maxdiff_task")) return lcChoice(def, ds, totalCases, q.id, q.type);
+  }
   const vars = expandBattery(ds, def.variables).filter((v) => ds.byName.has(v) && ["categorical", "scale", "numeric"].includes(ds.byName.get(v)!.role));
   if (vars.length < 2) return refused(def, ds, totalCases, "Latent class analysis needs at least two categorical indicators (three or more for more than two classes).", ["heatmap"]);
   const cats = vars.map((v) => categoriesOf(ds, v));
@@ -306,6 +313,58 @@ export function lca(def: AnalysisDefinition, ds: Dataset, totalCases: number): A
   }
   const warnings = [...notes, ...(sel ? sel.warnings.filter((w) => w.severity !== "info").map((w) => w.message) : [])];
   return makeResult(def, ds, { tables, chart, insights, warnings, recommendedCharts: ["heatmap", "bar_vertical", "segment_size"], variablesUsed: vars, totalCases, validN: out.nUsed });
+}
+
+/*
+ * LATENT-CLASS CHOICE (2026-11-23): segments of a CBC or MaxDiff exercise, each with its own utilities.
+ */
+function lcChoice(def: AnalysisDefinition, ds: Dataset, totalCases: number, qid: string, type: string): AnalysisResult {
+  const isCbc = type === "conjoint_task";
+  const cbc = isCbc ? cbcRespondentSets(ds, qid) : null;
+  const md = isCbc ? null : maxdiffRespondentSets(ds, qid);
+  if (isCbc && !cbc) return refused(def, ds, totalCases, "The conjoint design has not been generated, or it is a menu-based / rating (CVA) design — a latent-class choice model reads choice-based conjoint tasks.", ["attribute_importance"]);
+  if (!isCbc && (!md || "unsupported" in md)) return refused(def, ds, totalCases, md && "unsupported" in md ? String(md.unsupported).replace("with HB here", "as latent classes here") : "The MaxDiff design has not been generated.", ["bar_horizontal"]);
+  const respondents = isCbc ? cbc!.respondents : (md as Exclude<typeof md, null | { unsupported: string }>).respondents;
+  const p = isCbc ? cbc!.coding.p : (md as { p: number }).p;
+  const levels = isCbc ? cbc!.coding.levelRows() : { names: (md as { items: { label: string }[] }).items.map((i) => i.label), attr: [] as (string | null)[], level: [] as string[], rows: (md as { levelRows: number[][] }).levelRows };
+  const r = latentClassChoice(respondents.map((x) => x.sets), p, {
+    minClasses: intOpt(def.options?.minClasses, 1, 1, 8), maxClasses: intOpt(def.options?.maxClasses, 4, 1, 8), starts: intOpt(def.options?.starts, 10, 1, 100), seed: intOpt(def.options?.seed, 1, 0, 2 ** 31 - 1),
+  });
+  if ("error" in r) return refused(def, ds, totalCases, r.error, ["segment_size"]);
+  const chosenK = intOpt(def.options?.classes, r.recommended ?? 1, 1, 8);
+  const sel = r.fits.find((f) => f.k === chosenK) ?? r.fits.find((f) => f.k === r.recommended);
+  const tables: ResultTable[] = [{
+    id: "lcc_fit", title: "Latent-class choice models compared", columns: [{ key: "k", label: "Classes", type: "number", decimals: 0 }, { key: "ll", label: "Log-likelihood", type: "number", decimals: 2 }, { key: "npar", label: "Parameters", type: "number", decimals: 0 }, { key: "aic", label: "AIC", type: "number", decimals: 2 }, { key: "bic", label: "BIC", type: "number", decimals: 2 }, { key: "entropy", label: "Entropy", type: "number", decimals: 3 }, { key: "smallest", label: "Smallest class %", type: "pct", decimals: 1 }, { key: "rep", label: "Best LL replicated" }, { key: "status", label: "Status" }],
+    rows: r.fits.map((f) => ({ k: f.k, ll: round(f.logLik, 2), npar: f.npar, aic: round(f.aic, 2), bic: round(f.bic, 2), entropy: f.entropy == null ? null : r3(f.entropy), smallest: pct(Math.min(...f.shares) * 100), rep: `${f.replicated} of ${f.starts}`, status: !f.converged ? "not converged" : f.warnings.some((w) => /over-extract/.test(w)) ? "near-empty class" : f.k === r.recommended ? "lowest BIC ✓" : "valid" })),
+    notes: [r.recommendation, `${r.n} respondents, ${r.tasks} choice tasks. BIC uses N = respondents.`],
+  }];
+  const insights = [r.recommendation.split(". ")[0] + "."];
+  const chart: ChartData = {};
+  const warnings: string[] = [];
+  if (sel) {
+    const K = sel.k, cls = Array.from({ length: K }, (_, k) => `Class ${k + 1}`);
+    const util = (k: number, row: number[]) => row.reduce((a, v, i) => a + v * sel.betas[k][i], 0);
+    tables.push({ id: "lcc_shares", title: `Segment sizes — ${K}-class model`, columns: [{ key: "cls", label: "Class" }, { key: "share", label: "Estimated share %", type: "pct", decimals: 1 }, { key: "n", label: "Assigned n", type: "number", decimals: 0 }], rows: cls.map((c, k) => ({ cls: c, share: pct(sel.shares[k] * 100), n: sel.modal.filter((m) => m === k).length })), notes: ["Classes are numbered largest first."] });
+    const uRows = levels.names.map((name, li) => ({ level: name, ...Object.fromEntries(cls.map((_, k) => [`c${k}`, round(util(k, levels.rows[li]), 3)])) }));
+    tables.push({ id: "lcc_utilities", title: `${isCbc ? "Part-worth utilities" : "Item utilities"} by class — ${K}-class model`, columns: [{ key: "level", label: isCbc ? "Attribute: level" : "Item" }, ...cls.map((c, k) => ({ key: `c${k}`, label: c, type: "number" as const, decimals: 3 }))], rows: uRows, notes: [isCbc ? "Effects-coded logit utilities: the levels of each attribute sum to zero within a class." : "Effects-coded best–worst utilities: they sum to zero within a class.", "Standard errors come from each class's posterior-weighted logit and treat the class memberships as known — they are somewhat too small."] });
+    if (isCbc) {
+      const attrs = cbc!.coding.attrs;
+      const imp = cls.map((_, k) => { const ranges = attrs.map((a) => { const us = levels.names.map((_, li) => li).filter((li) => levels.attr[li] === a).map((li) => util(k, levels.rows[li])); return Math.max(...us) - Math.min(...us); }); const tot = ranges.reduce((x, y) => x + y, 0) || 1; return ranges.map((v) => (v / tot) * 100); });
+      tables.push({ id: "lcc_importance", title: `Attribute importance by class — ${K}-class model`, columns: [{ key: "attr", label: "Attribute" }, ...cls.map((c, k) => ({ key: `c${k}`, label: `${c} %`, type: "pct" as const, decimals: 1 }))], rows: attrs.map((a, j) => ({ attr: a, ...Object.fromEntries(cls.map((_, k) => [`c${k}`, pct(imp[k][j])])) })), notes: ["Range of an attribute's utilities as a share of the summed ranges, within each class."] });
+      chart.categories = attrs; chart.series = cls.map((c, k) => ({ name: c, values: imp[k].map((v) => pct(v)) })); chart.valueFormat = "pct";
+      const top = cls.map((c, k) => `${c} (${fmtPct(sel.shares[k] * 100, 0)}) weighs ${attrs[imp[k].indexOf(Math.max(...imp[k]))]} most`);
+      insights.push(`${top.join("; ")}.`);
+    } else {
+      const items = levels.names;
+      const best = cls.map((c, k) => { const us = levels.rows.map((row) => util(k, row)); return `${c} (${fmtPct(sel.shares[k] * 100, 0)}) values “${items[us.indexOf(Math.max(...us))]}” most`; });
+      insights.push(`${best.join("; ")}.`);
+      chart.categories = items; chart.series = cls.map((c, k) => ({ name: c, values: levels.rows.map((row) => round(util(k, row), 3) ?? 0) }));
+    }
+    tables.push({ id: "lcc_membership", title: `Segment membership — ${K}-class model (one row per respondent)`, columns: [{ key: "id", label: "Respondent" }, { key: "cls", label: "Assigned class" }, { key: "max", label: "Max probability", type: "number", decimals: 3 }, ...cls.map((c, k) => ({ key: `c${k}`, label: `P(${c})`, type: "number" as const, decimals: 3 }))], rows: sel.posterior.map((row, i) => ({ id: ds.cases[respondents[i].ci]?.code ?? respondents[i].id, cls: cls[sel.modal[i]], max: r3(Math.max(...row)), ...Object.fromEntries(row.map((v, k) => [`c${k}`, r3(v)])) })) });
+    chart.kpis = [{ label: "Segments", value: K }, { label: "BIC", value: round(sel.bic, 1) ?? 0 }, ...(sel.entropy != null ? [{ label: "Entropy", value: r3(sel.entropy) ?? 0 }] : [])];
+    warnings.push(...sel.warnings);
+  }
+  return makeResult(def, ds, { tables, chart, insights, warnings, recommendedCharts: ["attribute_importance", "segment_size"], variablesUsed: def.variables, totalCases, validN: r.n });
 }
 
 /*

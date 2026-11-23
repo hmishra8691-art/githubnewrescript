@@ -59,7 +59,7 @@ test("the methodologies name only what exists: registered question types, engine
 
 test("asked by the copilot's refusal / clarify logic: what a request names, with its status", () => {
   const ids = (t: string) => capabilitiesMentioned(t).map((c) => `${c.id}:${c.status}`);
-  /* F3 2026-10-22: HB is a plan method (a background job) — supported; latent class stays partial (no latent-class choice model yet) */
+  /* F3 2026-10-22: HB is a plan method (a background job) — supported; segmentation stays partial (no typing tool) */
   assert.ok(ids("estimate HB utilities for the conjoint").includes("analysis:hb:supported"));
   assert.ok(ids("segment them with latent class").includes("analysis:latent_class:partial"));
   assert.ok(ids("fit a structural equation model").includes("analysis:sem:supported"));

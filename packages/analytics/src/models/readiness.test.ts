@@ -99,3 +99,20 @@ test("LCA with covariates and distal outcomes: odds ratios and Wald tests (ML th
   assert.ok(modal.some((t) => t.id === "lca_modal_Y1"), "a numeric variable: means by assigned class");
   assert.ok(modal.some((t) => t.id === "lca_modal_SAT") || /too uncertainly/.test(refusedNote), "the categorical one is cross-tabbed, or refused with the entropy reason");
 });
+
+test("latent-class choice model: one CBC or MaxDiff question → segments with their own utilities", { timeout: 180_000 }, () => {
+  assert.equal(analysisReadiness(D("lca", ["CBC"], { maxClasses: 3 }), vars).ready, true);
+  assert.equal(analysisReadiness(D("lca", ["MD"]), vars).ready, true);
+  assert.match(analysisReadiness(D("lca", ["CBC"], { covariates: ["SAT"] }), vars).missing.join(" "), /profile the segments afterwards/);
+  const c = runAnalysis(D("lca", ["CBC"], { minClasses: 1, maxClasses: 2, starts: 3 }), ds);
+  assert.ok(!c.error, String(c.error));
+  const ids = c.tables.map((t) => t.id);
+  for (const id of ["lcc_fit", "lcc_shares", "lcc_utilities", "lcc_importance", "lcc_membership"]) assert.ok(ids.includes(id), `${id} in ${ids.join(", ")}`);
+  const fit = c.tables.find((t) => t.id === "lcc_fit")!;
+  assert.equal(fit.rows.length, 2);
+  const imp = c.tables.find((t) => t.id === "lcc_importance")!;
+  for (const k of Object.keys(imp.rows[0]).filter((x) => x.startsWith("c"))) assert.ok(Math.abs(imp.rows.reduce((a, r) => a + (r[k] as number), 0) - 100) < 0.5, "importances sum to 100 within a class");
+  const m = runAnalysis(D("lca", ["MD"], { minClasses: 1, maxClasses: 2, starts: 3 }), ds);
+  assert.ok(!m.error, String(m.error));
+  assert.ok(m.tables.some((t) => t.id === "lcc_utilities"));
+});

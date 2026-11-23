@@ -103,6 +103,13 @@ export function readAdvancedRequest(def: SurveyDefinition, raw: string, ctx: Tar
     const range = resolveQuestionRange(def, rest, ctx);
     if (!range.ok) return { kind: "refused", understood, reason: range.reason, detected: [det("method", "latent_class")] };
     const vars = range.questions.map((q) => q.variableName);
+    /* one CBC or MaxDiff question (2026-11-23): the latent-class choice model */
+    if (range.questions.length === 1 && (range.questions[0].type === "conjoint_task" || range.questions[0].type === "maxdiff_task")) {
+      const q = range.questions[0];
+      if (opts.covariates || opts.distal) return { kind: "refused", understood, reason: "Covariates and distal outcomes are for latent classes of indicators; for a choice exercise, run the latent-class choice model and profile the segments by their membership afterwards.", detected: [det("method", "latent_class")] };
+      const what = q.type === "conjoint_task" ? "part-worths and attribute importance" : "item utilities";
+      return { kind: "actions", short: `Plan a latent-class choice model of ${code(q)}.`, understood: `Plan a latent-class choice model of ${code(q)}: ${String(opts.minClasses)}–${String(opts.maxClasses)} segments compared by BIC, each with its own ${what}, segment sizes and each respondent's segment.`, actions: [{ op: "add_analysis_test", method: "latent_class", variables: vars, priority: 1, reason: "asked for in Intelligent mode: choice segments by latent class", options: opts } as SurveyAction], detected: [det("method", "latent_class"), det("choice exercise", code(q))] };
+    }
     /* covariates and distal outcomes are named by question code or variable name; they must exist */
     for (const key of ["covariates", "distal"] as const) {
       const names = (opts[key] as string[] | undefined) ?? [];

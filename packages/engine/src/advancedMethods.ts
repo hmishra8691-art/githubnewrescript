@@ -292,6 +292,14 @@ export function advancedSuitability(def: SurveyDefinition, t: Pick<PlannedTest, 
       const qs = t.variables.map((v) => byVar(def, v));
       const missing = t.variables.filter((_, i) => !qs[i]);
       if (missing.length) { blocking.push(`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not a question in this survey.`); break; }
+      /* one CBC or MaxDiff question (2026-11-23): the latent-class choice model */
+      if (qs.length === 1 && (qs[0]!.type === "conjoint_task" || qs[0]!.type === "maxdiff_task")) {
+        const minK = Number(o.minClasses ?? 1), maxK = Number(o.maxClasses ?? 4);
+        if (!(minK >= 1 && maxK <= 8 && minK <= maxK)) blocking.push("The class range must run from 1 to at most 8 classes, the smallest first.");
+        if ((Array.isArray(o.covariates) && o.covariates.length) || (Array.isArray(o.distal) && o.distal.length)) blocking.push("Covariates and distal outcomes are for latent classes of indicators; profile the choice segments afterwards by their membership.");
+        sample(ADVANCED_RULES.lcaMin, ADVANCED_RULES.lcaWarn, "A latent-class choice model");
+        break;
+      }
       const items = qs.flatMap((q) => (GRID.has(q!.type) ? (q!.rows ?? []).map(() => q!) : [q!]));
       const notCat = qs.filter((q) => !(isCategorical(measurementOf(q!)) && measurementOf(q!) !== "multi") && !(GRID.has(q!.type)));
       if (notCat.length) blocking.push(`Latent class indicators must be categorical answers; ${notCat.map((q) => `${q!.code} is ${measurementOf(q!)}`).join(", ")} — band a numeric question first, or use cluster analysis for scales.`);

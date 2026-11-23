@@ -127,6 +127,16 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
       break;
     }
     case "lca": {
+      /* one CBC or MaxDiff question (2026-11-23): the latent-class choice model — segments by how people choose */
+      /* the picker names the question (CBC) or its task variable (CBC_TASKS) */
+      const choiceMeta = vs.length === 1 ? (variables.find((v) => v.name === vs[0]) ?? variables.find((v) => v.name === `${vs[0]}_TASKS`)) : undefined;
+      if (choiceMeta?.questionType === "conjoint_task" || choiceMeta?.questionType === "maxdiff_task") {
+        const minK = Number(o.minClasses ?? 1), maxK = Number(o.maxClasses ?? 4);
+        if (!(minK >= 1 && maxK <= 8 && minK <= maxK)) need("The class range must run from 1 to at most 8 classes, the smallest first.");
+        if (Array.isArray(o.covariates) || Array.isArray(o.distal)) need("Covariates and distal outcomes are related to latent classes of indicators; for a choice model, profile the segments afterwards by the membership table.");
+        break;
+      }
+      if (choiceMeta?.questionType === "acbc_task") { need("Latent-class choice models read a CBC or MaxDiff question; ACBC is estimated by HB."); break; }
       if (vs.length && items() < 2) need("Latent class analysis needs at least two categorical indicators — add more variables.");
       const minK = Number(o.minClasses ?? 1), maxK = Number(o.maxClasses ?? 4);
       /* covariates and distal outcomes (2026-11-23): estimated by the three-step method — they must be variables of the data */
