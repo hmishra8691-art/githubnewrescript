@@ -23,6 +23,7 @@ import { expandBattery } from "./basics.js";
 import { fmtNum, fmtP, fmtPct, makeResult, opt, pct, refused, round } from "./common.js";
 import { effectsPriorShape, hbAdvance, hbDone, hbInit, hbSummarise, resolveHbOptions, type HbData, type HbOptions, type HbOutput, type HbState } from "../models/hb.js";
 import { latentClass, type LcaFit } from "../models/lca.js";
+import { bchDistal, mlThreeStep, modalCrosstab, oddsRatio, type DistalCategorical, type DistalNumeric } from "../models/lcaThreeStep.js";
 import { fitSem, type SemEstimate } from "../models/sem.js";
 import { MODELS_VERSION, intOpt, nowMs } from "../models/spec.js";
 import { dualCodingOf } from "./choice.js";
@@ -301,9 +302,86 @@ export function lca(def: AnalysisDefinition, ds: Dataset, totalCases: number): A
     chart.matrix = { rows: profRows.map((r) => `${r.indicator}: ${r.category}`), columns: cls, values: profRows.map((r) => cls.map((_, k) => r[`c${k}`] as number)) };
     chart.kpis = [{ label: "Classes", value: K }, { label: "BIC", value: round(sel.bic, 1) ?? 0 }, ...(sel.entropy != null ? [{ label: "Entropy", value: r3(sel.entropy) ?? 0 }] : [])];
     if (K > 1) insights.push(`${K}-class model: class sizes ${sel.classSizes.map((v) => fmtPct(v * 100, 0)).join(", ")}; entropy ${fmtNum(sel.entropy, 2)}.`);
+    if (K > 1) relateClasses(def, ds, sel, out.usedIndex, cls, tables, insights, notes);
   }
   const warnings = [...notes, ...(sel ? sel.warnings.filter((w) => w.severity !== "info").map((w) => w.message) : [])];
   return makeResult(def, ds, { tables, chart, insights, warnings, recommendedCharts: ["heatmap", "bar_vertical", "segment_size"], variablesUsed: vars, totalCases, validN: out.nUsed });
+}
+
+/*
+ * WHAT THE CLASSES ARE RELATED TO (2026-11-23): `options.covariates` (variables that may predict class membership)
+ * and `options.distal` (variables the classes may differ on), by `options.covariateMethod`:
+ *   "three_step" (default)  covariates: ML three-step multinomial logit (odds ratios against Class 1);
+ *                           distal: BCH-corrected class means / proportions with bootstrap intervals
+ *   "modal"                 assign, then cross-tab: the assigned class against each variable — refused at entropy < 0.6
+ */
+function relateClasses(def: AnalysisDefinition, ds: Dataset, sel: LcaFit, used: number[], cls: string[], tables: ResultTable[], insights: string[], notes: string[]): void {
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : typeof v === "string" && v ? [v] : []).filter((n) => ds.byName.has(n));
+  const covariates = list(def.options?.covariates), distal = list(def.options?.distal);
+  const askedMissing = [...(Array.isArray(def.options?.covariates) ? def.options!.covariates as unknown[] : []), ...(Array.isArray(def.options?.distal) ? def.options!.distal as unknown[] : [])].map(String).filter((n) => !ds.byName.has(n));
+  if (askedMissing.length) notes.push(`Not in the data, left out: ${askedMissing.join(", ")}.`);
+  if (!covariates.length && !distal.length) return;
+  const method = def.options?.covariateMethod === "modal" ? "modal" : "three_step";
+  const K = sel.k;
+  const kindOf = (v: string): "categorical" | "numeric" => { const m = ds.byName.get(v)!; const c = categoriesOf(ds, v); return m.role === "numeric" || (m.role !== "categorical" && c.length > 15) ? "numeric" : "categorical"; };
+  const catY = (v: string): DistalCategorical => { const col = categoricalColumn(ds, v); return { kind: "categorical", values: used.map((i) => { const x = col[i]; return x == null || Array.isArray(x) ? null : x; }), categories: categoriesOf(ds, v) }; };
+  const numY = (v: string): DistalNumeric => { const col = numericColumn(ds, v); return { kind: "numeric", values: used.map((i) => col[i] ?? null) }; };
+  const caveat = "Three-step: the classes are estimated first and held fixed; the step-1 uncertainty is not added to these standard errors.";
+
+  if (method === "modal") {
+    for (const v of [...covariates, ...distal]) {
+      if (kindOf(v) === "numeric") {
+        const y = numY(v); const sums = new Array(K).fill(0), ns = new Array(K).fill(0);
+        sel.modal.forEach((k, i) => { const x = y.values[i]; if (x != null) { sums[k] += x; ns[k]++; } });
+        tables.push({ id: `lca_modal_${v}`, title: `${labelOf(ds, v)} by assigned class (assign, then compare)`, columns: [{ key: "cls", label: "Assigned class" }, { key: "n", label: "n", type: "number", decimals: 0 }, { key: "mean", label: "Mean", type: "number", decimals: 2 }], rows: cls.map((c, k) => ({ cls: c, n: ns[k], mean: ns[k] ? round(sums[k] / ns[k], 2) : null })), notes: ["Means of the assigned (most likely) class. Misclassified respondents pull the class means towards each other."] });
+        continue;
+      }
+      const ct = modalCrosstab(sel.posterior, sel.modal, catY(v));
+      if (ct.status === "refused") { notes.push(`${labelOf(ds, v)}: ${ct.message}`); continue; }
+      const cats = categoriesOf(ds, v);
+      tables.push({ id: `lca_modal_${v}`, title: `${labelOf(ds, v)} by assigned class (assign, then cross-tab)`, columns: [{ key: "cat", label: labelOf(ds, v) }, ...cls.map((c, k) => ({ key: `c${k}`, label: `${c} %`, type: "pct" as const, decimals: 1 }))], rows: cats.map((c, j) => ({ cat: c.label, ...Object.fromEntries(cls.map((_, k) => [`c${k}`, pct(ct.percents[k][j])])) })), notes: [ct.message, ...(ct.test ? [`χ²(${ct.test.df}) = ${fmtNum(ct.test.chi2, 2)}, p ${fmtP(ct.test.p)} — computed as if the assigned classes were exact.`] : [])] });
+      if (ct.status === "caution") notes.push(`${labelOf(ds, v)}: ${ct.message}`);
+    }
+    return;
+  }
+
+  /* covariates → ML three-step */
+  if (covariates.length) {
+    const cols: { name: string; term: string; values: (number | null)[] }[] = [];
+    for (const v of covariates) {
+      if (kindOf(v) === "numeric") { const y = numY(v); cols.push({ name: v, term: `${labelOf(ds, v)} (per unit)`, values: y.values }); continue; }
+      const y = catY(v); const cats = y.categories;
+      cats.slice(1).forEach((c) => cols.push({ name: v, term: `${labelOf(ds, v)}: ${c.label} vs ${cats[0].label}`, values: y.values.map((x) => (x == null ? null : String(x) === String(c.code) ? 1 : 0)) }));
+    }
+    const rows = used.map((_, i) => i).filter((i) => cols.every((c) => c.values[i] != null));
+    const r = mlThreeStep(rows.map((i) => sel.posterior[i]), rows.map((i) => sel.modal[i]), rows.map((i) => [1, ...cols.map((c) => c.values[i] as number)]));
+    if ("error" in r) notes.push(`Covariates: ${r.error}`);
+    else {
+      const trows: Record<string, unknown>[] = [];
+      for (let t = 1; t < K; t++) cols.forEach((c, j) => { const o = oddsRatio(r.coefficients[t - 1][j + 1], r.se[t - 1][j + 1]); trows.push({ cls: `${cls[t]} vs ${cls[0]}`, term: c.term, or: round(o.or, 3), lo: round(o.lower, 3), hi: round(o.upper, 3), p: round(o.p, 4) }); });
+      tables.push({ id: "lca_covariates", title: "What predicts class membership — odds ratios (ML three-step)", columns: [{ key: "cls", label: "Class" }, { key: "term", label: "Covariate" }, { key: "or", label: "Odds ratio", type: "number", decimals: 3 }, { key: "lo", label: "95% CI low", type: "number", decimals: 3 }, { key: "hi", label: "95% CI high", type: "number", decimals: 3 }, { key: "p", label: "p", type: "number", decimals: 4 }], rows: trows, notes: [`Multinomial logit of the class on the covariates, against ${cls[0]} (the largest), with the assigned class measured with its step-1 classification error (Vermunt 2010). n = ${r.n}.`, caveat, ...r.warnings] });
+      const byVar = covariates.map((v) => { const idx = cols.map((c, j) => (c.name === v ? j : -1)).filter((j) => j >= 0); return { v, idx }; });
+      tables.push({ id: "lca_covariate_tests", title: "Does each covariate predict class membership? (Wald tests)", columns: [{ key: "term", label: "Covariate column" }, { key: "chi2", label: "Wald χ²", type: "number", decimals: 2 }, { key: "df", label: "df", type: "number", decimals: 0 }, { key: "p", label: "p", type: "number", decimals: 4 }], rows: cols.map((c, j) => ({ term: c.term, chi2: round(r.wald[j].chi2, 2), df: r.wald[j].df, p: round(r.wald[j].p, 4) })), notes: ["Each row tests that the column has no effect on any class (df = classes − 1)."] });
+      const sig = cols.filter((_, j) => r.wald[j].p < 0.05).map((c) => c.term);
+      insights.push(sig.length ? `Class membership differs by ${sig.slice(0, 3).join("; ")} (ML three-step, p < 0.05).` : "None of the covariates predicts class membership at p < 0.05 (ML three-step).");
+      void byVar;
+    }
+  }
+
+  /* distal outcomes → BCH */
+  for (const v of distal) {
+    const kind = kindOf(v);
+    const r = bchDistal(sel.posterior, sel.modal, kind === "numeric" ? numY(v) : catY(v), { bootstrap: intOpt(def.options?.bootstrap, 200, 0, 2000), seed: intOpt(def.options?.seed, 1, 0, 2 ** 31 - 1) });
+    if ("error" in r) { notes.push(`${labelOf(ds, v)}: ${r.error}`); continue; }
+    const testNote = r.test ? `Do the classes differ? Wald χ²(${r.test.df}) = ${fmtNum(r.test.chi2, 2)}, p ${fmtP(r.test.p)} (bootstrap covariance, ${r.bootstrap} samples).` : "Too few usable bootstrap samples for an overall test.";
+    if (kind === "numeric") {
+      tables.push({ id: `lca_distal_${v}`, title: `${labelOf(ds, v)} by class (BCH three-step)`, columns: [{ key: "cls", label: "Class" }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "lo", label: "95% CI low", type: "number", decimals: 2 }, { key: "hi", label: "95% CI high", type: "number", decimals: 2 }, { key: "sd", label: "SD", type: "number", decimals: 2 }], rows: cls.map((c, k) => ({ cls: c, mean: round(r.estimates[k][0], 2), lo: round(r.lower[k][0], 2), hi: round(r.upper[k][0], 2), sd: round(r.sd?.[k] ?? NaN, 2) })), notes: ["Class means corrected for classification error (BCH weights; Bolck, Croon & Hagenaars 2004; Bakk & Vermunt 2016).", testNote, caveat, ...r.warnings] });
+    } else {
+      const cats = categoriesOf(ds, v);
+      tables.push({ id: `lca_distal_${v}`, title: `${labelOf(ds, v)} by class (BCH three-step)`, columns: [{ key: "cat", label: labelOf(ds, v) }, ...cls.flatMap((c, k) => [{ key: `c${k}`, label: `${c} %`, type: "pct" as const, decimals: 1 }, { key: `ci${k}`, label: `${c} 95% CI` }])], rows: cats.map((c, j) => ({ cat: c.label, ...Object.fromEntries(cls.flatMap((_, k) => [[`c${k}`, pct(r.estimates[k][j] * 100)], [`ci${k}`, `${fmtNum(r.lower[k][j] * 100, 1)}–${fmtNum(r.upper[k][j] * 100, 1)}`]])) })), notes: ["Class-specific percentages corrected for classification error (BCH weights).", testNote, caveat, ...r.warnings] });
+    }
+    if (r.test && r.test.p < 0.05) insights.push(`${labelOf(ds, v)} differs between classes (BCH three-step, p ${fmtP(r.test.p)}).`);
+  }
 }
 
 /* ================================================================== SEM */

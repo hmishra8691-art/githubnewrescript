@@ -283,7 +283,12 @@ export function advancedSuitability(def: SurveyDefinition, t: Pick<PlannedTest, 
       break;
     }
     case "latent_class": {
-      if (Array.isArray(o.covariates) && o.covariates.length) blocking.push(`Latent class with covariates is not estimated here (no one- or three-step covariate model) — run it on the indicators alone and profile the classes by ${o.covariates.map(String).join(", ")} with a crosstab of the assigned class.`);
+      /* covariates / distal outcomes (2026-11-23): the three-step method; each must be a question (or variable) of this survey */
+      for (const key of ["covariates", "distal"] as const) {
+        const xs = Array.isArray(o[key]) ? (o[key] as unknown[]).map(String) : [];
+        const unknown = xs.filter((n) => !byVar(def, n));
+        if (unknown.length) blocking.push(`${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not a question in this survey (latent class ${key === "covariates" ? "covariates" : "distal outcomes"}).`);
+      }
       const qs = t.variables.map((v) => byVar(def, v));
       const missing = t.variables.filter((_, i) => !qs[i]);
       if (missing.length) { blocking.push(`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not a question in this survey.`); break; }

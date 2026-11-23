@@ -129,8 +129,13 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
     case "lca": {
       if (vs.length && items() < 2) need("Latent class analysis needs at least two categorical indicators — add more variables.");
       const minK = Number(o.minClasses ?? 1), maxK = Number(o.maxClasses ?? 4);
-      /* covariates (2026-10-22): asked for by name, refused in words — the estimator has no covariate (one- or three-step) model */
-      if (Array.isArray(o.covariates) && (o.covariates as unknown[]).length) need(`Latent class with covariates (${(o.covariates as unknown[]).map(String).join(", ")}) is not estimated here — the model has no covariate step. Run it on the indicators alone, then profile the classes by ${(o.covariates as unknown[]).length === 1 ? "that variable" : "those variables"} with a crosstab of the assigned class.`);
+      /* covariates and distal outcomes (2026-11-23): estimated by the three-step method — they must be variables of the data */
+      for (const key of ["covariates", "distal"] as const) {
+        const xs = Array.isArray(o[key]) ? (o[key] as unknown[]).map(String) : [];
+        const unknown = xs.filter((n) => !variables.some((v) => v.name === n));
+        if (unknown.length) need(`${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not a variable of this dataset (latent class ${key === "covariates" ? "covariates" : "distal outcomes"}).`);
+      }
+      if (o.covariateMethod !== undefined && o.covariateMethod !== "three_step" && o.covariateMethod !== "modal") need("covariateMethod is three_step (the corrected estimate) or modal (assign, then cross-tab).");
       if (!(minK >= 1 && maxK <= 8 && minK <= maxK)) need("The class range must run from 1 to at most 8 classes, the smallest first.");
       else if (vs.length && items() >= 2) {
         const metas = vs.map((n) => variables.find((v) => v.name === n));

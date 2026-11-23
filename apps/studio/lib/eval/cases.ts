@@ -338,11 +338,11 @@ export const GOLDEN_CASES: EvalCase[] = [
       expect: { modelCalled: true, appliedExactly: 0 } }],
   },
   {
-    id: "advanced-lca-covariates-refused", category: "analysis_plan", title: "Latent class with covariates is refused in words", fixture: "spec", tags: ["advanced", "refusal"],
-    fixtureSpec: [1, 2, 3].map((k) => ({ ref: `U${k}`, type: "single_select", text: `Usage ${k}`, options: ["Never", "Sometimes", "Often"] })).concat([{ ref: "AGE", type: "numeric", text: "Age" }] as never),
-    turns: [{ message: "Latent class on U1-U3 with age as a covariate",
-      fake: { kind: "edit", reply: "Planned latent class with AGE as a covariate.", actions: [{ op: "add_analysis_test", method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["AGE"] } }] },
-      expect: { modelCalled: true, appliedExactly: 0 } }],
+    id: "advanced-lca-covariates", category: "analysis_plan", title: "Latent class with a covariate and a distal outcome (three-step)", fixture: "spec", tags: ["advanced"],
+    fixtureSpec: [1, 2, 3].map((k) => ({ ref: `U${k}`, type: "single_select", text: `Usage ${k}`, options: ["Never", "Sometimes", "Often"] })).concat([{ ref: "AGE", type: "numeric", text: "Age" }, { ref: "SPEND", type: "numeric", text: "Monthly spend" }] as never),
+    turns: [{ message: "Latent class on U1-U3 with age as a covariate, and compare the classes on spend",
+      fake: { kind: "edit", reply: "Planned latent class on U1–U3, with AGE predicting membership (ML three-step) and SPEND compared across classes (BCH).", actions: [{ op: "add_analysis_test", method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["AGE"], distal: ["SPEND"] }, priority: 1 }] },
+      expect: { modelCalled: true, opsPresent: ["add_analysis_test"], appliedMin: 1, valid: true } }],
   },
 
   /* ---------------------------------------------------------------- MaxDiff, conjoint, List Fill */

@@ -103,7 +103,7 @@
       "advanced-latent-class": true,
       "advanced-mediation-bootstrap": true,
       "advanced-hb-refused": true,
-      "advanced-lca-covariates-refused": true,
+      "advanced-lca-covariates": true,
       "method-maxdiff": true,
       "method-conjoint": true,
       "method-cva": true,

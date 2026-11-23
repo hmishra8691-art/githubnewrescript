@@ -75,7 +75,10 @@ test("ONE readiness rule per advanced item — valid and invalid, in the researc
   assert.ok(ready({ method: "latent_class", variables: ["U1", "U2", "U3", "U4"] }).ready);
   assert.match(ready({ method: "latent_class" }).missing.join(" "), /indicators/);
   assert.match(ready({ method: "latent_class", variables: ["U1"] }).missing.join(" "), /at least two categorical/);
-  assert.match(ready({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["SAT"] } }).missing.join(" "), /covariates \(SAT\) is not estimated/);
+  /* covariates / distal outcomes (2026-11-23, three-step): ready when they are variables of the data */
+  assert.ok(ready({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["SAT"], distal: ["SAT"] } }).ready);
+  assert.match(ready({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["NOPE"] } }).missing.join(" "), /NOPE is not a variable of this dataset \(latent class covariates\)/);
+  assert.match(ready({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariateMethod: "magic" } }).missing.join(" "), /covariateMethod is three_step/);
   assert.match(ready({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { minClasses: 0, maxClasses: 9 } }).missing.join(" "), /1 to at most 8/);
   /* SEM */
   const [sem] = byMethod("sem");

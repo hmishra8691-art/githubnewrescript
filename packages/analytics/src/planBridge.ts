@@ -43,7 +43,7 @@ const METHOD_KIND: Record<AnalysisMethod, AnalysisKind> = {
 const PLAN_OPTION_KEYS: Partial<Record<AnalysisMethod, readonly string[]>> = {
   hb: ["chains", "burnIn", "draws", "thin", "seed", "priorVariance", "priorDf", "includeHoldouts", "scenario"],
   /* covariates are carried so the readiness rule can refuse them in words (the estimator has no covariate model) */
-  latent_class: ["minClasses", "maxClasses", "starts", "seed", "classes", "maxIter", "covariates"],
+  latent_class: ["minClasses", "maxClasses", "starts", "seed", "classes", "maxIter", "covariates", "distal", "covariateMethod", "bootstrap"],
   sem: ["syntax", "scaling", "hypothesisPaths"],
   regression: ["bootstrap", "seed"],
   reliability: ["omega"],

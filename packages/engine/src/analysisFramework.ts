@@ -1295,7 +1295,7 @@ export function explainPlanItem(def: SurveyDefinition, item: PlanItem, plan: Ana
           why = `${predList} are categorical answers; latent class analysis finds groups of respondents who answer them alike, comparing ${String(t.options?.minClasses ?? 1)}–${String(t.options?.maxClasses ?? 4)} classes by BIC.`;
           output = "the fit of each number of classes (LL, AIC, BIC, SABIC, entropy), class sizes, item-response probabilities per class and each respondent's class membership";
           lead = `Latent class analysis is recommended because the study looks for segments and ${predList} describe them.`;
-          limitations.push("The choice of the number of classes is guided by BIC, not automatic; respondents missing an indicator are left out; no covariates are estimated in the model.");
+          limitations.push("The choice of the number of classes is guided by BIC, not automatic; respondents missing an indicator are left out; covariates and distal outcomes are related to the classes by the three-step method (classes fixed first), not inside the measurement model.");
           break;
         case "sem": {
           const paths = Object.entries((t.options?.hypothesisPaths ?? {}) as Record<string, string>);

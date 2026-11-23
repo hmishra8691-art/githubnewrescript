@@ -136,7 +136,7 @@ function testSpec(x: unknown): TestSpec | string {
  */
 const OPTION_KEYS: Partial<Record<AnalysisMethod, string[]>> = {
   hb: ["chains", "burnIn", "draws", "thin", "seed", "priorVariance", "priorDf"],
-  latent_class: ["minClasses", "maxClasses", "starts", "seed", "classes", "covariates"],
+  latent_class: ["minClasses", "maxClasses", "starts", "seed", "classes", "covariates", "distal", "covariateMethod", "bootstrap"],
   sem: ["syntax", "scaling", "hypothesisPaths"],
   regression: ["bootstrap", "seed"], logistic_regression: ["bootstrap", "seed"], driver_analysis: ["bootstrap", "seed"],
   reliability: ["omega"],
@@ -164,6 +164,8 @@ export function testOptions(method: AnalysisMethod, o: Record<string, unknown>):
     switch (k) {
       case "priorVariance": case "priorDf": { const n = Number(v); if (!(n > 0 && n < 1000)) return `${k} must be a positive number`; out[k] = n; break; }
       case "covariates": { const xs = strs(v); if (!xs) return "covariates is a list of variable names"; if (xs.length) out[k] = xs; break; }
+      case "distal": { const xs = strs(v); if (!xs) return "distal is a list of variable names"; if (xs.length) out[k] = xs; break; }
+      case "covariateMethod": { if (v !== "three_step" && v !== "modal") return "covariateMethod is three_step or modal"; out[k] = v; break; }
       case "syntax": { const t = typeof v === "string" ? v.trim() : ""; if (!t) return "syntax is the model written lavaan-style (F =~ a + b + c; Y ~ F)"; out[k] = t.slice(0, 6000); break; }
       case "scaling": if (v !== "marker" && v !== "unit_variance") return "scaling is \"marker\" or \"unit_variance\""; out[k] = v; break;
       case "hypothesisPaths": { if (typeof v !== "object" || Array.isArray(v)) return "hypothesisPaths maps a hypothesis label to its path (\"H2\": \"INTENT ~ TRUST\")"; const e = Object.entries(v as Record<string, unknown>).filter(([h, p]) => /^H\d+$/i.test(h) && typeof p === "string").map(([h, p]) => [h.toUpperCase(), String(p).slice(0, 120)]); if (e.length) out[k] = Object.fromEntries(e); break; }

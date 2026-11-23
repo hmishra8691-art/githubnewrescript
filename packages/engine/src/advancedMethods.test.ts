@@ -107,7 +107,9 @@ test("method suitability: sample minimums, indicators, identification and tasks 
   assert.equal(block(T({ method: "latent_class", variables: ["U1", "U2", "U3", "U4"] })), "");
   assert.match(block(T({ method: "latent_class", variables: ["U1", "AGE"] })), /AGE is ratio/);
   assert.match(block(T({ method: "latent_class", variables: ["U1"] })), /at least 2 indicators/);
-  assert.match(block(T({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["AGE"] } })), /covariates is not estimated here/);
+  /* covariates / distal outcomes (2026-11-23, three-step): planned when they are questions of the survey */
+  assert.equal(block(T({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["AGE"], distal: ["CH"] } })), "");
+  assert.match(block(T({ method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["INCOME"] } })), /INCOME is not a question in this survey \(latent class covariates\)/);
   assert.match(warn(T({ method: "latent_class", variables: ["CH", "U1"], options: { maxClasses: 4 } })), /At most \d classes are identified/);
   assert.match(block(T({ method: "latent_class", variables: ["U1", "U2", "U3"] }), study({ research: { sampleSize: 80 } })), /at least 100 completes/);
   /* SEM */
@@ -223,8 +225,12 @@ test("sentences → actions through the gate (deterministic): HB, latent class, 
   assert.deepEqual(acts("test H1 and H2 with a structural equation model")[0].hypotheses, ["H1", "H2"]);
   assert.match(String((acts("run a CFA of the constructs")[0].options as Record<string, unknown>).syntax), /PRICE_PERCEPTION =~ PP1 \+ PP2 \+ PP3/);
   /* refused, nothing applied, the rule named */
-  const no = read("segment respondents with latent class using PP1 with AGE as covariates");
-  assert.equal(no.kind, "refused"); assert.match(no.kind === "refused" ? no.reason : "", /^Not planned: Latent class with covariates is not estimated/);
+  /* latent class with covariates and distal outcomes: planned (three-step); an unknown covariate is refused by name */
+  const cov = read("segment respondents with latent class using U1 to U4 and compare the classes on CH, with AGE as covariates");
+  assert.equal(cov.kind, "actions", cov.kind === "refused" ? cov.reason : "");
+  if (cov.kind === "actions") { const o = (cov.actions[0] as { options?: Record<string, unknown> }).options ?? {}; assert.deepEqual(o.covariates, ["AGE"]); assert.deepEqual(o.distal, ["CH"]); assert.match(cov.understood, /ML three-step.*BCH three-step/); }
+  const no = read("segment respondents with latent class using U1 to U4 with INCOME as covariates");
+  assert.equal(no.kind, "refused"); assert.match(no.kind === "refused" ? no.reason : "", /INCOME is not a question of this survey/);
   const hbAge = read("run HB on AGE");
   assert.ok(hbAge.kind === "refused" && /AGE is a numeric question/.test(hbAge.reason));
   assert.ok(read("test H9 as a mediation through trust").kind === "refused");

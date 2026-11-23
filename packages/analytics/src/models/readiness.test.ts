@@ -78,3 +78,24 @@ test("advanced results export through the analysis export path (one sheet per ta
   assert.ok(bytes.length > 2000);
   assert.equal(String.fromCharCode(bytes[0], bytes[1]), "PK", "a zip (xlsx) file");
 });
+
+test("LCA with covariates and distal outcomes: odds ratios and Wald tests (ML three-step), BCH tables, or assign-then-cross-tab", { timeout: 120_000 }, () => {
+  const r = runAnalysis(D("lca", ["U1", "U2", "U3", "U4"], { minClasses: 2, maxClasses: 2, classes: 2, starts: 5, covariates: ["X1", "SAT"], distal: ["Y1", "SAT"], bootstrap: 50 }), ds);
+  assert.ok(!r.error, String(r.error));
+  const ids = r.tables.map((t) => t.id);
+  for (const id of ["lca_covariates", "lca_covariate_tests", "lca_distal_Y1", "lca_distal_SAT"]) assert.ok(ids.includes(id), `${id} in ${ids.join(", ")}`);
+  const cov = r.tables.find((t) => t.id === "lca_covariates")!;
+  assert.equal(cov.rows.length, 1 + 4, "one class contrast × (X1 + four SAT dummies)");
+  assert.ok(cov.rows.every((row) => typeof row.or === "number" && (row.or as number) > 0));
+  assert.match(cov.notes!.join(" "), /step-1 uncertainty is not added/);
+  const sat = r.tables.find((t) => t.id === "lca_distal_SAT")!;
+  assert.equal(sat.rows.length, 5);
+  const y1 = r.tables.find((t) => t.id === "lca_distal_Y1")!;
+  assert.equal(y1.rows.length, 2);
+  assert.match(y1.notes!.join(" "), /BCH weights/);
+  const m = runAnalysis(D("lca", ["U1", "U2", "U3", "U4"], { minClasses: 2, maxClasses: 2, classes: 2, starts: 5, distal: ["SAT", "Y1"], covariateMethod: "modal" }), ds);
+  const modal = m.tables.filter((t) => t.id.startsWith("lca_modal_"));
+  const refusedNote = m.warnings.join(" ");
+  assert.ok(modal.some((t) => t.id === "lca_modal_Y1"), "a numeric variable: means by assigned class");
+  assert.ok(modal.some((t) => t.id === "lca_modal_SAT") || /too uncertainly/.test(refusedNote), "the categorical one is cross-tabbed, or refused with the entropy reason");
+});

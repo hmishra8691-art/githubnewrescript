@@ -93,7 +93,9 @@ export function readAdvancedRequest(def: SurveyDefinition, raw: string, ctx: Tar
     let rest = m[1];
     const opts: Record<string, unknown> = { starts: 20, seed: 1 };
     let k: RegExpExecArray | null;
-    if ((k = /[,\s]+(?:with|for|and|controlling\s+for)\s+(.+?)\s+as\s+(?:a\s+)?covariates?$/i.exec(rest))) { opts.covariates = k[1].split(/\s*(?:,|\band\b)\s*/i).filter(Boolean); rest = rest.slice(0, k.index); }
+    if ((k = /[,\s]+(?:with|for|and|controlling\s+for)\s+([A-Za-z0-9_.]+(?:\s*(?:,|\band\b)\s*[A-Za-z0-9_.]+)*)\s+as\s+(?:a\s+)?covariates?$/i.exec(rest))) { opts.covariates = k[1].split(/\s*(?:,|\band\b)\s*/i).filter(Boolean); rest = rest.slice(0, k.index); }
+    /* "… and compare the classes on SPEND, NPS" / "… with SPEND as distal outcome(s)" (2026-11-23: BCH three-step) */
+    if ((k = /[,\s]+(?:and\s+)?(?:compare|profile)\s+(?:the\s+)?(?:classes|segments)\s+(?:on|by)\s+(.+)$/i.exec(rest)) || (k = /[,\s]+(?:with|and)\s+(.+?)\s+as\s+(?:a\s+)?(?:distal\s+)?outcomes?$/i.exec(rest))) { opts.distal = k[1].split(/\s*(?:,|\band\b)\s*/i).filter(Boolean); rest = rest.slice(0, k.index); }
     if ((k = /[,\s]+(?:with|for|testing|comparing|from)\s+(\d)\s*(?:to|-|–|through)\s*(\d)\s+classes$/i.exec(rest))) { opts.minClasses = Number(k[1]); opts.maxClasses = Number(k[2]); rest = rest.slice(0, k.index); }
     else if ((k = /[,\s]+(?:with|into)\s+(\d)\s+classes$/i.exec(rest))) { opts.minClasses = 1; opts.maxClasses = Math.max(Number(k[1]), 2); opts.classes = Number(k[1]); rest = rest.slice(0, k.index); }
     else { opts.minClasses = 1; opts.maxClasses = 5; }
@@ -101,7 +103,17 @@ export function readAdvancedRequest(def: SurveyDefinition, raw: string, ctx: Tar
     const range = resolveQuestionRange(def, rest, ctx);
     if (!range.ok) return { kind: "refused", understood, reason: range.reason, detected: [det("method", "latent_class")] };
     const vars = range.questions.map((q) => q.variableName);
-    return { kind: "actions", short: understood, understood: `Plan a latent class analysis of ${range.questions.map(code).join(", ")}: ${String(opts.minClasses)}–${String(opts.maxClasses)} classes compared by BIC (AIC, SABIC and entropy beside it), class sizes, profiles and each respondent's class.`, actions: [{ op: "add_analysis_test", method: "latent_class", variables: vars, priority: 1, reason: "asked for in Intelligent mode: segments by latent class", options: opts } as SurveyAction], detected: [det("method", "latent_class"), det("indicators", range.questions.map(code).join(", "))] };
+    /* covariates and distal outcomes are named by question code or variable name; they must exist */
+    for (const key of ["covariates", "distal"] as const) {
+      const names = (opts[key] as string[] | undefined) ?? [];
+      if (!names.length) continue;
+      const qs = names.map((n) => def.questions.find((q) => q.variableName.toLowerCase() === n.toLowerCase() || String(q.code).toLowerCase() === n.toLowerCase()));
+      const missing = names.filter((_, i) => !qs[i]);
+      if (missing.length) return { kind: "refused", understood, reason: `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not a question of this survey — name the ${key === "covariates" ? "covariates" : "outcomes"} by question code or variable name.`, detected: [det("method", "latent_class")] };
+      opts[key] = qs.map((q) => q!.variableName);
+    }
+    const related = [opts.covariates ? `what predicts membership (${(opts.covariates as string[]).join(", ")}: odds ratios, ML three-step)` : "", opts.distal ? `how the classes differ on ${(opts.distal as string[]).join(", ")} (BCH three-step)` : ""].filter(Boolean).join("; ");
+    return { kind: "actions", short: understood, understood: `Plan a latent class analysis of ${range.questions.map(code).join(", ")}: ${String(opts.minClasses)}–${String(opts.maxClasses)} classes compared by BIC (AIC, SABIC and entropy beside it), class sizes, profiles and each respondent's class${related ? `; then ${related}` : ""}.`, actions: [{ op: "add_analysis_test", method: "latent_class", variables: vars, priority: 1, reason: "asked for in Intelligent mode: segments by latent class", options: opts } as SurveyAction], detected: [det("method", "latent_class"), det("indicators", range.questions.map(code).join(", "))] };
   }
 
   /* ---- a hypothesis as a mediation, bootstrapped */
