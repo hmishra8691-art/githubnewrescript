@@ -534,6 +534,34 @@ appended after every other column in CSV, Excel, SPSS, SAS and Stata, as numeric
 (and in the dictionary file of the bundles). A response outside the coded sources is missing, never 0. Off unless
 ticked, so existing deliveries do not change.
 
+### The Moderate crash, and the three decisions built (23 November, 0301 to 0305)
+
+**0301, Moderate crashed in production.** On Vercel a dynamic route's path parameters are added to the query and
+replace a query parameter of the same name, so `/api/surveys/[id]/qual/live?id=<room>` never saw the room and the
+console died on `room.title`. Local runs do not do this, which is why every sandbox test passed. The same collision
+broke opening a live group session and deleting a session record or a transcript. The four routes now use `?room=`,
+`?group=`, `?session=`, `?transcript=`; the console shows "reload and try again" instead of crashing; and
+`scripts/route-param-audit.mjs` (in `audit:code`) fails when a route reads a query parameter named like one of its own
+path segments. Found by reproducing on the live Studio.
+
+**0302, I4: migrated responses are stored, at $0.002 each** (decision: option C). A legacy file is previewed onto the
+current version (map, unmatched values, reconciliation, price) and stored in one transaction by
+`rescript_migrate_responses` (migration 0116), with `source = 'migration'`, a batch id that can be stored once, and
+LEGACY_ID. Billed as SURVEY_RESPONSE_IMPORTED ($0.002; TEST free), never as a complete, and left out of quota
+recounts. "Migrate legacy data" sits next to Import responses.
+
+**0303, F2: the free layer of network signals** (decision: build the free layer, license an offline anonymous-IP
+database for the rest). A daily job downloads the published AWS, Google Cloud, Oracle, DigitalOcean, Linode and
+Cloudflare ranges and the Tor exit list into `ip_ranges` (migration 0117); the gateway looks the arriving address up
+at admission (never stored) and the datacenter rule names the provider. A licensed VPN / proxy feed is loaded from
+`IP_REPUTATION_FEED_URL` as plain `cidr,kind` CSV.
+
+**0304 and 0305, LCA** (decision: assign-then-cross-tab, then the standard three-step, then choice models).
+`options.covariates` get odds ratios by the ML three-step (Vermunt 2010) and `options.distal` get BCH-corrected class
+means and percentages; `covariateMethod: "modal"` gives the assign-then-cross-tab, refused below entropy 0.6. A single
+CBC or MaxDiff question gets a latent-class choice model: segments with their own utilities and importances, K by BIC.
+All checked by simulation against known models (see the tests below).
+
 ## The scorecard after this
 
 14 benchmarks, 12 measured. 24 of 47 metrics with a target meet it.
@@ -616,6 +644,13 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | LiveKit adapter: which library is loaded, the URL and token, what is published, remote tracks as tiles, observers publish nothing; LiveKit by default once configured | `livekitAdapter.test.ts`, 4 tests | pass |
 | LiveKit in the browser: LiveKit offered by default; both apps serve the library themselves and open `LIVEKIT_URL/rtc` with a valid token; nothing loaded from the waiting room; the fall back said in the console, not to participants | `scripts/livekit-bundled-browser.mjs` against a stand-in signalling server, in two parts (sandbox memory) | 4 of 4 and 3 of 3 |
 | Migration guard: six planted faults reported and nothing else; the repository's 115 migrations clean | `migration-audit.mjs --self-test` | pass |
+| Shadowed query parameters: four routes found and fixed; a planted case in each form reported | `route-param-audit.mjs --self-test` (160 dynamic routes) | pass |
+| Migrated responses: the rows to store, the $0.002 rate and reserve / settle, TEST free | `dataMigration.test.ts`, `billing.test.ts` | pass |
+| `rescript_migrate_responses` on Postgres: stored, a batch twice refused, a bad row rolls the batch back, service role only | migration 0116 on a local Postgres 16 | pass |
+| Address ranges: every published format, junk skipped, the licensed-feed CSV, the rule naming the provider | `ipRanges.test.ts`, 5 tests | pass |
+| `rescript_ip_signals` / replace on Postgres: v4, v6, Tor, consumer address, an empty or bad list keeps the old rows, GiST used | migration 0117 on a local Postgres 16 | pass |
+| LCA three-step by simulation: ML recovers the logit coefficient within 2 SE; the naive estimate is attenuated; BCH recovers means 25 / 40 and 30% / 70% where the cross-tab understates the gap | `lcaThreeStep.test.ts`, 5 tests | pass |
+| Latent-class choice by simulation: BIC picks 2 segments; shares, part-worths (within 3 SE) and 85%+ of memberships recovered | `lcMnl.test.ts`, 2 tests; end to end on the fixture's CBC and MaxDiff | pass |
 | Coded columns in exports: SPSS, SAS (transport, syntax, CSV), Stata, Excel and the dictionary carry them last, numeric, labelled, missing outside the base; read back by pyreadstat | `statisticalExport.test.ts` 5, `codedVariables.test.ts` 1 (exporters suite: 169) | pass |
 
 ## What was NOT tested
@@ -650,6 +685,10 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
   the routes and panels were type-checked and audited.
 - **LiveKit was not tested against a real LiveKit server.** The browser library, the token and the fall back were
   checked against a stand-in server; the join and video through LiveKit itself were not. The live runtime has the keys.
+- **0302 to 0305 ran against no database.** Migrations 0116 and 0117 are not applied. The migration route, the
+  ip-ranges job (its download URLs were not fetched from here: no web access), the gateway lookup and the LCA tables
+  in the Studio were type-checked and unit-tested, and the two SQL migrations were run on a local Postgres. The
+  licensed VPN / proxy feed is a format, not a vendor: none is licensed yet.
 - **The coded-columns export was not run against a database.** The exporters were tested on fixtures (read back by
   this repository's decoders and by pyreadstat); the export route was type-checked only.
 - **English only.**
@@ -689,18 +728,12 @@ refused) waits on your decision.
 
 ## To apply
 
-0105 and 0106 are applied on the live database. Written and not applied, in order:
+0105 to 0115 are applied on the live database (checked in `schema_marks` on 23 November). Written and not applied, in order:
 
 | Migration | What |
 | --- | --- |
-| 0107 | interview slots and bookings; mail kinds for invitations and reminders |
-| 0108 | export history accepts PDF, CSV and Word (PDF and CSV rows are being refused today) |
-| 0109 | viewer rules on share links |
-| 0110 | report schedules and runs; mail kinds for deliveries and alerts |
-| 0111, 0112 | from the scale work, not this roadmap: responses partitioned by month, and survey versions copied to object storage (see [SCALE-READINESS-2026-11-22.md](SCALE-READINESS-2026-11-22.md)) |
-| 0113 | import sessions keep the side-by-side review's acceptance |
-| 0114 | report schedules can republish (needs 0110) |
-| 0115 | the observer room of an AI interview (needs 0069) |
+| 0116 | migrated legacy responses: source `migration`, `rescript_migrate_responses`, the $0.002 rate (needs 0006) |
+| 0117 | published datacenter and Tor ranges for admission: `ip_ranges`, `rescript_ip_signals` (needs 0084) |
 
-Two new hourly jobs are in `apps/studio/vercel.json` (interview reminders, report schedules); they need `CRON_SECRET`,
+Jobs in `apps/studio/vercel.json` added in this phase: interview reminders and report schedules (hourly), and the address-range refresh (daily, 0117); they need `CRON_SECRET`,
 like the others. Links in emails use `STUDIO_PUBLIC_URL` when it is set.
