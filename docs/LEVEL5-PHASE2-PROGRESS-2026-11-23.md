@@ -463,6 +463,58 @@ Links pinned to a version do not change. The rules:
 - A scheduled publish is audited like a manual one, marked as from the schedule.
 - Needs migration 0114. Without it, schedules still save and run; only the republish option is unavailable.
 
+### Quotas and translations, video answers, moderator v2, observer room (22 November, 0293 to 0296)
+
+**I5, quotas and translations brought across and checked (0293).** A survey moved from another platform mid-fieldwork
+brings the quota counts it reached there, and each language version is checked after the import.
+
+- **Carried-over counts:** each quota cell can hold completes carried over from earlier fieldwork, with where they
+  came from. They come from a Qualtrics export's count (read only beside its target, so an old export's count-as-target
+  is never taken for completes) or from a quota report's Achieved / Current / Completes-so-far column. A report for a
+  quota already in the survey sets the counts on its cells by label and reports a different target rather than
+  applying it.
+- **Where they count:** they are added to the LIVE counters wherever fullness is decided (the runtime, List Fill,
+  conditions that read a quota, the dashboard, the copilot's quota tab), never to the test counters. They live on the
+  definition, so a recount from responses never wipes them. The dashboard shows them apart ("Carried over N") and
+  lets the researcher change or clear them.
+- **Language versions:** the import report runs each imported language through the translation tasks' own final
+  check: strings present, missing (by label), broken (a piping token, placeholder or HTML that does not match the
+  source) or still in the source language. The import card has a "Quotas and languages" section. Survey-level and
+  interface strings are not part of an imported translation, and the report says so.
+- Fixed on the way: a long quota sheet with a Target and an Achieved column was read as a cross-tab.
+
+**Q7, video answers transcribed, coded and usable in tables (0294).**
+
+- **Transcription:** while the camera records, the recorder also records the audio track alone; after the video is
+  stored, that track goes through the voice answers' transcription pipeline. An uploaded video file is transcribed
+  from the file itself when it is 25 MB or less. The transcript rides on the video file's answer, written by the
+  server when the job ends and by the recorder when it sees it. The audio track is deleted once the words are kept.
+  Variables `<VAR>_TRANSCRIPT` and `<VAR>_TRANSCRIPT_SOURCE` are in the dictionary and the data.
+- **Coding into variables:** open-ended answers added to the qualitative workspace now include what a video answer
+  said. Codes on those answers become 0/1 columns (`<VAR>_CODED`, `<VAR>_<CODE>`) in the Studio's dataset and
+  variable list, over the answers that were coded. An answer that was not coded is missing, never 0. Rejected codes
+  are left out; AI-suggested ones count, and each column says how many a person reviewed. This is part of M9 (Phase 3)
+  for any coded open end, not only video.
+
+**Q3, moderator engine v2 (0295).**
+
+- **Laddering:** a question can ladder (1 to 5 rungs): after the first answer the moderator asks why it matters,
+  rung by rung, and stops early once the participant names a personal value.
+- **Topic exhaustion:** once a follow-up's answer has little new in it, probing stops for that question.
+- **Section timing:** each section has minutes (the guide's, else its share by steps). A section near them gets at
+  most one follow-up, over them none, and at 1.5 times them the rest of it is skipped.
+- **Stimuli:** a concept board (title, text, optional picture) and a screen-share task. The participant page shows the
+  concept as a card and offers "Share your screen"; with recording consent the screen is recorded with that answer.
+- **Guide adherence:** per interview, steps asked (60%) and objectives covered (40%), with missed steps and why,
+  ladders, exhausted topics and sections over time. Shown in the Studio's interview table and the simulator.
+
+**Q5, observer room for AI interviews (0296).** Beside the live transcript of a running AI interview: a private chat
+for the team, markers on moments, and questions for the moderator. A question is asked after the participant's next
+answer, as the moderator's own follow-up, once; a question asking for contact details, a link or several things is
+refused when sent, and one still queued when the interview ends is recorded as not asked. The participant never sees
+any of it. Live groups (many participants and observers on video) still wait on the media server (Q2). Needs
+migration 0115.
+
 ## The scorecard after this
 
 14 benchmarks, 12 measured. 24 of 47 metrics with a target meet it.
@@ -533,6 +585,15 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
 | Review acceptance: who and when, held by the bulk rule, dropped when the question changes | `sessions.test.ts`, 1 new test | pass |
 | Publish: a partial report refused unless forced, numbering, the report pointed at the new version, another project's or a deleted report unknown | `reportPublishCore.test.ts`, 2 tests | pass |
 | Republish: a new version on each run that unpinned links follow, a partial run not published, a failed render publishing nothing, no publish without the setting or on an alert | `reportSchedulesCore.test.ts`, 2 new tests (Studio suite: 1,363) | pass |
+| Carried-over quota counts: from a Qualtrics export (live only, full when reached), none said with what to send, an old export's count read as the target, a report onto existing quotas, a new quota with counts, a non-whole count reported | `i5FieldState.test.ts` 5, `quotaCarried.test.ts` 3 | pass |
+| Language versions checked after an import: a broken piping token and a missing option named | `i5FieldState.test.ts` | pass |
+| Video answers: the transcript on the answer, the dictionary and the data in step | `q7VideoTranscript.test.ts`, 2 tests | pass |
+| Coded answers as variables: rejected codes left out, an uncoded answer missing, a crosstab whose base is the coded answers | `codedVariables.test.ts`, 3 tests (analytics suite: 944) | pass |
+| The recorder makes a second, audio-only recorder that hands over data when the take stops; none when transcription is off | `scripts/q7-video-transcript-browser.mjs` (Chromium's fake camera, test link) | 3 of 3 |
+| Moderator v2: the plan's ladders and section minutes, laddering by rules and model, exhaustion on and off, a section over its minutes moving on, guide adherence | `aiModeratorV2.test.ts` 6, two new eval cases (fake-provider moderator eval passes; engine suite: 3,030) | pass |
+| On the participant page: the ladder asks why, a value moves on and the concept card shows, a screen share starts and stops | `scripts/q3-moderator-v2-browser.mjs` (runtime sandbox, fake screen) | 4 of 4 |
+| Observer room: notes checked, a question asked once after the next answer, not after injected text or on the closing question; queued → asked, withdrawn never asked, a late question refused | `aiInterviewObserver.test.ts` 3, runtime `service.test.ts` 1 (runtime suite: 179) | pass |
+| Observer room end to end: the moderator asks the observer's question on the participant's page, the room shows it asked, the participant never sees the room | `scripts/q5-observer-room-browser.mjs` (runtime sandbox) | 5 of 5 |
 
 ## What was NOT tested
 
@@ -560,6 +621,11 @@ The verifier and loop figures are on cases I wrote and graded. They show the mec
   import route here), the drill selector, the viewer-rules editor, the master import button, and the schedules card
   with its republish option.
 - **R4 was tested on a template I built, not on a real client's template.**
+- **The 0293 to 0296 batch ran against no database.** Migration 0115 is not applied. The upload of a video's audio
+  track, a real transcript (no speech-to-text provider here), a real screen recording upload, the moderator v2 with a
+  real model, and the Studio's observer-room panel and quota "Carried over" field in a browser were not exercised;
+  the routes and panels were type-checked and audited. Coded columns are in the Studio's tables, not yet in the
+  exported data files.
 - **English only.**
 
 ## Phase 2 item by item
@@ -572,9 +638,9 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | AI design agents (8) | A3, A5, A6, A7, A15 | A2 (about 90 of 850 cases), A4 (loop built, no model), A8 (reasons in plans, not on screen) | |
 | Programming (6) | P2, P3 | P1 (edits faster, target not met), P5 (engine and route; no screen) | P4, P11 |
 | Analytics (6) | M2, M3, M4 (screens tested against a fake backend), M5, M10 | M1 (measured only) | |
-| Import (6) | I3, I6 | I1 (10 of 300 files), I2 (exists, 58.3%, not examined), I4 (preview only; storing waits on the billing decision) | I5 |
+| Import (6) | I3, I5, I6 | I1 (10 of 300 files), I2 (exists, 58.3%, not examined), I4 (preview only; storing waits on the billing decision) | |
 | Reporting (6) | R1, R2, R3, R4, R5 (with republish), R6 (not run against a database) | | |
-| Qualitative (6) | Q4, Q6 | | Q2, Q3, Q5, Q7 |
+| Qualitative (6) | Q3 (no real model or speech run), Q4, Q6, Q7 | Q5 (AI interviews; live groups wait on Q2) | Q2 |
 | Fraud (6) | F3, F4 (typing and pointer summaries collected, sanitised and read by four rules), F6, F11 | F5 (typing rules only; open-end content not judged) | F2 |
 
 Some "not started" items have earlier work in the product that I have not assessed against the roadmap's
@@ -582,8 +648,9 @@ definition (libraries, dashboards, the quality review screen, the import review 
 
 **Next:** the 11 items asked for are built (I3, I4, I6, Q4, Q6, R1 to R6), and their screens and the two follow-ups
 (review acceptance, republish) are in 0287 to 0291. F2 still waits on the build-or-license decision; I4's storage
-waits on the billing decision for migrated completes. Open in the table: P1, P4, P5's screen, P11, M1, I1, I2, I5, Q2,
-Q3, Q5, Q7, F2, F5, and the model-dependent parts of A2, A4 and A8.
+waits on the billing decision for migrated completes. Then I5, Q3, Q5 and Q7 were built (0293 to 0296).
+Open in the table: P1, P4, P5's screen, P11, M1, I1, I2, Q2, Q5 for live groups, F2, F5, and the model-dependent parts
+of A2, A4 and A8.
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages
 reviewed by people, P11 real devices, and anything needing the model, speech or vendor keys.
@@ -607,6 +674,7 @@ refused) waits on your decision.
 | 0111, 0112 | from the scale work, not this roadmap: responses partitioned by month, and survey versions copied to object storage (see [SCALE-READINESS-2026-11-22.md](SCALE-READINESS-2026-11-22.md)) |
 | 0113 | import sessions keep the side-by-side review's acceptance |
 | 0114 | report schedules can republish (needs 0110) |
+| 0115 | the observer room of an AI interview (needs 0069) |
 
 Two new hourly jobs are in `apps/studio/vercel.json` (interview reminders, report schedules); they need `CRON_SECRET`,
 like the others. Links in emails use `STUDIO_PUBLIC_URL` when it is set.
