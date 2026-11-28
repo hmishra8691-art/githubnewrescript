@@ -77,3 +77,13 @@ test("a turn answered as a durable task is not checked for the single-turn conte
   const { checks } = scoreTurn({ message: "brief", expect: { mode: ["generate", "task"], context: { ux: true, analysis: true } } }, out, { defBefore: {} });
   assert.ok(checks.every((c) => c.ok), JSON.stringify(checks.filter((c) => !c.ok)));
 });
+
+test("a planned analysis test counts from add_analysis_test or from set_analysis_plan's tests; a wrong mediator or a missing bootstrap fails", () => {
+  const turn: EvalTurn = { message: "Test whether trust mediates price → intent, with a bootstrap", expect: { plansTests: [{ method: "mediation|regression", mediator: "TRUST", option: "bootstrap" }] } };
+  const check = (actions: unknown[]) => scoreTurn(turn, outcome({ kind: "proposal", reply: "Planned.", actions }), { defBefore: {}, risk }).checks.find((c) => c.name.startsWith("plans_test:"))!;
+  assert.equal(check([{ op: "set_analysis_plan", tests: [{ method: "mediation", outcome: "INTENT", variables: ["PRICE"], mediator: "TRUST", options: { bootstrap: 5000 } }] }]).ok, true);
+  assert.equal(check([{ op: "add_analysis_test", method: "regression", mediator: "TRUST", options: { bootstrap: 5000 } }]).ok, true);
+  assert.equal(check([{ op: "set_analysis_plan", tests: [{ method: "mediation", mediator: "PRICE", options: { bootstrap: 5000 } }] }]).ok, false);
+  assert.equal(check([{ op: "set_analysis_plan", tests: [{ method: "mediation", mediator: "TRUST" }] }]).ok, false);
+  assert.equal(check([{ op: "set_research", question: "x" }]).ok, false);
+});

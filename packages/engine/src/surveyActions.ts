@@ -14,7 +14,8 @@ import { parseLogicExpression, formatCondition } from "./logicExpression.js";
 import { validateExpression } from "./calc.js";
 import { migrateQuestionType } from "./questionShape.js";
 import { getQuestionByCodeOrVar } from "./state.js";
-import { applySemantic, inferSemantic, SEMANTICS, type Semantic } from "./semanticValidation.js";
+import { applySemantic, inferSemantic, SEMANTICS, SEMANTIC_SPECS, type Semantic } from "./semanticValidation.js";
+const SEMANTIC_LABEL = Object.fromEntries(Object.entries(SEMANTIC_SPECS).map(([k, v]) => [k, v.label.toLowerCase()])) as Record<string, string>;
 import { runQualityCheck } from "./qualityCheck.js";
 import { lintPageStructure, fixPageStructure, type StructureIssue } from "./structureLint.js";
 import { insertBlockAt, moveBlockTo, previewBlockMove, type BlockPosition } from "./blockPlacement.js";
@@ -964,8 +965,18 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
        * for an age — and leaves every bound the action gave untouched. "none"
        * keeps the registry out of a question it would otherwise tag.
        */
-      const sem = a.semantic ?? inferSemantic(q);
+      /*
+       * A FORMAT the action names (email, phone, postal, url) must be one the question asks for. A model tagged
+       * "Which city do you live in?" as postal (eval 2026-11-28, multi-turn-it), which would have refused every
+       * city typed in. A format tag is kept only when the wording or the variant says the same; otherwise it is
+       * dropped and said. Meanings without a format (age, count …) are taken as given, as before.
+       */
+      const inferred = inferSemantic(q);
+      const FORMAT = new Set<string>(["email", "phone", "postal", "url"]);
+      const refusedFormat = a.semantic && a.semantic !== "none" && FORMAT.has(a.semantic) && inferred !== a.semantic ? a.semantic : null;
+      const sem = refusedFormat ? inferred : (a.semantic ?? inferred);
       const semApplied = applySemantic(q, sem);
+      if (refusedFormat) ctx.uxWarnings.push(`${q.code} was not given the ${SEMANTIC_LABEL[refusedFormat]} format check: its wording does not ask for one, and the check would refuse ordinary answers. Ask for a ${SEMANTIC_LABEL[refusedFormat]} validation on ${q.code} if it should have one.`);
       // place it
       const { pageId, index } = placement(ctx, a.block, a.after, undefined, a.before);
       def.questions.push(q);

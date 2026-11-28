@@ -762,6 +762,17 @@ recorded answers offline gives 50 of 54. Three of the remaining four need a new 
 re-ask, the multi-turn Italian case, the dual-response second turn); the fourth (latent classes with covariates,
 refused) waits on your decision.
 
+**Live eval, 28 November (Claude Sonnet 4.6, 54 cases, $1.40): 48 passed (88.9%).** The six failures, traced in the
+recording (0312):
+
+| Case | Cause | Done |
+| --- | --- | --- |
+| multi-turn-it | The model made the new city question required on its own, so "make it required" had nothing to do: the case's expectation, not the model. It also tagged "Which city do you live in?" as a postal code, which would have refused every city typed in | The case now asks for an optional question first. The engine drops a format tag (email, phone, postal, url) the wording does not ask for, and says so |
+| advanced-mediation-bootstrap | A correct mediation (5,000 bootstrap draws) written as `set_analysis_plan` failed a check that wanted `add_analysis_test` | A new check, "plans this test", reads both ops; the replayed recording passes |
+| method-conjoint, method-dual-response | The model asked for the product category although the attributes and levels were given; the automatic "build now" ask then timed out, and the question was cached and served again for the identical message | A worked example in the methods guide; a question back is no longer cached when the essentials were given |
+| method-maxdiff | One request ran 934 s although its one model call stopped at 180 s; the recording cannot show where the rest went | The failure log now records when each model call started. **Not explained yet**; needs a run with this log |
+| staged-build | 304 s against a 300 s budget: the first build named matrix-row variables (SAT_FOOD) that do not exist, and the repair pass took the extra time | Not changed |
+
 ## To apply
 
 0105 to 0115 are applied on the live database (checked in `schema_marks` on 23 November). Written and not applied, in order:

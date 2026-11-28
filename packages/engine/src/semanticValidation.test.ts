@@ -109,3 +109,18 @@ test("inference is conservative and idempotent; applySemantic refuses a tag that
   assert.equal(bad.applied, false); assert.match(bad.reason ?? "", /applies to open_text/);
   for (const s of Object.keys(SEMANTIC_SPECS)) assert.ok(SEMANTIC_SPECS[s as keyof typeof SEMANTIC_SPECS].hint);
 });
+
+test("a format tag the wording does not ask for is dropped and said: a city tagged postal would refuse every city (eval 2026-11-28)", () => {
+  const c = coerceSurveyActions([{ op: "create_block", ref: "B", title: "About you" },
+    { op: "create_question", ref: "CITY", type: "text", text: "Which city do you live in?", required: true, semantic: "postal" },
+    { op: "create_question", ref: "ZIP", type: "text", text: "What is your ZIP code?", semantic: "postal" },
+    { op: "create_question", ref: "AGE", type: "numeric", text: "Please tell us", semantic: "age" }]);
+  const r = applySurveyActions(empty(), c.actions as SurveyAction[], { ids, now: "2026-11-28T00:00:00Z" });
+  assert.deepEqual(r.errors, []);
+  const city = r.def.questions.find((q) => q.variableName === "CITY")!;
+  assert.equal(city.validation.some((v) => v.kind === "zip"), false);
+  assert.equal(verdict(r.def, "CITY", "Mumbai"), "ACCEPT");
+  assert.ok(r.warnings.some((w) => new RegExp(`${city.code} was not given the postal / zip code format check`).test(w)), r.warnings.join("\n"));
+  assert.ok(r.def.questions.find((q) => q.variableName === "ZIP")!.validation.some((v) => v.kind === "zip"), "a ZIP question keeps it");
+  assert.ok(r.def.questions.find((q) => q.variableName === "AGE")!.validation.some((v) => v.kind === "integer"), "a meaning without a format is taken as given");
+});

@@ -50,7 +50,8 @@ test("sizes and caching: the system prompt is unchanged and under its cap; the g
   /* Design Generators phase 2 2026-11-09: + partial-profile CBC, create_experiment (was < 9,000) */
   /* 2026-11-10: + MaxDiff task opt-outs (was < 10,000) */
   /* 2026-11-22: + "essentials given → build now" (the live eval's model asked first on a fully specified CBC) (was < 10,200) */
-  assert.ok(COPILOT_METHODS_GUIDE.length < 10_300, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
+  /* 2026-11-28: + a worked "attributes given → build" example (the live eval asked for the product category again) (was < 10,300) */
+  assert.ok(COPILOT_METHODS_GUIDE.length < 10_450, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
   assert.ok(COPILOT_LIST_FILL_GUIDE.length < 4_200, `List Fill guide ${COPILOT_LIST_FILL_GUIDE.length}`);
   const prompt = copilotUserPrompt({ ...base, message: BRIEF[0], methods: true, listFill: true });
   const [system, user] = copilotCall(prompt);

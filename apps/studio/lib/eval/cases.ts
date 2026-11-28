@@ -80,6 +80,12 @@ export interface TurnExpect {
   guideMisses?: number;
   /** #13: the Studio corrected a refused design itself (`context.methodFixes`), at least this many */
   methodFixesMin?: number;
+  /**
+   * analysis tests the proposal must plan, by method (and, when given, mediator / an option that must be set) —
+   * read from add_analysis_test AND from set_analysis_plan's tests: both are the same plan (eval 2026-11-28: a
+   * correct mediation written as set_analysis_plan failed "op_present:add_analysis_test")
+   */
+  plansTests?: { method: string; mediator?: string; option?: string }[];
 }
 
 export interface EvalTurn {
@@ -328,7 +334,7 @@ export const GOLDEN_CASES: EvalCase[] = [
     fixtureSpec: [{ ref: "PRICE", type: "single_select", text: "The price is fair", options: AGREE5 }, { ref: "TRUST", type: "single_select", text: "I trust the brand", options: AGREE5 }, { ref: "INTENT", type: "single_select", text: "I will buy it", options: AGREE5 }],
     turns: [{ message: "Test whether trust mediates the effect of price on intent, with a bootstrap",
       fake: { kind: "edit", reply: "Planned the mediation of PRICE → INTENT through TRUST with 5,000 bootstrap resamples (percentile and BCa intervals).", actions: [{ op: "add_analysis_test", method: "regression", outcome: "INTENT", variables: ["PRICE"], mediator: "TRUST", options: { bootstrap: 5000, seed: 7 }, priority: 1 }] },
-      expect: { modelCalled: true, opsPresent: ["add_analysis_test"], appliedMin: 1, valid: true } }],
+      expect: { modelCalled: true, plansTests: [{ method: "mediation|regression", mediator: "TRUST", option: "bootstrap" }], appliedMin: 1, valid: true } }],
   },
   {
     id: "advanced-hb-refused", category: "analysis_plan", title: "HB on a question that is not a choice exercise is refused", fixture: "spec", tags: ["advanced", "refusal"],
@@ -440,7 +446,7 @@ export const GOLDEN_CASES: EvalCase[] = [
   {
     id: "multi-turn-it", category: "multi_turn", title: "“Make it required” refers to the question just added", fixture: "nps_relationship", admin: true,
     turns: [
-      { message: "Add a question asking which city the respondent lives in, after Q6", fake: { kind: "edit", reply: "Added CITY after Q6.", memory: "Added CITY (which city) after Q6.", actions: [{ op: "create_question", ref: "CITY", after: "Q6", type: "single", text: "Which city do you live in?", options: ["Mumbai", "Delhi", "Bengaluru", "Other"] }] },
+      { message: "Add an optional question asking which city the respondent lives in, after Q6", fake: { kind: "edit", reply: "Added CITY after Q6.", memory: "Added CITY (which city) after Q6.", actions: [{ op: "create_question", ref: "CITY", after: "Q6", type: "single", text: "Which city do you live in?", options: ["Mumbai", "Delhi", "Bengaluru", "Other"] }] },
         expect: { opsPresent: ["create_question"], appliedMin: 1 } },
       { message: "Make it required", fake: { kind: "edit", reply: "CITY is now required.", actions: [{ op: "update_question", target: "CITY", required: true }] },
         expect: { opsPresent: ["update_question"], targets: ["CITY"], appliedMin: 1, clarify: "forbidden" } },

@@ -551,7 +551,10 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const contextMeta = () => { const shown = rc ?? planRc; return { researchContext: { status: rcStatus, ...(shown ? { version: shown.version, chars: (researchContextText ?? renderResearchContext(shown)).length, layer: rc ? layers.researchContext : "none", briefChars: shown.fingerprint.briefChars, ref: shown.fingerprint.brief.slice(0, 12), hypotheses: shown.hypotheses.length, sections: shown.sections.length } : {}), ...(stored?.context.status === "stale" ? { stale: true, reason: stored.context.staleReason } : {}), ...(turnPassages.length ? { passages: turnPassages.map((p) => p.id) } : {}) }, questionnaire: qScope, workflowId, ...(Object.keys(itemGuides).length ? { itemGuides } : {}), ...(misses.length ? { guideMisses: misses } : {}), calls: calls.map((c) => ({ operation: c.operation, promptChars: c.promptChars, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedInputTokens: c.cachedInputTokens, cacheWriteTokens: c.cacheWriteTokens ?? 0, retries: c.retries, latencyMs: c.latencyMs })), ...(fakeProvider && sent.length ? { sent } : {}) }; };
   const faults: Fault[] = fakeProvider && Array.isArray(body.faults) ? (body.faults as Fault[]).slice(0, 40) : [];
   /** the test seam: a scripted fault or delay in front of a model call (nothing, outside the fake provider) */
+  /* when each model call of this request started (ms after the request began) — in the failure log, so a slow turn shows where its time went (eval 2026-11-28: a turn ran 934 s, its one call 180 s) */
+  const callStarts: number[] = [];
   const model = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    callStarts.push(Date.now() - startedAt);
     /* the first model call commits a streaming request to the stream (heartbeats from here on); a no-op otherwise */
     sink?.start();
     const f = faults.shift();
@@ -589,7 +592,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   /** the browser is told what happened: the card, the retry and the log all read the same failure */
   const failureOfError = (e: unknown, where: string): TurnFailure => {
     const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : isProviderError(e) ? failureFromError(e, { own: ownProvider }) : failureFromError((e as Error)?.message ?? "", { own: ownProvider, studio: true });
-    console.warn("[rescript:copilot]", JSON.stringify({ event: `${where} failed`, userId: user?.userId, surveyId, code: failure.code, ...(isProviderError(e) ? { kind: e.kind, status: e.status, attempts: e.attempts, retryAfterMs: e.retryAfterMs, exhausted: e.exhausted, host: e.host, said: e.detail.slice(0, 200) } : { error: ((e as Error)?.message ?? "").slice(0, 200) }), retries: events.filter((x) => x.type === "retry").length, elapsedMs: Date.now() - startedAt }));
+    console.warn("[rescript:copilot]", JSON.stringify({ event: `${where} failed`, userId: user?.userId, surveyId, code: failure.code, ...(isProviderError(e) ? { kind: e.kind, status: e.status, attempts: e.attempts, retryAfterMs: e.retryAfterMs, exhausted: e.exhausted, host: e.host, said: e.detail.slice(0, 200) } : { error: ((e as Error)?.message ?? "").slice(0, 200) }), retries: events.filter((x) => x.type === "retry").length, elapsedMs: Date.now() - startedAt, callStartsMs: callStarts }));
     return failure;
   };
   /** a failed turn: nothing was changed, nothing was charged for the failed call, the request is kept — and a temporary failure says when to come back (HTTP 503 + Retry-After) */
@@ -892,6 +895,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
         if (r2 && r2.actions.length) { reply = r2; raw = m2.value; CACHE.set(key, { at: Date.now(), value: m2.value }); }
       }
     } catch (e) { console.warn("[rescript:copilot] build-now ask failed", JSON.stringify({ error: (e as Error).message })); }
+    /* still a question back: it is not kept for the next identical message, which would skip this ask (eval 2026-11-28, method-dual-response) */
+    if (reply.kind === "clarify" && !reply.actions.length) CACHE.delete(key);
   }
   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
   let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly, uxOnlyInferred, uxBehaviour }) : null;

@@ -144,6 +144,14 @@ export function scoreTurn(turn: EvalTurn, out: TurnOutcome, ctx: { defBefore: un
   if (e.stage !== undefined) c("stage", anyOf(e.stage, f.stage), `stage ${f.stage}, expected ${[e.stage].flat().join("|")}`);
   for (const op of e.opsPresent ?? []) c(`op_present:${op}`, f.ops.includes(op), `no ${op} in [${f.ops.join(", ")}]`);
   for (const op of e.opsAbsent ?? []) c(`op_absent:${op}`, !f.ops.includes(op), `${op} was proposed`);
+  if (e.plansTests?.length) {
+    const tests = f.actions.flatMap((a) => (a.op === "add_analysis_test" ? [a] : a.op === "set_analysis_plan" && Array.isArray(a.tests) ? (a.tests as Record<string, unknown>[]) : []));
+    for (const w of e.plansTests) {
+      const methods = w.method.split("|");
+      const hit = tests.some((t) => methods.includes(String(t.method)) && (!w.mediator || String(t.mediator ?? "").toUpperCase() === w.mediator.toUpperCase()) && (!w.option || (t.options && typeof t.options === "object" && (t.options as Record<string, unknown>)[w.option] != null)));
+      c(`plans_test:${w.method}${w.mediator ? `/${w.mediator}` : ""}`, hit, `no ${w.method} test${w.mediator ? ` with mediator ${w.mediator}` : ""}${w.option ? ` and ${w.option}` : ""} in [${tests.map((t) => `${String(t.method)}${t.mediator ? `/${String(t.mediator)}` : ""}`).join(", ")}]`);
+    }
+  }
   if (e.targets?.length) {
     const names = f.actions.flatMap(actionTargets);
     for (const t of e.targets) c(`target:${t}`, touches(names, t), `nothing targets ${t} (targets: ${[...new Set(names)].slice(0, 12).join(", ")})`);
