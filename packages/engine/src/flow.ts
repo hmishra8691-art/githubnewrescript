@@ -790,6 +790,32 @@ function leaveAnsweredPage(
   return { next: j > idx ? j : idx + 1 };
 }
 
+/** a step's identity across recompiles: a page by its id (iteration included), anything else by its node and iteration */
+function stepKey(s: RuntimeStep): string {
+  if (s.kind === "page") return `page:${s.pageId}`;
+  const loop = (s as { loop?: LoopContext | null }).loop;
+  return `${s.kind}:${s.nodeId}${loop ? loopKeySuffix(loop) : ""}`;
+}
+
+/**
+ * The cursor's place in `next`: right after the step it followed in `prev` — the one just run, or passed over. If a
+ * branch switched arms, whatever now follows that step is next (a new arm is entered, not skipped). If that step
+ * itself is gone (the "set once" element inside the branch it closes), the cursor goes after the last step before
+ * it that is still there, so nothing after the collapsed branch is passed over.
+ */
+function relocateStep(prev: RuntimeStep[], idx: number, next: RuntimeStep[]): number {
+  if (prev === next || idx <= 0) return idx;
+  const before = Math.min(idx, prev.length) - 1;
+  if (before < next.length && stepKey(next[before]) === stepKey(prev[before])) return idx;
+  const where = new Map<string, number[]>();
+  next.forEach((s, i) => { const k = stepKey(s); const at = where.get(k); if (at) at.push(i); else where.set(k, [i]); });
+  for (let k = before; k >= 0; k--) {
+    const at = where.get(stepKey(prev[k]));
+    if (at?.length) return at.reduce((best, i) => (Math.abs(i - k) < Math.abs(best - k) ? i : best), at[0]) + 1 + Math.max(0, idx - prev.length);
+  }
+  return 0;
+}
+
 function walkForward(
   def: SurveyDefinition,
   state: ResponseState,
@@ -803,7 +829,16 @@ function walkForward(
   while (guard++ < 10000) {
     // derived variables are coded before the flow is resolved: a branch may read them
     punchDerivedQuestions(def, state, quotaCounts);
-    steps = compileFlow(def, state, quotaCounts); // re-resolve (answers/embedded may change)
+    /*
+     * Re-resolve (answers / embedded data may change) — and keep pointing at the SAME step, not the same number.
+     * A step run here can remove steps BEHIND the cursor: Qualtrics' "set once" pattern, a branch "if ED.X is
+     * empty" whose own embedded-data element sets X, collapses that branch — its page included — the moment the
+     * element runs, and the next index then pointed two pages further on. Respondents of such a survey were moved
+     * past the pages after it (found by the import equivalence check, I2, 2026-11-27: Qualtrics' TQ4–TQ6).
+     */
+    const next = compileFlow(def, state, quotaCounts);
+    idx = relocateStep(steps, idx, next);
+    steps = next;
     if (idx >= steps.length) {
       state.status = "complete";
       return { steps, stepIndex: steps.length - 1, done: true, endStatus: "complete", triggeredSkips, quotaFull: [] };
