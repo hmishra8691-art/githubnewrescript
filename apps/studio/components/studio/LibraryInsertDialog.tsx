@@ -3,6 +3,7 @@ import React from "react";
 import { SurveyDefinition } from "@rescript/schema";
 import { importQuestions, listPages, markupToText } from "@rescript/engine";
 import { useStudio } from "./store";
+import { LinkedInsert, LibraryLinks } from "./LibraryLinked";
 import { VALIDATED_SCALES, scaleBlock, citationText } from "@rescript/templates";
 
 /**
@@ -14,7 +15,7 @@ import { VALIDATED_SCALES, scaleBlock, citationText } from "@rescript/templates"
  */
 interface ProjectRow { surveyId: string; code: string; title: string }
 
-export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /** 2026-11-14: the block the dialog was opened from — the copies arrive beside it, or in it while it is empty */ intoBlock?: string }) {
+export function LibraryInsertDialog({ onClose, intoBlock, initialMode }: { onClose(): void; /** 2026-11-14: the block the dialog was opened from — the copies arrive beside it, or in it while it is empty */ intoBlock?: string; /** P5 (2026-11-27): open on the links view */ initialMode?: "survey" | "scale" | "linked" | "links" }) {
   const s = useStudio();
   const [projects, setProjects] = React.useState<ProjectRow[] | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
@@ -24,7 +25,9 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
   const [qs, setQs] = React.useState<Set<string>>(new Set());
   const [filter, setFilter] = React.useState("");
   /* P2-10: a published scale, with its items, options, citation and scoring, from the validated scale library */
-  const [mode, setMode] = React.useState<"survey" | "scale">("survey");
+  /* P5 (2026-11-27): "linked" inserts from a library's saved version and keeps a link; "links" lists the links here */
+  const [mode, setMode] = React.useState<"survey" | "scale" | "linked" | "links">(initialMode ?? "survey");
+  const linkCount = (s.def.libraryLinks ?? []).length;
   const [scaleId, setScaleId] = React.useState("");
 
   React.useEffect(() => {
@@ -91,8 +94,12 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
         <div className="row" style={{ gap: 6, marginBottom: 8 }} role="tablist">
           <button type="button" role="tab" aria-selected={mode === "survey"} className={`btn small ${mode === "survey" ? "primary" : ""}`} onClick={() => setMode("survey")} data-testid="library-mode-survey">Another survey</button>
           <button type="button" role="tab" aria-selected={mode === "scale"} className={`btn small ${mode === "scale" ? "primary" : ""}`} onClick={() => setMode("scale")} data-testid="library-mode-scale">Validated scale</button>
+          <button type="button" role="tab" aria-selected={mode === "linked"} className={`btn small ${mode === "linked" ? "primary" : ""}`} onClick={() => setMode("linked")} data-testid="library-mode-linked">Linked from a library</button>
+          <button type="button" role="tab" aria-selected={mode === "links"} className={`btn small ${mode === "links" ? "primary" : ""}`} onClick={() => setMode("links")} data-testid="library-mode-links">Links here{linkCount ? ` (${linkCount})` : ""}</button>
         </div>
-        {mode === "scale" ? (
+        {mode === "linked" ? <LinkedInsert projects={projects} intoBlock={intoBlock} onDone={onClose} />
+        : mode === "links" ? <LibraryLinks onDone={onClose} />
+        : mode === "scale" ? (
           <div data-testid="library-scales">
             <p className="muted" style={{ marginTop: 0 }}>Published measures with their exact items, options and scoring. The score is added as a calculation. Check the licence line before commercial use.</p>
             <div style={{ maxHeight: "46vh", overflow: "auto", border: "1px solid var(--c-border, #e5e7eb)", borderRadius: 8, padding: 8 }}>
@@ -146,17 +153,17 @@ export function LibraryInsertDialog({ onClose, intoBlock }: { onClose(): void; /
           </div>
         )}
         </>}
-        {preview && (
+        {(mode === "survey" || mode === "scale") && preview && (
           <div style={{ marginTop: 10, fontSize: 13 }} data-testid="library-preview">
             <b>{preview.count}</b> question{preview.count === 1 ? "" : "s"} will be added {intoBlock ? "here — right after this block, or in it if it has no questions yet" : "as a new block"}.
             {Object.keys(preview.renamed).length > 0 && <div>Renamed (code already used here): {Object.entries(preview.renamed).map(([a, b]) => `${a} → ${b}`).join(", ")}</div>}
             {preview.dropped.length > 0 && <div className="callout warn" style={{ marginTop: 6 }}>Rules that named questions you did not copy will be removed: {preview.dropped.slice(0, 6).join("; ")}{preview.dropped.length > 6 ? ` and ${preview.dropped.length - 6} more` : ""}</div>}
           </div>
         )}
-        <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+        {(mode === "survey" || mode === "scale") && <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={!preview?.count || s.readOnly} onClick={insert} data-testid="library-insert">{mode === "scale" && scaleSrc ? `Insert the ${scaleSrc.scale.short}` : `Insert${preview?.count ? ` ${preview.count}` : ""}`}</button>
-        </div>
+        </div>}
       </div>
     </div>
   );

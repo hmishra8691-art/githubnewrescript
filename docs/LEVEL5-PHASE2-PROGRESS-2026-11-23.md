@@ -263,8 +263,18 @@ of the whole item and of each question. The link later tells "up to date", "upda
 would lose a question or option they read, and the local edits it would overwrite. The Studio route previews an
 insert or update as a source diff and saves it only with apply, under the edit lock and revision guard.
 
-What is not done: no screen to browse a library or see link status (route only); the routes were type-checked and
-audited, not called over HTTP; no database was used.
+**The screen (27 November, 0309).** Insert from a library has two new tabs. "Linked from a library": pick the library
+survey (its saved version is named), pick a block, a question or an option list (a list asks which question it goes
+into), see the notes and the source diff, insert. "Links here (N)": each link with its state (up to date, update
+available, edited here, both, removed from the library, library not found), and what an update would add, remove,
+change, break elsewhere and overwrite; "Preview the update" shows the diff and "Apply the update" applies it. Both
+preview against the survey as it is in the editor, unsaved edits included (the route now accepts the editor's
+`definition` for a preview and returns the result), and apply through the editor, so undo, autosave and the revision
+guard work as for any other change. Tested in a browser on the sandbox editor (`scripts/library-links-browser.mjs`,
+11 checks) with the route answered by the engine functions it calls.
+
+What is not done: the route's database and permission path has not been called over HTTP (no database here); a
+survey does not yet show that an update is available anywhere except in this dialog.
 
 ### Analytics batch: assumption checks, "why this number", tab plans, simulators, published limits (29 November)
 
@@ -701,7 +711,7 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | Area | Done | Partly | Not started |
 | --- | --- | --- | --- |
 | AI design agents (8) | A3, A5, A6, A7, A15 | A2 (about 90 of 850 cases), A4 (loop built, no model), A8 (reasons in plans, not on screen) | |
-| Programming (6) | P2, P3 | P1 (edit target met in Node, 0308; browser not measured), P5 (engine and route; no screen) | P4, P11 |
+| Programming (6) | P2, P3 | P1 (edit target met in Node, 0308; browser not measured), P5 (engine, route and screen, 0309; route not called over HTTP) | P4, P11 |
 | Analytics (6) | M2, M3, M4 (screens tested against a fake backend), M5, M10 | M1 (measured only) | |
 | Import (6) | I3, I5, I6 | I1 (10 of 300 files), I2 (exists, 58.3%, not examined), I4 (preview only; storing waits on the billing decision) | |
 | Reporting (6) | R1, R2, R3, R4, R5 (with republish), R6 (not run against a database) | | |
@@ -714,7 +724,7 @@ definition (libraries, dashboards, the quality review screen, the import review 
 **Next:** the 11 items asked for are built (I3, I4, I6, Q4, Q6, R1 to R6), and their screens and the two follow-ups
 (review acceptance, republish) are in 0287 to 0291. F2 still waits on the build-or-license decision; I4's storage
 waits on the billing decision for migrated completes. Then I5, Q3, Q5 and Q7 were built (0293 to 0296).
-Open in the table: P1, P4, P5's screen, P11, M1, I1, I2, Q2, Q5 for live groups, F2, F5, and the model-dependent parts
+Open in the table: P4, P11, M1, I1, I2, Q2, Q5 for live groups, F2, F5, and the model-dependent parts
 of A2, A4 and A8.
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages

@@ -19,8 +19,13 @@ export const dynamic = "force-dynamic";
  *                                                             available, changed here — with the impact
  *   POST { action: "insert", library, itemId, after?, into?, apply? }
  *   POST { action: "update", linkId, apply? }
- *        → without apply: what it would do (notes and the source diff); nothing is written.
+ *        → without apply: what it would do (notes, the source diff and the resulting definition); nothing is written.
  *        → with apply and baseRevision: saved to the draft under the edit lock and the revision guard.
+ *
+ * `definition` (status, insert and update, without apply): the survey as it is in the caller's editor, unsaved edits
+ * included, instead of the stored draft. The Studio's library screen sends it and applies the returned definition
+ * through the editor (its undo, autosave and revision guard), so a preview never disagrees with what is on screen.
+ * It is parsed like any other definition and nothing is written; `apply` always works on the stored draft.
  */
 async function loadLibrary(req: NextRequest, id: string): Promise<{ def: SurveyDefinition; version: string; title: string } | { response: NextResponse }> {
   const gate = await requireProject(req, id, "project.read");
@@ -44,7 +49,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const db = customerDb(gate.survey.customer_id);
   const loaded = await loadDefinition(db as never, params.id);
   if ("error" in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
-  const def = loaded.def as SurveyDefinition;
+  let def = loaded.def as SurveyDefinition;
+  if (body?.definition != null) {
+    if (body?.apply === true) return NextResponse.json({ error: "apply saves the stored draft; to use the editor's survey, preview with it and apply the returned definition in the editor." }, { status: 400 });
+    const given = SurveyDefinitionSchema.safeParse(body.definition);
+    if (!given.success) return NextResponse.json({ error: `The survey sent is not valid: ${given.error.issues[0]?.path.join(".")} ${given.error.issues[0]?.message}` }, { status: 400 });
+    def = given.data;
+  }
   if (action === "status") {
     const libraries: Record<string, { def: SurveyDefinition; version: string }> = {};
     for (const id of new Set((def.libraryLinks ?? []).map((l) => l.library.surveyId).filter((x): x is string => !!x))) { const lib = await loadLibrary(req, id); if (!("response" in lib)) libraries[id] = lib; }
@@ -64,7 +75,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   } else return NextResponse.json({ error: "action must be items, status, insert or update" }, { status: 400 });
   if ("error" in result) return NextResponse.json({ ok: false, error: result.error }, { status: 422 });
   const view = { ok: true, notes: result.notes, diff: sourceDiff(toSource(def), toSource(result.def)) };
-  if (body?.apply !== true) return NextResponse.json({ ...view, mode: "preview" });
+  if (body?.apply !== true) return NextResponse.json({ ...view, mode: "preview", definition: result.def, link: result.link });
 
   const edit = await requireEditRight(req, params.id, "survey.edit" as never);
   if (isFailure(edit)) return edit.response;
