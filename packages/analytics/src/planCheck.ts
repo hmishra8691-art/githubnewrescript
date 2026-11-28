@@ -137,12 +137,14 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
         break;
       }
       if (choiceMeta?.questionType === "acbc_task") { need("Latent-class choice models read a CBC or MaxDiff question; ACBC is estimated by HB."); break; }
-      if (vs.length && items() < 2) need("Latent class analysis needs at least two categorical indicators — add more variables.");
+      /* one variable and no variable list (the run route): it may be a choice question — the runner decides, and refuses in words if not */
+      if (vs.length && items() < 2 && !(vs.length === 1 && !variables.length)) need("Latent class analysis needs at least two categorical indicators — add more variables.");
       const minK = Number(o.minClasses ?? 1), maxK = Number(o.maxClasses ?? 4);
       /* covariates and distal outcomes (2026-11-23): estimated by the three-step method — they must be variables of the data */
       for (const key of ["covariates", "distal"] as const) {
         const xs = Array.isArray(o[key]) ? (o[key] as unknown[]).map(String) : [];
-        const unknown = xs.filter((n) => !variables.some((v) => v.name === n));
+        /* only against a known variable list: the run route checks readiness without one (the runner then reports what it cannot find) */
+        const unknown = variables.length ? xs.filter((n) => !variables.some((v) => v.name === n)) : [];
         if (unknown.length) need(`${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not a variable of this dataset (latent class ${key === "covariates" ? "covariates" : "distal outcomes"}).`);
       }
       if (o.covariateMethod !== undefined && o.covariateMethod !== "three_step" && o.covariateMethod !== "modal") need("covariateMethod is three_step (the corrected estimate) or modal (assign, then cross-tab).");
