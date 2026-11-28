@@ -128,7 +128,33 @@ baseline exists.
 | "After S1 ask how many cars they own…" proposed as "move S1 after Q10" | Fixed. It goes to the model to draft. Wrong proposals in the benchmark: 1.7% to 0 |
 | "Ask the open-end Q6 ahead of the attention check Q5" read as data cleaning | Fixed. Read as the move it is |
 | One edit on the 501-question survey at about 440 ms | **About 75 ms (27 November, 0308); the 100 ms target is met in Node.** Each edit no longer re-judges the survey it was given; zod rebuilt every recursive schema on every parse (now built once); the schema parse covers only the questions the edit changed; the quality check derives the variable dictionary once. Not yet measured in the editor in a browser |
-| How many of the 131 failing import scenarios are the scenario builder's fault | Not looked at |
+| How many of the 131 failing import scenarios are the scenario builder's fault | **Examined (27 November, 0310 and 0311).** Most were the builder's or the walker's; one was an engine bug that moved real respondents past pages (fixed in 0310). 58.3% → 84.8%; see “I2, examined” below |
+
+### I2, examined: the 131 failing import scenarios (27 November)
+
+Each failing scenario on the ten-file corpus was traced to its cause. Before: 183 passed, 131 failed (58.3%). After:
+256 passed, 46 failed (84.8%), 117 not testable, each with its reason.
+
+| Cause | Scenarios | Whose fault | Done |
+| --- | --- | --- | --- |
+| The scenario fixed a hidden flag the survey sets itself (Decipher's `qTesting`, set from the link field `testing2`; flags worked out from other answers). It was never applied, or the next page worked it out again | 52 | Builder | The flag's own rule is driven instead (the link field, or the answers it reads, a few levels down). A flag that cannot be driven and that the survey recomputes is "not testable", never a pass |
+| "Not met → the interview does not end here" failed because a different term ended it later: the walker took a screener's first answer when every answer looked equally deep, chose numbers at random (an age of 1 to 99 against "under 18 or over 44"), and gave every grid row the first column (S12: four high ratings or out) | about 30 | Walker | Ties go to the answer that switches on fewer ends; numbers are tried at each side of every threshold the rules compare them with; grids are tried one column at a time |
+| A question inside a Qualtrics randomizer that shows 1 of 4 elements was expected on a draw that did not present it | 16 | Builder | Up to 16 draws are tried; one that presents the element is used, or the scenario is not testable |
+| "Not Straightliner" taken as "Speeder", which fired the Speeder term | 4 | Builder | "Not this answer" prefers an answer that ends nothing. Only ending answers are avoided: avoiding every code a rule mentions would also hide a wrong code the import wrote (the broken-import test caught that) |
+| A branch "if ED.X is empty" whose own element sets X: running the element collapsed the branch and the engine's cursor jumped two pages | 4 here | **Engine** (live respondents) | 0310: the cursor follows a step, not an index |
+| AND-not-met and OR-met tried only the first child | some | Builder | The first child that can be driven |
+
+**What still fails (46).** 40 are decipher_4 and decipher_5: hidden "picker" questions filled by least-fill from
+Decipher's quota sheet (`hasMarker('/Pklr_Degree/…')`), which is not in the corpus. Without it every imported
+respondent is screened at decipher_4's GRADUATE term and no video is assigned in decipher_5. The importer already
+reports this as a high risk ("The quota sheet is needed"). These failures are true for the survey as imported; they
+go away only with the sheet, or with least-fill pickers reconstructed. 6 are Qualtrics (five in qualtrics_2, one in
+qualtrics_1) and are **not explained yet**.
+
+**Not testable (117)** are listed with their reasons: conditions the builder cannot drive (counts against text,
+grid cells, values computed by an unread script), flags the survey recomputes, randomizer elements never drawn.
+
+Tests: `packages/import/src/i2Scenarios.test.ts` (five; all fail on the code before), `flowSetOnce.test.ts` (engine).
 
 ### Fraud — recorded automation, and what it showed (26 November)
 
@@ -713,7 +739,7 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | AI design agents (8) | A3, A5, A6, A7, A15 | A2 (about 90 of 850 cases), A4 (loop built, no model), A8 (reasons in plans, not on screen) | |
 | Programming (6) | P2, P3 | P1 (edit target met in Node, 0308; browser not measured), P5 (engine, route and screen, 0309; route not called over HTTP) | P4, P11 |
 | Analytics (6) | M2, M3, M4 (screens tested against a fake backend), M5, M10 | M1 (measured only) | |
-| Import (6) | I3, I5, I6 | I1 (10 of 300 files), I2 (exists, 58.3%, not examined), I4 (preview only; storing waits on the billing decision) | |
+| Import (6) | I3, I5, I6 | I1 (10 of 300 files), I2 (examined: 84.8%; 40 of 46 failures need the Decipher quota sheet, 6 unexplained), I4 (stored and billed at $0.002 a response, 0302, migration 0116) | |
 | Reporting (6) | R1, R2, R3, R4, R5 (with republish), R6 (not run against a database) | | |
 | Qualitative (6) | Q3 (no real model or speech run), Q4, Q6, Q7 | Q5 (AI interviews; live groups wait on Q2) | Q2 |
 | Fraud (6) | F3, F4 (typing and pointer summaries collected, sanitised and read by four rules), F6, F11 | F5 (typing rules only; open-end content not judged) | F2 |
@@ -724,7 +750,7 @@ definition (libraries, dashboards, the quality review screen, the import review 
 **Next:** the 11 items asked for are built (I3, I4, I6, Q4, Q6, R1 to R6), and their screens and the two follow-ups
 (review acceptance, republish) are in 0287 to 0291. F2 still waits on the build-or-license decision; I4's storage
 waits on the billing decision for migrated completes. Then I5, Q3, Q5 and Q7 were built (0293 to 0296).
-Open in the table: P4, P11, M1, I1, I2, Q2, Q5 for live groups, F2, F5, and the model-dependent parts
+Open in the table: P4, P11, M1, I1, Q2, Q5 for live groups, F2, F5, and the model-dependent parts
 of A2, A4 and A8.
 
 **Cannot be done from here:** Q2 media server, F2 device and network signals (build or license), P4 80 languages

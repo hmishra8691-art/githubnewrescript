@@ -185,6 +185,38 @@ export function answerFor(q: Question, strategy: Strategy, rnd: () => number): u
   }
 }
 
+/*
+ * I2: the values the deepest walk tries for a number — its bounds, its middle, and each side of every number the
+ * survey's rules compare it with ("under 18 or over 44 → screened" is passed only between 18 and 44, which neither the
+ * bounds 1 and 99 nor the middle 50 is).
+ */
+const THRESHOLDS = new WeakMap<SurveyDefinition, Map<string, number[]>>();
+function thresholdsOf(def: SurveyDefinition): Map<string, number[]> {
+  let m = THRESHOLDS.get(def);
+  if (m) return m;
+  m = new Map();
+  const found = m;
+  JSON.stringify(def, (_k, v) => {
+    const r = v as { type?: string; source?: { kind?: string; ref?: string }; value?: unknown; value2?: unknown } | null;
+    if (r && typeof r === "object" && r.type === "rule" && r.source?.kind === "question" && r.source.ref) {
+      for (const x of [r.value, r.value2]) { const n = typeof x === "number" ? x : typeof x === "string" && x.trim() !== "" ? Number(x) : NaN; if (Number.isFinite(n)) found.set(r.source.ref, [...(found.get(r.source.ref) ?? []), n]); }
+    }
+    return v;
+  });
+  THRESHOLDS.set(def, m);
+  return m;
+}
+function numberCandidates(def: SurveyDefinition, q: Question): number[] {
+  const s = q.settings as Record<string, unknown>;
+  const min = typeof s.minValue === "number" ? s.minValue : q.validation.find((v) => v.kind === "min_value")?.value;
+  const max = typeof s.maxValue === "number" ? s.maxValue : q.validation.find((v) => v.kind === "max_value")?.value;
+  const lo = typeof min === "number" ? min : 1, hi = typeof max === "number" ? max : Math.max(lo, 10);
+  const ts = [...new Set(thresholdsOf(def).get(q.id) ?? [])].sort((a, b) => a - b);
+  const out = [lo, Math.round((lo + hi) / 2), hi];
+  for (let i = 0; i < ts.length; i++) { out.push(ts[i] - 1, ts[i], ts[i] + 1); if (i + 1 < ts.length) out.push(Math.round((ts[i] + ts[i + 1]) / 2)); }
+  return [...new Set(out.filter((v) => v >= lo && v <= hi))].slice(0, 16);
+}
+
 function mulberry(seed: number): () => number {
   let a = seed >>> 0;
   return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -216,14 +248,22 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
   readBy?: Set<string>;
   /** I8 lifecycle: hand back the respondent's final state (for an export) — never put in a report */
   keepState?: boolean;
-} = {}): RuntimeWalk & { seen: Set<string>; state?: ResponseState } {
+} = {}): RuntimeWalk & { seen: Set<string>; state?: ResponseState; forceLost?: string[] } {
   const rnd = mulberry(seed);
   const readBy = strategy === "deepest" ? (opts.readBy ?? readByOthers(def)) : null;
   const position = opts.stopAfter ? [...placedQuestions(def)] : null;
   const stopAt = position ? position.indexOf(opts.stopAfter!) : -1;
-  const walk: RuntimeWalk & { seen: Set<string> } = { strategy, seed, pages: 0, questions: 0, end: null, refusals: [], error: null, loops: 0, seen: new Set() };
+  const walk: RuntimeWalk & { seen: Set<string>; forceLost?: string[] } = { strategy, seed, pages: 0, questions: 0, end: null, refusals: [], error: null, loops: 0, seen: new Set() };
+  /* I2: hidden questions given a fixed value, checked at every later page — a survey that recomputes one undoes the scenario */
+  const fixedHidden = new Map<string, unknown>();
+  const checkFixed = () => { for (const [id, v] of fixedHidden) if (JSON.stringify(state.answers[id]) !== JSON.stringify(v) && !(walk.forceLost ??= []).includes(id)) walk.forceLost.push(id); };
   const state: ResponseState = createResponseState(def, { seed, embedded: opts.embedded ?? {} });
   try {
+    /* I2: a hidden question the scenario fixes holds from the start — a flag the source's script sets before it is read, on no page the walk visits first */
+    for (const [id, v] of Object.entries(opts.force ?? {})) {
+      const q = def.questions.find((x) => x.id === id);
+      if ((q?.settings as { hidden?: boolean } | undefined)?.hidden) { setAnswer(def, state, id, v, null); fixedHidden.set(id, state.answers[id]); }
+    }
     let nav = start(def, state, {});
     const max = opts.maxPages ?? 500;
     while (!nav.done && walk.pages < max) {
@@ -240,6 +280,19 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
        * (a few rounds at most) — and counts as seen only what is visible once the page has settled.
        */
       const answered = new Set<string>();
+      /*
+       * I2 (2026-11-27): a scenario can fix a HIDDEN question — a variable the source's own script sets (Decipher's
+       * `where="execute"` qTesting, a hidden flag). The respondent never sees it, so it was never answered and the
+       * fixed value never applied: 52 of the 131 failing scenarios on the corpus were that. The value is written as
+       * the script would have written it, on the page that holds the question, before the visible ones are answered.
+       */
+      const forceHidden = () => {
+        if (!opts.force) return;
+        const shown = new Set(visibleQuestions(def, step, state, {}).map((q) => q.id));
+        for (const id of step.questionIds) if (id in opts.force && !shown.has(id)) { setAnswer(def, state, id, opts.force[id], step.loop ?? null); fixedHidden.set(id, state.answers[id]); }
+      };
+      checkFixed();
+      forceHidden();
       let qs = visibleQuestions(def, step, state, {});
       for (let round = 0; round < 4; round++) {
         const fresh = qs.filter((q) => !answered.has(q.id));
@@ -263,16 +316,22 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
        */
       if (strategy === "deepest") {
         for (const q of qs) {
-          if (!["single_select", "dropdown", "multi_select", "multi_dropdown"].includes(q.type)) continue;
+          const isNumber = q.type === "numeric" || q.type === "slider";
+          /* I2: a single-choice grid is tried "every row in column k" — a screener that counts high ratings (S12: four rows in the top three columns or out) only passes that way */
+          const isGrid = q.type === "matrix_single" || q.type === "matrix_dropdown";
+          if (!["single_select", "dropdown", "multi_select", "multi_dropdown"].includes(q.type) && !isNumber && !isGrid) continue;
           if (opts.force && q.id in opts.force) continue;
           /* 2026-11-13: a question's OWN skip rule (S2 = Under 18 → end) reads it too — it used to be left out of the look-ahead, so the walker took the first answer and screened itself out */
           if (readBy && !readBy.has(q.id) && !(q.skipLogic?.length)) continue;
           const cands = (shownAs(def, q, state, step.loop).options ?? []).filter((o) => !o.flags?.includes("other_specify") && o.logic?.visibility !== "always_hide").slice(0, 12);
-          if (cands.length < 2) continue;
-          let best: { value: unknown; ahead: number } | null = null;
+          let best: { value: unknown; ahead: number; ends: number; shown: number } | null = null;
           const isMulti = q.type === "multi_select" || q.type === "multi_dropdown";
           /* a multi-select also tries "everything plain at once" — a count condition ("selected 2 or more") only opens that way */
-          const values: unknown[] = [...cands.map((o) => (isMulti ? [o.code] : o.code)), ...(isMulti ? [cands.filter((o) => !o.flags?.includes("exclusive")).map((o) => o.code)] : [])];
+          const gridRows = isGrid ? (shownAs(def, q, state, step.loop).rows ?? []) : [];
+          const values: unknown[] = isNumber ? numberCandidates(def, shownAs(def, q, state, step.loop))
+            : isGrid ? cands.map((o) => Object.fromEntries(gridRows.map((r) => [String(r.code), o.code])))
+            : [...cands.map((o) => (isMulti ? [o.code] : o.code)), ...(isMulti ? [cands.filter((o) => !o.flags?.includes("exclusive")).map((o) => o.code)] : [])];
+          if (values.length < 2) continue;
           for (const value of values) {
             const trial: ResponseState = structuredClone(state);
             setAnswer(def, trial, q.id, value, step.loop ?? null);
@@ -285,8 +344,16 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
             /* …and the questions those pages would show — a count condition ("2 or more selected") opens a question, not a page */
             let shown = 0;
             for (const pg of pagesAhead.slice(0, 40)) if (pg.kind === "page") shown += visibleQuestions(def, pg, trial, {}).length;
-            const ahead = nav2.done ? (nav2.endStatus === "complete" ? 0.5 : 0) : pagesAhead.length + (endKind === "complete" || endKind === undefined ? 0.5 : 0) + shown * 0.001;
-            if (!best || ahead > best.ahead) best = { value, ahead };
+            const ahead = nav2.done ? (nav2.endStatus === "complete" ? 0.5 : 0) : pagesAhead.length + (endKind === "complete" || endKind === undefined ? 0.5 : 0);
+            /*
+             * I2 (2026-11-27): equally deep, prefer the answer that switches on fewer ends. A term placed at the end of
+             * a screener ("S05 = less than a year → screened", after S19) is behind an end another unanswered term
+             * already switches on ("S15 is not 5 …" is true while S15 is empty), so every answer to S05 looked
+             * equally deep and the first one — the screening one — was kept.
+             */
+            const ends = rest.filter((x) => x.kind === "end" && (x as { status?: string }).status !== "complete").length;
+            const better = !best || ahead > best.ahead || (ahead === best.ahead && (ends < best.ends || (ends === best.ends && shown > best.shown)));
+            if (better) best = { value, ahead, ends, shown };
           }
           if (best) setAnswer(def, state, q.id, best.value, step.loop ?? null);
         }
@@ -294,14 +361,17 @@ export function walkSurvey(def: SurveyDefinition, strategy: Strategy, seed: numb
       if (strategy === "deepest") {
         /* the chosen answers may have shown a same-page question: answer it too (the page must still validate) */
         settleForcedAnswers(def, state, step, {});
+        forceHidden();
         qs = visibleQuestions(def, step, state, {});
         for (const q of qs.filter((x) => !answered.has(x.id))) { answered.add(q.id); walk.questions++; const v = opts.force && q.id in opts.force ? opts.force[q.id] : answerFor(shownAs(def, q, state, step.loop), strategy, rnd); if (v !== undefined) setAnswer(def, state, q.id, v, step.loop ?? null); }
       }
+      checkFixed();
       for (const q of qs) walk.seen.add(q.id);
       const errors = validatePage(def, qs, { def, state, loop: step.loop ?? null });
       for (const e of errors) { const q = qs.find((x) => x.id === e.questionId); if (q && !walk.refusals.some((r) => r.questionId === q.id)) walk.refusals.push({ questionId: q.id, code: q.code, message: e.message }); }
       nav = advance(def, state, {}, { fromPageId: step.pageId });
     }
+    checkFixed();
     walk.end = nav.done ? (nav.endStatus ?? state.status ?? "complete") : `stopped after ${walk.pages} pages`;
   } catch (e) {
     walk.error = (e as Error).message;
