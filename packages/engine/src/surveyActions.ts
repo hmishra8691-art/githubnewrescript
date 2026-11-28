@@ -1,6 +1,6 @@
 import { downstreamOf } from "./lifecycle.js";
 import type { AnalysisPlan, Condition, FlowNode, OptionMask, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
-import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema, effectiveResponseModel, questionSettingField } from "@rescript/schema";
+import { SurveyDefinition as SurveyDefinitionSchema, Question as QuestionSchema, variantRegistry, Condition as ConditionSchema, effectiveResponseModel, questionSettingField } from "@rescript/schema";
 import { forEachRule, isConditionNode } from "./conditionWalk.js";
 import { canonicalizeCondition } from "./optionCodes.js";
 import { looksLikeOtherSpecify } from "./otherSpecify.js";
@@ -622,22 +622,63 @@ const HYPOTHESIS_OPS = new Set(["add_hypothesis", "set_hypothesis", "remove_hypo
  * fingerprint of its content: the same object edited in place since (tests do it; nothing in the product should)
  * has another fingerprint and is judged again.
  */
-interface Judged { normalized: SurveyDefinition | null; errors: Set<string> }
+export interface Judged { normalized: SurveyDefinition | null; errors: Set<string>; questionJson?: Map<string, string>; structure?: string }
+/*
+ * The fingerprint is the survey's JSON itself (P1, 2026-11-27): comparing two strings is a memory compare, where
+ * hashing a 500-question survey character by character cost about 2 ms each time it was asked.
+ */
 const JUDGED = new WeakMap<object, { print: string; judged: Judged }>();
-function fingerprint(def: SurveyDefinition): string {
-  const s = JSON.stringify(def);
-  let h1 = 0x811c9dc5, h2 = 0x1000193;
-  for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 0x01000193); h2 = Math.imul(h2 + c, 0x5bd1e995) ^ (h2 >>> 13); }
-  return `${s.length}:${(h1 >>> 0).toString(36)}:${(h2 >>> 0).toString(36)}`;
-}
+const fingerprint = (def: SurveyDefinition): string => JSON.stringify(def);
 function rememberJudged(def: SurveyDefinition, judged: Judged): void { JUDGED.set(def, { print: fingerprint(def), judged }); }
+/** what is known about a survey without working anything out — for the lite path, which judges nothing */
+function knownJudged(def: SurveyDefinition): Judged | null {
+  const hit = JUDGED.get(def);
+  return hit && hit.print === fingerprint(def) ? hit.judged : null;
+}
 function judgedBefore(before: SurveyDefinition): Judged {
-  const hit = JUDGED.get(before);
-  if (hit && hit.print === fingerprint(before)) return hit.judged;
+  const hit = knownJudged(before);
+  if (hit) return hit;
   const baseline = SurveyDefinitionSchema.safeParse(before);
   const judged: Judged = { normalized: baseline.success ? baseline.data : null, errors: new Set(runQualityCheck(before).areas.flatMap((x) => x.issues).filter((i) => i.level === "error").map((i) => i.message)) };
-  JUDGED.set(before, { print: fingerprint(before), judged });
+  rememberJudged(before, judged);
   return judged;
+}
+
+/*
+ * THE SCHEMA PARSE OF THE RESULT, ONLY WHERE IT CHANGED (P1, 2026-11-27). Questions are 98% of a parse — about 30
+ * ms on 500 questions — and an edit changes one or two. A question whose JSON is identical to the already-parsed
+ * (normalised) question of the same id is already what the parse would return — the schema's transforms are
+ * idempotent, which `schemaTransforms.test.ts` holds every transform to — so it is kept as it is and only the others
+ * are parsed. The survey has no rule across questions in the schema (only per question and per field), so parsing
+ * the rest with no questions and each changed question alone gives the same result and the same issues, the issue
+ * paths prefixed with the question's place. `surveyParse.test.ts` compares it with a full parse.
+ */
+type ParseIssue = { path: (string | number)[]; message: string };
+type SurveyParse = { success: true; data: SurveyDefinition } | { success: false; error: { issues: ParseIssue[] } };
+function questionJsonOf(j: Judged): Map<string, string> | null {
+  if (!j.normalized) return null;
+  if (!j.questionJson) {
+    const m = new Map<string, string>();
+    for (const q of j.normalized.questions ?? []) if (q && typeof q.id === "string" && !m.has(q.id)) m.set(q.id, JSON.stringify(q));
+    j.questionJson = m;
+  }
+  return j.questionJson;
+}
+export function parseSurveyIncrementally(def: SurveyDefinition, prior: Judged | null): SurveyParse {
+  const known = prior ? questionJsonOf(prior) : null;
+  if (!known || !Array.isArray(def.questions)) return SurveyDefinitionSchema.safeParse(def) as SurveyParse;
+  const rest = SurveyDefinitionSchema.safeParse({ ...def, questions: [] });
+  const issues: ParseIssue[] = rest.success ? [] : rest.error.issues.map((i) => ({ path: i.path, message: i.message }));
+  const questions: SurveyDefinition["questions"] = [];
+  def.questions.forEach((q, i) => {
+    const text = JSON.stringify(q);
+    if (q && typeof q.id === "string" && known.get(q.id) === text) { questions.push(q); return; }
+    const r = QuestionSchema.safeParse(q);
+    if (r.success) questions.push(r.data as SurveyDefinition["questions"][number]);
+    else issues.push(...r.error.issues.map((x) => ({ path: ["questions", i, ...x.path], message: x.message })));
+  });
+  if (issues.length || !rest.success) return { success: false, error: { issues } };
+  return { success: true, data: { ...rest.data, questions } as SurveyDefinition };
 }
 
 export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean; uxBehaviour?: boolean; lite?: boolean } = {}): ApplyActionsOutcome {
@@ -652,8 +693,17 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   // hypothesis" beside set_research in one generation ran first and was refused — "the research design has no hypotheses")
   const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : HYPOTHESIS_OPS.has(a.op) ? 2.5 : a.op === "link_constructs" ? 2.6 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) || isListFillOp(a.op) || isAssessmentOp(a.op) ? 0.5 : 0);
   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
+  /*
+   * The state before each action, to judge it against and to go back to. Before the FIRST action that state is the
+   * caller's survey itself, untouched (only the clone above is edited), so it is read from there rather than cloned a
+   * second time — on a 500-question survey a clone is about 10 ms of a single edit (P1). Going back to it clones it
+   * then, so the caller's object is never the one edited.
+   */
+  let first = true;
   order.forEach(({ a, index }) => {
-    const snapshot = structuredClone(def) as SurveyDefinition;
+    const snapshot = first ? before : (structuredClone(def) as SurveyDefinition);
+    first = false;
+    const restore = () => { def = snapshot === before ? (structuredClone(before) as SurveyDefinition) : snapshot; ctx.def = def; };
     ctx.def = def;
     const behaviourOk = !!(opts.uxOnly && opts.uxOnlyInferred && !isUxOp(a.op) && (a.op === "set_validation" || (opts.uxBehaviour && behaviourNativeOp(a))));
     if (opts.uxOnly && !isUxOp(a.op) && !behaviourOk) {
@@ -667,7 +717,7 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
         const was = snapshot.questions.find((x) => x.id === (r.touched ?? [])[0]);
         const now = ctx.def.questions.find((x) => x.id === (r.touched ?? [])[0]);
         if (was && now && effectiveResponseModel(was) !== effectiveResponseModel(now)) {
-          def = snapshot; ctx.def = def;
+          restore();
           results.push({ index, op: a.op, ok: false, description: describeAction(a), error: lookOnlyRefusal(true, `changing ${was.code} to another kind of question (${now.type})`), touched: [] });
           return;
         }
@@ -684,14 +734,14 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
       const issues = validateActionOutcome(snapshot, ctx.def, a, r.touched ?? []);
       const blocking = issues.filter((i) => i.level === "error");
       if (blocking.length) {
-        def = snapshot; ctx.def = def;
+        restore();
         results.push({ index, op: a.op, ok: false, description: describeAction(a), error: blocking.map((i) => i.message).join(" "), touched: [], issues, ...(blocking.find((i) => i.suggestion)?.suggestion ? { suggestion: blocking.find((i) => i.suggestion)!.suggestion } : {}) });
         return;
       }
       const impact = IMPACT_OPS.has(a.op) && !opts.lite ? impactOfAction(snapshot, ctx.def, a, r.touched ?? []) : undefined;
       results.push({ index, op: a.op, ok: true, description: r.description, touched: r.touched ?? [], ...(r.destructive ? { destructive: r.destructive } : {}), ...(issues.length ? { issues } : {}), ...(impact && impact.count ? { impact } : {}) });
     } catch (e) {
-      def = snapshot; ctx.def = def;
+      restore();
       results.push({ index, op: a.op, ok: false, description: describeAction(a), error: (e as Error).message, touched: [] });
     }
     def = ctx.def;
@@ -712,7 +762,7 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
    */
   const orphans = pruneOrphanedTranslations(def);
   if (orphans.dropped) ctx.uxWarnings.push(`${orphans.dropped} translation${orphans.dropped === 1 ? "" : "s"} (${orphans.languages.join(", ")}) of removed elements ${orphans.dropped === 1 ? "was" : "were"} dropped.`);
-  const parsed = SurveyDefinitionSchema.safeParse(def);
+  const parsed = parseSurveyIncrementally(def, opts.lite ? knownJudged(before) : judgedBefore(before));
   results.sort((x, y) => x.index - y.index);
   const errors = results.filter((r) => !r.ok).map((r) => `${describeAction(actions[r.index])}: ${r.error}`);
   if (!parsed.success) {
@@ -762,13 +812,16 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   }
   if (opts.lite) return { def: after, results, errors, warnings: [...new Set(ctx.uxWarnings)].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly: results.filter((r) => r.ok).length > 0 && results.filter((r) => r.ok).every((r) => isUxOp(r.op)), structureUnchanged: false };
   const was = judgedBefore(before);
-  const structureUnchanged = JSON.stringify(withoutPresentation(was.normalized ?? before)) === JSON.stringify(withoutPresentation(after));
+  /* the structure of "before" was worked out when it was the previous edit's result; kept with it, not redone */
+  const structureBefore = was.structure ?? (was.structure = JSON.stringify(withoutPresentation(was.normalized ?? before)));
+  const structureAfter = JSON.stringify(withoutPresentation(after));
+  const structureUnchanged = structureBefore === structureAfter;
   const applied = results.filter((r) => r.ok);
   const uxOnly = applied.length > 0 && applied.every((r) => isUxOp(r.op));
   const beforeIssues = was.errors;
   const afterErrors = runQualityCheck(after).areas.flatMap((x) => x.issues).filter((i) => i.level === "error");
   /* the survey this call returns is the next call's "before": what was just worked out about it is kept with it */
-  rememberJudged(after, { normalized: after, errors: new Set(afterErrors.map((i) => i.message)) });
+  rememberJudged(after, { normalized: after, errors: new Set(afterErrors.map((i) => i.message)), structure: structureAfter });
   const warnings = afterErrors.filter((i) => !beforeIssues.has(i.message)).map((i) => `${i.questionCode ? `${i.questionCode}: ` : ""}${i.message}`);
   const validationWarnings = results.flatMap((r) => (r.issues ?? []).filter((i) => i.level === "warning").map((i) => i.message));
   /*

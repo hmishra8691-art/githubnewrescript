@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { once } from "./lazyOnce.js";
 import { Condition } from "./conditions.js";
 import { SetExpr } from "./setExpression.js";
 import { ExactBalance } from "./balance.js";
@@ -502,7 +503,7 @@ export type FlowNode =
       redirectUrl?: string;
     };
 
-export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
+export const FlowNode: z.ZodType<FlowNode> = z.lazy(once(() =>
   z.discriminatedUnion("type", [
     z.object({
       type: z.literal("page"),
@@ -643,7 +644,7 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       redirectUrl: z.string().optional(),
     }),
   ]),
-) as unknown as z.ZodType<FlowNode>;
+)) as unknown as z.ZodType<FlowNode>;
 
 /**
  * Logic Flow — a standalone decision graph (requirement §8), independent of

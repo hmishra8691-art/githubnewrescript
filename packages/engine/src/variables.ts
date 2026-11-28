@@ -799,8 +799,29 @@ export function buildVariableDictionary(def: SurveyDefinition): VariableDef[] {
   return applyOverrides(def, buildDerivedVariables(def));
 }
 
+/*
+ * ONE DERIVATION PER CHECK (P1, 2026-11-27). The quality check reaches the derived dictionary from four places (the
+ * logic lint, the variable lint, the override check, the dependency index), each deriving it again from the same
+ * survey — about 3 ms each on 500 questions. Inside `withDerivedVariablesCached` the first derivation is kept for the
+ * survey object and the others get a copy of the list. Only for read-only passes over a survey nobody edits meanwhile;
+ * outside one, every call derives afresh as before.
+ */
+let derivedScope: WeakMap<object, VariableDef[]> | null = null;
+export function withDerivedVariablesCached<T>(f: () => T): T {
+  if (derivedScope) return f();
+  derivedScope = new WeakMap();
+  try { return f(); } finally { derivedScope = null; }
+}
+
 /** The dictionary the survey implies, before any programmer override. */
 export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
+  if (!derivedScope) return deriveVariables(def);
+  let hit = derivedScope.get(def);
+  if (!hit) { hit = deriveVariables(def); derivedScope.set(def, hit); }
+  return hit.slice();
+}
+
+function deriveVariables(def: SurveyDefinition): VariableDef[] {
   const loc = pageLocator(def);
   const out: VariableDef[] = [];
 

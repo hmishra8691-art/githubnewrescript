@@ -127,7 +127,7 @@ baseline exists.
 | --- | --- |
 | "After S1 ask how many cars they own…" proposed as "move S1 after Q10" | Fixed. It goes to the model to draft. Wrong proposals in the benchmark: 1.7% to 0 |
 | "Ask the open-end Q6 ahead of the attention check Q5" read as data cleaning | Fixed. Read as the move it is |
-| One edit on the 501-question survey at about 440 ms | About 150 to 190 ms. Each edit no longer re-judges the survey it was given. **The 100 ms target is not met**; getting there needs incremental validation |
+| One edit on the 501-question survey at about 440 ms | **About 75 ms (27 November, 0308); the 100 ms target is met in Node.** Each edit no longer re-judges the survey it was given; zod rebuilt every recursive schema on every parse (now built once); the schema parse covers only the questions the edit changed; the quality check derives the variable dictionary once. Not yet measured in the editor in a browser |
 | How many of the 131 failing import scenarios are the scenario builder's fault | Not looked at |
 
 ### Fraud — recorded automation, and what it showed (26 November)
@@ -575,7 +575,7 @@ All checked by simulation against known models (see the tests below).
 | Planted defects the verifier reports on the right question (7) | 100% | 99% |
 | Agent loop scenarios with a scripted planner (12) | 100% | 100% |
 | Loop runs that left the given survey unchanged | 100% | 100% |
-| One edit on a 501-question survey | 185 ms | 100 ms |
+| One edit on a 501-question survey | 75 ms (Node, 0308) | 100 ms |
 | Path coverage goals met on four shipped surveys | 94.9% | 100% of reachable |
 | Fixtures identical after a source round trip (39) | 100% | 100% |
 | Recorded automated sessions excluded on behaviour alone (36) | 83.3% | 95% |
@@ -701,7 +701,7 @@ Done means built and tested as described above, not that its Level 5 threshold i
 | Area | Done | Partly | Not started |
 | --- | --- | --- | --- |
 | AI design agents (8) | A3, A5, A6, A7, A15 | A2 (about 90 of 850 cases), A4 (loop built, no model), A8 (reasons in plans, not on screen) | |
-| Programming (6) | P2, P3 | P1 (edits faster, target not met), P5 (engine and route; no screen) | P4, P11 |
+| Programming (6) | P2, P3 | P1 (edit target met in Node, 0308; browser not measured), P5 (engine and route; no screen) | P4, P11 |
 | Analytics (6) | M2, M3, M4 (screens tested against a fake backend), M5, M10 | M1 (measured only) | |
 | Import (6) | I3, I5, I6 | I1 (10 of 300 files), I2 (exists, 58.3%, not examined), I4 (preview only; storing waits on the billing decision) | |
 | Reporting (6) | R1, R2, R3, R4, R5 (with republish), R6 (not run against a database) | | |

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { once } from "./lazyOnce.js";
 
 /**
  * Condition model — the universal logic primitive of the platform.
@@ -327,7 +328,7 @@ export interface CountSpec {
  * contains this — so the reference is lazy. The thunk is not called until
  * something is parsed, by which time every binding is in place.
  */
-export const CountSpec: z.ZodType<CountSpec, z.ZodTypeDef, unknown> = z.lazy(() =>
+export const CountSpec: z.ZodType<CountSpec, z.ZodTypeDef, unknown> = z.lazy(once(() =>
   z.object({
     of: CountOf.default("selected"),
     scope: CountScope.default("options"),
@@ -336,7 +337,7 @@ export const CountSpec: z.ZodType<CountSpec, z.ZodTypeDef, unknown> = z.lazy(() 
     responseIn: z.array(z.union([z.string(), z.number()])).optional(),
     where: Condition.optional(),
   }),
-) as unknown as z.ZodType<CountSpec, z.ZodTypeDef, unknown>;
+)) as unknown as z.ZodType<CountSpec, z.ZodTypeDef, unknown>;
 
 /** What a rule reads from: a question's answer, a named variable,
  *  an embedded-data field, a calculated value, or quota state. */
@@ -422,17 +423,17 @@ export type ConditionGroup = {
 };
 export type Condition = ConditionRule | ConditionGroup;
 
-export const Condition: z.ZodType<Condition, z.ZodTypeDef, unknown> = z.lazy(() =>
+export const Condition: z.ZodType<Condition, z.ZodTypeDef, unknown> = z.lazy(once(() =>
   z.union([ConditionRule, ConditionGroup]),
-) as unknown as z.ZodType<Condition, z.ZodTypeDef, unknown>;
+)) as unknown as z.ZodType<Condition, z.ZodTypeDef, unknown>;
 
-export const ConditionGroup: z.ZodType<ConditionGroup, z.ZodTypeDef, unknown> = z.lazy(() =>
+export const ConditionGroup: z.ZodType<ConditionGroup, z.ZodTypeDef, unknown> = z.lazy(once(() =>
   z.object({
     type: z.literal("group"),
     op: z.enum(["and", "or", "not"]),
     children: z.array(Condition),
   }),
-) as unknown as z.ZodType<ConditionGroup, z.ZodTypeDef, unknown>;
+)) as unknown as z.ZodType<ConditionGroup, z.ZodTypeDef, unknown>;
 
 /**
  * Dynamic comparison value (req §8–9, "option-to-option logic").

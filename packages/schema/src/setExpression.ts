@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { once } from "./lazyOnce.js";
 import { Condition } from "./conditions.js";
 
 /**
@@ -70,7 +71,7 @@ export type SetExpr =
   | { kind: "complement"; of: SetExpr }
   | { kind: "op"; operator: SetOperator; left: SetExpr; right: SetExpr };
 
-export const SetExpr: z.ZodType<SetExpr, z.ZodTypeDef, unknown> = z.lazy(() =>
+export const SetExpr: z.ZodType<SetExpr, z.ZodTypeDef, unknown> = z.lazy(once(() =>
   z.union([
     z.object({
       kind: z.literal("ref"),
@@ -110,7 +111,7 @@ export const SetExpr: z.ZodType<SetExpr, z.ZodTypeDef, unknown> = z.lazy(() =>
       right: SetExpr,
     }),
   ]),
-) as unknown as z.ZodType<SetExpr, z.ZodTypeDef, unknown>;
+)) as unknown as z.ZodType<SetExpr, z.ZodTypeDef, unknown>;
 
 /** What the computed set is used for. */
 export const MaskAction = z.enum([

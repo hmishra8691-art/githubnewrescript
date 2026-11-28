@@ -2,7 +2,7 @@ import { lintPageStructure } from "./structureLint.js";
 import type { SurveyDefinition } from "@rescript/schema";
 import { designGeneratorRegistry } from "@rescript/schema";
 import { lintSurveyLogic, type LogicIssue } from "./lintLogic.js";
-import { lintVariables } from "./variables.js";
+import { lintVariables, withDerivedVariablesCached } from "./variables.js";
 import { validateFlowStructure } from "./flowTree.js";
 import { unresolvableDisplayRules } from "./displayRules.js";
 
@@ -173,6 +173,10 @@ function designIssues(def: SurveyDefinition): LogicIssue[] {
 }
 
 export function runQualityCheck(def: SurveyDefinition): QualityCheckResult {
+  return withDerivedVariablesCached(() => qualityCheckOf(def));
+}
+
+function qualityCheckOf(def: SurveyDefinition): QualityCheckResult {
   const collected: LogicIssue[] = [];
 
   /* the logic lint, which now also carries the structural checks */
